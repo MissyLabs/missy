@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -87,7 +88,11 @@ def _fingerprint_tc(name: str, arguments: dict) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def _rewrite_heredoc_command(tool_args: dict) -> dict:
+def _rewrite_heredoc_command(
+    tool_args: dict,
+    session_id: str = "",
+    task_id: str = "",
+) -> tuple[dict, str | None]:
     """Rewrite shell commands containing heredocs to use temp files.
 
     Many external models (e.g. GPT-5.2 via Codex) generate heredoc-style
@@ -96,8 +101,25 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
     extracting the heredoc body into a temporary file and replacing the
     command with one that executes the file directly.
 
+    SR-2.4: the interpreter is checked against the shell policy *before*
+    anything is written to disk. Writing the model-supplied body first and
+    only finding out afterward that the command would have been denied
+    violates "denied operations have no side effects" — the file would
+    already exist (potentially holding secrets the model was manipulated
+    into embedding) regardless of the eventual policy outcome. If the
+    interpreter isn't permitted (or the policy engine isn't initialised,
+    which fails closed the same way the registry itself does), this
+    returns *tool_args* unmodified so the original heredoc-laden command
+    reaches :meth:`~missy.tools.registry.ToolRegistry.execute` and is
+    denied there normally — with zero disk footprint.
+
     Only rewrites when ``<<`` is detected.  Returns *tool_args* unmodified
     otherwise.
+
+    Returns:
+        A ``(tool_args, tmppath)`` tuple. ``tmppath`` is the path of the
+        temp file created (the caller is responsible for deleting it once
+        the tool call completes), or ``None`` when no file was written.
     """
     import os
     import re
@@ -105,7 +127,7 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
 
     command = tool_args.get("command", "")
     if "<<" not in command:
-        return tool_args
+        return tool_args, None
 
     # Match patterns like:  python3 - <<'DELIM'\n...\nDELIM
     # or:                   python3 - <<"DELIM"\n...\nDELIM
@@ -128,10 +150,31 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
             "Heredoc detected but pattern did not match; passing through: %s",
             command[:120],
         )
-        return tool_args
+        return tool_args, None
 
     interpreter = m.group(1)
     body = m.group(3)
+
+    # SR-2.4: verify the interpreter itself would be permitted before
+    # writing anything. The rewritten command is always exactly
+    # "{interpreter} {tmppath}" with no redirection, so checking the
+    # interpreter alone is equivalent to checking the full rewritten
+    # command would pass.
+    from missy.core.exceptions import PolicyViolationError
+    from missy.policy.engine import get_policy_engine
+
+    try:
+        engine = get_policy_engine()
+        engine.check_shell(interpreter, session_id=session_id, task_id=task_id)
+    except (PolicyViolationError, RuntimeError) as exc:
+        logger.info(
+            "Heredoc rewrite skipped — interpreter %r not permitted by shell "
+            "policy: %s. Original command will be evaluated (and denied) "
+            "as-is with no file written.",
+            interpreter,
+            exc,
+        )
+        return tool_args, None
 
     # Determine file extension from interpreter name
     ext_map = {
@@ -148,7 +191,8 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
     base = os.path.basename(interpreter)
     ext = ext_map.get(base, ".tmp")
 
-    # Write body to a temp file (not auto-deleted so the shell can read it)
+    # Write body to a temp file. The caller deletes it once the tool call
+    # completes (success or failure) — see the shell_exec dispatch site.
     fd, tmppath = tempfile.mkstemp(suffix=ext, prefix="missy_heredoc_")
     try:
         os.write(fd, body.encode("utf-8"))
@@ -164,12 +208,21 @@ def _rewrite_heredoc_command(tool_args: dict) -> dict:
 
     rewritten = dict(tool_args)
     rewritten["command"] = new_command
-    return rewritten
+    return rewritten, tmppath
 
 
 # Threshold (chars) above which tool results are stored separately and replaced
 # with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
 _LARGE_CONTENT_THRESHOLD = 50_000
+
+# SR-3.3: tools that retrieve from the memory store need a live store
+# reference and the calling session's ID, but neither is part of the
+# model-facing tool schema (the model cannot supply an object reference,
+# and letting it forge an arbitrary session_id as the *default* scope
+# would defeat per-session isolation). These are injected as private
+# (``_``-prefixed) kwargs at dispatch time, the same way SR-2.4's heredoc
+# rewrite special-cases shell_exec.
+_MEMORY_RETRIEVAL_TOOL_NAMES = frozenset({"memory_search", "memory_describe", "memory_expand"})
 
 
 @dataclass
@@ -204,12 +257,17 @@ class AgentConfig:
         "Available tools: file_read, file_write, file_delete, list_files, "
         "shell_exec, web_fetch, calculator, self_create_tool, code_evolve. "
         "CODE SELF-EVOLUTION: When you encounter a bug or error in your own "
-        "source code (missy/), you can fix yourself. Workflow: "
+        "source code (missy/), you may propose a fix, but you may NEVER "
+        "approve, apply, or roll back your own code changes — that requires "
+        "an authenticated human operator and the tool will refuse if you try. "
+        "Workflow: "
         "1) file_read the source to understand the code "
         "2) code_evolve(action='propose', file_path=..., original_code=..., proposed_code=...) "
-        "3) code_evolve(action='approve', proposal_id=...) "
-        "4) code_evolve(action='apply', proposal_id=...) — runs tests, commits, restarts. "
-        "Use code_evolve(action='rollback', proposal_id=...) to undo. "
+        "3) Stop and tell the user/operator the proposal ID and that it needs "
+        "review; they must run `missy evolve approve <id>` then "
+        "`missy evolve apply <id>` from a terminal on the host. Do not offer "
+        "to write the change directly to disk, edit the evolutions store, or "
+        "any other route around that requirement. "
         "BROWSER: Use browser_navigate(url=...) for ALL web tasks — never use x11 tools for the browser. "
         "browser_navigate launches Firefox automatically and navigates in one call. "
         "To search: browser_navigate(url='https://duckduckgo.com/?q=query'). "
@@ -223,7 +281,15 @@ class AgentConfig:
         "x11_click (click at coordinates), x11_type (type text), "
         "x11_key (send keypress), x11_window_list (list open windows). "
         "Use x11_read_screen to verify UI state after actions. "
-        "Always use tools to get real information rather than guessing or describing."
+        "Always use tools to get real information rather than guessing or describing. "
+        "SAFETY: If an approval-gated or policy-gated tool or action is "
+        "unavailable, denied, or refuses your request, report that limitation "
+        "to the user and stop. Never propose or perform an alternate route "
+        "around it — no raw file writes, shell commands, alternate providers, "
+        "direct API calls, or manual edits to a tool's storage/config as a "
+        "substitute. Offer only equally governed alternatives: requesting "
+        "authenticated approval, using a different policy-approved tool, or "
+        "telling the operator the capability is missing."
     )
     max_iterations: int = 10
     temperature: float = 0.7
@@ -236,6 +302,11 @@ class AgentConfig:
     sandbox_tool_policy: Any | None = None
     subagent_tool_policy: Any | None = None
     tool_intelligence: Any | None = None
+    #: SR-4.7 -- an ApprovalGate (missy.agent.approval.ApprovalGate) MCP
+    #: tool calls requiring human approval block on. None means no
+    #: confirmation infrastructure is available for this runtime instance;
+    #: such calls then fail closed (denied) rather than running unconfirmed.
+    mcp_approval_gate: Any | None = None
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -297,13 +368,26 @@ class AgentRuntime:
         self._session_mgr = SessionManager()
         # Circuit breaker per runtime instance (keyed to provider name)
         self._circuit_breaker = self._make_circuit_breaker(config.provider)
+        # SR-4.8: one CircuitBreaker per *fallback* provider name, lazily
+        # created. Kept separate from self._circuit_breaker (which tracks
+        # only the configured primary) so a failure on one fallback
+        # candidate's breaker never affects another candidate's, or the
+        # primary's, half-open/backoff state.
+        self._fallback_breakers: dict[str, Any] = {}
         # Rate limiter for API calls
         self._rate_limiter = self._make_rate_limiter()
         # Lazy-loaded subsystems
         self._context_manager = self._make_context_manager()
         self._memory_store = self._make_memory_store()
-        # Cost tracking (graceful degradation)
-        self._cost_tracker = self._make_cost_tracker()
+        # Cost tracking (graceful degradation). SR-3.4 cross-session fix:
+        # max_spend_usd is documented as a per-session cap
+        # (AgentConfig.max_spend_usd), so each session gets its own
+        # CostTracker rather than one shared across every session this
+        # runtime instance serves (e.g. every Discord user, every Web API
+        # session) -- see _get_cost_tracker().
+        self._cost_tracking_enabled = self._cost_tracker_module_available()
+        self._cost_trackers: dict[str, Any] = {}
+        self._cost_trackers_lock = threading.Lock()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
         # Scan for incomplete checkpoints from previous runs
@@ -322,6 +406,19 @@ class AgentRuntime:
         self._identity = self._make_identity()
         # Trust scorer for providers, tools, and MCP servers
         self._trust_scorer = TrustScorer()
+        # SR-4.7: MCP manager (graceful degradation) -- connects to
+        # configured servers and exposes their tools; _get_tools() syncs
+        # them into the real ToolRegistry each turn so dispatch goes
+        # through the same reference monitor as every built-in tool.
+        self._mcp_manager = self._make_mcp_manager()
+        # SR-4.1: sleeptime worker (graceful degradation) -- background
+        # daemon thread that summarises idle conversations and extracts
+        # learnings during agent idle periods. Wired in exactly as its
+        # own module docstring documents: constructed+started here,
+        # record_activity() called at the top of every run() (below), and
+        # stopped via AgentRuntime.shutdown(). Uses SleeptimeConfig's own
+        # default (enabled=True) rather than overriding it off.
+        self._sleeptime = self._make_sleeptime_worker()
         # Attention system (Feature B: brain-inspired attention subsystems)
         self._attention = self._make_attention_system()
         # Persona and behavior layer (humanistic response shaping)
@@ -478,7 +575,9 @@ class AgentRuntime:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run(self, user_input: str, session_id: str | None = None) -> str:
+    def run(
+        self, user_input: str, session_id: str | None = None, _delegation_depth: int = 0
+    ) -> str:
         """Run the agent with *user_input* and return the response string.
 
         Execution steps:
@@ -503,6 +602,13 @@ class AgentRuntime:
                 session with that ID is not already active on the current
                 thread a new session is created (the ID is stored in its
                 metadata for traceability).
+            _delegation_depth: SR-4.2 -- internal. How many levels of
+                ``delegate_task`` nesting produced this call. ``0`` for a
+                genuine top-level call. Threaded down to
+                ``_execute_tool()`` so the ``delegate_task`` tool can
+                refuse to spawn further sub-agents once
+                ``sub_agent.MAX_SUB_AGENT_DEPTH`` is reached. Not intended
+                for external callers to set.
 
         Returns:
             The model's reply as a plain string.
@@ -513,6 +619,12 @@ class AgentRuntime:
         """
         if not user_input or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
+
+        # SR-4.1: reset the sleeptime worker's idle timer on every real
+        # user interaction so it never processes memory concurrently with
+        # an active run.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
 
         # Sanitize user input: truncate oversized payloads and detect
         # prompt injection patterns *before* the input reaches the LLM.
@@ -555,12 +667,22 @@ class AgentRuntime:
         # Load history from memory store
         history = self._load_history(sid)
 
+        # Persist the user turn immediately, before the (possibly failing
+        # or long-running) provider call, so a provider crash, timeout, or
+        # policy denial doesn't leave the incoming message unrecorded
+        # (FX-B: persistence failure -- including "we never even tried" --
+        # must never disappear silently). Loading history above first
+        # avoids this turn leaking into its own prompt context.
+        self._save_turn(sid, "user", user_input, task_id=task_id)
+
         # Attention system: process input to get urgency, topics, priorities
         attention_query = user_input
+        priority_tools: list[str] = []
         if self._attention is not None:
             try:
                 attn_state = self._attention.process(user_input, history)
                 attention_query = " ".join(attn_state.topics) if attn_state.topics else user_input
+                priority_tools = attn_state.priority_tools
                 logger.debug(
                     "Attention state: urgency=%.2f topics=%s focus=%d priority=%s",
                     attn_state.urgency,
@@ -604,6 +726,8 @@ class AgentRuntime:
                 session_id=sid,
                 task_id=task_id,
                 user_input=user_input,
+                _delegation_depth=_delegation_depth,
+                priority_tools=priority_tools,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -646,9 +770,9 @@ class AgentRuntime:
         # Record turn to request tracker for pattern detection.
         self._track_request(user_input, sid, all_tool_names_used, provider.name)
 
-        # Persist turn
-        self._save_turn(sid, "user", user_input)
-        self._save_turn(sid, "assistant", final_response, provider=provider.name)
+        # Persist the assistant turn (the user turn was already saved
+        # above, before the provider call was attempted).
+        self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
 
         # Extract learnings from tool-augmented runs
         if all_tool_names_used:
@@ -658,9 +782,10 @@ class AgentRuntime:
         self._maybe_compact(sid, provider)
 
         cost_detail = {}
-        if self._cost_tracker is not None:
+        _session_tracker = self._peek_cost_tracker(sid)
+        if _session_tracker is not None:
             with contextlib.suppress(Exception):
-                cost_detail = self._cost_tracker.get_summary()
+                cost_detail = _session_tracker.get_summary()
 
         self._emit_event(
             session_id=sid,
@@ -721,6 +846,11 @@ class AgentRuntime:
         if not user_input or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
 
+        # SR-4.1: same idle-timer reset as run() -- this path can bypass
+        # run() entirely (single-turn streaming), so it needs its own call.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
+
         # Sanitize user input before processing (same as run())
         if self._sanitizer is not None:
             user_input = self._sanitizer.sanitize(user_input)
@@ -745,9 +875,42 @@ class AgentRuntime:
         system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
         msg_objects = self._dicts_to_messages(system_prompt, messages)
 
+        # Verify system prompt integrity before this provider call --
+        # this streaming path calls provider.stream() directly rather
+        # than going through _single_turn()/_tool_loop(), so it needs
+        # its own drift check (see the identical check now in
+        # _single_turn() for why this matters). getattr (not a direct
+        # attribute access) tolerates minimal test doubles built via
+        # AgentRuntime.__new__() that bypass __init__ and never set
+        # _drift_detector at all.
+        drift_detector = getattr(self, "_drift_detector", None)
+        if drift_detector is not None and not drift_detector.verify("system_prompt", system_prompt):
+            logger.warning("Prompt drift detected: system prompt has been modified")
+            self._emit_event(
+                session_id=sid,
+                task_id="",
+                event_type="security.prompt_drift",
+                result="alert",
+                detail={"prompt_id": "system_prompt"},
+            )
+
+        # SR-3.4-class gap: _single_turn()/_tool_loop() both check budget
+        # before every paid provider call, but this streaming path called
+        # provider.stream() directly with no pre-flight check at all --
+        # a session already over max_spend_usd could still stream
+        # indefinitely through this path. provider.stream() only yields
+        # text deltas with no usage/cost info (unlike CompletionResponse),
+        # so _record_cost() genuinely cannot be called afterward without
+        # a broader redesign of the streaming interface to also surface
+        # token usage -- that part is a documented residual, not fixed
+        # here. The pre-flight check itself, which only reads already-
+        # accumulated cost from *prior* calls, is fully fixable now.
+        self._check_budget(session_id=sid, task_id="")
+
         self._acquire_rate_limit()
 
         full_text = ""
+        any_chunk_yielded = False
         subscription = AgentSubscription(reasoning_mode="off")
         subscription.handle_event({"type": "message_start"})
         try:
@@ -757,23 +920,41 @@ class AgentRuntime:
                 )
                 full_text = update.full_visible_text
                 if update.visible_delta:
+                    any_chunk_yielded = True
                     yield update.visible_delta
             final_update = subscription.handle_event({"type": "message_end"})
             full_text = final_update.full_visible_text
             if final_update.visible_delta:
+                any_chunk_yielded = True
                 yield final_update.visible_delta
         except Exception:
-            logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
-            # Fall back to non-streaming
-            response = self._single_turn(
-                provider=provider,
-                system_prompt=system_prompt,
-                messages=messages,
-                session_id=sid,
-                task_id=str(self._session_mgr.generate_task_id()),
-            )
-            yield response.content
-            full_text = response.content
+            if any_chunk_yielded:
+                # Regression: falling back to _single_turn() here re-generates
+                # and yields the ENTIRE response from scratch -- if the
+                # stream failed *after* already yielding some chunks to the
+                # caller (e.g. a connection drop mid-response), the caller
+                # would receive the already-streamed partial text followed
+                # by a full duplicate/overlapping re-generation. Stop with
+                # whatever partial text was captured instead of compounding
+                # a failure with confusing duplicated output.
+                logger.warning(
+                    "Streaming failed after partial output was already "
+                    "yielded; not falling back to avoid duplicating "
+                    "already-sent content.",
+                    exc_info=True,
+                )
+            else:
+                logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
+                # Fall back to non-streaming
+                response = self._single_turn(
+                    provider=provider,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    session_id=sid,
+                    task_id=str(self._session_mgr.generate_task_id()),
+                )
+                yield response.content
+                full_text = response.content
 
         # Persist turns
         self._save_turn(sid, "user", user_input)
@@ -791,6 +972,8 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        _delegation_depth: int = 0,
+        priority_tools: list[str] | None = None,
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -806,11 +989,26 @@ class AgentRuntime:
             task_id: Task ID for kwargs forwarding.
             user_input: Original user prompt, forwarded to the tool loop for
                 checkpointing.
+            _delegation_depth: SR-4.2 -- internal, forwarded to
+                :meth:`_tool_loop`. See :meth:`run`.
+            priority_tools: Tool names the :class:`~missy.agent.attention.AttentionSystem`
+                flagged as most relevant to this turn. Previously computed
+                every turn and only ever logged at DEBUG level -- the whole
+                point of "prioritising" tools (as README.md advertises) was
+                never actually acted on anywhere. Tools named here are moved
+                to the front of the definitions sent to the provider
+                (order can influence which tool an LLM reaches for first),
+                without changing which tools are allowed/available.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
         tools = self._get_tools()
+        if priority_tools:
+            priority_set = set(priority_tools)
+            prioritised = [t for t in tools if getattr(t, "name", None) in priority_set]
+            rest = [t for t in tools if getattr(t, "name", None) not in priority_set]
+            tools = prioritised + rest
         use_tool_loop = bool(tools) and self.config.max_iterations > 1
 
         if use_tool_loop:
@@ -822,6 +1020,7 @@ class AgentRuntime:
                 session_id=session_id,
                 task_id=task_id,
                 user_input=user_input,
+                _delegation_depth=_delegation_depth,
             )
         else:
             response = self._single_turn(
@@ -842,6 +1041,7 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        _delegation_depth: int = 0,
     ) -> tuple[str, list[str]]:
         """Inner agentic tool-call loop.
 
@@ -900,11 +1100,37 @@ class AgentRuntime:
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
+        # SR-2.3: the tools presented to the provider for this turn are the
+        # only ones that may actually be dispatched. _get_tools() already
+        # resolved capability_mode/tool_policy for this exact call; without
+        # re-checking dispatch against that same set, a hallucinated,
+        # stale, or provider-ignored-the-constraint tool name would still
+        # execute via the registry — silently bypassing the capability
+        # mode/tool-policy layer (the registry's own filesystem/network/
+        # shell checks still apply independently, but this layer is meant
+        # to be a separate, earlier gate).
+        allowed_tool_names = {getattr(t, "name", None) for t in tools}
+        allowed_tool_names.discard(None)
+
         # --- OpenClaw A3: mutation fingerprinting + sticky lastToolError ---
         # Maps fingerprint → call count across all iterations.
         _mutation_fp_counts: dict[str, int] = {}
         # Maps fingerprint → last error text (cleared when same fp succeeds).
         _mutation_fp_errors: dict[str, str] = {}
+
+        # SR-4.4: done-criteria verification. Deterministic, tool-observed
+        # evidence (not a model self-report) that the round of tool calls
+        # immediately preceding a "stop" claim actually succeeded. Tracks
+        # only the *most recent* round rather than _mutation_fp_errors'
+        # full per-argument-fingerprint history: a corrected retry
+        # necessarily uses different arguments (a different fingerprint),
+        # so gating on "any fingerprint ever errored" would keep rejecting
+        # completion long after the model successfully recovered via a
+        # different call -- gating on "did the last round contain an
+        # unresolved error" avoids that false-positive class entirely.
+        _last_round_errors: list[str] = []
+        _MAX_DONE_VERIFICATION_RETRIES = 2
+        _done_verification_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
@@ -916,13 +1142,17 @@ class AgentRuntime:
         try:
             for iteration in range(self.config.max_iterations):
                 _progress.on_iteration(iteration, self.config.max_iterations)
-                if getattr(provider, "accepts_message_dicts", False) is True:
-                    provider_messages = self._dicts_to_native_messages(system_prompt, loop_messages)
-                else:
-                    provider_messages = self._dicts_to_messages(system_prompt, loop_messages)
 
-                # Rate limit before calling provider
-                self._acquire_rate_limit()
+                # SR-3.4: check budget against cost already accumulated from
+                # prior calls *before* making another paid provider call.
+                # check_budget() only ever raises once total_cost_usd has
+                # already crossed max_spend_usd from previous responses, so
+                # this cannot preemptively deny the one call that actually
+                # crosses the threshold (its cost isn't known until it
+                # completes) — but it stops every call *after* that one from
+                # incurring further billed usage before being denied, which
+                # is what the post-call-only check below could never do.
+                self._check_budget(session_id=session_id, task_id=task_id)
 
                 # Verify system prompt integrity before each provider call
                 if self._drift_detector is not None and not self._drift_detector.verify(
@@ -951,11 +1181,30 @@ class AgentRuntime:
                     )
                     return fallback.content, tool_names_used
 
-                response: CompletionResponse = self._circuit_breaker.call(
-                    provider.complete_with_tools,
-                    provider_messages,
-                    tools,
-                    system_prompt,
+                # SR-4.8: built fresh per candidate provider so message
+                # formatting matches whichever provider actually serves the
+                # call, including a fallback with a different
+                # accepts_message_dicts convention than `provider`.
+                def _make_complete_with_tools_call(target: Any) -> Any:
+                    if getattr(target, "accepts_message_dicts", False) is True:
+                        target_messages = self._dicts_to_native_messages(
+                            system_prompt, loop_messages
+                        )
+                    else:
+                        target_messages = self._dicts_to_messages(system_prompt, loop_messages)
+
+                    def _call() -> CompletionResponse:
+                        self._acquire_rate_limit()
+                        return target.complete_with_tools(target_messages, tools, system_prompt)
+
+                    return _call
+
+                response, provider = self._call_provider_with_fallback(
+                    provider,
+                    _make_complete_with_tools_call,
+                    session_id=session_id,
+                    task_id=task_id,
+                    requires_tools=True,
                 )
 
                 # Record cost and enforce budget
@@ -965,6 +1214,20 @@ class AgentRuntime:
                 if response.finish_reason == "tool_calls" and response.tool_calls:
                     # Execute each tool call
                     tool_results: list[ToolResult] = []
+                    # Feature #7: which tools crossed the failure threshold
+                    # THIS round. Previously a single `should_inject` bool was
+                    # overwritten (not accumulated) on every iteration, so if
+                    # an earlier tool call in a multi-tool-call round crossed
+                    # its failure threshold but a later one in the same round
+                    # succeeded (or simply didn't itself cross threshold),
+                    # the True flag from the earlier call was silently
+                    # clobbered by the later call's False -- the
+                    # strategy-rotation prompt was never injected for that
+                    # round even though FailureTracker's own per-tool state
+                    # correctly recorded the threshold crossing. Providers
+                    # that support parallel tool calling make this a real,
+                    # not merely theoretical, scenario.
+                    strategy_rotation_targets: list[tuple[str, str]] = []
                     for tc in response.tool_calls:
                         tool_names_used.append(tc.name)
                         _progress.on_tool_start(tc.name)
@@ -978,7 +1241,13 @@ class AgentRuntime:
                                 },
                                 source=f"tool:{tc.name}",
                             )
-                        tr = self._execute_tool(tc, session_id=session_id, task_id=task_id)
+                        tr = self._execute_tool(
+                            tc,
+                            session_id=session_id,
+                            task_id=task_id,
+                            allowed_tool_names=allowed_tool_names,
+                            _delegation_depth=_delegation_depth,
+                        )
                         if _HAS_MESSAGE_BUS:
                             self._bus_publish(
                                 _BUS_TOOL_RESULT,
@@ -1004,26 +1273,17 @@ class AgentRuntime:
                         # Feature #7: track failures / successes per tool
                         if failure_tracker is not None:
                             if tr.is_error:
-                                should_inject = failure_tracker.record_failure(tc.name, tr.content)
+                                if failure_tracker.record_failure(tc.name, tr.content):
+                                    strategy_rotation_targets.append((tc.name, tr.content))
                             else:
                                 failure_tracker.record_success(tc.name)
-                                should_inject = False
-                        else:
-                            should_inject = False
 
-                        # Trust scoring: adjust score based on tool outcome
-                        _trust = getattr(self, "_trust_scorer", None)
-                        if _trust is not None:
-                            if tr.is_error:
-                                _trust.record_failure(tc.name)
-                                if not _trust.is_trusted(tc.name):
-                                    logger.warning(
-                                        "Trust score for tool %r dropped below threshold: %d",
-                                        tc.name,
-                                        _trust.score(tc.name),
-                                    )
-                            else:
-                                _trust.record_success(tc.name)
+                        # Trust scoring now happens inside _execute_tool()
+                        # itself, which has the raw registry ToolResult
+                        # (including policy_denied) in scope -- see the
+                        # comment there for why doing it here instead would
+                        # collapse a policy violation into the same
+                        # record_failure() penalty as any other tool error.
 
                     # Append assistant message with tool_calls to loop history
                     loop_messages.append(
@@ -1040,6 +1300,13 @@ class AgentRuntime:
                             ],
                         }
                     )
+
+                    # SR-4.4: record this round's errors (and only this
+                    # round's -- overwritten, not accumulated) for the
+                    # done-criteria completion gate below.
+                    _last_round_errors = [
+                        f"{tr.name}: {tr.content}" for tr in tool_results if tr.is_error
+                    ]
 
                     # Append tool result messages (with injection scanning)
                     for tr in tool_results:
@@ -1082,25 +1349,31 @@ class AgentRuntime:
                             }
                         )
 
-                    # Feature #7: inject strategy-rotation prompt when threshold hit
-                    if should_inject and failure_tracker is not None:
-                        # Use the last tc/tr from the loop (they stay in scope)
-                        strategy_prompt = failure_tracker.get_strategy_prompt(tc.name, tr.content)
-                        loop_messages.append({"role": "user", "content": strategy_prompt})
-                        with contextlib.suppress(Exception):
-                            self._emit_event(
-                                session_id=session_id,
-                                task_id=task_id,
-                                event_type="agent.tool.strategy_rotation",
-                                result="allow",
-                                detail={
-                                    "tool_name": tc.name,
-                                    "failure_count": failure_tracker.threshold,
-                                },
+                    # Feature #7: inject a strategy-rotation prompt for EVERY
+                    # tool that crossed its failure threshold this round, not
+                    # just whichever tool call happened to be last.
+                    if failure_tracker is not None:
+                        for target_name, target_content in strategy_rotation_targets:
+                            strategy_prompt = failure_tracker.get_strategy_prompt(
+                                target_name, target_content
                             )
+                            loop_messages.append({"role": "user", "content": strategy_prompt})
+                            with contextlib.suppress(Exception):
+                                self._emit_event(
+                                    session_id=session_id,
+                                    task_id=task_id,
+                                    event_type="agent.tool.strategy_rotation",
+                                    result="allow",
+                                    detail={
+                                        "tool_name": target_name,
+                                        "failure_count": failure_tracker.threshold,
+                                    },
+                                )
 
-                        # Feature #9: error-driven code evolution analysis
-                        self._analyze_for_evolution(tc.name, tr.content, failure_tracker)
+                            # Feature #9: error-driven code evolution analysis
+                            self._analyze_for_evolution(
+                                target_name, target_content, failure_tracker
+                            )
 
                     # OpenClaw A3: inject sticky lastToolError for repeated-error fingerprints.
                     # When the model has called the same tool with the same arguments
@@ -1149,6 +1422,61 @@ class AgentRuntime:
                     iteration + 1,
                     response.finish_reason,
                 )
+
+                # SR-4.4: reject a completion claim when the round of tool
+                # calls immediately preceding it contained an error --
+                # deterministic, tool-observed evidence, not the model's
+                # own say-so.
+                if _last_round_errors:
+                    if _done_verification_retries < _MAX_DONE_VERIFICATION_RETRIES:
+                        _done_verification_retries += 1
+                        rejection_msg = (
+                            "DONE-CRITERIA CHECK FAILED: you reported completion, but "
+                            f"{len(_last_round_errors)} tool call(s) in the immediately "
+                            "preceding round errored:\n"
+                            + "\n".join(f"  • {e[:200]}" for e in _last_round_errors)
+                            + "\nThis task is not done until these are resolved, or you "
+                            "explicitly explain why they cannot be fixed. Retry the "
+                            "failed operation(s) with corrected parameters, or use a "
+                            "different tool/approach."
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append({"role": "user", "content": rejection_msg})
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.done_criteria.rejected",
+                                result="deny",
+                                detail={
+                                    "unresolved_error_count": len(_last_round_errors),
+                                    "attempt": _done_verification_retries,
+                                    "max_attempts": _MAX_DONE_VERIFICATION_RETRIES,
+                                },
+                            )
+                        # Deliberately NOT cleared here: if the model
+                        # responds again without calling any tool (i.e.
+                        # without changing the evidence), the same
+                        # still-unaddressed error must keep being rejected
+                        # up to the retry cap rather than being accepted on
+                        # a second identical claim. A new round of tool
+                        # calls (success or failure) naturally overwrites
+                        # this list above regardless.
+                        continue
+                    # Retries exhausted -- still return the model's response
+                    # (a stale/incorrect completion claim is not something
+                    # the runtime should silently rewrite), but make the
+                    # gap visible via audit rather than treating it as a
+                    # verified success.
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.done_criteria.unverified",
+                            result="warn",
+                            detail={"unresolved_error_count": len(_last_round_errors)},
+                        )
+
                 # Feature #8: mark checkpoint complete on success
                 if _cm is not None and _checkpoint_id is not None:
                     with contextlib.suppress(Exception):
@@ -1202,24 +1530,69 @@ class AgentRuntime:
         Returns:
             A :class:`~missy.providers.base.CompletionResponse`.
         """
+        # SR-3.4: _single_turn() previously never checked budget at all --
+        # neither before nor after its paid provider.complete() call. It is
+        # used both directly (the non-tool-loop single-turn path) and as
+        # _tool_loop's fallback when a provider doesn't implement
+        # complete_with_tools, so this is a second, independent gap from
+        # the pre-flight check added to _tool_loop's main iteration.
+        self._check_budget(session_id=session_id, task_id=task_id)
+
+        # Verify system prompt integrity before this provider call. Only
+        # _tool_loop() did this (checked once per iteration); this method
+        # is *also* the entire completion path for every conversation with
+        # no tools registered or max_iterations<=1 (the non-tool-loop
+        # branch of _run_loop), so those calls previously sent the system
+        # prompt to the provider with zero drift verification at all --
+        # a prompt-injection rewrite of the system prompt on exactly
+        # those paths went completely undetected. getattr (not a direct
+        # attribute access) tolerates minimal test doubles built via
+        # AgentRuntime.__new__() that bypass __init__ and never set
+        # _drift_detector at all.
+        drift_detector = getattr(self, "_drift_detector", None)
+        if drift_detector is not None and not drift_detector.verify("system_prompt", system_prompt):
+            logger.warning("Prompt drift detected: system prompt has been modified")
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="security.prompt_drift",
+                result="alert",
+                detail={"prompt_id": "system_prompt"},
+            )
+
         msg_objects = self._dicts_to_messages(system_prompt, messages)
-        complete_kwargs: dict = {
-            "session_id": session_id,
-            "task_id": task_id,
-            "temperature": self.config.temperature,
-        }
-        if self.config.model:
-            complete_kwargs["model"] = self.config.model
+        primary_name = provider.name
 
-        # Rate limit before calling provider
-        self._acquire_rate_limit()
+        # SR-4.8: model/tool compatibility across a fallback transition --
+        # self.config.model names a model on the *originally configured*
+        # provider (e.g. an Anthropic model id) and must never be forwarded
+        # to an unrelated fallback provider. Only the originally-resolved
+        # provider gets the explicit override; any fallback candidate uses
+        # its own configured default model instead.
+        def _make_complete_call(target: Any) -> Any:
+            complete_kwargs: dict = {
+                "session_id": session_id,
+                "task_id": task_id,
+                "temperature": self.config.temperature,
+            }
+            if target.name == primary_name and self.config.model:
+                complete_kwargs["model"] = self.config.model
 
-        result = self._circuit_breaker.call(
-            provider.complete,
-            msg_objects,
-            **complete_kwargs,
+            def _call() -> CompletionResponse:
+                self._acquire_rate_limit()
+                return target.complete(msg_objects, **complete_kwargs)
+
+            return _call
+
+        result, _provider_used = self._call_provider_with_fallback(
+            provider,
+            _make_complete_call,
+            session_id=session_id,
+            task_id=task_id,
+            requires_tools=False,
         )
         self._record_cost(result, session_id=session_id)
+        self._check_budget(session_id=session_id, task_id=task_id)
         return result
 
     # ------------------------------------------------------------------
@@ -1249,6 +1622,7 @@ class AgentRuntime:
         try:
             registry = get_tool_registry()
             self._load_enabled_candidate_tools(registry)
+            self._sync_mcp_tools(registry)
             tool_names = [name for name in registry.list_tools() if registry.is_enabled(name)]
         except RuntimeError:
             return []
@@ -1297,6 +1671,43 @@ class AgentRuntime:
                 )
         except Exception:
             logger.debug("Candidate runtime loader failed; continuing with registered tools only.")
+
+    def _sync_mcp_tools(self, registry: Any) -> None:
+        """Register every currently-connected MCP tool into *registry*.
+
+        SR-4.7: called at the top of every :meth:`_get_tools` so servers
+        connected/reconnected/disconnected after startup (via
+        ``missy mcp add``/``remove`` or :meth:`~missy.mcp.manager.McpManager.health_check`)
+        are reflected on the very next turn. ``registry.register()``
+        silently replaces any prior registration under the same name, so
+        re-syncing every call is cheap and idempotent -- it does not
+        matter that this re-wraps tools that haven't changed.
+        """
+        if self._mcp_manager is None:
+            return
+        try:
+            from missy.mcp.tool_wrapper import McpToolWrapper
+
+            for tool_dict in self._mcp_manager.all_tools():
+                name = tool_dict.get("name")
+                if not name:
+                    continue
+                annotation = self._mcp_manager.get_annotation(name)
+                if annotation is None:
+                    from missy.mcp.annotations import ToolAnnotation
+
+                    annotation = ToolAnnotation()
+                registry.register(
+                    McpToolWrapper(
+                        self._mcp_manager,
+                        name,
+                        tool_dict.get("description", ""),
+                        tool_dict.get("inputSchema", {}),
+                        annotation,
+                    )
+                )
+        except Exception:
+            logger.debug("MCP tool sync failed; continuing without MCP tools", exc_info=True)
 
     def _apply_provider_gate(self, tool_names: list[str]) -> list[str]:
         """Filter *tool_names* through :class:`~missy.tools.intelligence.provider_gate.ToolProviderGate`.
@@ -1354,8 +1765,46 @@ class AgentRuntime:
             pass
         return tuple(transient)
 
+    def _score_tool_trust(
+        self, tool_name: str, *, success: bool, policy_denied: bool = False
+    ) -> None:
+        """Adjust ``self._trust_scorer``'s score for *tool_name* by outcome.
+
+        A plain tool-execution failure costs :meth:`TrustScorer.record_failure`
+        (-50 by default). A failure specifically caused by the policy engine
+        raising ``PolicyViolationError`` (see
+        :meth:`missy.tools.registry.ToolRegistry.execute`'s ``policy_denied``
+        flag on its returned ``ToolResult``) costs the harsher
+        :meth:`TrustScorer.record_violation` (-200) instead — previously
+        every call site here used ``record_failure`` unconditionally, so
+        ``record_violation`` had zero production callers despite being
+        documented (``CLAUDE.md``, ``docs/threat-model.md``) as the scoring
+        event for policy violations specifically.
+        """
+        _trust = getattr(self, "_trust_scorer", None)
+        if _trust is None:
+            return
+        if success:
+            _trust.record_success(tool_name)
+            return
+        if policy_denied:
+            _trust.record_violation(tool_name)
+        else:
+            _trust.record_failure(tool_name)
+        if not _trust.is_trusted(tool_name):
+            logger.warning(
+                "Trust score for tool %r dropped below threshold: %d",
+                tool_name,
+                _trust.score(tool_name),
+            )
+
     def _execute_tool(
-        self, tool_call: ToolCall, session_id: str = "", task_id: str = ""
+        self,
+        tool_call: ToolCall,
+        session_id: str = "",
+        task_id: str = "",
+        allowed_tool_names: set[str] | None = None,
+        _delegation_depth: int = 0,
     ) -> ToolResult:
         """Execute a single tool call via the tool registry.
 
@@ -1367,6 +1816,17 @@ class AgentRuntime:
             tool_call: The :class:`~missy.providers.base.ToolCall` to execute.
             session_id: For audit events.
             task_id: For audit events.
+            allowed_tool_names: SR-2.3 — when provided, the exact per-turn
+                tool set resolved by :meth:`_get_tools` (capability_mode +
+                tool_policy already applied). Any ``tool_call.name`` outside
+                this set is refused before the registry is ever consulted,
+                regardless of whether the underlying registry itself would
+                otherwise permit it — a hallucinated, stale, or
+                provider-ignored-the-constraint tool name must not slip
+                past the capability-mode/tool-policy layer just because the
+                registry happens to have a tool by that name registered.
+                ``None`` skips this check (used by call sites that don't
+                have a resolved per-turn set, e.g. direct/legacy callers).
 
         Returns:
             A :class:`~missy.providers.base.ToolResult` with the outcome.
@@ -1376,6 +1836,31 @@ class AgentRuntime:
         _MAX_TOOL_RETRIES = 2
         _RETRY_BASE_DELAY = 1.0  # seconds
 
+        if allowed_tool_names is not None and tool_call.name not in allowed_tool_names:
+            logger.warning(
+                "Tool %r requested but not in this turn's resolved allow-set "
+                "(capability_mode=%r); refusing dispatch.",
+                tool_call.name,
+                self.config.capability_mode,
+            )
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="tool_execute",
+                result="deny",
+                detail={"tool": tool_call.name, "reason": "not_in_per_turn_allow_set"},
+            )
+            self._score_tool_trust(tool_call.name, success=False)
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=(
+                    f"Tool {tool_call.name!r} is not available this turn "
+                    "(not in the current capability_mode/tool_policy allow-set)."
+                ),
+                is_error=True,
+            )
+
         # Lazily initialise transient error types once.
         if not AgentRuntime._TRANSIENT_ERRORS:
             AgentRuntime._TRANSIENT_ERRORS = AgentRuntime._init_transient_errors()
@@ -1384,6 +1869,7 @@ class AgentRuntime:
             registry = get_tool_registry()
         except KeyError as exc:
             logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -1392,6 +1878,7 @@ class AgentRuntime:
             )
         except RuntimeError as exc:
             logger.warning("Tool registry not available: %s", exc)
+            self._score_tool_trust(tool_call.name, success=False)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -1412,79 +1899,155 @@ class AgentRuntime:
             k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
         }
 
+        # SR-3.3: memory_search/memory_describe/memory_expand need a live
+        # store reference and the current session ID to function at all —
+        # neither is (or should be) model-suppliable. Without this
+        # injection every call to these tools returns "Memory store is not
+        # available" regardless of what was actually stored.
+        if tool_call.name in _MEMORY_RETRIEVAL_TOOL_NAMES:
+            tool_args = dict(tool_args)
+            tool_args.setdefault("_memory_store", self._memory_store)
+            # memory_search's own schema advertises a model-suppliable
+            # `session_id` argument to search a specific PAST session
+            # (MemorySearchTool.execute() reads
+            # `kwargs.get("session_id") or kwargs.get("_session_id")`, i.e.
+            # a model-supplied value should win over the current session).
+            # But the generic strip a few lines above already removed
+            # "session_id" from tool_args (to avoid colliding with the
+            # session_id= kwarg passed to registry.execute() below), and
+            # ToolRegistry.execute() strips it AGAIN before calling
+            # tool.execute() -- so the model's override could never
+            # reach the tool and every memory_search call was silently
+            # scoped to the current session regardless of what was
+            # requested. Recover the model's original value (if any)
+            # from the un-stripped tool_call.arguments and fold it into
+            # the internally-injected _session_id, which does survive
+            # both strip layers, preserving the same effective precedence.
+            requested_session_id = tool_call.arguments.get("session_id")
+            tool_args.setdefault("_session_id", requested_session_id or session_id)
+
+        # SR-4.2: delegate_task needs a live AgentRuntime reference (to run
+        # sub-agents through the same policy/budget/audit machinery as this
+        # call) plus the current session_id (so child spend aggregates
+        # against the same per-session CostTracker rather than escaping the
+        # parent's budget cap) and the current delegation depth (so nested
+        # delegate_task calls can enforce MAX_SUB_AGENT_DEPTH). None of
+        # these are model-suppliable.
+        if tool_call.name == "delegate_task":
+            tool_args = dict(tool_args)
+            tool_args.setdefault("_runtime", self)
+            tool_args.setdefault("_session_id", session_id)
+            tool_args.setdefault("_depth", _delegation_depth)
+
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).
+        heredoc_tmppath: str | None = None
         if tool_call.name == "shell_exec" and "command" in tool_args:
-            tool_args = _rewrite_heredoc_command(tool_args)
+            tool_args, heredoc_tmppath = _rewrite_heredoc_command(
+                tool_args, session_id=session_id, task_id=task_id
+            )
 
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_TOOL_RETRIES + 1):
-            try:
-                result = registry.execute(
-                    tool_call.name,
-                    session_id=session_id,
-                    task_id=task_id,
-                    **tool_args,
-                )
-                content = str(result.output) if result.output is not None else ""
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=content if result.success else (result.error or "Tool failed"),
-                    is_error=not result.success,
-                )
-            except KeyError as exc:
-                logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content=f"Tool not found: {tool_call.name}",
-                    is_error=True,
-                )
-            except RuntimeError as exc:
-                logger.warning("Tool registry not available: %s", exc)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content="Tool registry not initialised.",
-                    is_error=True,
-                )
-            except AgentRuntime._TRANSIENT_ERRORS as exc:
-                last_exc = exc
-                if attempt < _MAX_TOOL_RETRIES:
-                    delay = _RETRY_BASE_DELAY * (2**attempt)
-                    logger.warning(
-                        "Transient error executing tool %r (attempt %d/%d), retrying in %.1fs: %s",
+        try:
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_TOOL_RETRIES + 1):
+                try:
+                    result = registry.execute(
                         tool_call.name,
-                        attempt + 1,
-                        _MAX_TOOL_RETRIES + 1,
-                        delay,
-                        exc,
+                        session_id=session_id,
+                        task_id=task_id,
+                        **tool_args,
                     )
-                    time.sleep(delay)
-                else:
-                    logger.warning(
-                        "Tool %r failed after %d attempts: %s",
-                        tool_call.name,
-                        _MAX_TOOL_RETRIES + 1,
-                        exc,
-                    )
-            except Exception:
-                logger.exception("Unexpected error executing tool %r", tool_call.name)
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                    content="Tool execution failed due to an internal error.",
-                    is_error=True,
-                )
 
-        # All retries exhausted for transient error.
-        return ToolResult(
-            tool_call_id=tool_call.id,
-            name=tool_call.name,
-            content=f"Tool failed after {_MAX_TOOL_RETRIES + 1} attempts: {last_exc}",
-            is_error=True,
-        )
+                    # Trust scoring: adjust score based on tool outcome.
+                    # Distinguishing policy_denied here (rather than in the
+                    # caller, which only sees the generic is_error bool on
+                    # the ToolResult returned below) is what makes it
+                    # possible to apply record_violation()'s harsher -200
+                    # penalty specifically for a PolicyViolationError,
+                    # instead of every failure -- policy denial included --
+                    # collapsing into the same -50 record_failure() penalty
+                    # a tool's own internal error gets.
+                    self._score_tool_trust(
+                        tool_call.name,
+                        success=result.success,
+                        policy_denied=getattr(result, "policy_denied", False) is True,
+                    )
+
+                    content = str(result.output) if result.output is not None else ""
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content=content if result.success else (result.error or "Tool failed"),
+                        is_error=not result.success,
+                    )
+                except KeyError as exc:
+                    logger.warning("Tool %r not found in registry: %s", tool_call.name, exc)
+                    self._score_tool_trust(tool_call.name, success=False)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content=f"Tool not found: {tool_call.name}",
+                        is_error=True,
+                    )
+                except RuntimeError as exc:
+                    logger.warning("Tool registry not available: %s", exc)
+                    self._score_tool_trust(tool_call.name, success=False)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content="Tool registry not initialised.",
+                        is_error=True,
+                    )
+                except AgentRuntime._TRANSIENT_ERRORS as exc:
+                    last_exc = exc
+                    if attempt < _MAX_TOOL_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2**attempt)
+                        logger.warning(
+                            "Transient error executing tool %r (attempt %d/%d), "
+                            "retrying in %.1fs: %s",
+                            tool_call.name,
+                            attempt + 1,
+                            _MAX_TOOL_RETRIES + 1,
+                            delay,
+                            exc,
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.warning(
+                            "Tool %r failed after %d attempts: %s",
+                            tool_call.name,
+                            _MAX_TOOL_RETRIES + 1,
+                            exc,
+                        )
+                except Exception:
+                    logger.exception("Unexpected error executing tool %r", tool_call.name)
+                    self._score_tool_trust(tool_call.name, success=False)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content="Tool execution failed due to an internal error.",
+                        is_error=True,
+                    )
+
+            # All retries exhausted for transient error.
+            self._score_tool_trust(tool_call.name, success=False)
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=f"Tool failed after {_MAX_TOOL_RETRIES + 1} attempts: {last_exc}",
+                is_error=True,
+            )
+        finally:
+            # SR-2.4: a heredoc temp file is a purely internal implementation
+            # detail with no reason to persist once the tool call has
+            # finished (success, failure, or retries exhausted) — leaving it
+            # on disk indefinitely risks exposing whatever the model wrote
+            # into it (potentially secrets) to any other local process/user.
+            if heredoc_tmppath is not None:
+                import os as _os
+
+                with contextlib.suppress(OSError):
+                    _os.unlink(heredoc_tmppath)
 
     # ------------------------------------------------------------------
     # Context / memory helpers
@@ -1552,7 +2115,19 @@ class AgentRuntime:
                         behavior_context = {
                             "turn_count": len(history),
                             "has_tool_results": False,
-                            "topic": "",
+                            # "topic" was previously hardcoded to "" at this
+                            # sole production call site, so
+                            # get_response_guidelines()'s "Technical topic
+                            # detected" branch (code/script/function/class/api
+                            # keyword matching) could never fire despite
+                            # being fully implemented and unit-tested in
+                            # isolation. attention_query already carries
+                            # exactly this signal -- the AttentionSystem's
+                            # extracted topics (falling back to user_input
+                            # when none were extracted) -- computed once in
+                            # run() for memory relevance scoring; reusing it
+                            # here costs nothing extra.
+                            "topic": attention_query or user_input,
                             "intent": "question",
                             "urgency": "low",
                         }
@@ -1635,7 +2210,30 @@ class AgentRuntime:
         try:
             from missy.memory.synthesizer import MemorySynthesizer
 
-            synth = MemorySynthesizer()
+            # Reconcile with ContextManager's own token budget.
+            # build_messages() reserves memory_fraction + learnings_fraction
+            # of the available budget (subtracted from history_budget)
+            # specifically for injected memory/learnings -- but this
+            # synthesized block is appended to the system prompt string
+            # *after* build_messages() already ran, entirely outside its
+            # accounting (no production caller ever passes memory_results/
+            # learnings into build_messages() itself). MemorySynthesizer's
+            # own independent default max_tokens (4500) had no relationship
+            # to that reservation: the reserved budget went completely
+            # unused while the actually-appended block could still push the
+            # real final prompt over the configured TokenBudget.total.
+            # Deriving max_tokens from the same reservation keeps the two
+            # budgets in sync instead of silently disagreeing.
+            max_tokens = 4500
+            if self._context_manager is not None:
+                budget = getattr(self._context_manager, "_budget", None)
+                if budget is not None:
+                    max_tokens = max(
+                        1,
+                        int(budget.total * (budget.memory_fraction + budget.learnings_fraction)),
+                    )
+
+            synth = MemorySynthesizer(max_tokens=max_tokens)
             has_content = False
 
             if learnings:
@@ -1677,26 +2275,54 @@ class AgentRuntime:
             logger.debug("Failed to load history from memory store: %s", exc)
             return []
 
-    def _save_turn(self, session_id: str, role: str, content: str, provider: str = "") -> None:
+    def _save_turn(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        provider: str = "",
+        task_id: str = "",
+    ) -> None:
         """Persist a conversation turn to the memory store.
+
+        ``SQLiteMemoryStore.add_turn()`` (the production memory backend,
+        see :meth:`_make_memory_store`) takes a single ``ConversationTurn``
+        object rather than keyword arguments, so one is constructed here.
 
         Args:
             session_id: Session to write to.
             role: Speaker role (``"user"`` or ``"assistant"``).
             content: Message content.
             provider: Provider name (for assistant turns).
+            task_id: Task identifier, for the failure audit event.
         """
         if self._memory_store is None:
             return
         try:
-            self._memory_store.add_turn(
+            from missy.memory.sqlite_store import ConversationTurn
+
+            turn = ConversationTurn.new(
                 session_id=session_id,
                 role=role,
                 content=content,
                 provider=provider,
             )
+            self._memory_store.add_turn(turn)
         except Exception as exc:
-            logger.debug("Failed to save turn to memory store: %s", exc)
+            # FX-B: persistence failure must never disappear silently.
+            logger.warning(
+                "Failed to save %s turn to memory store (session=%s): %s",
+                role,
+                session_id,
+                exc,
+            )
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="memory.persist_failed",
+                result="error",
+                detail={"role": role, "error": str(exc)},
+            )
 
     def _intercept_large_content(self, session_id: str, tool_name: str, content: str) -> str:
         """Store large content and return a compact reference.
@@ -1768,7 +2394,16 @@ class AgentRuntime:
         final_response: str,
         prompt: str,
     ) -> None:
-        """Extract and log learnings from a completed tool-augmented run.
+        """Extract and persist learnings from a completed tool-augmented run.
+
+        SR-4.1: previously extracted a real
+        :class:`~missy.agent.learnings.TaskLearning` and only logged it
+        at DEBUG level, never calling
+        :meth:`~missy.memory.sqlite_store.SQLiteMemoryStore.save_learning`
+        -- the ``learnings`` table was permanently empty in production,
+        so :meth:`_build_context_messages`'s ``get_learnings(limit=5)``
+        context injection had nothing to inject, ever, despite the
+        retrieval half of this feature always having worked correctly.
 
         Args:
             tool_names_used: All tool names invoked during the run.
@@ -1789,8 +2424,31 @@ class AgentRuntime:
                 learning.outcome,
                 learning.lesson,
             )
+            if self._memory_store is not None:
+                self._memory_store.save_learning(learning)
+
+            # Playbook.record() (the "auto-capture successful tool
+            # patterns" half of the advertised feature) previously had zero
+            # production callers anywhere -- get_relevant()'s read side
+            # always worked, but nothing ever wrote a pattern, so
+            # get_promotable()/mark_promoted() (auto-promotion to skill
+            # proposals after 3+ successes) were permanently inert too.
+            # Only record genuine tool-augmented successes; a "success"
+            # with no tools used isn't a reusable tool-sequence pattern.
+            if learning.outcome == "success" and learning.approach:
+                try:
+                    from missy.agent.playbook import Playbook
+
+                    Playbook().record(
+                        task_type=learning.task_type,
+                        description=learning.lesson,
+                        tool_sequence=learning.approach,
+                        prompt_hint=prompt[:200],
+                    )
+                except Exception:
+                    logger.debug("Failed to record playbook pattern", exc_info=True)
         except Exception as exc:
-            logger.debug("Failed to extract learnings: %s", exc)
+            logger.debug("Failed to extract/persist learnings: %s", exc)
 
     def _analyze_for_evolution(
         self,
@@ -1877,7 +2535,40 @@ class AgentRuntime:
                     content_str = f"[Tool error for {d.get('name', 'unknown')}]: {content}"
                 result.append(Message(role="user", content=content_str))
             elif role in ("user", "assistant"):
-                result.append(Message(role=role, content=str(content)))
+                content_str = str(content)
+                if not content_str and role == "assistant":
+                    # The Anthropic Messages API rejects any non-final
+                    # message with empty content ("all messages must have
+                    # non-empty content except for the optional final
+                    # assistant message"). An assistant loop_messages dict
+                    # can legitimately have content="" for more than one
+                    # reason -- Claude (and other providers) frequently
+                    # emit a tool_use block with no accompanying text
+                    # (behavior.py explicitly tells the model to avoid
+                    # preamble), and the SR-4.4 done-criteria-rejection
+                    # retry path (above) also appends
+                    # {"role": "assistant", "content": final_text} where
+                    # final_text can itself be "" if the provider returned
+                    # blank text with finish_reason="stop". Both are the
+                    # common case, not an edge case, and both previously
+                    # re-serialized straight to an empty-content Message,
+                    # sending an invalid request and aborting the entire
+                    # multi-round task on the very next round. Substitute a
+                    # placeholder instead of an empty string in every case.
+                    if d.get("tool_calls"):
+                        tool_names = [
+                            str(tc.get("name", "tool"))
+                            for tc in d["tool_calls"]
+                            if isinstance(tc, dict)
+                        ]
+                        content_str = (
+                            f"[Called tool: {', '.join(tool_names)}]"
+                            if tool_names
+                            else "[Tool call]"
+                        )
+                    else:
+                        content_str = "[No response text]"
+                result.append(Message(role=role, content=content_str))
         return result
 
     def _dicts_to_native_messages(
@@ -1895,12 +2586,23 @@ class AgentRuntime:
     # Lazy subsystem factories
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _make_circuit_breaker(provider_name: str) -> Any:
+    def _make_circuit_breaker(self, provider_name: str) -> Any:
         """Create a :class:`~missy.agent.circuit_breaker.CircuitBreaker`.
 
+        SR-4.8 residual: every provider previously got a breaker with the
+        same hardcoded threshold/cooldown regardless of its own
+        configured ``circuit_breaker_threshold``/
+        ``circuit_breaker_cooldown_seconds`` (a flakier or higher-stakes
+        provider had no way to get a different tolerance). Looks up the
+        named provider's registered :class:`~missy.providers.registry.ProviderConfig`
+        (if any) and uses its tunables; falls back to
+        :class:`CircuitBreaker`'s own defaults when the provider isn't
+        registered with a config, or the config doesn't set these
+        fields (e.g. an older config predating this option).
+
         Args:
-            provider_name: Used as the breaker name for logging.
+            provider_name: Used as the breaker name for logging, and to
+                look up this provider's own tunables.
 
         Returns:
             A :class:`~missy.agent.circuit_breaker.CircuitBreaker` instance,
@@ -1908,8 +2610,33 @@ class AgentRuntime:
         """
         try:
             from missy.agent.circuit_breaker import CircuitBreaker
+        except Exception:
+            return _NoOpCircuitBreaker()
 
-            return CircuitBreaker(name=provider_name)
+        # The process-level ProviderRegistry may not be initialised yet
+        # at the point a runtime is constructed (tests routinely build an
+        # AgentRuntime standalone; some startup orderings do too) -- that
+        # is a normal, expected case, not a reason to silently disable
+        # circuit-breaking altogether by falling through to the no-op
+        # stub. Only missing/failed CircuitBreaker construction itself
+        # should do that.
+        kwargs: dict[str, Any] = {}
+        try:
+            from missy.providers.registry import get_registry
+
+            provider_config = get_registry().get_config(provider_name)
+        except Exception:
+            provider_config = None
+        if provider_config is not None:
+            threshold = getattr(provider_config, "circuit_breaker_threshold", None)
+            cooldown = getattr(provider_config, "circuit_breaker_cooldown_seconds", None)
+            if threshold is not None:
+                kwargs["threshold"] = threshold
+            if cooldown is not None:
+                kwargs["base_timeout"] = cooldown
+
+        try:
+            return CircuitBreaker(name=provider_name, **kwargs)
         except Exception:
             return _NoOpCircuitBreaker()
 
@@ -1935,10 +2662,16 @@ class AgentRuntime:
             A string block to append to the system prompt, or ``None``.
         """
         try:
-            from missy.agent.playbook import Playbook
+            from missy.agent.playbook import Playbook, classify_task_type
 
             playbook = Playbook()
-            entries = playbook.get_relevant(task_type=user_input, top_k=3)
+            # get_relevant() matches on an exact coarse category (e.g.
+            # "shell", "file") -- passing the raw, arbitrary user_input
+            # here could never match any recorded pattern in principle,
+            # since Playbook.record() is only ever keyed on that same
+            # small coarse vocabulary. classify_task_type() guesses the
+            # likely category before any tools have actually run this turn.
+            entries = playbook.get_relevant(task_type=classify_task_type(user_input), top_k=3)
             if not entries:
                 return None
             lines = ["\n\n[Playbook — proven patterns]"]
@@ -1951,16 +2684,36 @@ class AgentRuntime:
 
     @staticmethod
     def _make_memory_store() -> Any:
-        """Create a :class:`~missy.memory.store.MemoryStore`.
+        """Create the production memory store.
+
+        Uses :class:`~missy.memory.sqlite_store.SQLiteMemoryStore` (the
+        durable, WAL-mode, FTS5-searchable backend at ``~/.missy/memory.db``)
+        -- the same backend every other production consumer already
+        assumes: ``memory_search``/``memory_describe``/``memory_expand``
+        tools, :func:`~missy.agent.compaction.compact_if_needed` (which is
+        type-hinted to require it), :meth:`_intercept_large_content`
+        (which imports ``LargeContentRecord`` from this module), hatching's
+        welcome-turn seeding, and :class:`~missy.vision.vision_memory.VisionMemoryBridge`.
+
+        Previously this returned :class:`~missy.memory.store.MemoryStore`
+        (a JSON file at ``~/.missy/memory.json``) which every one of those
+        call sites is incompatible with -- e.g. it has no
+        ``store_large_content``/``add_summary`` methods at all, and
+        :meth:`_save_turn` here called ``add_turn`` with keyword arguments
+        that only the JSON store's signature accepts. That mismatch (SR-3.1)
+        is the direct cause of the FX-B finding that real Discord
+        conversation turns were never durably persisted: turns were written
+        to ``memory.json`` while every read path (memory tools, `missy
+        sessions`, this validation harness) looks at ``memory.db``.
 
         Returns:
-            A :class:`~missy.memory.store.MemoryStore` instance, or ``None``
-            when unavailable.
+            A :class:`~missy.memory.sqlite_store.SQLiteMemoryStore` instance,
+            or ``None`` when unavailable.
         """
         try:
-            from missy.memory.store import MemoryStore
+            from missy.memory.sqlite_store import SQLiteMemoryStore
 
-            return MemoryStore()
+            return SQLiteMemoryStore()
         except Exception:
             return None
 
@@ -1979,6 +2732,76 @@ class AgentRuntime:
             return CostTracker(max_spend_usd=self.config.max_spend_usd)
         except Exception:
             return None
+
+    @staticmethod
+    def _cost_tracker_module_available() -> bool:
+        """Return ``True`` when the cost-tracker module can be imported."""
+        try:
+            import missy.agent.cost_tracker  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    #: Maximum number of per-session CostTracker instances retained in
+    #: memory at once. Bounds growth for a long-running shared runtime
+    #: (e.g. a Discord bot or Web API process) serving many distinct
+    #: sessions over its lifetime; oldest-created trackers are evicted
+    #: first, matching the eviction pattern already used inside
+    #: CostTracker itself for per-call usage records.
+    _MAX_TRACKED_SESSIONS: int = 5_000
+
+    def _get_cost_tracker(self, session_id: str) -> Any:
+        """Return the :class:`CostTracker` for *session_id*, creating it if needed.
+
+        SR-3.4 (cross-session-aggregation fix): ``max_spend_usd`` is
+        documented as a per-session budget cap, but a single shared
+        ``AgentRuntime`` instance commonly serves many logically distinct
+        sessions (every Discord user, every Web API session, every
+        scheduled job run). A single runtime-wide accumulator would let
+        one session's spend count against every other session's budget.
+        Each session therefore gets its own tracker, keyed by
+        *session_id*.
+
+        Args:
+            session_id: The session this cost/budget check belongs to.
+                An empty string is treated as its own session bucket
+                (matches callers that have no session context, e.g.
+                direct unit-level calls).
+
+        Returns:
+            A :class:`~missy.agent.cost_tracker.CostTracker`, or ``None``
+            when cost tracking is disabled/unavailable for this runtime.
+        """
+        if not self._cost_tracking_enabled:
+            return None
+        key = session_id or "__no_session__"
+        with self._cost_trackers_lock:
+            tracker = self._cost_trackers.get(key)
+            if tracker is None:
+                tracker = self._make_cost_tracker()
+                if tracker is None:
+                    self._cost_tracking_enabled = False
+                    return None
+                self._cost_trackers[key] = tracker
+                if len(self._cost_trackers) > self._MAX_TRACKED_SESSIONS:
+                    oldest_key = next(iter(self._cost_trackers))
+                    if oldest_key != key:
+                        del self._cost_trackers[oldest_key]
+            return tracker
+
+    def _peek_cost_tracker(self, session_id: str) -> Any:
+        """Return *session_id*'s CostTracker without creating one.
+
+        Non-side-effecting counterpart to :meth:`_get_cost_tracker`, for
+        read-only display sites (e.g. audit-event summaries) that should
+        not fabricate a fresh empty tracker for a session that never
+        actually recorded any cost.
+        """
+        if not self._cost_tracking_enabled:
+            return None
+        key = session_id or "__no_session__"
+        with self._cost_trackers_lock:
+            return self._cost_trackers.get(key)
 
     @staticmethod
     def _make_rate_limiter() -> Any:
@@ -2032,6 +2855,55 @@ class AgentRuntime:
         except Exception:
             return None
 
+    def _make_mcp_manager(self) -> Any:
+        """Create and connect an :class:`~missy.mcp.manager.McpManager`.
+
+        Threads :attr:`AgentConfig.mcp_approval_gate` through so
+        destructive/mutating MCP tool calls block on the same real
+        approval mechanism the caller (e.g. ``missy gateway start``, per
+        SR-2.2) has wired up, rather than each subsystem inventing its
+        own.
+
+        Returns:
+            A connected :class:`~missy.mcp.manager.McpManager`, or
+            ``None`` when the module is unavailable or no servers are
+            configured (this is not an error -- MCP is entirely optional).
+        """
+        try:
+            from missy.mcp.manager import McpManager
+
+            manager = McpManager(approval_gate=self.config.mcp_approval_gate)
+            manager.connect_all()
+            return manager
+        except Exception:
+            logger.debug("McpManager unavailable; continuing without MCP tools", exc_info=True)
+            return None
+
+    def _make_sleeptime_worker(self) -> Any:
+        """Create and start a :class:`~missy.agent.sleeptime.SleeptimeWorker`.
+
+        Returns:
+            A started :class:`SleeptimeWorker`, or ``None`` when the
+            module is unavailable. Construction never fails the whole
+            runtime -- background memory processing is a best-effort
+            enhancement, not a required subsystem.
+        """
+        try:
+            from missy.agent.sleeptime import SleeptimeWorker
+
+            try:
+                provider_registry = get_registry()
+            except Exception:
+                provider_registry = None
+            worker = SleeptimeWorker(
+                memory_store=self._memory_store, provider_registry=provider_registry
+            )
+            worker.start()
+            return worker
+        except Exception:
+            logger.debug("SleeptimeWorker unavailable; continuing without it", exc_info=True)
+            return None
+
     @staticmethod
     def _make_drift_detector() -> Any:
         """Create a :class:`~missy.security.drift.PromptDriftDetector`.
@@ -2051,20 +2923,18 @@ class AgentRuntime:
     def _make_identity() -> Any:
         """Load or generate an Ed25519 agent identity.
 
-        Attempts to load from the default key path; generates and saves
-        a new identity if no key file exists.  Returns ``None`` if the
+        Delegates to :meth:`AgentIdentity.load_or_generate` (the single
+        source of truth for "the" process-level identity, also used by
+        :class:`~missy.observability.audit_logger.AuditLogger` for
+        SR-1.1 full-event signing) so the runtime and the audit sink
+        always sign with the same keypair. Returns ``None`` if the
         identity module is unavailable.
         """
         try:
-            import os
-
             from missy.security.identity import DEFAULT_KEY_PATH, AgentIdentity
 
-            if os.path.exists(DEFAULT_KEY_PATH):
-                return AgentIdentity.from_key_file(DEFAULT_KEY_PATH)
-            identity = AgentIdentity.generate()
-            identity.save(DEFAULT_KEY_PATH)
-            logger.info("Generated new agent identity: %s", identity.public_key_fingerprint())
+            identity = AgentIdentity.load_or_generate(DEFAULT_KEY_PATH)
+            logger.debug("Agent identity ready: %s", identity.public_key_fingerprint())
             return identity
         except Exception:
             logger.debug("Agent identity unavailable; proceeding without it", exc_info=True)
@@ -2162,12 +3032,190 @@ class AgentRuntime:
         """
         return list(self._pending_recovery)
 
+    def shutdown(self) -> None:
+        """Stop background subsystems this runtime owns.
+
+        SR-4.1: primarily stops the :class:`~missy.agent.sleeptime.SleeptimeWorker`
+        daemon thread. Safe to call multiple times or when a subsystem was
+        never constructed (graceful degradation). Callers that own an
+        ``AgentRuntime`` for the lifetime of a long-running process (e.g.
+        ``missy gateway start``) should call this on clean shutdown; a
+        short-lived process (e.g. ``missy ask``) does not need to, since
+        the worker is a daemon thread that dies with the process anyway.
+        """
+        if self._sleeptime is not None:
+            with contextlib.suppress(Exception):
+                self._sleeptime.stop()
+
+    def resume_checkpoint(self, checkpoint_id: str) -> str:
+        """Resume an interrupted task from a persisted checkpoint (SR-4.3).
+
+        Loads the checkpoint's saved ``loop_messages`` (the exact
+        conversation-plus-tool-results history at the point of the last
+        completed round -- see :class:`~missy.agent.checkpoint.CheckpointManager`'s
+        ``update()``, which is only ever called *after* a round's tool
+        calls and their results have all been appended, never mid-call),
+        validates it, and feeds it straight into the real
+        :meth:`_tool_loop` so the resumed run goes through exactly the
+        same per-call policy/permission enforcement as any other tool
+        call -- resuming does not re-authorize anything the current
+        config/policy wouldn't already allow.
+
+        Args:
+            checkpoint_id: Primary key of a ``RUNNING`` checkpoint, as
+                returned by :attr:`pending_recovery` or ``missy recover``.
+
+        Returns:
+            The resumed run's final response text.
+
+        Raises:
+            ValueError: When no such checkpoint exists, or it is not in
+                the ``RUNNING`` state (already completed/failed/abandoned
+                checkpoints cannot be resumed).
+            CheckpointCorruptedError: When the checkpoint's persisted
+                ``loop_messages`` fails schema validation. The checkpoint
+                is marked ``FAILED`` before this is raised, so it will not
+                be offered for resume again.
+            ProviderError: Propagated from the underlying tool loop, same
+                as :meth:`run`.
+        """
+        from missy.agent.checkpoint import (
+            CheckpointCorruptedError,
+            validate_loop_messages,
+        )
+        from missy.agent.checkpoint import (
+            CheckpointManager as _CheckpointManager,
+        )
+
+        # SR-4.1: resuming is real agent activity.
+        if self._sleeptime is not None:
+            self._sleeptime.record_activity()
+
+        cm = _CheckpointManager()
+        checkpoint = cm.get(checkpoint_id)
+        if checkpoint is None:
+            raise ValueError(f"No checkpoint found with id {checkpoint_id!r}.")
+
+        # Atomically claim the checkpoint (RUNNING -> COMPLETE) before doing
+        # any further work, closing a TOCTOU race where two concurrent
+        # resume_checkpoint() calls (e.g. two `missy recover --resume <id>`
+        # invocations) could both pass a plain state=='RUNNING' check and
+        # both proceed to execute the resumed tool loop, duplicating every
+        # subsequent tool call for the same task. claim() returns True only
+        # for the single caller whose UPDATE actually flipped the row from
+        # RUNNING; every other concurrent caller sees False and fails
+        # closed here instead.
+        if not cm.claim(checkpoint_id):
+            current = cm.get(checkpoint_id)
+            current_state = current["state"] if current else "unknown"
+            raise ValueError(
+                f"Checkpoint {checkpoint_id!r} is not resumable "
+                f"(state={current_state!r}); only RUNNING checkpoints "
+                "can be resumed."
+            )
+
+        loop_messages = checkpoint["loop_messages"]
+        if not validate_loop_messages(loop_messages):
+            cm.fail(
+                checkpoint_id, error="Corrupted checkpoint: loop_messages failed schema validation."
+            )
+            raise CheckpointCorruptedError(
+                f"Checkpoint {checkpoint_id!r} has corrupted loop_messages; marked FAILED."
+            )
+
+        sid = checkpoint["session_id"]
+        original_prompt = checkpoint["prompt"]
+        task_id = str(self._session_mgr.generate_task_id())
+
+        provider = self._get_provider()
+
+        # Rebuild the system prompt fresh (persona/behavior/memory-synthesis
+        # may have changed since the checkpoint was created); the saved
+        # loop_messages already carries the full prior conversation, so the
+        # freshly-built `messages` return value is discarded -- we only
+        # need a current system_prompt.
+        system_prompt, _unused_messages = self._build_context_messages(
+            original_prompt, history=[], session_id=sid
+        )
+        if self._drift_detector is not None:
+            self._drift_detector.register("system_prompt", system_prompt)
+
+        # Re-resolve tools under the CURRENT capability_mode/tool_policy --
+        # this is the policy-revalidation step: if config has tightened
+        # since the checkpoint was created, the resumed run only gets the
+        # narrower set, same as any fresh run would.
+        tools = self._get_tools()
+
+        # This checkpoint's data has now been consumed and handed off to a
+        # new checkpoint-tracked run (created inside _tool_loop()) -- it
+        # was already atomically marked complete by cm.claim() above, so
+        # it can never be offered for resume again, including by a
+        # concurrent `missy recover --resume` invocation.
+
+        self._emit_event(
+            session_id=sid,
+            task_id=task_id,
+            event_type="agent.checkpoint.resumed",
+            result="allow",
+            detail={"checkpoint_id": checkpoint_id, "iteration": checkpoint.get("iteration", 0)},
+        )
+
+        try:
+            final_response, all_tool_names_used = self._tool_loop(
+                provider=provider,
+                system_prompt=system_prompt,
+                messages=loop_messages,
+                tools=tools,
+                session_id=sid,
+                task_id=task_id,
+                user_input=original_prompt,
+            )
+        except Exception as exc:
+            self._emit_event(
+                session_id=sid,
+                task_id=task_id,
+                event_type="agent.run.error",
+                result="error",
+                detail={"error": str(exc), "stage": "resume", "checkpoint_id": checkpoint_id},
+            )
+            if isinstance(exc, ProviderError):
+                raise
+            raise ProviderError(f"Unexpected error resuming checkpoint: {exc}") from exc
+
+        self._track_request(original_prompt, sid, all_tool_names_used, provider.name)
+        self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
+        if all_tool_names_used:
+            self._record_learnings(all_tool_names_used, final_response, original_prompt)
+        self._maybe_compact(sid, provider)
+
+        cost_detail = {}
+        _session_tracker = self._peek_cost_tracker(sid)
+        if _session_tracker is not None:
+            with contextlib.suppress(Exception):
+                cost_detail = _session_tracker.get_summary()
+
+        self._emit_event(
+            session_id=sid,
+            task_id=task_id,
+            event_type="agent.run.complete",
+            result="allow",
+            detail={
+                "provider": provider.name,
+                "tools_used": all_tool_names_used,
+                "resumed_from": checkpoint_id,
+                **cost_detail,
+            },
+        )
+
+        return censor_response(final_response)
+
     def _record_cost(self, response, session_id: str = "") -> None:
-        """Record token usage in the cost tracker and persist to SQLite."""
-        if self._cost_tracker is None:
+        """Record token usage in this session's cost tracker and persist to SQLite."""
+        tracker = self._get_cost_tracker(session_id)
+        if tracker is None:
             return
         try:
-            rec = self._cost_tracker.record_from_response(response)
+            rec = tracker.record_from_response(response)
             # Persist to SQLite for historical cost queries
             if rec is not None and session_id and self._memory_store is not None:
                 try:
@@ -2201,13 +3249,17 @@ class AgentRuntime:
         """Enforce budget limits after recording cost.
 
         Raises :class:`~missy.agent.cost_tracker.BudgetExceededError` if the
-        accumulated session cost exceeds ``max_spend_usd``.  An audit event
-        is emitted before the exception propagates.
+        accumulated cost for *session_id* exceeds ``max_spend_usd``. Each
+        session is checked against its own accumulated total (SR-3.4) --
+        one session's spend never counts against another session's budget
+        even when they share this runtime instance. An audit event is
+        emitted before the exception propagates.
         """
-        if self._cost_tracker is None:
+        tracker = self._get_cost_tracker(session_id)
+        if tracker is None:
             return
         try:
-            self._cost_tracker.check_budget()
+            tracker.check_budget()
         except Exception:
             # Emit audit event for budget breach
             with contextlib.suppress(Exception):
@@ -2216,7 +3268,7 @@ class AgentRuntime:
                     task_id=task_id,
                     event_type="agent.budget.exceeded",
                     result="deny",
-                    detail=self._cost_tracker.get_summary(),
+                    detail=tracker.get_summary(),
                 )
             raise
 
@@ -2287,6 +3339,192 @@ class AgentRuntime:
             "Ensure at least one provider is initialised and its API key is set."
         )
 
+    def _get_breaker_for(self, provider_name: str) -> Any:
+        """Return the :class:`CircuitBreaker` tracking *provider_name*.
+
+        The configured primary provider keeps using ``self._circuit_breaker``
+        (unchanged behavior, and what existing tests swap directly);
+        every other provider name gets its own lazily-created breaker in
+        ``self._fallback_breakers`` so cooldown/half-open state is tracked
+        independently per candidate.
+
+        Args:
+            provider_name: Registry key or ``.name`` of the provider.
+
+        Returns:
+            A :class:`~missy.agent.circuit_breaker.CircuitBreaker`-like object.
+        """
+        if provider_name == self.config.provider:
+            return self._circuit_breaker
+        breaker = self._fallback_breakers.get(provider_name)
+        if breaker is None:
+            breaker = self._make_circuit_breaker(provider_name)
+            self._fallback_breakers[provider_name] = breaker
+        return breaker
+
+    def _call_provider_with_fallback(
+        self,
+        provider: Any,
+        call_factory: Any,
+        *,
+        session_id: str,
+        task_id: str,
+        requires_tools: bool = False,
+    ) -> tuple[Any, Any]:
+        """Execute a provider call with automatic key rotation and fallback.
+
+        SR-4.8: ``ProviderConfig.api_keys`` rotation and cross-provider
+        fallback were both documented capabilities with either zero
+        production call sites (:meth:`~.registry.ProviderRegistry.rotate_key`)
+        or a static, start-of-run-only check
+        (:meth:`AgentRuntime._get_provider`). This is the real, mid-call
+        version: on a provider failure it classifies the error, retries
+        once on a rotated API key for auth failures, then -- if that also
+        fails or wasn't applicable -- selects a healthy, budget-eligible,
+        ideally tool-capable fallback provider (gated by that provider's
+        own :class:`~missy.agent.circuit_breaker.CircuitBreaker`, mirroring
+        the half-open probe pattern used for the primary provider) and
+        retries the call there. Every transition (rotation or fallback) is
+        recorded as a redacted audit event before it happens.
+
+        Args:
+            provider: The first provider to try.
+            call_factory: Given a provider instance, returns a zero-arg
+                callable that performs the actual ``complete``/
+                ``complete_with_tools`` call against *that* provider --
+                built fresh per-candidate so message formatting matches
+                each provider's ``accepts_message_dicts`` convention
+                (transcript integrity across the transition).
+            session_id: For budget checks and audit events.
+            task_id: For audit events.
+            requires_tools: When ``True``, fallback candidates that
+                override ``complete_with_tools`` are preferred over ones
+                that only inherit the base class's tool-less default.
+
+        Returns:
+            A ``(response, provider_used)`` tuple.
+
+        Raises:
+            ProviderError: When the primary call and every eligible
+                fallback candidate all fail.
+        """
+        from missy.agent.circuit_breaker import CircuitState
+        from missy.providers.base import BaseProvider
+        from missy.providers.health import classify_provider_error
+
+        def _attempt(target: Any) -> Any:
+            breaker = self._get_breaker_for(target.name)
+            return breaker.call(call_factory(target))
+
+        try:
+            return _attempt(provider), provider
+        except ProviderError as exc:
+            # Registry only needed on the failure path (key rotation /
+            # fallback candidate selection) -- resolved lazily so the
+            # common success path never requires get_registry() to have
+            # been initialised.
+            registry = get_registry()
+            failure_class = classify_provider_error(exc)
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="agent.provider.call_failed",
+                result="error",
+                detail={
+                    "provider": provider.name,
+                    "failure_class": str(failure_class),
+                    "error": str(exc),
+                },
+            )
+
+            # Retry-eligibility: an auth failure with more than one
+            # configured API key is worth one immediate retry on the next
+            # key before treating the whole provider as down. Rate limits
+            # and timeouts are never fixed by rotating credentials.
+            registry_key = registry.key_for(provider) or provider.name
+            config = registry._provider_configs.get(registry_key)
+            if failure_class == "auth" and config is not None and len(config.api_keys) > 1:
+                registry.rotate_key(registry_key)
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.key_rotated",
+                    result="allow",
+                    detail={"provider": provider.name, "reason": str(failure_class)},
+                )
+                try:
+                    return _attempt(provider), provider
+                except ProviderError as exc2:
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": provider.name,
+                            "failure_class": str(classify_provider_error(exc2)),
+                            "error": str(exc2),
+                            "after_key_rotation": True,
+                        },
+                    )
+
+            # Budget must still allow another (potentially billed) call
+            # before spending it on a fallback provider.
+            self._check_budget(session_id=session_id, task_id=task_id)
+
+            candidates = [
+                p
+                for p in registry.get_available()
+                if p.name != provider.name
+                and self._get_breaker_for(p.name).state != CircuitState.OPEN
+            ]
+
+            def _is_tool_capable(p: Any) -> bool:
+                return type(p).complete_with_tools is not BaseProvider.complete_with_tools
+
+            if requires_tools:
+                candidates.sort(key=lambda p: not _is_tool_capable(p))
+
+            last_exc: Exception = exc
+            for fallback in candidates:
+                degraded = requires_tools and not _is_tool_capable(fallback)
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.fallback",
+                    result="allow",
+                    detail={
+                        "from_provider": provider.name,
+                        "to_provider": fallback.name,
+                        "reason": str(failure_class),
+                        "tool_compatibility_degraded": degraded,
+                    },
+                )
+                try:
+                    return _attempt(fallback), fallback
+                except ProviderError as exc3:
+                    last_exc = exc3
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": fallback.name,
+                            "failure_class": str(classify_provider_error(exc3)),
+                            "error": str(exc3),
+                        },
+                    )
+                    continue
+
+            # last_exc already carries its own original traceback/context
+            # from wherever it was first caught (it may be the outer `exc`
+            # or a later fallback's own `exc3`) -- `from None` suppresses
+            # Python from also implying it happened "during handling of"
+            # this outer except block's `exc`, which would be misleading
+            # whenever last_exc is actually a different, later exception.
+            raise last_exc from None
+
     def _build_messages(self, user_input: str) -> list[Message]:
         """Construct the message list to send to the provider.
 
@@ -2323,18 +3561,15 @@ class AgentRuntime:
             detail: Structured event data.
         """
         try:
-            # Sign audit event with agent identity if available
-            identity = getattr(self, "_identity", None)
-            if identity is not None:
-                import json
-
-                event_payload = json.dumps(
-                    {"session_id": session_id, "task_id": task_id, "event_type": event_type},
-                    sort_keys=True,
-                ).encode()
-                sig = identity.sign(event_payload)
-                detail = {**detail, "identity_signature": sig.hex()}
-
+            # SR-1.1: full-event signing now happens once, at the single
+            # AuditLogger write chokepoint every published event passes
+            # through (missy/observability/audit_logger.py), covering all
+            # fields (not just session_id/task_id/event_type) and every
+            # event regardless of whether it was emitted via this method.
+            # Signing here too would be redundant and, worse, misleading:
+            # a partial 3-field signature embedded in the mutable `detail`
+            # dict looks like proof of integrity but neither covers most
+            # of the record nor survives edits to fields outside `detail`.
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
@@ -2355,6 +3590,11 @@ class AgentRuntime:
 
 class _NoOpCircuitBreaker:
     """Passthrough stub used when the circuit_breaker module is unavailable."""
+
+    # Always reports CLOSED so SR-4.8's fallback candidate filter
+    # (`breaker.state != CircuitState.OPEN`) never excludes a provider
+    # just because the real circuit_breaker module failed to import.
+    state = "closed"
 
     def call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)

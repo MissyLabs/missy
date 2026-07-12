@@ -129,7 +129,7 @@ def mock_faiss():
 
     class FakeIndex:
         def __init__(self, dim):
-            self.dim = dim
+            self.d = dim  # matches real faiss.Index's dimension attribute
             self._vectors = []
             self.ntotal = 0
 

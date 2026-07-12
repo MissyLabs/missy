@@ -448,19 +448,21 @@ class RefusingSandbox:
 
 def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
     """Parse a ``sandbox:`` YAML section into :class:`SandboxConfig`."""
+    from missy.config.settings import _coerce_bool
+
     if not isinstance(data, dict):
         return SandboxConfig()
     return SandboxConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         image=str(data.get("image", "python:3.11-slim")),
         memory_limit=str(data.get("memory_limit", "256m")),
         cpu_limit=float(data.get("cpu_limit", 1.0)),
-        network_disabled=bool(data.get("network_disabled", True)),
-        read_only_root=bool(data.get("read_only_root", True)),
+        network_disabled=_coerce_bool(data.get("network_disabled"), True),
+        read_only_root=_coerce_bool(data.get("read_only_root"), True),
         allowed_bind_mounts=list(data.get("allowed_bind_mounts", [])),
         timeout=int(data.get("timeout", 30)),
         workspace_path=str(data.get("workspace_path", "/workspace")),
-        require_isolation=bool(data.get("require_isolation", True)),
+        require_isolation=_coerce_bool(data.get("require_isolation"), True),
         tools=dict(data.get("tools") or {}),
     )
 

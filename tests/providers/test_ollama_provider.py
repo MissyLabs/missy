@@ -263,3 +263,25 @@ class TestOllamaStream:
         p = OllamaProvider(_make_config())
         tokens = list(p.stream([Message(role="user", content="Hi")]))
         assert tokens == ["ok"]
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_stream_acquires_rate_limit(self, mock_client_cls):
+        """stream() must throttle through the same rate limiter complete()
+        and complete_with_tools() already do -- pre-fix, stream() built the
+        payload and dispatched it with no call to _acquire_rate_limit() at
+        all, silently bypassing any configured throttling for the
+        streaming code path.
+        """
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.iter_lines.return_value = iter(
+            [json.dumps({"message": {"content": "hi"}, "done": True})]
+        )
+        mock_client_cls.return_value.post.return_value = mock_resp
+
+        p = OllamaProvider(_make_config())
+        rate_limiter = MagicMock()
+        p.rate_limiter = rate_limiter
+        list(p.stream([Message(role="user", content="Hi")]))
+
+        assert rate_limiter.acquire.called

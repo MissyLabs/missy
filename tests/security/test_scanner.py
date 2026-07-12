@@ -290,6 +290,59 @@ class TestCheckConfigSecurity:
         ids = [f.id for f in result.findings]
         assert "SEC-002" not in ids
 
+    def test_sec_002_vault_ref_not_flagged_via_real_load_config(self, tmp_path, monkeypatch):
+        """Regression: load_config() (the real path `missy security scan`
+        actually uses, not a directly-constructed MissyConfig) resolves
+        "vault://KEY" into the actual secret *before* SecurityScanner ever
+        sees it, so provider_cfg.api_key was already plaintext by the time
+        the old SEC-002 check ran -- every correctly-vaulted key was
+        permanently flagged as if typed directly into config.yaml, with no
+        way for an operator to satisfy the check. Must not flag a properly
+        vault-referenced key when loaded through the real config path.
+        """
+        monkeypatch.setattr(
+            "missy.security.vault.Vault.resolve",
+            lambda self, ref: "sk-ant-actualsecretvalue1234567890",
+        )
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "providers:\n"
+            "  anthropic:\n"
+            "    model: claude-sonnet-4-6\n"
+            "    api_key: vault://ANTHROPIC_KEY\n"
+            "vault:\n"
+            "  enabled: true\n"
+        )
+        scanner = SecurityScanner(config_path=str(cfg_path), missy_dir=str(tmp_path / ".missy"))
+        result = scanner.scan_all()
+        # Confirm the resolution actually happened (i.e. we're testing the
+        # real bug scenario, not a no-op).
+        assert scanner.config.providers["anthropic"].api_key == "sk-ant-actualsecretvalue1234567890"
+        ids = [f.id for f in result.findings]
+        assert "SEC-002" not in ids
+        assert "SEC-060" not in ids
+
+    def test_sec_002_real_plaintext_key_still_flagged_via_real_load_config(self, tmp_path):
+        """A genuinely plaintext key (no vault:// or $ reference at all)
+        must still be flagged when loaded through the real load_config()
+        path -- confirms the raw-file fallback doesn't blanket-suppress
+        SEC-002/SEC-060 for the true-positive case.
+        """
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "providers:\n"
+            "  anthropic:\n"
+            "    model: claude-sonnet-4-6\n"
+            "    api_key: sk-ant-actualsecretvalue1234567890\n"
+            "vault:\n"
+            "  enabled: false\n"
+        )
+        scanner = SecurityScanner(config_path=str(cfg_path), missy_dir=str(tmp_path / ".missy"))
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-002" in ids
+        assert "SEC-060" in ids
+
     def test_sec_003_old_config_version(self, tmp_path):
         cfg = _make_config(config_version=0)
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
@@ -347,6 +400,29 @@ class TestCheckNetworkPolicy:
         ids = [f.id for f in result.findings]
         assert "SEC-011" not in ids
 
+    @pytest.mark.parametrize("cidr", ["1.2.3.4/1", "10.0.0.0/1", "8.8.8.8/0"])
+    def test_sec_011_differently_written_but_equally_broad_cidr_flagged(self, tmp_path, cidr):
+        """Regression: real enforcement (policy/network.py) parses every
+        CIDR via ipaddress.ip_network(cidr, strict=False), which
+        normalizes host bits away -- so "1.2.3.4/1" grants access to
+        half the IPv4 address space exactly like "0.0.0.0/1", but a
+        bare string-set membership check never caught it since the
+        literal string differs. Same bug class as the already-fixed
+        SEC-013 apex-domain false negative.
+        """
+        cfg = _make_config(allowed_cidrs=[cidr])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-011" in ids
+
+    def test_sec_011_malformed_cidr_does_not_crash_scanner(self, tmp_path):
+        cfg = _make_config(allowed_cidrs=["not-a-cidr"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-011" not in ids
+
     def test_sec_012_no_rest_policies_low(self, tmp_path):
         cfg = _make_config(rest_policies=[])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
@@ -368,7 +444,10 @@ class TestCheckNetworkPolicy:
         assert "SEC-012" not in ids
 
     def test_sec_013_broad_domain_high(self, tmp_path):
-        cfg = _make_config(allowed_domains=[".com"])
+        """A genuine wildcard over a bare TLD (matching NetworkPolicyEngine's
+        real "*."-prefix wildcard semantics) is the actually-broad case.
+        """
+        cfg = _make_config(allowed_domains=["*.com"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]
@@ -378,6 +457,19 @@ class TestCheckNetworkPolicy:
 
     def test_sec_013_specific_domain_not_flagged(self, tmp_path):
         cfg = _make_config(allowed_domains=["api.anthropic.com"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-013" not in ids
+
+    def test_sec_013_exact_apex_domain_not_flagged(self, tmp_path):
+        """A bare, non-wildcard apex domain (e.g. "anthropic.com") is an
+        EXACT match only under NetworkPolicyEngine._check_domain() -- it
+        never matches any other host, so it must not be flagged as "very
+        broad". Pre-fix, the heuristic (endswith(".com") + count(".") <= 1)
+        flagged every ordinary, fully-specific apex domain this way.
+        """
+        cfg = _make_config(allowed_domains=["anthropic.com"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]
@@ -429,6 +521,36 @@ class TestCheckFilesystemPolicy:
         ids = [f.id for f in result.findings]
         assert "SEC-021" not in ids
         assert "SEC-022" not in ids
+
+    @pytest.mark.parametrize("path", ["/etcd-data", "/usrlocal-apps", "/bootstrap", "/devtools"])
+    def test_sec_021_path_merely_sharing_prefix_characters_not_flagged(self, tmp_path, path):
+        """Regression: a bare str.startswith(prefix) check with no
+        path-segment boundary false-flagged any unrelated path that
+        merely shares a sensitive prefix's characters (e.g. "/etcd-data"
+        starts with "/etc"), identical in kind to the already-fixed
+        SEC-013 apex-domain bug. These are plausible real top-level
+        container/VM mount points, not actually under /etc, /usr, /boot,
+        or /dev.
+        """
+        cfg = _make_config(write_paths=[path])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" not in ids
+
+    def test_sec_021_exact_sensitive_dir_still_flagged(self, tmp_path):
+        cfg = _make_config(write_paths=["/etc"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" in ids
+
+    def test_sec_021_subdirectory_of_sensitive_dir_still_flagged(self, tmp_path):
+        cfg = _make_config(write_paths=["/etc/missy"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-021" in ids
 
     def test_sec_022_home_dir_write_high(self, tmp_path):
         home = str(Path.home())
@@ -501,6 +623,30 @@ class TestCheckShellPolicy:
 
     def test_sec_032_bash_interpreter_high(self, tmp_path):
         cfg = _make_config(shell_enabled=True, allowed_commands=["bash", "git"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-032" in ids
+
+    def test_sec_031_path_qualified_dangerous_command_still_flagged(self, tmp_path):
+        """Regression: ShellPolicyEngine._match_allowed() matches by
+        basename, so an allowlist entry like "/bin/rm" permits "rm"
+        execution exactly as if the bare name were listed (a common
+        hardening convention to avoid PATH hijacking). The scanner
+        previously intersected `allowed` as literal strings against
+        `_DANGEROUS_COMMANDS` (bare names only), so a path-qualified
+        dangerous command slipped through entirely undetected.
+        """
+        cfg = _make_config(shell_enabled=True, allowed_commands=["/bin/rm", "git"])
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-031" in ids
+        f = result.findings[ids.index("SEC-031")]
+        assert "/bin/rm" in f.details.get("dangerous_commands", [])
+
+    def test_sec_032_path_qualified_interpreter_still_flagged(self, tmp_path):
+        cfg = _make_config(shell_enabled=True, allowed_commands=["/usr/bin/python3", "git"])
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]
@@ -637,6 +783,88 @@ class TestCheckMcpSecurity:
         result = scanner.scan_all()
         ids = [f.id for f in result.findings]
         assert "SEC-042" not in ids
+
+    def test_sec_042_full_path_interpreter_flagged(self, tmp_path):
+        """Regression: a full-path interpreter invocation (e.g.
+        "/usr/bin/python3 -m my_mcp_server") is functionally identical in
+        risk to the bare "npx ..." case already caught, but previously
+        went undetected because the old check only matched a token that
+        equaled a known interpreter name exactly -- a full path never
+        does.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": "/usr/bin/python3 -m my_mcp_server",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
+
+    def test_sec_042_version_suffixed_interpreter_flagged(self, tmp_path):
+        """Regression: a version-suffixed interpreter (e.g. "python3.11")
+        was also previously undetected for the same reason.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": "python3.11 server.py",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
+
+    def test_sec_042_venv_relative_path_interpreter_flagged(self, tmp_path):
+        """Regression: an interpreter inside a virtualenv path (e.g.
+        ".venv/bin/python") was also previously undetected.
+        """
+        d = tmp_path / ".missy"
+        d.mkdir()
+        mcp_path = d / "mcp.json"
+        mcp_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "fsserver",
+                        "command": ".venv/bin/python server.py",
+                        "digest": "sha256:pinned",
+                    }
+                ]
+            )
+        )
+        mcp_path.chmod(0o600)
+        scanner = SecurityScanner(
+            config=_make_config(), config_path="/nonexistent", missy_dir=str(d)
+        )
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-042" in ids
 
     def test_multiple_mcp_servers_each_checked(self, tmp_path):
         d = tmp_path / ".missy"
@@ -891,6 +1119,24 @@ class TestCheckKnownVulnerabilities:
         f = result.findings[ids.index("SEC-090")]
         assert f.severity == Severity.LOW
 
+    def test_sec_090_fires_even_when_container_enabled_true(self, tmp_path):
+        """Regression: ContainerSandbox has zero production callers in the
+        tool-dispatch path -- setting container.enabled: true does not
+        change how tools actually execute. SEC-090 previously only fired
+        when the flag was False, giving an operator who enabled it a false
+        sense of security (the scanner would stop flagging this while tool
+        execution stayed completely unchanged). The finding must fire
+        unconditionally until this is actually wired in.
+        """
+        cfg = _make_config(container_enabled=True)
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-090" in ids
+        f = result.findings[ids.index("SEC-090")]
+        assert f.severity == Severity.LOW
+        assert "container.enabled: true" not in f.recommendation
+
     def test_sec_091_no_spend_limit_medium(self, tmp_path):
         cfg = _make_config(max_spend_usd=0.0)
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
@@ -931,6 +1177,41 @@ class TestCheckKnownVulnerabilities:
         assert "SEC-093" in ids
         f = result.findings[ids.index("SEC-093")]
         assert f.severity == Severity.INFO
+
+    def test_sec_094_landlock_available_but_unwired(self, tmp_path, monkeypatch):
+        """Regression: LandlockPolicy/apply_landlock_from_config
+        (missy/security/landlock.py) is fully implemented and documented
+        (README.md, docs/threat-model.md) as an active kernel-level
+        filesystem enforcement layer, but has zero production callers
+        anywhere in the codebase -- no CLI command, config flag, or
+        runtime bootstrap path ever applies it. On a kernel that supports
+        Landlock, this must be surfaced so an operator isn't misled into
+        thinking it's actually protecting them.
+        """
+        monkeypatch.setattr(
+            "missy.security.landlock.LandlockPolicy.is_available", staticmethod(lambda: True)
+        )
+        cfg = _make_config()
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-094" in ids
+        f = result.findings[ids.index("SEC-094")]
+        assert f.severity == Severity.LOW
+
+    def test_sec_094_not_flagged_when_landlock_unavailable(self, tmp_path, monkeypatch):
+        """Flagging an operator for not using a kernel feature their kernel
+        doesn't even support would just be noise -- must not fire when
+        Landlock is unavailable (old kernel, non-Linux, etc.).
+        """
+        monkeypatch.setattr(
+            "missy.security.landlock.LandlockPolicy.is_available", staticmethod(lambda: False)
+        )
+        cfg = _make_config()
+        scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
+        result = scanner.scan_all()
+        ids = [f.id for f in result.findings]
+        assert "SEC-094" not in ids
 
 
 # ---------------------------------------------------------------------------

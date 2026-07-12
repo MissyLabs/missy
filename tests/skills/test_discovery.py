@@ -68,6 +68,66 @@ class TestParseSkillMd:
         manifest = discovery.parse_skill_md(str(skill_file))
         assert manifest.tools == ["web_fetch", "shell_exec", "file_read"]
 
+    def test_parse_multiline_block_list_tools(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
+        """Regression: the standard YAML block-list syntax used by real
+        SKILL.md files (e.g. the SKILL.md open standard's own
+        ``allowed-tools:`` field) was silently mangled -- a ``tools:``
+        line with nothing after the colon was treated as an empty value,
+        and the following ``- item`` lines (no ``:`` on them) were
+        silently discarded, so ``tools`` came out as ``[]`` with no
+        error or warning anywhere.
+        """
+        content = (
+            "---\n"
+            "name: block-list-tools\n"
+            "description: Uses the standard block-list YAML syntax\n"
+            "version: 1.0.0\n"
+            "author: Test\n"
+            "tools:\n"
+            "  - web_fetch\n"
+            "  - shell_exec\n"
+            "---\n"
+            "\n"
+            "# Instructions\n"
+        )
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(content)
+
+        manifest = discovery.parse_skill_md(str(skill_file))
+        assert manifest.tools == ["web_fetch", "shell_exec"]
+
+    def test_parse_block_list_at_same_indentation_as_key(
+        self, discovery: SkillDiscovery, tmp_path: Path
+    ) -> None:
+        """Regression: standard YAML also permits block-sequence items at
+        the SAME indentation as their parent mapping key (this is what
+        PyYAML's own default block-style dumper produces for a top-level
+        list) -- a strict "must be indented more than the key" check
+        silently dropped this equally-common form as an empty string,
+        with the exact same silent-data-loss symptom the indented-form
+        regression test above already guards against.
+        """
+        content = (
+            "---\n"
+            "name: unindented-block-list-tools\n"
+            "description: Uses the unindented block-list YAML syntax\n"
+            "version: 1.0.0\n"
+            "author: Test\n"
+            "tools:\n"
+            "- web_fetch\n"
+            "- shell_exec\n"
+            "---\n"
+            "\n"
+            "# Instructions\n"
+        )
+        skill_file = tmp_path / "SKILL.md"
+        skill_file.write_text(content)
+
+        manifest = discovery.parse_skill_md(str(skill_file))
+        assert manifest.tools == ["web_fetch", "shell_exec"]
+
     def test_parse_minimal_frontmatter(self, discovery: SkillDiscovery, tmp_path: Path) -> None:
         content = "---\nname: minimal\n---\n\nBody text.\n"
         skill_file = tmp_path / "SKILL.md"
@@ -176,6 +236,32 @@ class TestSearch:
         results = discovery.search("WEB", sample_skills)
         assert len(results) >= 1
         assert results[0].name == "web-search"
+
+    def test_search_multi_word_query_matches_hyphenated_name(
+        self, discovery: SkillDiscovery, sample_skills: list[SkillManifest]
+    ) -> None:
+        """Regression: a plain contiguous-substring check required the
+        query to appear verbatim (same delimiter) -- "web search" is not
+        a substring of "web-search" (hyphen vs. space), a false negative
+        on a completely natural multi-word phrasing for an obviously
+        relevant skill.
+        """
+        results = discovery.search("web search", sample_skills)
+        assert len(results) >= 1
+        assert results[0].name == "web-search"
+
+    def test_search_multi_word_query_reordered_still_matches(
+        self, discovery: SkillDiscovery
+    ) -> None:
+        skill = SkillManifest(
+            name="tool-a",
+            description="Search the web using DuckDuckGo",
+            version="1.0.0",
+            author="A",
+        )
+        # Query words in the opposite order from the description's phrasing.
+        results = discovery.search("web search", [skill])
+        assert len(results) == 1
 
 
 class TestMissingFrontmatter:

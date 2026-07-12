@@ -126,25 +126,40 @@ class RateLimiter:
             sleep_time = min(wait_needed, remaining, 0.5)
             time.sleep(sleep_time)
 
-    def record_usage(self, prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
-        """Deduct actual token usage after a response is received.
+    def record_usage(
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        estimated_tokens: int = 0,
+    ) -> None:
+        """Reconcile the token bucket against actual usage after a response.
 
-        Call this after getting the actual token counts from the API response
-        to adjust the token budget.  The ``acquire()`` call already deducted
-        the *estimated* tokens; this method corrects the bucket to reflect
-        the *actual* consumption.
+        The ``acquire()`` call already deducted *estimated_tokens* from the
+        bucket before the request was sent. This method must first credit
+        that estimate back, then deduct the *actual* consumption -- a net
+        adjustment of ``estimated_tokens - actual_total``. Deducting the
+        actual total on top of the already-deducted estimate (without ever
+        crediting the estimate back) would double-charge every single
+        call, exhausting the configured ``tokens_per_minute`` budget at
+        roughly half the intended rate and causing spurious blocking/
+        `RateLimitExceeded` under normal, correctly-configured load.
 
         Args:
             prompt_tokens: Actual input tokens consumed.
             completion_tokens: Actual output tokens generated.
+            estimated_tokens: The estimate originally passed to the
+                :meth:`acquire` call this response corresponds to.
         """
         if self._tpm <= 0:
             return
         total = prompt_tokens + completion_tokens
-        if total <= 0:
+        if total < 0:
+            return  # Malformed/defensive: negative usage is never valid.
+        net_adjustment = float(estimated_tokens) - float(total)
+        if net_adjustment == 0:
             return
         with self._lock:
-            self._tok_tokens = max(0.0, self._tok_tokens - float(total))
+            self._tok_tokens = max(0.0, min(float(self._tpm), self._tok_tokens + net_adjustment))
 
     def on_rate_limit_response(self, retry_after: float = 0.0) -> None:
         """Handle a 429 response from the API.

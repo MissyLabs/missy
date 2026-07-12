@@ -24,6 +24,16 @@ _MAX_RESULTS_PER_SESSION = 50
 # Default maximum concurrent sessions.
 _DEFAULT_MAX_SESSIONS = 20
 
+# Maximum number of distinct sessions whose results are retained across
+# the process lifetime. unregister_connection() intentionally leaves a
+# disconnected session's results in place (they remain briefly queryable
+# after disconnect), so without this cap every session that ever streamed
+# at least one frame would leave a permanent dict entry forever, growing
+# unboundedly over weeks of routine use -- the equivalent protection
+# ScreencastTokenRegistry already applies to revoked sessions (auth.py's
+# _MAX_TRACKED_SESSIONS) but which was never applied here.
+_MAX_TRACKED_RESULT_SESSIONS = 200
+
 
 @dataclass
 class FrameMetadata:
@@ -131,6 +141,25 @@ class SessionManager:
         if sid not in self._results:
             self._results[sid] = deque(maxlen=_MAX_RESULTS_PER_SESSION)
         self._results[sid].append(result)
+        self._prune_results()
+
+    def _prune_results(self) -> None:
+        """Evict the oldest disconnected sessions' results once the number
+        of tracked sessions exceeds ``_MAX_TRACKED_RESULT_SESSIONS``.
+
+        Only disconnected sessions (not in ``self._connections``) are
+        eligible for eviction, so an active session's results are never
+        dropped out from under it.
+        """
+        if len(self._results) <= _MAX_TRACKED_RESULT_SESSIONS:
+            return
+        disconnected = [sid for sid in self._results if sid not in self._connections]
+        disconnected.sort(
+            key=lambda sid: self._results[sid][-1].timestamp if self._results[sid] else 0.0
+        )
+        overflow = len(self._results) - _MAX_TRACKED_RESULT_SESSIONS
+        for sid in disconnected[:overflow]:
+            self._results.pop(sid, None)
 
     def get_results(self, session_id: str, limit: int = 10) -> list[AnalysisResult]:
         """Return the most recent results for a session."""

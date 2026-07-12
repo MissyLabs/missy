@@ -86,6 +86,7 @@ def _make_trigger(name="t1", **kwargs) -> ProactiveTrigger:
         "interval_seconds": 5,
         "cooldown_seconds": 0,
         "prompt_template": "ping from {trigger_name}",
+        "requires_confirmation": False,
     }
     defaults.update(kwargs)
     return ProactiveTrigger(name=name, **defaults)
@@ -168,6 +169,7 @@ class TestPromptTemplateSubstitution:
                 trigger_type=ttype,
                 cooldown_seconds=0,
                 prompt_template="",
+                requires_confirmation=False,
             )
             _received = received  # bind loop variable for lambda
             mgr = _make_manager(t, callback=lambda p, s, _r=_received: _r.append(p))
@@ -370,6 +372,7 @@ class TestScheduleIntervalFloor:
             trigger_type="schedule",
             interval_seconds=0,
             cooldown_seconds=0,
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[t], agent_callback=cb)
 
@@ -388,6 +391,7 @@ class TestScheduleIntervalFloor:
             trigger_type="schedule",
             interval_seconds=-5,
             cooldown_seconds=0,
+            requires_confirmation=False,
         )
         mgr = ProactiveManager(triggers=[t], agent_callback=cb)
 

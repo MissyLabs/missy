@@ -188,9 +188,17 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Singleton registry mapping provider name strings to live `BaseProvider` instances. Factory method builds a registry from `MissyConfig`. Supports fallback, hot-swap, and model tier routing (fast/premium). |
+| **Purpose** | Singleton registry mapping provider name strings to live `BaseProvider` instances. Factory method builds a registry from `MissyConfig`. `rotate_key()`/`get_available()`/`key_for()` are real dispatch-time mechanisms called by `AgentRuntime._call_provider_with_fallback()` (SR-4.8) on a mid-run provider failure, not just at startup. `ModelRouter` (fast/primary/premium tier selection) remains unwired -- nothing in `AgentRuntime` calls `score_complexity()`/`select_model()`. |
 | **Key exports** | `ProviderRegistry`, `ModelRouter`, `init_registry()`, `get_registry()` |
 | **Internal deps** | `missy.config.settings`, `missy.providers.anthropic_provider`, `missy.providers.openai_provider`, `missy.providers.ollama_provider`, `missy.providers.base`, `missy.providers.rate_limiter` |
+
+### missy.providers.health
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | SR-4.8: classifies a `ProviderError`'s root cause (auth / rate_limit / timeout / unknown) from its message text, using the wording every built-in provider already raises consistently. Drives `AgentRuntime`'s decision to retry on a rotated key (auth only) vs. fall over to a different provider. |
+| **Key exports** | `classify_provider_error()`, `ProviderFailureClass` |
+| **Internal deps** | None |
 
 ### missy.providers.rate_limiter
 
@@ -208,9 +216,9 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Top-level agent orchestrator: resolves a provider, builds messages, calls the provider, and returns the model reply. |
+| **Purpose** | Top-level agent orchestrator: resolves a provider, builds messages, calls the provider, and returns the model reply. `_call_provider_with_fallback()` (SR-4.8) wraps every provider call made by `_single_turn()`/`_tool_loop()` with per-provider-name `CircuitBreaker` cooldown tracking, one auto-retry on a rotated `ProviderConfig.api_keys` entry for auth failures, and cross-provider fallback (budget-gated, tool-capability-ordered, never forwarding the failed provider's `model` string) with a redacted `agent.provider.*` audit event per transition. |
 | **Key exports** | `AgentRuntime`, `AgentConfig` (dataclass) |
-| **Internal deps** | `missy.core.events` (`AuditEvent`, `event_bus`), `missy.core.exceptions` (`ProviderError`), `missy.core.session` (`Session`, `SessionManager`), `missy.providers.base` (`Message`, `CompletionResponse`), `missy.providers.registry` (`get_registry`), `missy.tools.registry` (`get_tool_registry`) |
+| **Internal deps** | `missy.core.events` (`AuditEvent`, `event_bus`), `missy.core.exceptions` (`ProviderError`), `missy.core.session` (`Session`, `SessionManager`), `missy.providers.base` (`Message`, `CompletionResponse`), `missy.providers.registry` (`get_registry`), `missy.providers.health` (`classify_provider_error`), `missy.agent.circuit_breaker` (`CircuitBreaker`, `CircuitState`), `missy.tools.registry` (`get_tool_registry`) |
 
 ### missy.agent.circuit_breaker
 
@@ -296,9 +304,9 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Spawns child agent instances for parallel work. |
-| **Key exports** | `SubAgentRunner` |
-| **Internal deps** | `missy.agent.runtime` |
+| **Purpose** | Decomposes a compound task into sub-agent steps, run against the *same* AgentRuntime/session as the caller (budget/policy stay aggregated, not per-child-independent) with genuine parallelism for independent steps, bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
+| **Key exports** | `SubAgentRunner`, `SubTask`, `parse_subtasks`, `MAX_SUB_AGENT_DEPTH` |
+| **Internal deps** | `missy.agent.runtime` (via the runtime instance passed in, not an import) |
 
 ### missy.agent.approval
 
@@ -336,8 +344,8 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | WAL-mode SQLite task checkpointing. Enables `missy recover` to resume incomplete sessions. |
-| **Key exports** | `Checkpoint` |
+| **Purpose** | WAL-mode SQLite task checkpointing. Enables `missy recover --resume ID` to actually continue an incomplete session from its saved conversation state (`AgentRuntime.resume_checkpoint()`), not just list it. |
+| **Key exports** | `CheckpointManager`, `CheckpointCorruptedError`, `validate_loop_messages`, `scan_for_recovery` |
 | **Internal deps** | None (SQLite at `~/.missy/checkpoints.db`) |
 
 ### missy.agent.cost_tracker
@@ -461,7 +469,8 @@ dependencies on other `missy` modules.
 | `discord_upload` | Discord file/image uploads |
 | `incus_tools` | LXD/Incus container management |
 | `code_evolve` | Self-code modification (with approval) |
-| `self_create_tool` | Dynamic tool creation in `~/.missy/custom-tools/` |
+| `self_create_tool` | Writes custom tool *proposal* scripts to `~/.missy/custom-tools/` for human review — not automatically loaded/registered/callable |
+| `delegate_task` | Decomposes a compound task into sub-agent steps via `SubAgentRunner`, reusing the caller's runtime/session for shared budget+policy; depth-limited, real concurrency for independent steps |
 
 ### missy.tools.intelligence
 
@@ -593,9 +602,9 @@ skipped with `tool.candidate.load_skipped` audit events.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | OpenTelemetry traces and metrics export via OTLP (gRPC or HTTP). Requires `pip install -e ".[otel]"`. |
-| **Key exports** | `OtelExporter` |
-| **Internal deps** | `missy.config.settings` |
+| **Purpose** | OpenTelemetry span export via OTLP (gRPC or HTTP). `subscribe()` wraps `event_bus.publish()` (matching `AuditLogger`'s pattern) so every event is exported regardless of type; `export_event()` redacts `detail` first and tracks failures (`export_failure_count`/`last_export_error`) rather than only logging at DEBUG. Requires `pip install -e ".[otel]"`. |
+| **Key exports** | `OtelExporter`, `init_otel` |
+| **Internal deps** | `missy.config.settings`, `missy.core.events`, `missy.observability.audit_logger` |
 
 ---
 
@@ -741,9 +750,17 @@ skipped with `tool.candidate.load_skipped` audit events.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | MCP server connection manager. Config at `~/.missy/mcp.json`. Auto-restarts dead servers. |
+| **Purpose** | MCP server connection manager. Config at `~/.missy/mcp.json`. Auto-restarts dead servers. `call_tool()` is the single dispatch chokepoint: re-verifies the pinned digest and enforces annotation-driven approval immediately before every call (SR-4.7), not only at connect time. |
 | **Key exports** | `McpManager` |
-| **Internal deps** | `missy.mcp.client`, `missy.mcp.digest`, `missy.tools.registry`, `missy.gateway.client` |
+| **Internal deps** | `missy.mcp.client`, `missy.mcp.digest`, `missy.mcp.tool_wrapper`, `missy.tools.registry`, `missy.gateway.client` |
+
+### missy.mcp.tool_wrapper
+
+| Field | Value |
+|-------|-------|
+| **Purpose** | `McpToolWrapper(BaseTool)` adapts a connected MCP tool for registration into the real `ToolRegistry`, so MCP dispatch goes through the same permission-check/audit path as any built-in tool. `AgentRuntime._sync_mcp_tools()` registers one wrapper per connected MCP tool every turn. |
+| **Key exports** | `McpToolWrapper` |
+| **Internal deps** | `missy.tools.base` |
 
 ### missy.mcp.digest
 

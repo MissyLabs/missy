@@ -192,6 +192,46 @@ class TestPermissionChecking:
             assert result.success is False
             assert "denied" in result.error.lower()
 
+    def test_policy_denial_sets_policy_denied_flag(self):
+        """Regression: a PolicyViolationError from the policy engine must
+        set ToolResult.policy_denied=True so callers (AgentRuntime's trust
+        scoring) can apply TrustScorer.record_violation()'s harsher penalty
+        instead of conflating it with an ordinary tool failure via
+        record_failure(). Previously ToolResult carried no such
+        distinction, so record_violation() had zero production callers.
+        """
+        reg = ToolRegistry()
+        reg.register(NetworkTool())
+
+        mock_engine = MagicMock()
+        mock_engine.check_network.side_effect = PolicyViolationError(
+            "host denied", category="network", detail="api.example.com"
+        )
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            result = reg.execute("network_tool")
+            assert result.success is False
+            assert result.policy_denied is True
+
+    def test_ordinary_tool_failure_does_not_set_policy_denied_flag(self):
+        """A tool's own internal failure (not a policy denial) must leave
+        policy_denied at its default False, so it still scores via the
+        ordinary record_failure() path.
+        """
+        reg = ToolRegistry()
+
+        class FailingTool(EchoTool):
+            name = "failing_echo"
+
+            def execute(self, **kwargs):
+                from missy.tools.base import ToolResult
+
+                return ToolResult(success=False, output=None, error="boom")
+
+        reg.register(FailingTool())
+        result = reg.execute("failing_echo", text="x")
+        assert result.success is False
+        assert result.policy_denied is False
+
     def test_filesystem_read_checks_actual_path(self):
         """Policy engine should check the actual path from kwargs."""
         reg = ToolRegistry()
@@ -270,6 +310,108 @@ class TestPermissionChecking:
             assert "/a" in paths
             assert "/b" in paths
             assert "/c" in paths
+
+    def test_resolve_shell_command_overrides_generic_command_kwarg_heuristic(self):
+        """SR-1.5/1.4: a tool that overrides resolve_shell_command must be
+        checked against its declared real command, not a generic ``command``
+        kwarg -- even if such a kwarg happens to be present and would
+        otherwise mislead the heuristic (as with a sandboxed-guest command)."""
+        reg = ToolRegistry()
+
+        class FixedHostBinaryTool(BaseTool):
+            name = "fixed_host_binary"
+            description = "Always shells out to a specific host binary"
+            permissions = ToolPermissions(shell=True)
+
+            def resolve_shell_command(self, kwargs):
+                return "restricted-host-binary"
+
+            def execute(self, **kwargs) -> ToolResult:
+                return ToolResult(success=True, output="ran")
+
+        reg.register(FixedHostBinaryTool())
+        mock_engine = MagicMock()
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            # A misleading "command" kwarg that names something else entirely
+            # must NOT be what gets checked.
+            reg.execute("fixed_host_binary", command="totally-unrelated-guest-command")
+            mock_engine.check_shell.assert_called_once()
+            assert mock_engine.check_shell.call_args[0][0] == "restricted-host-binary"
+
+    def test_resolve_shell_command_returning_none_fails_closed_not_raw_kwarg(self):
+        """A tool that explicitly overrides resolve_shell_command has opted
+        out of the generic 'command' kwarg heuristic entirely -- if it
+        returns None for a given call, the registry must NOT silently fall
+        back to trusting an arbitrary 'command' kwarg (which is exactly the
+        declaration/dispatch mismatch SR-1.5 exploited). It checks the
+        unresolvable dummy target instead, which fails closed against any
+        real allowlist."""
+        reg = ToolRegistry()
+
+        class OptionalResolverTool(BaseTool):
+            name = "optional_resolver"
+            description = "Overrides the hook but defers for this call"
+            permissions = ToolPermissions(shell=True)
+
+            def resolve_shell_command(self, kwargs):
+                return None
+
+            def execute(self, **kwargs) -> ToolResult:
+                return ToolResult(success=True, output="ran")
+
+        reg.register(OptionalResolverTool())
+        mock_engine = MagicMock()
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            # An attacker-controlled "command" kwarg must not be trusted just
+            # because the resolver declined to resolve for this call.
+            reg.execute("optional_resolver", command="git status")
+            assert mock_engine.check_shell.call_args[0][0] != "git status"
+
+    def test_resolve_filesystem_targets_overrides_generic_kwarg_heuristic(self):
+        """SR-1.4/1.5: a tool whose real filesystem target isn't carried in
+        one of the generic kwarg names must still be enforced when it
+        declares resolve_filesystem_targets -- the registry must not
+        silently skip the check just because no recognized kwarg matched."""
+        reg = ToolRegistry()
+
+        class CustomPathKwargTool(BaseTool):
+            name = "custom_path_kwarg"
+            description = "Reads/writes via nonstandard kwarg names"
+            permissions = ToolPermissions(filesystem_read=True, filesystem_write=True)
+
+            def resolve_filesystem_targets(self, kwargs):
+                return ([kwargs.get("source_thing")], [kwargs.get("dest_thing")])
+
+            def execute(self, **kwargs) -> ToolResult:
+                return ToolResult(success=True, output="ran")
+
+        reg.register(CustomPathKwargTool())
+        mock_engine = MagicMock()
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            reg.execute(
+                "custom_path_kwarg",
+                source_thing="/etc/shadow",
+                dest_thing="/tmp/exfil",
+            )
+            mock_engine.check_read.assert_any_call("/etc/shadow", session_id="", task_id="")
+            mock_engine.check_write.assert_any_call("/tmp/exfil", session_id="", task_id="")
+            # The generic-name kwargs (none present here) must not have been
+            # substituted in -- only the resolver's explicit targets.
+            read_paths = [c[0][0] for c in mock_engine.check_read.call_args_list]
+            write_paths = [c[0][0] for c in mock_engine.check_write.call_args_list]
+            assert read_paths == ["/etc/shadow"]
+            assert write_paths == ["/tmp/exfil"]
+
+    def test_resolve_filesystem_targets_not_overridden_uses_legacy_heuristic(self):
+        """Tools that don't override the hook keep exactly the prior
+        behaviour (generic path/file_path/target/destination heuristic)."""
+        reg = ToolRegistry()
+        reg.register(FileReadTool())
+        mock_engine = MagicMock()
+        with patch("missy.tools.registry.get_policy_engine", return_value=mock_engine):
+            reg.execute("file_reader", path="/etc/passwd")
+            paths = [c[0][0] for c in mock_engine.check_read.call_args_list]
+            assert "/etc/passwd" in paths
 
 
 # ---------------------------------------------------------------------------

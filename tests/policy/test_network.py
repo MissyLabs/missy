@@ -244,6 +244,82 @@ class TestDNSFallback:
 
 
 # ---------------------------------------------------------------------------
+# check_host_resolved (SR-1.9b) -- returns the validated IP for pinning
+# ---------------------------------------------------------------------------
+
+
+class TestCheckHostResolved:
+    def test_bare_ip_returns_the_ip_itself(self):
+        engine = make_engine(allowed_cidrs=["93.184.216.0/24"])
+        allowed, ip = engine.check_host_resolved("93.184.216.34")
+        assert allowed is True
+        assert ip == "93.184.216.34"
+
+    def test_exact_host_match_returns_resolved_ip(self):
+        engine = make_engine(allowed_hosts=["api.example.com"])
+        mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
+        with patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result):
+            allowed, ip = engine.check_host_resolved("api.example.com")
+        assert allowed is True
+        assert ip == "93.184.216.34"
+
+    def test_domain_match_returns_resolved_ip(self):
+        engine = make_engine(allowed_domains=["*.example.com"])
+        mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]
+        with patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result):
+            allowed, ip = engine.check_host_resolved("sub.example.com")
+        assert allowed is True
+        assert ip == "93.184.216.34"
+
+    def test_cidr_fallback_returns_the_matching_resolved_ip(self):
+        engine = make_engine(allowed_cidrs=["93.184.216.0/24"])
+        mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 80))]
+        with patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result):
+            allowed, ip = engine.check_host_resolved("example.com")
+        assert allowed is True
+        assert ip == "93.184.216.34"
+
+    def test_default_allow_mode_never_resolves_and_returns_none_ip(self):
+        """default_deny=False is an established, deliberately-tested
+        no-DNS-lookup mode (see TestDefaultDenyFalseAllowsAll in
+        test_network_edges.py) -- check_host_resolved must preserve that
+        property. A None IP tells the pinned transport to fall back to
+        normal resolution for this one request, since there is no
+        security boundary to protect in this mode anyway."""
+        engine = make_engine(default_deny=False)
+        with patch("missy.policy.network.socket.getaddrinfo") as mock_getaddrinfo:
+            allowed, ip = engine.check_host_resolved("anything.example.com")
+        assert allowed is True
+        assert ip is None
+        mock_getaddrinfo.assert_not_called()
+
+    def test_denied_host_raises_same_as_check_host(self):
+        engine = make_engine()
+        with pytest.raises(PolicyViolationError):
+            engine.check_host_resolved("not-allowed.example.com")
+
+    def test_rebinding_denial_still_raises(self):
+        """A hostname that fails SR-1.9a's rebinding check must still
+        raise from check_host_resolved -- the "also return the IP"
+        addition must not weaken the existing denial path."""
+        engine = make_engine(allowed_hosts=["internal.example.com"])
+        mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.5", 80))]
+        with (
+            patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result),
+            pytest.raises(PolicyViolationError, match="rebinding"),
+        ):
+            engine.check_host_resolved("internal.example.com")
+
+    def test_check_host_and_check_host_resolved_agree_on_allow_deny(self):
+        engine = make_engine(allowed_cidrs=["93.184.216.0/24"])
+        mock_result = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 80))]
+        with patch("missy.policy.network.socket.getaddrinfo", return_value=mock_result):
+            assert engine.check_host("example.com") is True
+            allowed, _ip = engine.check_host_resolved("example.com")
+            assert allowed is True
+
+
+# ---------------------------------------------------------------------------
 # Edge cases and input validation
 # ---------------------------------------------------------------------------
 

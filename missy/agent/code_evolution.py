@@ -275,16 +275,62 @@ class CodeEvolutionManager:
         result = self._git("status", "--porcelain", check=False)
         return bool(result.stdout.strip())
 
-    def _stash_if_dirty(self) -> bool:
-        """Stash uncommitted work. Returns True if a stash was created."""
+    def _stash_if_dirty(self) -> str | None:
+        """Stash uncommitted work.
+
+        Returns the stash's commit SHA -- its stable identity, independent
+        of its position on the stash stack -- if a stash was created, else
+        None.
+        """
         if self._has_uncommitted_changes():
             self._git("stash", "push", "-m", "missy-evolve: safety stash")
-            return True
-        return False
+            # "git stash push" is a no-op ("No local changes to save") when
+            # the only dirty state is an *untracked* file (status --porcelain
+            # reports "??" entries, but a plain "stash push" without -u never
+            # stashes them) -- no stash is actually created in that case.
+            # A bare "git rev-parse stash@{0}" against a nonexistent stash
+            # writes its "fatal: ambiguous argument..." recovery hint to
+            # *stdout* (not just stderr), ending with the literal argument
+            # "stash@{0}" on its own line -- which is truthy and looks like
+            # a real SHA to a naive `.strip()`. "--verify -q" suppresses
+            # that error text entirely and signals failure via an empty
+            # stdout / non-zero exit code instead, so a bogus "stash@{0}"
+            # string can never be mistaken for a real stash identity.
+            result = self._git("rev-parse", "--verify", "-q", "stash@{0}", check=False)
+            sha = result.stdout.strip()
+            return sha or None
+        return None
 
-    def _stash_pop(self) -> None:
-        """Restore stashed work (best-effort)."""
-        self._git("stash", "pop", check=False)
+    def _stash_pop(self, stash_sha: str | None) -> None:
+        """Restore the stash identified by ``stash_sha`` (best-effort).
+
+        ``git stash pop`` with no argument always pops ``stash@{0}``, the
+        top of the stack by *position*. If another process pushes a stash
+        between our push and pop (this repo routinely has unrelated stashes
+        from other sessions/branches on its stack), a bare pop would
+        restore the wrong one -- and if its content conflicts with the
+        current working tree, leave conflict markers mixed into someone
+        else's in-progress work. We instead resolve our stash's current
+        stack position by SHA immediately before popping.
+        """
+        if not stash_sha:
+            return
+        result = self._git("stash", "list", "--format=%H %gd", check=False)
+        ref = None
+        for line in result.stdout.splitlines():
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2 and parts[0] == stash_sha:
+                ref = parts[1]
+                break
+        if ref is None:
+            logger.warning(
+                "code_evolution: could not find our safety stash (%s) on "
+                "the stash stack -- leaving it untouched rather than "
+                "guessing and possibly popping unrelated work.",
+                stash_sha[:12],
+            )
+            return
+        self._git("stash", "pop", ref, check=False)
 
     # ------------------------------------------------------------------
     # Proposal lifecycle
@@ -483,6 +529,13 @@ class CodeEvolutionManager:
             }
 
         stashed = self._stash_if_dirty()
+        # Full pre-edit content of every touched file, keyed by diff.file_path.
+        # git checkout -- <path> only restores files git already has a
+        # committed version of; for an untracked (never-committed) file it
+        # is a silent no-op (with check=False, no exception is raised
+        # either), so _revert_diffs() falls back to writing this captured
+        # content straight back for any file git can't restore on its own.
+        original_contents: dict[str, str] = {}
 
         try:
             # Apply diffs
@@ -490,7 +543,7 @@ class CodeEvolutionManager:
                 abs_path = (self._repo_root / diff.file_path).resolve()
                 # Prevent path traversal: ensure resolved path is under repo root
                 if not abs_path.is_relative_to(self._repo_root.resolve()):
-                    self._revert_diffs(prop.diffs)
+                    self._revert_diffs(prop.diffs, original_contents)
                     with self._lock:
                         prop.status = EvolutionStatus.FAILED
                         self._save()
@@ -506,6 +559,8 @@ class CodeEvolutionManager:
                         "test_output": "",
                     }
                 content = abs_path.read_text()
+                if diff.file_path not in original_contents:
+                    original_contents[diff.file_path] = content
                 content = content.replace(diff.original_code, diff.proposed_code, 1)
                 abs_path.write_text(content)
 
@@ -549,7 +604,7 @@ class CodeEvolutionManager:
 
             if test_result.returncode != 0:
                 # Tests failed — revert
-                self._revert_diffs(prop.diffs)
+                self._revert_diffs(prop.diffs, original_contents)
                 with self._lock:
                     prop.status = EvolutionStatus.FAILED
                     prop.test_output = test_output[-2000:]  # cap output
@@ -615,7 +670,7 @@ class CodeEvolutionManager:
         except Exception as exc:
             # Something went wrong — revert everything
             logger.exception("Failed to apply evolution %s", proposal_id)
-            self._revert_diffs(prop.diffs)
+            self._revert_diffs(prop.diffs, original_contents)
             with self._lock:
                 prop.status = EvolutionStatus.FAILED
                 prop.test_output = str(exc)
@@ -627,8 +682,7 @@ class CodeEvolutionManager:
                 "test_output": str(exc),
             }
         finally:
-            if stashed:
-                self._stash_pop()
+            self._stash_pop(stashed)
 
     def rollback(self, proposal_id: str) -> dict[str, Any]:
         """Revert a previously applied evolution via ``git revert``.
@@ -788,11 +842,42 @@ class CodeEvolutionManager:
                 return p
         return None
 
-    def _revert_diffs(self, diffs: list[FileDiff]) -> None:
-        """Best-effort revert of applied diffs via ``git checkout``."""
+    def _revert_diffs(
+        self, diffs: list[FileDiff], original_contents: dict[str, str] | None = None
+    ) -> None:
+        """Best-effort revert of applied diffs via ``git checkout``.
+
+        ``git checkout -- <path>`` only restores a file git already has a
+        committed version of. For a file that was never committed (newly
+        created earlier in the same session, still untracked), the
+        checkout is silently a no-op -- with ``check=False`` it doesn't
+        even raise, so the applied (possibly broken) content would
+        otherwise be left in place while callers report the change as
+        reverted. When *original_contents* (the full pre-edit text of each
+        file, captured by :meth:`apply` before editing) is supplied, any
+        file git doesn't actually track is restored directly from it
+        instead of relying on git alone.
+        """
+        original_contents = original_contents or {}
         for diff in diffs:
             try:
-                self._git("checkout", "--", diff.file_path, check=False)
+                is_tracked = (
+                    self._git(
+                        "ls-files", "--error-unmatch", "--", diff.file_path, check=False
+                    ).returncode
+                    == 0
+                )
+                if is_tracked:
+                    self._git("checkout", "--", diff.file_path, check=False)
+                elif diff.file_path in original_contents:
+                    abs_path = (self._repo_root / diff.file_path).resolve()
+                    abs_path.write_text(original_contents[diff.file_path])
+                else:
+                    logger.warning(
+                        "code_evolution: %s is untracked and no original "
+                        "content was captured -- cannot revert it.",
+                        diff.file_path,
+                    )
             except Exception:
                 logger.warning("Failed to revert %s", diff.file_path, exc_info=True)
 

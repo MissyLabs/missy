@@ -82,6 +82,28 @@ class PolicyEngine:
             category=category,
         )
 
+    def check_network_resolved(
+        self,
+        host: str,
+        session_id: str = "",
+        task_id: str = "",
+        category: str = "",
+    ) -> tuple[bool, str | None]:
+        """Like :meth:`check_network`, but also returns the validated IP.
+
+        SR-1.9b: delegates to :meth:`NetworkPolicyEngine.check_host_resolved`
+        so callers that actually open the connection
+        (:class:`~missy.gateway.client.PolicyHTTPClient`) can pin it to
+        the exact address this check validated, closing the
+        check-time/connect-time DNS-rebinding TOCTOU window.
+        """
+        return self.network.check_host_resolved(
+            host,
+            session_id=session_id,
+            task_id=task_id,
+            category=category,
+        )
+
     def check_write(
         self,
         path: str | Path,
@@ -136,7 +158,14 @@ class PolicyEngine:
     ) -> bool:
         """Evaluate a shell command execution request.
 
-        Delegates to :meth:`ShellPolicyEngine.check_command`.
+        Delegates to :meth:`ShellPolicyEngine.check_command` for program-name
+        allow-listing, then — SR-1.7 — routes every redirection target in
+        *command* through the filesystem policy engine too. An allowed
+        program name says nothing about what files a shell redirection lets
+        it touch: ``echo x > /etc/cron.d/pwn`` with only ``echo`` allowlisted
+        would otherwise write an arbitrary host file with no filesystem
+        check at all, since ``ShellPolicyEngine`` only ever inspected
+        program names.
 
         Args:
             command: The shell command string to evaluate.
@@ -144,12 +173,23 @@ class PolicyEngine:
             task_id: Optional calling task identifier.
 
         Returns:
-            ``True`` when the command is allowed.
+            ``True`` when the command — and every redirection target it
+            contains — is allowed.
 
         Raises:
-            PolicyViolationError: When the command is denied.
+            PolicyViolationError: When the command is denied, or any
+                redirection target falls outside the filesystem policy's
+                allowed read/write paths.
         """
-        return self.shell.check_command(command, session_id=session_id, task_id=task_id)
+        self.shell.check_command(command, session_id=session_id, task_id=task_id)
+
+        write_targets, read_targets = self.shell.extract_redirect_targets(command)
+        for target in write_targets:
+            self.filesystem.check_write(target, session_id=session_id, task_id=task_id)
+        for target in read_targets:
+            self.filesystem.check_read(target, session_id=session_id, task_id=task_id)
+
+        return True
 
 
 # ---------------------------------------------------------------------------

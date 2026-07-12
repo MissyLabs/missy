@@ -68,6 +68,13 @@ def _make_mock_config(**overrides) -> MagicMock:
     cfg.plugins.allowed_plugins = []
     cfg.discord = None
     cfg.vault = None
+    # `gateway start` now constructs a real SchedulerManager (pointed at the
+    # real ~/.missy/jobs.json) whenever cfg.scheduling.enabled is truthy --
+    # and a bare, un-configured MagicMock attribute is truthy by default.
+    # Defaulting this off here keeps every gateway-start test that doesn't
+    # care about the scheduler from touching the operator's real jobs.json
+    # or spinning up a real APScheduler thread.
+    cfg.scheduling.enabled = False
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
@@ -138,6 +145,70 @@ class TestLoadSubsystemsMigrationException:
             # Should not raise — the exception is logged and swallowed
             result = _load_subsystems(str(cfg_path))
             assert result is not None
+
+
+class TestLoadSubsystemsInitializesMessageBus:
+    """Regression: _load_subsystems() must actually initialize the process-level
+    MessageBus singleton.
+
+    docs/architecture.md documents init_message_bus() as part of the
+    bootstrap sequence, but it was never actually called anywhere in the
+    running app. AgentRuntime._make_message_bus() and RunRegistry._default_bus()
+    both gracefully degrade to bus=None when get_message_bus() raises "not
+    initialised" -- so the gap was entirely silent: the Web TUI's live run
+    console never showed tool-call events or provider/tools_used/cost in its
+    completion summary, with no error surfaced anywhere.
+    """
+
+    def test_load_subsystems_calls_init_message_bus(self, tmp_path) -> None:
+        from missy.cli.main import _load_subsystems
+        from missy.core.message_bus import get_message_bus, reset_message_bus
+
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(_MINIMAL_CONFIG_YAML)
+        reset_message_bus()
+        try:
+            with (
+                patch("missy.config.settings.load_config", return_value=_make_mock_config()),
+                patch("missy.policy.engine.init_policy_engine"),
+                patch("missy.observability.audit_logger.init_audit_logger"),
+                patch("missy.providers.registry.init_registry"),
+                patch("missy.tools.builtin.register_builtin_tools"),
+                patch("missy.tools.registry.init_tool_registry"),
+            ):
+                _load_subsystems(str(cfg_path))
+
+            # get_message_bus() raises RuntimeError if init_message_bus() was
+            # never called; this must not raise.
+            bus = get_message_bus()
+            assert bus is not None
+        finally:
+            reset_message_bus()
+
+    def test_agent_runtime_bus_is_usable_after_load_subsystems(self, tmp_path) -> None:
+        """End-to-end: after _load_subsystems(), a fresh AgentRuntime's
+        _make_message_bus() must return the real singleton, not None."""
+        from missy.agent.runtime import AgentRuntime
+        from missy.cli.main import _load_subsystems
+        from missy.core.message_bus import get_message_bus, reset_message_bus
+
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(_MINIMAL_CONFIG_YAML)
+        reset_message_bus()
+        try:
+            with (
+                patch("missy.config.settings.load_config", return_value=_make_mock_config()),
+                patch("missy.policy.engine.init_policy_engine"),
+                patch("missy.observability.audit_logger.init_audit_logger"),
+                patch("missy.providers.registry.init_registry"),
+                patch("missy.tools.builtin.register_builtin_tools"),
+                patch("missy.tools.registry.init_tool_registry"),
+            ):
+                _load_subsystems(str(cfg_path))
+
+            assert AgentRuntime._make_message_bus() is get_message_bus()
+        finally:
+            reset_message_bus()
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +380,20 @@ class TestRunHatchingCheckException:
 
 
 class TestProvidersSwitch:
+    """`providers switch` first tries a running gateway daemon's Web API
+    (`POST /api/v1/controls/provider.set_default`); only when that daemon is
+    unreachable (`httpx.ConnectError`) does it fall back to a local,
+    single-process registry mutation. All tests here force the
+    unreachable-daemon branch via a patched `httpx.post` so they exercise the
+    *local fallback* deterministically, regardless of whether a real gateway
+    happens to be listening on the default host/port in the environment the
+    tests run in.
+    """
+
     def test_providers_switch_success(self, runner: CliRunner) -> None:
-        """providers switch calls set_default and prints success message (line 1002)."""
+        """No daemon reachable: falls back to set_default and prints success (line 1002)."""
+        import httpx
+
         mock_config = _make_mock_config()
         mock_registry = MagicMock()
         mock_registry.set_default.return_value = None
@@ -318,6 +401,7 @@ class TestProvidersSwitch:
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", side_effect=httpx.ConnectError("refused")),
         ):
             result = runner.invoke(cli, ["providers", "switch", "openai"])
 
@@ -326,7 +410,9 @@ class TestProvidersSwitch:
         assert "openai" in result.output.lower() or "switched" in result.output.lower()
 
     def test_providers_switch_unknown_provider_exits_1(self, runner: CliRunner) -> None:
-        """providers switch with an unknown provider name prints error and exits 1 (lines 998-1000)."""
+        """No daemon reachable: local set_default ValueError still exits 1 (lines 998-1000)."""
+        import httpx
+
         mock_config = _make_mock_config()
         mock_registry = MagicMock()
         mock_registry.set_default.side_effect = ValueError("Provider 'nonexistent' not found")
@@ -334,12 +420,57 @@ class TestProvidersSwitch:
         with (
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", side_effect=httpx.ConnectError("refused")),
         ):
             result = runner.invoke(cli, ["providers", "switch", "nonexistent"])
 
         assert result.exit_code == 1
         all_output = result.output + result.stderr
         assert "nonexistent" in all_output or "not found" in all_output.lower()
+
+    def test_providers_switch_reaches_running_daemon(self, runner: CliRunner) -> None:
+        """When a gateway daemon answers 200, the daemon is switched and the
+        local registry is never touched (no throwaway-mutation fallback)."""
+        mock_registry = MagicMock()
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+
+        with (
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", return_value=fake_response) as mock_post,
+        ):
+            result = runner.invoke(cli, ["providers", "switch", "openai"])
+
+        assert result.exit_code == 0
+        assert "gateway daemon" in result.output.lower()
+        mock_registry.set_default.assert_not_called()
+        called_url = mock_post.call_args.args[0]
+        assert called_url.endswith("/api/v1/controls/provider.set_default")
+        assert mock_post.call_args.kwargs["json"] == {
+            "target": "openai",
+            "confirm": "set-default:openai",
+        }
+
+    def test_providers_switch_daemon_rejects_exits_1(self, runner: CliRunner) -> None:
+        """A daemon-side error (e.g. unknown/unavailable provider) surfaces the
+        daemon's error message and exits 1, without falling back locally."""
+        mock_registry = MagicMock()
+        fake_response = MagicMock()
+        fake_response.status_code = 404
+        fake_response.json.return_value = {
+            "status": "error",
+            "error": "Provider 'x' is not registered",
+        }
+
+        with (
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("httpx.post", return_value=fake_response),
+        ):
+            result = runner.invoke(cli, ["providers", "switch", "x"])
+
+        assert result.exit_code == 1
+        assert "not registered" in result.output.lower()
+        mock_registry.set_default.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -596,12 +596,15 @@ class TestShellPolicyEnforcement:
         with pytest.raises(PolicyViolationError):
             engine.check_command("curl https://evil.com")
 
-    def test_empty_allowlist_allows_everything_when_enabled(self):
-        """An empty allowed_commands list with shell enabled means allow-all."""
+    def test_empty_allowlist_denies_everything_when_enabled(self):
+        """SR-1.8: an empty allowed_commands list with shell enabled must
+        deny every command -- configuration ambiguity must never become
+        allow-all."""
         policy = ShellPolicy(enabled=True, allowed_commands=[])
         engine = ShellPolicyEngine(policy)
 
-        assert engine.check_command("ls") is True
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("ls")
 
     def test_allowed_command_emits_allow_event(self):
         """An allowed command must emit a shell_check allow event."""

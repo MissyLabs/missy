@@ -19,7 +19,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -126,10 +126,23 @@ class EventBus:
         events = bus.get_events(category="network")
     """
 
+    #: Availability hardening: the in-memory log grew without bound --
+    #: every published event was kept forever, for the lifetime of the
+    #: process. Missy is designed to run as a long-lived background
+    #: daemon (scheduler, SleeptimeWorker, Discord, webhook, etc.), so an
+    #: unbounded list here is a real memory-exhaustion hazard, not a
+    #: theoretical one. This does not shrink the *durable* audit trail --
+    #: AuditLogger/OtelExporter subscribe by wrapping publish() directly
+    #: (see missy/observability/audit_logger.py), so every event still
+    #: reaches disk/the collector regardless of this in-memory cap; only
+    #: EventBus.get_events()'s "recent in-memory snapshot" query surface
+    #: is bounded.
+    _MAX_LOG_SIZE = 10_000
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._subscribers: dict[str, list[EventCallback]] = defaultdict(list)
-        self._log: list[AuditEvent] = []
+        self._log: deque[AuditEvent] = deque(maxlen=self._MAX_LOG_SIZE)
 
     def subscribe(self, event_type: str, callback: EventCallback) -> None:
         """Register *callback* to be called whenever *event_type* is published.

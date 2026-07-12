@@ -49,6 +49,137 @@ class TestRunJob:
         assert updated_job.consecutive_failures == 0
 
     @patch("missy.scheduler.manager.uuid")
+    def test_run_job_uses_job_capability_mode_default_safe_chat(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
+        """SR-2.1 regression: a job created with default settings must run
+        the agent with capability_mode="safe-chat", not "full" -- an
+        unattended job's tool access must be restricted by default.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        job = started_manager.add_job("default mode job", "every 5 minutes", "do stuff")
+        assert job.capability_mode == "safe-chat"
+
+        with (
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+            patch("missy.agent.runtime.AgentConfig") as MockConfig,
+        ):
+            mock_agent = MagicMock()
+            mock_agent.run.return_value = "Done!"
+            MockRuntime.return_value = mock_agent
+
+            started_manager._run_job(job.id)
+
+        MockConfig.assert_called_once_with(
+            provider=job.provider, capability_mode="safe-chat", max_spend_usd=0.0
+        )
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_run_job_full_capability_mode_explicit_opt_in(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
+        """A job explicitly created with capability_mode="full" retains
+        full tool access -- the restricted default must not silently
+        override an explicit opt-in.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        job = started_manager.add_job(
+            "full mode job", "every 5 minutes", "do stuff", capability_mode="full"
+        )
+        assert job.capability_mode == "full"
+
+        with (
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+            patch("missy.agent.runtime.AgentConfig") as MockConfig,
+        ):
+            mock_agent = MagicMock()
+            mock_agent.run.return_value = "Done!"
+            MockRuntime.return_value = mock_agent
+
+            started_manager._run_job(job.id)
+
+        MockConfig.assert_called_once_with(
+            provider=job.provider, capability_mode="full", max_spend_usd=0.0
+        )
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_run_job_threads_configured_max_spend_usd(self, mock_uuid, tmp_jobs_file: str):
+        """Regression: every other AgentRuntime construction site in the
+        codebase (missy ask/run/recover, the gateway's interactive/Discord
+        runtimes, missy api start) passes the operator's configured
+        max_spend_usd cap into AgentConfig. _run_job() constructs a brand
+        new AgentRuntime (with its own in-memory CostTracker) per job run,
+        so without threading the same cap through, a scheduled job would
+        run with an unlimited budget regardless of what the operator
+        configured -- silently bypassing the one documented spend-cap knob.
+        SchedulerManager must accept and apply a default_max_spend_usd.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, default_max_spend_usd=5.0)
+        mgr.start()
+        try:
+            job = mgr.add_job("budgeted job", "every 5 minutes", "do stuff")
+
+            with (
+                patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+                patch("missy.agent.runtime.AgentConfig") as MockConfig,
+            ):
+                mock_agent = MagicMock()
+                mock_agent.run.return_value = "Done!"
+                MockRuntime.return_value = mock_agent
+
+                mgr._run_job(job.id)
+
+            MockConfig.assert_called_once_with(
+                provider=job.provider, capability_mode="safe-chat", max_spend_usd=5.0
+            )
+        finally:
+            mgr.stop()
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_run_job_threads_configured_tool_policy_kwargs(self, mock_uuid, tmp_jobs_file: str):
+        """Regression: every other AgentConfig construction site in the
+        codebase also passes _agent_tool_policy_kwargs(cfg) (tool_policy,
+        agent_tool_policy, sandbox_tool_policy, subagent_tool_policy,
+        tool_intelligence, agent_id). Without threading these through,
+        an operator's global tools.deny: [...] config would silently not
+        apply to a scheduled job's AgentConfig -- the same class of gap
+        default_max_spend_usd closed for the spend cap.
+        """
+        mock_uuid.uuid4.return_value = "test-session-id"
+        policy_kwargs = {
+            "agent_id": "default",
+            "tool_policy": {"deny": ["shell_exec"]},
+            "agent_tool_policy": None,
+            "sandbox_tool_policy": None,
+            "subagent_tool_policy": None,
+            "tool_intelligence": None,
+        }
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, default_tool_policy_kwargs=policy_kwargs)
+        mgr.start()
+        try:
+            job = mgr.add_job("policy job", "every 5 minutes", "do stuff")
+
+            with (
+                patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+                patch("missy.agent.runtime.AgentConfig") as MockConfig,
+            ):
+                mock_agent = MagicMock()
+                mock_agent.run.return_value = "Done!"
+                MockRuntime.return_value = mock_agent
+
+                mgr._run_job(job.id)
+
+            MockConfig.assert_called_once_with(
+                provider=job.provider,
+                capability_mode="safe-chat",
+                max_spend_usd=0.0,
+                **policy_kwargs,
+            )
+        finally:
+            mgr.stop()
+
+    @patch("missy.scheduler.manager.uuid")
     def test_run_job_error_increments_failures(self, mock_uuid, started_manager: SchedulerManager):
         mock_uuid.uuid4.return_value = "test-session"
         job = started_manager.add_job("fail", "every 5 minutes", "crash")
@@ -207,7 +338,7 @@ class TestCleanupMemory:
 
     def test_cleanup_memory_exception_returns_zero(self, started_manager: SchedulerManager):
         """cleanup_memory returns 0 on exception."""
-        with patch.dict("sys.modules", {"missy.memory.store": None}):
+        with patch.dict("sys.modules", {"missy.memory.sqlite_store": None}):
             result = started_manager.cleanup_memory()
             assert result == 0
 

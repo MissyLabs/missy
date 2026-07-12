@@ -325,6 +325,76 @@ class TestApply:
         assert "return 'hello'" in content
         assert mgr.get(prop.id).status == EvolutionStatus.FAILED
 
+    def test_apply_tests_fail_reverts_untracked_file(self, tmp_repo, store_path):
+        """Regression: _revert_diffs() used `git checkout -- <path>` alone,
+        which only restores files git already has a committed version of.
+        For a file that was never committed (created earlier in the same
+        session but not yet `git add`/`git commit`ed), that checkout is a
+        silent no-op -- with check=False it doesn't even raise -- so the
+        broken proposed content was permanently left in place while apply()
+        still reported "Tests failed. Changes reverted." Must actually
+        restore the original content for an untracked file too.
+        """
+        (tmp_repo / "missy" / "new_untracked.py").write_text("def foo():\n    return 'ORIGINAL'\n")
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="false",  # always fails
+        )
+        prop = mgr.propose(
+            title="Will fail tests on an untracked file",
+            description="test",
+            file_path="missy/new_untracked.py",
+            original_code="return 'ORIGINAL'",
+            proposed_code="return 'BROKEN_SHOULD_BE_REVERTED'",
+        )
+        mgr.approve(prop.id)
+        result = mgr.apply(prop.id)
+        assert not result["success"]
+        assert "Tests failed" in result["message"]
+        content = (tmp_repo / "missy" / "new_untracked.py").read_text()
+        assert "ORIGINAL" in content
+        assert "BROKEN_SHOULD_BE_REVERTED" not in content
+
+    def test_apply_tests_fail_reverts_untracked_file_multi_diff_same_file(
+        self, tmp_repo, store_path
+    ):
+        """Regression: apply() captured `original_contents[diff.file_path]`
+        inside the diff-application loop, keyed only by file_path. When a
+        single proposal has two FileDiff entries against the SAME untracked
+        file, the second diff's iteration reads the file *after* the first
+        diff was already written, overwriting original_contents with that
+        intermediate (already-patched) state instead of the true pre-edit
+        original. _revert_diffs()'s untracked-file fallback then restores
+        that corrupted "original," permanently leaving the first diff's
+        edit in place while apply() still reports "Tests failed. Changes
+        reverted."
+        """
+        (tmp_repo / "missy" / "new_untracked.py").write_text(
+            "def foo():\n    return 'ORIGINAL_A'\n\ndef bar():\n    return 'ORIGINAL_B'\n"
+        )
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="false",  # always fails
+        )
+        prop = mgr.propose_multi(
+            title="Multi-diff same untracked file",
+            description="test",
+            diffs=[
+                FileDiff("missy/new_untracked.py", "return 'ORIGINAL_A'", "return 'BROKEN_A'"),
+                FileDiff("missy/new_untracked.py", "return 'ORIGINAL_B'", "return 'BROKEN_B'"),
+            ],
+        )
+        mgr.approve(prop.id)
+        result = mgr.apply(prop.id)
+        assert not result["success"]
+        assert "Tests failed" in result["message"]
+        content = (tmp_repo / "missy" / "new_untracked.py").read_text()
+        assert "ORIGINAL_A" in content
+        assert "ORIGINAL_B" in content
+        assert "BROKEN" not in content
+
     def test_apply_stashes_dirty_work(self, mgr, tmp_repo):
         # Make uncommitted changes to an unrelated file
         (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
@@ -345,6 +415,126 @@ class TestApply:
     def test_apply_nonexistent_proposal(self, mgr):
         with pytest.raises(ValueError, match="not found"):
             mgr.apply("nope1234")
+
+    def test_apply_pops_correct_stash_despite_concurrent_unrelated_stash(self, mgr, tmp_repo):
+        """A stash pushed by another process/session between our push and
+        pop must not be disturbed, and our own safety stash must still be
+        restored correctly (SHA-identity lookup, not position-based
+        stash@{0})."""
+        # Make uncommitted changes to an unrelated file -- this is what
+        # apply() will stash.
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        prop = mgr.propose(
+            title="T",
+            description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+
+        real_stash_if_dirty = mgr._stash_if_dirty
+
+        def stash_then_simulate_concurrent_push():
+            sha = real_stash_if_dirty()
+            # Simulate a concurrent/interleaved stash from an unrelated
+            # process landing on top of ours before we pop.
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "unrelated concurrent commit"],
+                cwd=str(tmp_repo),
+                capture_output=True,
+                check=True,
+            )
+            (tmp_repo / "concurrent.txt").write_text("unrelated concurrent work\n")
+            subprocess.run(
+                ["git", "add", "concurrent.txt"], cwd=str(tmp_repo), capture_output=True, check=True
+            )
+            subprocess.run(
+                ["git", "stash", "push", "-m", "unrelated-concurrent-stash"],
+                cwd=str(tmp_repo),
+                capture_output=True,
+                check=True,
+            )
+            return sha
+
+        mgr._stash_if_dirty = stash_then_simulate_concurrent_push
+        try:
+            result = mgr.apply(prop.id)
+        finally:
+            mgr._stash_if_dirty = real_stash_if_dirty
+
+        assert result["success"]
+        # Our stashed dirty change was restored correctly.
+        content = (tmp_repo / "missy" / "__init__.py").read_text()
+        assert "# dirty" in content
+        # The unrelated concurrent stash was left untouched on the stack --
+        # not popped, not merged, not corrupted.
+        stash_list = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert "unrelated-concurrent-stash" in stash_list
+        # The unrelated stash's content was never applied to the working tree.
+        assert not (tmp_repo / "concurrent.txt").exists()
+
+        # Clean up the unrelated stash left on the stack by this test.
+        subprocess.run(["git", "stash", "drop"], cwd=str(tmp_repo), capture_output=True, check=True)
+
+
+class TestStashIdentity:
+    """Unit coverage for the SHA-identity-based stash helpers."""
+
+    def test_stash_if_dirty_returns_none_when_clean(self, mgr):
+        assert mgr._stash_if_dirty() is None
+
+    def test_stash_if_dirty_returns_none_for_untracked_only_dirty_state(self, mgr, tmp_repo):
+        """Regression: `git status --porcelain` reports untracked files as
+        dirty, but a plain `git stash push` (no -u) never actually stashes
+        them -- it's a no-op. The old code then ran a bare
+        `git rev-parse stash@{0}` against the nonexistent stash, which
+        writes its "fatal: ambiguous argument..." recovery hint to *stdout*
+        ending in the literal text "stash@{0}" -- truthy, and easily
+        mistaken by `.strip() or None` for a real stash SHA. Must return
+        None (no stash was actually created), not a bogus SHA-shaped string.
+        """
+        (tmp_repo / "missy" / "brand_new_untracked.py").write_text("# new file\n")
+        sha = mgr._stash_if_dirty()
+        assert sha is None
+
+    def test_stash_if_dirty_returns_commit_sha(self, mgr, tmp_repo):
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        sha = mgr._stash_if_dirty()
+        assert sha
+        assert len(sha) == 40  # full git commit SHA
+        # Working tree should be clean again after the stash push.
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert status.strip() == ""
+        mgr._stash_pop(sha)
+
+    def test_stash_pop_with_none_is_a_no_op(self, mgr, tmp_repo):
+        # Should not raise and should not touch any existing stash.
+        mgr._stash_pop(None)
+
+    def test_stash_pop_with_unknown_sha_leaves_stack_untouched(self, mgr, tmp_repo):
+        (tmp_repo / "missy" / "__init__.py").write_text("# dirty\n")
+        subprocess.run(
+            ["git", "stash", "push", "-m", "real stash"],
+            cwd=str(tmp_repo),
+            capture_output=True,
+            check=True,
+        )
+        before = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+
+        mgr._stash_pop("0" * 40)  # SHA that doesn't exist on the stack
+
+        after = subprocess.run(
+            ["git", "stash", "list"], cwd=str(tmp_repo), capture_output=True, text=True
+        ).stdout
+        assert before == after
+        subprocess.run(["git", "stash", "drop"], cwd=str(tmp_repo), capture_output=True, check=True)
 
 
 # ---------------------------------------------------------------------------

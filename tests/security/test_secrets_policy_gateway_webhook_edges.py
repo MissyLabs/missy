@@ -217,9 +217,12 @@ class TestWebhookHmacEdgeCases:
         try:
             import http.client
             import json
+            import time
 
             body = json.dumps({"prompt": "hello world"}).encode()
-            sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+            ts = int(time.time())
+            payload = f"{ts}.".encode() + body
+            sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
             conn = http.client.HTTPConnection("127.0.0.1", ch._port)
             conn.request(
                 "POST",
@@ -229,6 +232,7 @@ class TestWebhookHmacEdgeCases:
                     "Content-Type": "application/json",
                     "Content-Length": str(len(body)),
                     "X-Missy-Signature": sig,
+                    "X-Missy-Timestamp": str(ts),
                 },
             )
             resp = conn.getresponse()

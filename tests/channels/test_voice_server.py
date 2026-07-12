@@ -5,6 +5,7 @@ All external I/O (websockets, STT, TTS, audit events, registry) is mocked.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -414,6 +415,53 @@ class TestHandleAuth:
         assert any(f["type"] == "muted" for f in sent)
 
     @pytest.mark.asyncio
+    async def test_verify_token_offloaded_does_not_block_the_event_loop(self) -> None:
+        """Regression: verify_token() runs a real ~100k-iteration
+        PBKDF2-HMAC-SHA256 computation (live-measured at ~40ms on real
+        hardware). Calling it directly (not offloaded) from this async
+        handler would run that synchronously on the single event loop
+        thread with no rate limiting anywhere -- a client repeatedly
+        (re)connecting and authenticating could monopolize the event loop,
+        stalling every other connected node's audio/heartbeats/TTS. Must be
+        offloaded to a thread executor so the loop stays responsive.
+        """
+        import time as _time
+
+        node = _make_edge_node(paired=True, policy_mode="full")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        def _slow_verify_token(node_id: str, token: str) -> bool:
+            _time.sleep(0.4)
+            return True
+
+        server._registry.verify_token = _slow_verify_token
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        with patch("missy.channels.voice.server._emit"):
+            start = _time.monotonic()
+            await asyncio.gather(
+                server._handle_auth(ws, node_id="node-1", token="valid"), _ticker()
+            )
+            elapsed = _time.monotonic() - start
+
+        assert ticks == 20
+        # Sequential (blocked loop) would take ~0.4 + 0.4 = ~0.8s;
+        # concurrent (loop stayed responsive) takes ~max(0.4, 0.4) = ~0.4s.
+        # 0.65s sits roughly in the middle with generous headroom on both
+        # sides to absorb scheduling jitter under real system load (see
+        # this same session's earlier asyncio event-loop-blocking fix,
+        # which flaked once at a tighter margin under full-suite load).
+        assert elapsed < 0.65, f"expected concurrent execution, took {elapsed:.3f}s"
+
+    @pytest.mark.asyncio
     async def test_auth_success(self) -> None:
         node = _make_edge_node(paired=True, policy_mode="full")
         server = _make_server(node=node)
@@ -492,6 +540,44 @@ class TestHandlePairRequest:
 
 
 class TestMessageLoop:
+    @pytest.mark.asyncio
+    async def test_muted_mid_connection_disconnects_on_next_message(self) -> None:
+        """Regression: `missy devices policy <id> --mode muted` only ever
+        wrote to the on-disk registry (DeviceRegistry.update_node()) -- it
+        never touched an already-connected node's live WebSocket session.
+        _handle_auth()'s muted check ran once, at the initial handshake;
+        _message_loop() never re-checked it again, so a node muted while
+        already connected kept streaming audio (and invoking the agent)
+        indefinitely, until it disconnected on its own. _message_loop() must
+        re-fetch the node's live policy on every message and disconnect as
+        soon as a muted node sends anything.
+        """
+        node = _make_edge_node(policy_mode="full")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        # The node gets muted mid-connection -- the registry now reports it
+        # as muted, but `node` (captured at the original auth handshake) is
+        # still the stale "full" snapshot.
+        server._registry.get_node.return_value = _make_edge_node(policy_mode="muted")
+
+        async def fake_aiter():
+            yield json.dumps({"type": "heartbeat"})
+            yield json.dumps({"type": "audio_start", "sample_rate": 16000, "channels": 1})
+
+        ws.__aiter__ = lambda _self: fake_aiter()
+
+        with patch("missy.channels.voice.server._emit"):
+            await server._message_loop(ws, node)
+
+        ws.close.assert_awaited_once()
+        assert ws.close.call_args.args[0] == 1008
+        sent = [json.loads(c[0][0]) for c in ws.send.call_args_list if isinstance(c[0][0], str)]
+        assert any(f.get("type") == "muted" for f in sent)
+        # The subsequent audio_start must never have been processed -- the
+        # loop must have broken immediately on the first post-mute message.
+        server._stt.transcribe.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_binary_outside_audio_session_is_ignored(self) -> None:
         node = _make_edge_node()
@@ -679,6 +765,29 @@ class TestHandleAudio:
         # Filter out binary frames (audio chunks), only parse JSON strings.
         sent = [json.loads(c[0][0]) for c in ws.send.call_args_list if isinstance(c[0][0], str)]
         assert any(f["type"] == "transcript" for f in sent)
+
+    @pytest.mark.asyncio
+    async def test_agent_callback_receives_node_policy_mode(self) -> None:
+        """Regression: policy_mode was read in exactly one place in the whole
+        voice subsystem (the "muted" check at auth time) -- a node configured
+        with `missy devices policy <id> --mode safe-chat` still got full,
+        unrestricted tool access, since nothing downstream ever routed it to
+        a capability-restricted runtime. _handle_audio() must thread the
+        node's current policy_mode into the metadata dict passed to
+        agent_callback so the callback (_build_agent_callback()) can
+        actually route by it.
+        """
+        node = _make_edge_node(policy_mode="safe-chat")
+        server = _make_server(node=node)
+        ws = _make_websocket()
+
+        with patch("missy.channels.voice.server._emit"):
+            await server._handle_audio(ws, node=node, audio_buffer=b"\x00" * 100, sample_rate=16000)
+
+        server._agent_callback.assert_awaited_once()
+        call_args = server._agent_callback.call_args
+        metadata = call_args[0][2]
+        assert metadata["policy_mode"] == "safe-chat"
 
     @pytest.mark.asyncio
     async def test_agent_callback_failure_sends_error_frame(self) -> None:

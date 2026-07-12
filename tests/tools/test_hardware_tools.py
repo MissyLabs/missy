@@ -996,6 +996,99 @@ class TestBrowserScreenshotTool:
         assert result.success is False
 
 
+class TestBrowserScreenshotToolFilesystemWritePolicy:
+    """Regression: BrowserScreenshotTool declared only network=True, not
+    filesystem_write=True, even though execute() writes an agent-
+    controlled `path` kwarg to disk. ToolRegistry._check_permissions()
+    only calls engine.check_write() inside its `if perms.filesystem_write:`
+    branch -- with the flag False, that branch (and the write-path check
+    it guards) was skipped entirely, so a path outside
+    filesystem.allowed_write_paths was never denied. Uses the REAL
+    ToolRegistry + policy engine (not tool.execute() called directly) so
+    the actual enforcement point is exercised, not bypassed.
+    """
+
+    def test_write_outside_allowed_paths_is_denied(self, tmp_path):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy.engine import init_policy_engine
+        from missy.tools.builtin.browser_tools import BrowserScreenshotTool
+        from missy.tools.registry import ToolRegistry
+
+        allowed_dir = tmp_path / "allowed"
+        allowed_dir.mkdir()
+        init_policy_engine(
+            MissyConfig(
+                network=NetworkPolicy(),
+                filesystem=FilesystemPolicy(
+                    allowed_write_paths=[str(allowed_dir)], allowed_read_paths=[str(allowed_dir)]
+                ),
+                shell=ShellPolicy(),
+                plugins=PluginPolicy(),
+                providers={},
+                workspace_path=str(tmp_path),
+                audit_log_path=str(tmp_path / "audit.jsonl"),
+            )
+        )
+        registry = ToolRegistry()
+        registry.register(BrowserScreenshotTool())
+
+        # A sibling directory, not under `allowed_dir` -- must be denied
+        # even though both live under the same tmp_path root.
+        outside_path = str(tmp_path / "outside" / "shot.png")
+        with patch("missy.tools.builtin.browser_tools._page") as mock_page_fn:
+            result = registry.execute("browser_screenshot", path=outside_path)
+
+        assert result.success is False
+        assert result.policy_denied is True
+        mock_page_fn.assert_not_called()
+
+    def test_write_inside_allowed_paths_is_permitted(self, tmp_path):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy.engine import init_policy_engine
+        from missy.tools.builtin.browser_tools import BrowserScreenshotTool
+        from missy.tools.registry import ToolRegistry
+
+        init_policy_engine(
+            MissyConfig(
+                network=NetworkPolicy(),
+                filesystem=FilesystemPolicy(
+                    allowed_write_paths=["/tmp"], allowed_read_paths=["/tmp"]
+                ),
+                shell=ShellPolicy(),
+                plugins=PluginPolicy(),
+                providers={},
+                workspace_path="/tmp",
+                audit_log_path="/tmp/audit.jsonl",
+            )
+        )
+        registry = ToolRegistry()
+        registry.register(BrowserScreenshotTool())
+
+        allowed_path = "/tmp/browser_shot_allowed.png"
+        mock_page = _make_mock_page(title="Test Page")
+        with (
+            patch("missy.tools.builtin.browser_tools._page", return_value=mock_page),
+            patch("missy.tools.builtin.browser_tools.Path") as mock_path_cls,
+        ):
+            mock_path_cls.return_value.stat.return_value.st_size = 100
+            result = registry.execute("browser_screenshot", path=allowed_path)
+
+        assert result.success is True
+        mock_page.screenshot.assert_called_once()
+
+
 class TestBrowserGetContentTool:
     @pytest.fixture(autouse=True)
     def _tool(self):

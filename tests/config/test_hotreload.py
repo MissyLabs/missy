@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from missy.config.hotreload import ConfigWatcher, _apply_config
 
 
@@ -117,13 +119,130 @@ class TestDoReload:
 
 
 class TestApplyConfig:
+    @patch("missy.observability.audit_logger.init_audit_logger")
+    @patch("missy.observability.otel.init_otel")
     @patch("missy.providers.registry.init_registry")
     @patch("missy.policy.engine.init_policy_engine")
-    def test_apply_reinitializes_subsystems(self, mock_policy, mock_reg):
+    def test_apply_reinitializes_subsystems(
+        self, mock_policy, mock_reg, mock_otel, mock_audit_logger
+    ):
         config = MagicMock()
         _apply_config(config)
         mock_policy.assert_called_once_with(config)
         mock_reg.assert_called_once_with(config)
+        mock_otel.assert_called_once_with(config)
+        mock_audit_logger.assert_called_once_with(config.audit_log_path)
+
+    def test_apply_does_not_partially_install_when_one_subsystem_fails(self):
+        """If ProviderRegistry construction fails, PolicyEngine must not
+        already be installed globally -- pre-fix, _apply_config() called
+        init_policy_engine() then init_registry() with no guarantee across
+        the pair: a failure in the second left the process with a policy
+        engine on the NEW config and a provider registry still on the OLD
+        config, a genuinely inconsistent runtime state.
+        """
+        import missy.policy.engine as policy_mod
+        import missy.providers.registry as registry_mod
+
+        old_engine = policy_mod._engine
+        old_registry = registry_mod._registry
+        try:
+            policy_mod._engine = None
+            registry_mod._registry = None
+            config = MagicMock()
+
+            with (
+                patch(
+                    "missy.providers.registry.ProviderRegistry.from_config",
+                    side_effect=RuntimeError("boom"),
+                ),
+                pytest.raises(RuntimeError, match="boom"),
+            ):
+                _apply_config(config)
+
+            assert policy_mod._engine is None
+            assert registry_mod._registry is None
+        finally:
+            policy_mod._engine = old_engine
+            registry_mod._registry = old_registry
+
+
+class TestApplyConfigAuditLoggerRealReinit:
+    """Regression: init_audit_logger() was only ever called once, at
+    process bootstrap -- editing audit_log_path on a running `missy
+    gateway start` daemon had no effect whatsoever: every subsequent
+    event kept being written to the stale path forever, with no error
+    surfaced anywhere. _apply_config() must call init_audit_logger()
+    (which reconfigures the same, already-subscribed instance in place --
+    see AuditLogger.reconfigure()'s docstring) on every reload, and the
+    effect must be real: events published after a reload must land in
+    the NEW path, not the old one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_audit_logger_state(self):
+        import missy.observability.audit_logger as audit_mod
+        from missy.core.events import event_bus
+
+        original_publish = event_bus.publish
+        original_logger = audit_mod._audit_logger
+        yield
+        event_bus.publish = original_publish
+        audit_mod._audit_logger = original_logger
+
+    def test_reload_repoints_audit_logger_at_new_path(self, tmp_path):
+        import json
+
+        from missy.core.events import AuditEvent, event_bus
+
+        path_a = tmp_path / "a.jsonl"
+        path_b = tmp_path / "b.jsonl"
+
+        config_a = MagicMock()
+        config_a.audit_log_path = str(path_a)
+        config_b = MagicMock()
+        config_b.audit_log_path = str(path_b)
+
+        with (
+            patch("missy.policy.engine.init_policy_engine"),
+            patch("missy.providers.registry.init_registry"),
+            patch("missy.providers.registry.ProviderRegistry.from_config"),
+            patch("missy.policy.engine.PolicyEngine"),
+            patch("missy.observability.otel.init_otel"),
+        ):
+            _apply_config(config_a)
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type="test.event.a",
+                    category="test",
+                    result="allow",
+                    detail={},
+                )
+            )
+
+            _apply_config(config_b)
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type="test.event.b",
+                    category="test",
+                    result="allow",
+                    detail={},
+                )
+            )
+
+        assert path_a.exists()
+        lines_a = [json.loads(line) for line in path_a.read_text().splitlines() if line]
+        assert any(entry["event_type"] == "test.event.a" for entry in lines_a)
+        assert not any(entry["event_type"] == "test.event.b" for entry in lines_a)
+
+        assert path_b.exists()
+        lines_b = [json.loads(line) for line in path_b.read_text().splitlines() if line]
+        assert any(entry["event_type"] == "test.event.b" for entry in lines_b)
+        assert not any(entry["event_type"] == "test.event.a" for entry in lines_b)
 
 
 class TestDebounce:

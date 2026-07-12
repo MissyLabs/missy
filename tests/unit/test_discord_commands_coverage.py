@@ -18,6 +18,7 @@ from missy.channels.discord.commands import (
     _get_option,
     _handle_ask,
     _handle_model,
+    _interaction_author_id,
     handle_slash_command,
 )
 from missy.channels.discord.config import DiscordAccountConfig, DiscordDMPolicy
@@ -140,6 +141,200 @@ class TestHandleAsk:
         result = await _handle_ask(interaction, channel)
 
         assert "error" in result.lower() or "agent exploded" in result
+
+    @pytest.mark.asyncio
+    async def test_ask_preserves_whitespace_multiline_and_quotes_verbatim(self):
+        """DISC-CMD-001/002 (task #10 validation): a prompt with extra
+        leading/trailing whitespace, embedded blank lines, a quoted
+        phrase, and a tab character must reach agent.run() byte-for-byte
+        -- no trimming, no silent truncation, no mangling. Discord's
+        slash-command UI collects the whole `prompt` option as one
+        opaque string; there is no free-text tokenizer in this path to
+        misparse whitespace/quotes, but nothing should alter the value
+        either."""
+        raw_prompt = (
+            "   leading/trailing whitespace   \n\n"
+            'multiline\ncontent   with "quoted phrase" and \tembedded tab'
+        )
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": raw_prompt}])
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "ok"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        assert mock_agent.run.call_args[0][0] == raw_prompt
+
+    @pytest.mark.asyncio
+    async def test_ask_preserves_long_multi_requirement_prompt_without_truncation(self):
+        """DISC-CMD-002: a long, multi-requirement brief must not be
+        silently dropped or truncated before it reaches the agent."""
+        long_prompt = "Requirement 1: do X.\n" * 200 + "Final constraint: never do Y."
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": long_prompt}])
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "ok"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        forwarded = mock_agent.run.call_args[0][0]
+        assert forwarded == long_prompt
+        assert "Final constraint: never do Y." in forwarded
+
+
+class TestHandleAskSecretsDetection:
+    """Regression: regular MESSAGE_CREATE text runs through
+    SecretsDetector before dispatch (channel.py's "1b. Credential /
+    secrets detection" step), deleting the message and never forwarding
+    it to the agent. _handle_ask() forwarded its `prompt` option
+    straight to agent.run() with no equivalent check at all -- a
+    /ask prompt containing a live credential reached the LLM (and
+    Discord's own interaction history) with no scrubbing warning,
+    unlike identical content typed as a plain message.
+    """
+
+    @pytest.mark.asyncio
+    async def test_prompt_with_secret_is_not_forwarded_to_agent(self):
+        interaction = _make_interaction(
+            "ask",
+            options=[{"name": "prompt", "value": "My AWS key is AKIAIOSFODNN7EXAMPLE123456"}],
+        )
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "should never be reached"
+        channel._agent_runtime = mock_agent
+
+        result = await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_not_called()
+        assert "credential" in result.lower() or "secret" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_prompt_with_secret_emits_audit_event(self):
+        interaction = _make_interaction(
+            "ask",
+            options=[{"name": "prompt", "value": "AKIAIOSFODNN7EXAMPLE123456"}],
+        )
+        channel = _make_mock_channel()
+        channel._agent_runtime = MagicMock()
+
+        await _handle_ask(interaction, channel)
+
+        channel._emit_audit.assert_called_once()
+        event_type, result_kind, _detail = channel._emit_audit.call_args[0]
+        assert event_type == "discord.channel.credential_detected"
+        assert result_kind == "deny"
+
+    @pytest.mark.asyncio
+    async def test_prompt_without_secret_still_forwarded_normally(self):
+        interaction = _make_interaction(
+            "ask", options=[{"name": "prompt", "value": "What time is it?"}]
+        )
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "It is 3pm."
+        channel._agent_runtime = mock_agent
+
+        result = await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_called_once()
+        assert result == "It is 3pm."
+
+
+# ---------------------------------------------------------------------------
+# _interaction_author_id / per-user session scoping (SR-1.13 critical fix)
+#
+# _handle_ask() used to hardcode session_id="discord" for every user in
+# every guild, so every /ask interaction across the whole bot shared one
+# conversation history -- one user's prompts and the agent's replies to
+# them became context for every other user's /ask calls.
+# ---------------------------------------------------------------------------
+
+
+class TestInteractionAuthorId:
+    def test_extracts_from_guild_member(self):
+        interaction = {"member": {"user": {"id": "guild-user-1"}}}
+        assert _interaction_author_id(interaction) == "guild-user-1"
+
+    def test_extracts_from_dm_user(self):
+        interaction = {"user": {"id": "dm-user-1"}}
+        assert _interaction_author_id(interaction) == "dm-user-1"
+
+    def test_member_user_preferred_over_top_level_user(self):
+        interaction = {"member": {"user": {"id": "guild-user"}}, "user": {"id": "dm-user"}}
+        assert _interaction_author_id(interaction) == "guild-user"
+
+    def test_missing_author_returns_empty_string(self):
+        assert _interaction_author_id({}) == ""
+
+
+class TestHandleAskSessionScopedPerUser:
+    @pytest.mark.asyncio
+    async def test_session_id_is_the_invoking_users_id_not_hardcoded(self):
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "hi"}])
+        interaction["member"] = {"user": {"id": "user-alice"}}
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "reply"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_called_once_with("hi", "user-alice")
+
+    @pytest.mark.asyncio
+    async def test_two_different_users_get_two_different_session_ids(self):
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "reply"
+        channel._agent_runtime = mock_agent
+
+        alice_interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "a"}])
+        alice_interaction["member"] = {"user": {"id": "user-alice"}}
+        await _handle_ask(alice_interaction, channel)
+
+        bob_interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "b"}])
+        bob_interaction["member"] = {"user": {"id": "user-bob"}}
+        await _handle_ask(bob_interaction, channel)
+
+        session_ids = [call.args[1] for call in mock_agent.run.call_args_list]
+        assert session_ids == ["user-alice", "user-bob"]
+        assert session_ids[0] != session_ids[1]
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_session_id_from_top_level_user(self):
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "hi"}])
+        interaction["user"] = {"id": "dm-carol"}
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "reply"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_called_once_with("hi", "dm-carol")
+
+    @pytest.mark.asyncio
+    async def test_missing_author_falls_back_to_discord_literal(self):
+        # No member/user field at all (shouldn't happen in practice, but
+        # must not crash) -- falls back to the old shared literal rather
+        # than an empty string.
+        interaction = _make_interaction("ask", options=[{"name": "prompt", "value": "hi"}])
+        channel = _make_mock_channel()
+
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "reply"
+        channel._agent_runtime = mock_agent
+
+        await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_called_once_with("hi", "discord")
 
 
 # ---------------------------------------------------------------------------

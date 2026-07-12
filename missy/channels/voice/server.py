@@ -52,6 +52,7 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -441,6 +442,34 @@ class VoiceServer:
         audio_channels: int = 1
 
         async for raw in websocket:
+            # Re-check the node's live policy on every message, not just at
+            # the initial auth handshake. Without this, `missy devices policy
+            # <id> --mode muted` (which only ever writes to the on-disk
+            # registry -- see DeviceRegistry.update_node()) had no effect on
+            # an already-connected node until it disconnected on its own:
+            # _handle_auth()'s muted check ran once, and this loop kept
+            # dispatching audio/agent calls against the stale `node` object
+            # captured at auth time forever after. Re-fetching from the
+            # registry here mirrors the same fix applied to the screencast
+            # channel's revoke_session() gap.
+            current_node = self._registry.get_node(node.node_id)
+            if current_node is None or current_node.policy_mode == "muted":
+                logger.info(
+                    "VoiceServer: node %r muted/removed mid-connection — disconnecting.",
+                    node.node_id,
+                )
+                _emit(
+                    session_id=node.node_id,
+                    event_type="voice.connection.revoked_disconnect",
+                    result="deny",
+                    detail={"node_id": node.node_id},
+                )
+                with contextlib.suppress(Exception):
+                    await self._send_json(websocket, {"type": "muted"})
+                    await websocket.close(1008, "Node is muted")
+                break
+            node = current_node
+
             if isinstance(raw, bytes):
                 # Binary frame — audio payload accumulation.
                 if not in_audio_session:
@@ -565,8 +594,20 @@ class VoiceServer:
         Returns:
             The :class:`EdgeNode` on success, or ``None`` on failure.
         """
-        # Verify token.
-        if not self._registry.verify_token(node_id, token):
+        # Verify token. verify_token() runs a real ~100k-iteration
+        # PBKDF2-HMAC-SHA256 computation (live-measured at ~40ms) --
+        # calling it directly here would run that synchronously on the
+        # single asyncio event loop thread with no offload and no rate
+        # limiting anywhere in this class or DeviceRegistry, so a client
+        # repeatedly (re)connecting and sending auth attempts could
+        # monopolize the event loop for as long as the attack continues,
+        # stalling every other connected node's audio streaming/heartbeats/
+        # TTS delivery -- an unauthenticated DoS against the whole
+        # deployment. Offloading to a thread executor keeps the event loop
+        # free to keep servicing other connections while this runs.
+        loop = asyncio.get_event_loop()
+        verified = await loop.run_in_executor(None, self._registry.verify_token, node_id, token)
+        if not verified:
             reason = "invalid credentials"
             logger.info("VoiceServer: auth failure for node %r — %s", node_id, reason)
             _emit(
@@ -784,6 +825,15 @@ class VoiceServer:
             "hardware_profile": node.hardware_profile,
             "confidence": transcript.confidence,
             "language": transcript.language,
+            # Threaded through so the agent callback (_build_agent_callback())
+            # can route "safe-chat" nodes to a capability-restricted
+            # AgentRuntime instead of the default full-access one. Previously
+            # policy_mode was read in exactly one place in this whole
+            # subsystem (the "muted" check in _handle_auth()) -- a node
+            # explicitly configured with `missy devices policy <id> --mode
+            # safe-chat` got full, unrestricted tool access identical to
+            # "full" mode, since nothing downstream ever read this field.
+            "policy_mode": node.policy_mode,
         }
 
         try:

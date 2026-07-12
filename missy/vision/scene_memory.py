@@ -465,8 +465,15 @@ class SceneManager:
     ) -> SceneSession:
         """Create a new scene session, evicting oldest if at capacity."""
         with self._lock:
-            # Evict oldest inactive session if at capacity
-            if len(self._sessions) >= self._max_sessions:
+            # Evict oldest inactive session if at capacity. Replacing an
+            # EXISTING task_id causes no net growth (the old entry is
+            # overwritten below, not added alongside), so it must not count
+            # toward the capacity check -- otherwise a caller simply
+            # resetting/replacing an already-tracked session would evict a
+            # completely unrelated, unrecoverable, in-process-only active
+            # session (frames/state/observations) that the caller never
+            # asked to touch.
+            if task_id not in self._sessions and len(self._sessions) >= self._max_sessions:
                 self._evict_oldest()
 
             if task_id in self._sessions:

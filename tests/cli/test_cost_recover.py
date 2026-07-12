@@ -124,3 +124,56 @@ class TestRecoverCommand:
     def test_recover_help_exits_zero(self, runner):
         result = runner.invoke(cli, ["recover", "--help"])
         assert result.exit_code == 0
+
+
+class TestRecoverResume:
+    """SR-4.3: `missy recover --resume ID` must actually resume a
+    checkpoint, not just describe it."""
+
+    def test_resume_success_prints_response(self, runner, mock_config):
+        mock_agent = MagicMock()
+        mock_agent.resume_checkpoint.return_value = "The task finished successfully."
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.agent.runtime.AgentRuntime", return_value=mock_agent),
+        ):
+            result = runner.invoke(cli, ["recover", "--resume", "checkpoint-123"])
+            assert result.exit_code == 0
+            assert "The task finished successfully." in result.output
+            mock_agent.resume_checkpoint.assert_called_once_with("checkpoint-123")
+
+    def test_resume_nonexistent_checkpoint_exits_nonzero(self, runner, mock_config):
+        mock_agent = MagicMock()
+        mock_agent.resume_checkpoint.side_effect = ValueError("No checkpoint found with id 'x'.")
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.agent.runtime.AgentRuntime", return_value=mock_agent),
+        ):
+            result = runner.invoke(cli, ["recover", "--resume", "x"])
+            assert result.exit_code != 0
+            assert "No checkpoint found" in result.output
+
+    def test_resume_corrupted_checkpoint_exits_nonzero(self, runner, mock_config):
+        from missy.agent.checkpoint import CheckpointCorruptedError
+
+        mock_agent = MagicMock()
+        mock_agent.resume_checkpoint.side_effect = CheckpointCorruptedError(
+            "Checkpoint 'x' has corrupted loop_messages; marked FAILED."
+        )
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.agent.runtime.AgentRuntime", return_value=mock_agent),
+        ):
+            result = runner.invoke(cli, ["recover", "--resume", "x"])
+            assert result.exit_code != 0
+            assert "corrupted" in result.output.lower()
+
+    def test_resume_not_invoked_without_flag(self, runner):
+        """Plain `missy recover` (no --resume) must not touch AgentRuntime."""
+        with (
+            patch("missy.agent.checkpoint.scan_for_recovery", return_value=[]),
+            patch("missy.agent.runtime.AgentRuntime") as mock_cls,
+        ):
+            result = runner.invoke(cli, ["recover"])
+            assert result.exit_code == 0
+            mock_cls.assert_not_called()

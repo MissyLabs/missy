@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 _PBKDF2_ITERATIONS = 100_000
 _TASK_ID = "screencast-auth"
 
+# Availability hardening: revoke_session() only flipped session.active to
+# False and never removed the entry, and there was no TTL or cap anywhere in
+# this registry (unlike RunRegistry's _MAX_TRACKED_RUNS/_prune_locked or
+# DiscordUserRateLimiter's _IDLE_EVICTION_SECONDS). A long-running gateway
+# process would accumulate one permanent dict entry per `!screen share`
+# command, even after the user ran `!screen stop` -- unbounded, if slow,
+# memory growth over weeks of routine screen-sharing use.
+_REVOKED_SESSION_TTL_SECONDS = 3600.0
+_MAX_TRACKED_SESSIONS = 500
+
 
 def _emit(
     session_id: str,
@@ -106,6 +116,7 @@ class ScreencastTokenRegistry:
 
         with self._lock:
             self._sessions[session_id] = session
+            self._prune_locked()
 
         _emit(
             session_id,
@@ -154,10 +165,30 @@ class ScreencastTokenRegistry:
             if session is None:
                 return False
             session.active = False
+            self._prune_locked()
 
         _emit(session_id, "screencast.session.revoked", "allow")
         logger.info("Screencast session revoked: %s", session_id)
         return True
+
+    def _prune_locked(self) -> None:
+        """Evict stale inactive sessions. Caller must hold ``self._lock``."""
+        now = time.time()
+        for session_id, session in list(self._sessions.items()):
+            if not session.active:
+                last_seen = session.last_frame_at or session.created_at
+                if now - last_seen > _REVOKED_SESSION_TTL_SECONDS:
+                    self._sessions.pop(session_id, None)
+
+        if len(self._sessions) <= _MAX_TRACKED_SESSIONS:
+            return
+        inactive = sorted(
+            (s for s in self._sessions.values() if not s.active),
+            key=lambda s: s.last_frame_at or s.created_at,
+        )
+        overflow = len(self._sessions) - _MAX_TRACKED_SESSIONS
+        for session in inactive[:overflow]:
+            self._sessions.pop(session.session_id, None)
 
     def update_frame_stats(
         self,

@@ -142,6 +142,7 @@ def _load_subsystems(config_path: str) -> Any:
     """
     from missy.config.settings import load_config
     from missy.core.exceptions import ConfigurationError
+    from missy.core.message_bus import init_message_bus
     from missy.observability.audit_logger import init_audit_logger
     from missy.policy.engine import init_policy_engine
     from missy.providers.registry import init_registry
@@ -186,6 +187,15 @@ def _load_subsystems(config_path: str) -> Any:
     init_policy_engine(cfg)
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
+    # docs/architecture.md documents this as part of the bootstrap sequence
+    # (between provider registry and tool registry init), but it was never
+    # actually called anywhere in the running app -- AgentRuntime._make_message_bus()
+    # and RunRegistry._default_bus() both gracefully degrade to bus=None when
+    # get_message_bus() raises "not initialised", so the gap was silent: the
+    # Web TUI's live run console never showed tool-call events or
+    # provider/tools_used/cost in its completion summary, with no error
+    # surfaced anywhere.
+    init_message_bus()
 
     # Register built-in tools so the agent can use them.
     try:
@@ -194,6 +204,21 @@ def _load_subsystems(config_path: str) -> Any:
 
         tool_registry = init_tool_registry()
         register_builtin_tools(tool_registry)
+        # ToolRegistry.disable()/is_enabled() were fully built and
+        # tested (execute() refuses a disabled tool outright, and
+        # AgentRuntime._get_tools() already filters is_enabled() tools
+        # out of what's offered to the model) but had zero callers
+        # anywhere in the codebase -- an operator had no way to actually
+        # disable a tool via any first-party surface. tools.disabled_tools
+        # makes this reachable via config.
+        for _disabled_name in getattr(cfg.tools, "disabled_tools", None) or []:
+            try:
+                tool_registry.disable(_disabled_name)
+            except KeyError:
+                logger.warning(
+                    "tools.disabled_tools: %r is not a registered tool name; ignoring.",
+                    _disabled_name,
+                )
     except Exception as _tool_exc:
         logger.debug("Tool registry init failed: %s", _tool_exc)
 
@@ -779,6 +804,19 @@ def schedule() -> None:
 )
 @click.option("--task", required=True, help="Prompt/task text to run on each firing.")
 @click.option("--provider", default="anthropic", show_default=True, help="AI provider to use.")
+@click.option(
+    "--capability-mode",
+    "capability_mode",
+    default="safe-chat",
+    type=click.Choice(["full", "safe-chat", "no-tools"], case_sensitive=False),
+    show_default=True,
+    help=(
+        "Tool-access mode for this job's unattended run. safe-chat (read-only "
+        "tools) is the default so a scheduled job's blast radius is smaller "
+        "than an interactive session by default; pass --capability-mode full "
+        "to opt this specific job into unrestricted tool access."
+    ),
+)
 @click.pass_context
 def schedule_add(
     ctx: click.Context,
@@ -786,6 +824,7 @@ def schedule_add(
     schedule_str: str,
     task: str,
     provider: str,
+    capability_mode: str,
 ) -> None:
     """Add a new scheduled job.
 
@@ -795,6 +834,10 @@ def schedule_add(
             --name "Daily digest" \\
             --schedule "daily at 09:00" \\
             --task "Summarise the news"
+
+    By default the job runs in safe-chat mode (read-only tools only).
+    Pass --capability-mode full for jobs that need write access, shell,
+    or other elevated tools.
     """
     from missy.core.exceptions import SchedulerError
     from missy.scheduler.manager import SchedulerManager
@@ -804,7 +847,13 @@ def schedule_add(
 
     try:
         mgr.start()
-        job = mgr.add_job(name=name, schedule=schedule_str, task=task, provider=provider)
+        job = mgr.add_job(
+            name=name,
+            schedule=schedule_str,
+            task=task,
+            provider=provider,
+            capability_mode=capability_mode,
+        )
         mgr.stop()
     except ValueError as exc:
         _print_error(
@@ -821,7 +870,8 @@ def schedule_add(
         f"  ID      : [bold]{job.id}[/]\n"
         f"  Name    : {job.name}\n"
         f"  Schedule: {job.schedule}\n"
-        f"  Provider: {job.provider}"
+        f"  Provider: {job.provider}\n"
+        f"  Mode    : {job.capability_mode}"
     )
 
 
@@ -833,7 +883,7 @@ def schedule_list(ctx: click.Context) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = SchedulerManager()
-    jobs = mgr.list_jobs()
+    jobs = mgr.load_jobs()
 
     if not jobs:
         console.print("[dim]No scheduled jobs.[/]")
@@ -844,6 +894,7 @@ def schedule_list(ctx: click.Context) -> None:
     table.add_column("Name", style="bold")
     table.add_column("Schedule")
     table.add_column("Provider")
+    table.add_column("Mode")
     table.add_column("Enabled", justify="center")
     table.add_column("Runs", justify="right")
     table.add_column("Last Run")
@@ -858,6 +909,7 @@ def schedule_list(ctx: click.Context) -> None:
             job.name,
             job.schedule,
             job.provider,
+            job.capability_mode,
             enabled_text,
             str(job.run_count),
             last_run,
@@ -1075,6 +1127,97 @@ def audit_recent(ctx: click.Context, limit: int, category: str | None) -> None:
     console.print(table)
 
 
+@audit.command("verify")
+@click.option(
+    "--limit",
+    default=0,
+    show_default=True,
+    help="Show at most this many non-valid lines (0 = show all).",
+)
+@click.pass_context
+def audit_verify(ctx: click.Context, limit: int) -> None:
+    """Verify Ed25519 signatures on every line of the audit log (SR-1.1).
+
+    Recomputes each persisted event's signature against the agent's
+    identity public key and reports "valid" / "tampered" / "unsigned" /
+    "malformed" per line. A "tampered" line means the recorded
+    session_id, task_id, event_type, category, result, detail, or
+    policy_rule was changed after the event was written -- this is the
+    actual detection mechanism the "every audit event signed" claim
+    depends on; signing alone provides no protection without it.
+    """
+    from missy.observability.audit_logger import verify_audit_log
+    from missy.security.identity import AgentIdentity
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    try:
+        identity = AgentIdentity.load_or_generate()
+    except Exception as exc:
+        _print_error(f"Could not load agent identity: {exc}")
+        sys.exit(1)
+
+    results = verify_audit_log(cfg.audit_log_path, identity)
+    if not results:
+        console.print("[dim]Audit log is empty or does not exist.[/]")
+        return
+
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.status] = counts.get(r.status, 0) + 1
+
+    style_by_status = {
+        "valid": "green",
+        "tampered": "bold red",
+        "unsigned": "yellow",
+        "malformed": "red",
+    }
+    summary = "  ".join(
+        f"[{style_by_status.get(status, 'white')}]{status}: {count}[/]"
+        for status, count in sorted(counts.items())
+    )
+    console.print(f"Verified {len(results)} line(s) — {summary}")
+
+    # Per-line signatures alone catch content tampering but not
+    # reordering/deletion -- two validly-signed lines swapped in
+    # position would report every line "valid" above. chain_ok surfaces
+    # that separately: it's False only when a line's prev_chain_hash
+    # doesn't match the actual preceding line's hash.
+    broken_chain = [r for r in results if r.chain_ok is False]
+    if broken_chain:
+        console.print(
+            f"[bold red]chain: {len(broken_chain)} line(s) out of sequence "
+            "relative to their originally-written order (reordering/deletion "
+            "detected despite individually valid signatures)[/]"
+        )
+
+    non_valid = [r for r in results if r.status != "valid"]
+    if not non_valid and not broken_chain:
+        _print_success("Every signed line verified intact. No tampering detected.")
+        return
+
+    shown_ids = {r.line_number for r in non_valid} | {r.line_number for r in broken_chain}
+    shown_results = [r for r in results if r.line_number in shown_ids]
+    shown = shown_results if limit <= 0 else shown_results[:limit]
+    table = Table(title="Non-valid or out-of-sequence lines", show_lines=True)
+    table.add_column("Line", justify="right")
+    table.add_column("Status")
+    table.add_column("Chain")
+    table.add_column("Event Type")
+    for r in shown:
+        chain_text = "—" if r.chain_ok is None else ("ok" if r.chain_ok else "broken")
+        chain_style = "dim" if r.chain_ok is None else ("green" if r.chain_ok else "bold red")
+        table.add_row(
+            str(r.line_number),
+            Text(r.status, style=style_by_status.get(r.status, "white")),
+            Text(chain_text, style=chain_style),
+            r.event_type or "",
+        )
+    console.print(table)
+
+    if any(r.status == "tampered" for r in non_valid) or broken_chain:
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # missy logs
 # ---------------------------------------------------------------------------
@@ -1120,6 +1263,38 @@ def logs_tail_cmd(ctx: click.Context, limit: int) -> None:
 # ---------------------------------------------------------------------------
 # missy providers
 # ---------------------------------------------------------------------------
+
+# Shared by `missy providers switch`, `missy discord pairing ...`, and
+# `missy approvals ...` (all talk to the running gateway's Web API from a
+# separate CLI process).
+_APPROVALS_HOST_OPTION = click.option(
+    "--host", default="127.0.0.1", show_default=True, help="Gateway API host."
+)
+_APPROVALS_PORT_OPTION = click.option(
+    "--port", default=8080, type=int, show_default=True, help="Gateway API port."
+)
+_APPROVALS_API_KEY_OPTION = click.option(
+    "--api-key",
+    envvar="MISSY_API_KEY",
+    default="",
+    help="API key for authentication (falls back to ~/.missy/secrets/web_console.key).",
+)
+
+
+def _resolve_approvals_api_key(api_key: str) -> str:
+    if api_key:
+        return api_key
+    try:
+        key_path = Path("~/.missy/secrets/web_console.key").expanduser()
+        if key_path.exists():
+            return key_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+# Must match `missy.api.operator_controls._CONTROL_PROVIDER_SET_DEFAULT`.
+_PROVIDER_SET_DEFAULT_CONTROL_ID = "provider.set_default"
 
 
 @cli.group("providers", invoke_without_command=True)
@@ -1176,9 +1351,57 @@ def providers_list_cmd(ctx: click.Context) -> None:
 
 @providers_group.command("switch")
 @click.argument("name")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
 @click.pass_context
-def providers_switch(ctx: click.Context, name: str) -> None:
-    """Switch the active provider to NAME at runtime."""
+def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_key: str) -> None:
+    """Switch the active provider to NAME.
+
+    If a `missy gateway start` daemon is reachable at --host/--port, this
+    switches *that daemon's* live default provider via its Web API (the only
+    process whose provider selection persists across subsequent requests).
+    Otherwise there is no running daemon to update, and this command falls
+    back to a local, single-process registry mutation with no lasting
+    effect (there is no ``default_provider`` config field to persist a
+    choice to) -- use ``--provider NAME`` on ``missy ask``/``missy run`` for
+    a one-off override instead.
+    """
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/controls/{_PROVIDER_SET_DEFAULT_CONTROL_ID}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+    body = {"target": name, "confirm": f"set-default:{name}"}
+
+    resp = None
+    try:
+        resp = httpx.post(url, json=body, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        resp = None
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp is not None:
+        if resp.status_code == 200:
+            _print_success(
+                f"Active provider switched to [bold]{name}[/] on the running gateway daemon."
+            )
+            return
+        if resp.status_code == 401:
+            _print_error(
+                "Authentication required.",
+                hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+            )
+            sys.exit(1)
+        try:
+            message = resp.json().get("error", "")
+        except Exception:
+            message = ""
+        _print_error(message or f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
     from missy.providers.registry import get_registry
 
     _load_subsystems(ctx.obj["config_path"])
@@ -1190,7 +1413,12 @@ def providers_switch(ctx: click.Context, name: str) -> None:
         _print_error(str(exc))
         sys.exit(1)
 
-    _print_success(f"Active provider switched to [bold]{name}[/].")
+    _print_success(
+        f"Active provider switched to [bold]{name}[/] for this process only "
+        f"(no gateway daemon detected at http://{host}:{port} -- this does not persist; "
+        "pass --provider to `missy ask`/`missy run`, or run `missy gateway start` first "
+        "for a durable switch)."
+    )
 
 
 @providers_group.command("auth")
@@ -1903,6 +2131,125 @@ def discord_audit(ctx: click.Context, limit: int) -> None:
     console.print(table)
 
 
+@discord.group("pairing")
+def discord_pairing() -> None:
+    """Manage pending Discord DM pairing requests (SR-1.12).
+
+    Pairing decisions can never be made from in-band DM content (any
+    unpaired stranger could otherwise grant themselves access by
+    messaging accept/deny commands to the bot). These commands are the
+    real, authenticated approval surface an operator uses instead --
+    they call the running gateway's Web API, since a separate `missy`
+    CLI invocation cannot see the gateway process's in-memory pairing
+    state directly.
+    """
+
+
+@discord_pairing.command("list")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_list(host: str, port: int, api_key: str) -> None:
+    """List pending Discord DM pairing requests from a running gateway."""
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/discord/pairing"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        console.print(
+            f"[dim]No active gateway session at [bold]http://{host}:{port}[/] — "
+            "pairing requests are only visible while `missy gateway start` is running.[/]"
+        )
+        return
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        return
+
+    if resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        return
+    if resp.status_code != 200:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        return
+
+    pending = resp.json().get("data", {}).get("pending", [])
+    if not pending:
+        console.print("[dim]No pending Discord pairing requests.[/]")
+        return
+
+    table = Table(title="Pending Discord Pairing Requests", show_lines=True)
+    table.add_column("Account", style="dim")
+    table.add_column("User ID", style="bold")
+    for item in pending:
+        table.add_row(item.get("account", ""), item.get("user_id", ""))
+    console.print(table)
+
+
+def _resolve_discord_pairing(
+    host: str, port: int, api_key: str, user_id: str, *, approve: bool
+) -> None:
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    verb = "approve" if approve else "deny"
+    url = f"http://{host}:{port}/api/v1/discord/pairing/{user_id}/{verb}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.post(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        _print_error(
+            f"No active gateway session at http://{host}:{port}.",
+            hint="Pairing requests are only processed while `missy gateway start` is running.",
+        )
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp.status_code == 200:
+        _print_success(f"Discord user {user_id!r} pairing {verb}d.")
+    elif resp.status_code == 404:
+        _print_error(f"No pending pairing request for user {user_id!r}.")
+        sys.exit(1)
+    elif resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        sys.exit(1)
+    else:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
+
+@discord_pairing.command("approve")
+@click.argument("user_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_approve(user_id: str, host: str, port: int, api_key: str) -> None:
+    """Approve a pending Discord DM pairing request (see `missy discord pairing list`)."""
+    _resolve_discord_pairing(host, port, api_key, user_id, approve=True)
+
+
+@discord_pairing.command("deny")
+@click.argument("user_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def discord_pairing_deny(user_id: str, host: str, port: int, api_key: str) -> None:
+    """Deny a pending Discord DM pairing request (see `missy discord pairing list`)."""
+    _resolve_discord_pairing(host, port, api_key, user_id, approve=False)
+
+
 # ---------------------------------------------------------------------------
 # missy gateway
 # ---------------------------------------------------------------------------
@@ -1946,8 +2293,26 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    # SR-2.2: shared ApprovalGate for the whole gateway process. Proactive
+    # triggers gate through it (requires_confirmation defaults to True);
+    # the Web API's /approvals endpoints (below) let an operator actually
+    # respond to a pending request from another process, since this
+    # gateway process's in-memory approval state is otherwise unreachable
+    # from a separate `missy` CLI invocation.
+    from missy.agent.approval import ApprovalGate
+
+    def _approval_send(msg: str) -> None:
+        console.print(f"[yellow]{msg}[/]")
+        logger.info("Approval request: %s", msg)
+
+    approval_gate = ApprovalGate(send_fn=_approval_send)
+
     # Start proactive manager if configured.
     proactive_manager = None
+    # Populated below only when a proactive-trigger AgentRuntime is actually
+    # constructed; used by the config hot-reload callback further down to
+    # propagate a changed max_spend_usd to this runtime too.
+    _proactive_runtime = None
     try:
         if hasattr(cfg, "proactive") and cfg.proactive.enabled and cfg.proactive.triggers:
             from missy.agent.proactive import ProactiveManager, ProactiveTrigger
@@ -1980,9 +2345,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 )
                 _agent_cfg = AgentConfig(
                     provider=_provider_name,
+                    max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                     **_agent_tool_policy_kwargs(cfg),
                 )
                 _runtime = AgentRuntime(_agent_cfg)
+                _proactive_runtime = _runtime
 
                 def _proactive_callback(prompt: str, session_id: str) -> str:
                     return _runtime.run(prompt, session_id=session_id)
@@ -1997,6 +2364,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             proactive_manager = ProactiveManager(
                 triggers=triggers,
                 agent_callback=_proactive_callback,
+                approval_gate=approval_gate,
             )
             proactive_manager.start()
             console.print(f"[green]Proactive manager started[/] ({len(triggers)} trigger(s))")
@@ -2007,7 +2375,16 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
 
     _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-    _agent_cfg = AgentConfig(provider=_provider_name, **_agent_tool_policy_kwargs(cfg))
+    # SR-4.7: thread the same real ApprovalGate constructed above (for
+    # proactive triggers) into the agent runtimes so destructive/mutating
+    # MCP tool calls have real confirmation infrastructure to block on,
+    # instead of failing closed for lack of any gate at all.
+    _agent_cfg = AgentConfig(
+        provider=_provider_name,
+        mcp_approval_gate=approval_gate,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        **_agent_tool_policy_kwargs(cfg),
+    )
     _agent = AgentRuntime(_agent_cfg)
 
     # Discord-specific agent with filtered tools and appropriate system prompt.
@@ -2015,9 +2392,145 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         provider=_provider_name,
         system_prompt=DISCORD_SYSTEM_PROMPT,
         capability_mode="discord",
+        mcp_approval_gate=approval_gate,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
+
+    # Background subsystem health monitor. Fully built and tested
+    # (missy/agent/watchdog.py), but had zero production callers anywhere
+    # -- no CLI command or bootstrap path ever called .register()/.start()
+    # on it, so the "background subsystem health monitor" this module's own
+    # docstring advertises was inert in every real deployment: no operator
+    # ever saw a watchdog.health_check audit event or an ERROR-level
+    # "unhealthy" log for a real subsystem, silently, with no error
+    # anywhere. Registers real, meaningful checks against the objects this
+    # function already constructed.
+    from missy.agent.watchdog import Watchdog
+
+    def _check_provider_registry() -> bool:
+        from missy.providers.registry import get_registry
+
+        return bool(get_registry().get_available())
+
+    def _check_memory_store() -> bool:
+        store = getattr(_agent, "_memory_store", None)
+        if store is None:
+            return True  # no memory store configured; nothing to monitor
+        store.get_session_turns("watchdog-healthcheck", limit=1)
+        return True
+
+    def _check_mcp_servers() -> bool:
+        # McpManager.health_check() (restart any dead server, going through
+        # the same digest-verification/approval-annotation path as an
+        # initial add_server() call) was fully built and tested but had
+        # zero production callers anywhere -- once an MCP server subprocess
+        # died (crash, OOM-kill), it stayed dead for the rest of the
+        # process's life: its tools kept being listed via all_tools() and
+        # dispatched via call_tool(), which would simply fail against the
+        # dead subprocess forever, with no auto-recovery ever attempted.
+        # Piggybacking the restart-attempt onto this periodic check (rather
+        # than a bespoke separate thread) reuses the same infrastructure
+        # already wired in for provider_registry/memory_store above.
+        mgr = getattr(_agent, "_mcp_manager", None)
+        if mgr is None:
+            return True  # no MCP servers configured; nothing to monitor
+        mgr.health_check()
+        return all(server["alive"] for server in mgr.list_servers())
+
+    watchdog = Watchdog()
+    watchdog.register("provider_registry", _check_provider_registry)
+    watchdog.register("memory_store", _check_memory_store)
+    watchdog.register("mcp_servers", _check_mcp_servers)
+    watchdog.start()
+
+    # Job scheduler. Fully built and tested (missy/scheduler/manager.py,
+    # including per-job active-hours gating, retry backoff, and audit
+    # events) but had zero production callers in gateway_start() -- the
+    # persistent daemon process this systemd unit runs never constructed a
+    # SchedulerManager at all, so a job added via `missy schedule add`
+    # (itself just a separate CLI invocation that starts a private
+    # SchedulerManager, mutates jobs.json, and immediately stops it again)
+    # would never actually fire: nothing in the long-running gateway
+    # process ever loaded jobs.json into a live, running APScheduler
+    # instance. The Web TUI's scheduler pages and operator controls
+    # (api/server.py's _handle_list_scheduled_jobs/_handle_create_scheduled_job,
+    # api/operator_controls.py's scheduler.pause_job/resume_job/remove_job)
+    # were also silently non-functional in every real deployment, since
+    # they all resolve their SchedulerManager via
+    # getattr(runtime, "_scheduler", None) and nothing ever set that
+    # attribute on the AgentRuntime passed to ApiServer as runtime=_agent.
+    scheduler_manager = None
+    try:
+        if cfg.scheduling.enabled:
+            from missy.scheduler.manager import SchedulerManager
+
+            scheduler_manager = SchedulerManager(
+                default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+                default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
+            )
+            scheduler_manager.start()
+            _agent._scheduler = scheduler_manager  # noqa: SLF001
+            console.print(
+                f"[green]Scheduler started[/] ({len(scheduler_manager.list_jobs())} job(s) loaded)"
+            )
+        else:
+            console.print("[dim]Scheduler disabled via config (scheduling.enabled: false).[/]")
+    except Exception as _sched_exc:
+        console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
+        logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
+
+    # Config hot-reload. Fully built and tested (missy/config/hotreload.py,
+    # including its symlink/ownership/permission safety checks before
+    # reload), but had zero production callers anywhere -- editing
+    # config.yaml while gateway_start() was running (the long-lived service
+    # mode where hot-reload matters most) had no effect whatsoever, despite
+    # README.md/docs/architecture.md/CLAUDE.md all describing it as an
+    # active running control. _apply_config() (this same module) already
+    # exists as the ready-made reload callback -- it was simply never
+    # wired to an actual ConfigWatcher instance.
+    from missy.config.hotreload import ConfigWatcher, _apply_config
+
+    # _apply_config() reinitializes PolicyEngine/ProviderRegistry/
+    # OtelExporter/AuditLogger, but each of those is a fresh singleton
+    # rebuilt from the new config. _agent/_discord_agent/_proactive_runtime
+    # are long-lived AgentRuntime instances already constructed above --
+    # their .config (a plain, mutable AgentConfig, not rebuilt on reload)
+    # is read fresh only when a *new* per-session CostTracker is first
+    # created (AgentRuntime._make_cost_tracker() reads self.config.max_spend_usd
+    # at that moment), so editing max_spend_usd in config.yaml while the
+    # gateway keeps running had no effect on this process's already-running
+    # runtimes at all -- not even for brand-new sessions started after the
+    # edit -- until a full restart. Same gap for scheduler_manager's
+    # _default_max_spend_usd, read once at construction and threaded into
+    # every per-job AgentConfig thereafter. Propagating the new value onto
+    # each object in place (mutating existing objects, not rebuilding them)
+    # matches the same in-place-repoint approach already used for
+    # AuditLogger.reconfigure()/OtelExporter re-init.
+    # Populated further down, only if the voice channel is enabled and its
+    # safe-chat runtime construction succeeds; referenced by the closure
+    # below via ordinary late-binding (no `nonlocal` needed since this
+    # function only reads it, and Python closures see later reassignments
+    # of an enclosing-scope variable, not a value snapshotted at def-time).
+    _voice_safe_chat_agent: Any = None
+
+    def _apply_config_and_refresh_runtimes(new_cfg: Any) -> None:
+        _apply_config(new_cfg)
+        new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
+        _agent.config.max_spend_usd = new_max_spend
+        _discord_agent.config.max_spend_usd = new_max_spend
+        if _proactive_runtime is not None:
+            _proactive_runtime.config.max_spend_usd = new_max_spend
+        if _voice_safe_chat_agent is not None:
+            _voice_safe_chat_agent.config.max_spend_usd = new_max_spend
+        if scheduler_manager is not None:
+            scheduler_manager._default_max_spend_usd = new_max_spend  # noqa: SLF001
+
+    config_watcher = ConfigWatcher(
+        ctx.obj["config_path"], reload_fn=_apply_config_and_refresh_runtimes
+    )
+    config_watcher.start()
 
     # Start voice channel if configured.
     voice_channel = None
@@ -2052,13 +2565,32 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 tts_voice=_voice_cfg.get("tts", {}).get("voice", "en_US-lessac-medium"),
                 debug_transcripts=_voice_cfg.get("debug_transcripts", False),
             )
-            voice_channel.start(_agent)
+            # A dedicated capability_mode="safe-chat" runtime for edge nodes
+            # configured via `missy devices policy <id> --mode safe-chat`.
+            # Without this, "safe-chat" was read in exactly one place in the
+            # whole voice subsystem (the "muted" check) -- a safe-chat node
+            # got full, unrestricted tool access identical to "full" mode.
+            _voice_safe_chat_agent_cfg = AgentConfig(
+                provider=_provider_name,
+                capability_mode="safe-chat",
+                max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+                **_agent_tool_policy_kwargs(cfg),
+            )
+            _voice_safe_chat_agent = AgentRuntime(_voice_safe_chat_agent_cfg)
+            voice_channel.start(_agent, safe_chat_agent_runtime=_voice_safe_chat_agent)
             _vc_host = _voice_cfg.get("host", "0.0.0.0")
             _vc_port = _voice_cfg.get("port", 8765)
             console.print(f"[green]Voice channel started[/] on ws://{_vc_host}:{_vc_port}")
     except Exception as _ve:
         console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
         logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
+
+    # SR-1.12/task #12: shared list the Web API's /api/v1/discord/pairing
+    # endpoints read from. DiscordChannel instances are constructed later
+    # (inside the async `_run_discord()` below, after this list is passed
+    # to ApiServer), so this is the same list object both sides share --
+    # appended to once channels exist, read lazily at request time.
+    discord_channels: list = []
 
     # Start screencast channel if configured.
     screencast_channel = None
@@ -2148,6 +2680,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 memory_store=_api_memory_store,
                 provider_registry=_api_provider_registry,
                 tool_registry=_api_tool_registry,
+                approval_gate=approval_gate,
+                discord_channels=discord_channels,
             )
             api_server.start()
             console.print(
@@ -2279,6 +2813,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         screencast_channel.set_discord_rest(ch._rest)  # noqa: SLF001
                     await ch.start()
                     channels.append(ch)
+                    discord_channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
                     tasks.append(asyncio.create_task(_process_channel(ch)))
                 try:
@@ -2292,6 +2827,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             await t
                     for ch in channels:
                         await ch.stop()
+                        with contextlib.suppress(ValueError):
+                            discord_channels.remove(ch)
 
             asyncio.run(_run_discord())
         else:
@@ -2324,6 +2861,35 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 proactive_manager.stop()
             except Exception as _stop_exc:
                 logger.debug("proactive: stop error: %s", _stop_exc)
+        try:
+            watchdog.stop()
+        except Exception as _wd_stop_exc:
+            logger.debug("watchdog: stop error: %s", _wd_stop_exc)
+        if scheduler_manager is not None:
+            try:
+                scheduler_manager.stop()
+                console.print("[dim]Scheduler stopped.[/]")
+            except Exception as _sched_stop_exc:
+                logger.debug("scheduler: stop error: %s", _sched_stop_exc)
+        try:
+            config_watcher.stop()
+        except Exception as _cw_stop_exc:
+            logger.debug("config watcher: stop error: %s", _cw_stop_exc)
+        # AgentRuntime.shutdown() stops each runtime's SleeptimeWorker
+        # daemon thread cleanly (join with timeout) rather than letting it
+        # be killed mid-cycle (possibly mid-LLM-call, mid summary/learning
+        # write) whenever the process exits -- gateway_start is exactly the
+        # long-running-process case AgentRuntime.shutdown()'s own docstring
+        # names as needing this.
+        try:
+            _agent.shutdown()
+        except Exception as _agent_shutdown_exc:
+            logger.debug("agent: shutdown error: %s", _agent_shutdown_exc)
+        if _discord_agent is not None:
+            try:
+                _discord_agent.shutdown()
+            except Exception as _discord_agent_shutdown_exc:
+                logger.debug("discord agent: shutdown error: %s", _discord_agent_shutdown_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 
@@ -2380,6 +2946,28 @@ def gateway_status(ctx: click.Context) -> None:
     else:
         table.add_row("web", Text("disabled", style="dim"), "api.enabled: false in config")
 
+    # Scheduler — auto-starts with the gateway (missy schedule add/list
+    # manage jobs.json directly and don't require the gateway to be running,
+    # but jobs only actually *fire* while a `missy gateway start` process is
+    # up).
+    if cfg.scheduling.enabled:
+        try:
+            from missy.scheduler.manager import SchedulerManager
+
+            _job_count = len(SchedulerManager().load_jobs())
+        except Exception:
+            _job_count = None
+        _sched_detail = (
+            f"{_job_count} job(s) in jobs.json (missy gateway start)"
+            if _job_count is not None
+            else "jobs.json unreadable"
+        )
+        table.add_row("scheduler", Text("auto-starts with gateway", style="green"), _sched_detail)
+    else:
+        table.add_row(
+            "scheduler", Text("disabled", style="dim"), "scheduling.enabled: false in config"
+        )
+
     console.print(table)
 
     # Providers
@@ -2428,6 +3016,54 @@ def doctor(ctx: click.Context) -> None:
         table.add_row("audit log", ok, str(audit_path))
     else:
         table.add_row("audit log", warn, f"not found: {audit_path}")
+
+    # 2b. Audit signing status (SR-1.1/SR-4.6 residual): a quick,
+    # read-only glance at whether the audit trail is actually
+    # tamper-evident, without requiring the operator to separately run
+    # `missy audit verify`. Signing without verification provides no
+    # real tamper detection, so this surfaces the same
+    # valid/tampered/unsigned/malformed breakdown that command reports,
+    # scoped down to a single doctor row.
+    if audit_path.exists():
+        try:
+            from missy.observability.audit_logger import verify_audit_log
+            from missy.security.identity import AgentIdentity
+
+            identity = AgentIdentity.load_or_generate()
+            results = verify_audit_log(cfg.audit_log_path, identity)
+        except Exception as exc:
+            table.add_row("audit signing", warn, f"could not verify: {exc}")
+        else:
+            counts: dict[str, int] = {}
+            for r in results:
+                counts[r.status] = counts.get(r.status, 0) + 1
+            summary = ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+            # Per-line signatures alone catch content tampering but not
+            # reordering/deletion of otherwise validly-signed lines --
+            # surfaced separately here since counts (status-keyed) has no
+            # slot for it.
+            broken_chain_count = sum(1 for r in results if r.chain_ok is False)
+            if not results:
+                table.add_row("audit signing", warn, "log is empty — nothing to verify yet")
+            elif counts.get("tampered") or counts.get("malformed"):
+                table.add_row("audit signing", fail, f"integrity issue found: {summary}")
+            elif broken_chain_count:
+                table.add_row(
+                    "audit signing",
+                    fail,
+                    f"{broken_chain_count} line(s) out of sequence "
+                    f"(reordering/deletion detected): {summary}",
+                )
+            elif counts.get("unsigned"):
+                table.add_row(
+                    "audit signing",
+                    warn,
+                    f"some lines predate signing or were written unsigned: {summary}",
+                )
+            else:
+                table.add_row("audit signing", ok, f"all lines verified: {summary}")
+    else:
+        table.add_row("audit signing", warn, "no audit log to verify yet")
 
     app_log_path = _app_log_path(cfg)
     if app_log_path.exists():
@@ -2527,7 +3163,7 @@ def doctor(ctx: click.Context) -> None:
 
     # 9. Scheduler jobs
     mgr = SchedulerManager()
-    jobs = mgr.list_jobs()
+    jobs = mgr.load_jobs()
     table.add_row("scheduled jobs", ok, f"{len(jobs)} job(s) defined")
 
     # 10. Discord
@@ -2696,16 +3332,32 @@ def cost(ctx: click.Context, session: str | None) -> None:
 
 @cli.command()
 @click.option("--abandon-all", is_flag=True, help="Abandon all incomplete checkpoints.")
+@click.option(
+    "--resume",
+    "resume_id",
+    default=None,
+    help="Resume the checkpoint with this ID from its saved conversation state.",
+)
+@click.option(
+    "--provider", default=None, help="Provider to use for --resume (overrides config default)."
+)
 @click.pass_context
-def recover(ctx: click.Context, abandon_all: bool) -> None:
+def recover(
+    ctx: click.Context, abandon_all: bool, resume_id: str | None, provider: str | None
+) -> None:
     """List or act on incomplete task checkpoints from previous sessions.
 
     Scans for tasks that were interrupted by crashes or restarts and shows
-    recovery options.  Use --abandon-all to clear all stale checkpoints.
+    recovery options.  Use --abandon-all to clear all stale checkpoints, or
+    --resume ID to continue a specific checkpoint from its saved state.
     """
 
     try:
-        from missy.agent.checkpoint import CheckpointManager, scan_for_recovery
+        from missy.agent.checkpoint import (
+            CheckpointCorruptedError,
+            CheckpointManager,
+            scan_for_recovery,
+        )
     except ImportError:
         _print_error("Checkpoint module not available.")
         sys.exit(1)
@@ -2718,6 +3370,38 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
         except Exception as exc:
             _print_error(f"Failed to abandon checkpoints: {exc}")
             sys.exit(1)
+        return
+
+    if resume_id:
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.core.exceptions import ProviderError
+
+        cfg = _load_subsystems(ctx.obj["config_path"])
+        provider_name = provider or (
+            next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+        )
+        agent_cfg = AgentConfig(
+            provider=provider_name,
+            max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+            **_agent_tool_policy_kwargs(cfg),
+        )
+        agent = AgentRuntime(agent_cfg)
+        with console.status(f"[bold cyan]Resuming {resume_id[:12]}...[/]", spinner="dots"):
+            try:
+                response = agent.resume_checkpoint(resume_id)
+            except CheckpointCorruptedError as exc:
+                _print_error(f"Checkpoint corrupted, marked FAILED: {exc}")
+                sys.exit(1)
+            except ValueError as exc:
+                _print_error(str(exc))
+                sys.exit(1)
+            except ProviderError as exc:
+                _print_error(
+                    f"Provider error: {exc}",
+                    hint="Check that your API key is set and the provider is configured.",
+                )
+                sys.exit(1)
+        console.print(Panel(response, title="[bold cyan]Missy (resumed)[/]", border_style="cyan"))
         return
 
     results = scan_for_recovery()
@@ -2750,7 +3434,9 @@ def recover(ctx: click.Context, abandon_all: bool) -> None:
     console.print(table)
     console.print(
         f"\n[dim]{len(results)} checkpoint(s) found. "
-        "Use [bold]missy recover --abandon-all[/bold] to clear stale tasks.[/]"
+        "Use [bold]missy recover --resume ID[/bold] to continue one from its "
+        "saved state, or [bold]missy recover --abandon-all[/bold] to clear "
+        "stale tasks.[/]"
     )
 
 
@@ -2866,18 +3552,20 @@ def sessions() -> None:
 @click.pass_context
 def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None:
     """Delete old conversation history from the memory store."""
-    from missy.memory.store import MemoryStore
+    # SR-3.1/3.5: this previously constructed the legacy JSON MemoryStore,
+    # which has no cleanup() method -- the hasattr guard always evaluated
+    # False, so this command silently no-op'd on every invocation while
+    # printing a message recommending SQLiteMemoryStore, the very store
+    # `sessions list` (a few lines below) already uses correctly.
+    from missy.memory.sqlite_store import SQLiteMemoryStore
 
     _load_subsystems(ctx.obj["config_path"])
-    store = MemoryStore()
+    store = SQLiteMemoryStore()
     if dry_run:
         console.print(f"[dim]Dry run: would delete turns older than {older_than} days.[/]")
         return
-    if hasattr(store, "cleanup"):
-        removed = store.cleanup(older_than_days=older_than)
-        _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
-    else:
-        console.print("[dim]Memory store does not support cleanup (use SQLiteMemoryStore).[/]")
+    removed = store.cleanup(older_than_days=older_than)
+    _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
 
 
 @sessions.command("list")
@@ -2955,12 +3643,115 @@ def approvals() -> None:
 
 
 @approvals.command("list")
-@click.pass_context
-def approvals_list(ctx: click.Context) -> None:
-    """List pending approval requests (for the current gateway session)."""
-    console.print(
-        "[dim]No active gateway session; approvals are processed during missy gateway start.[/]"
-    )
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_list(host: str, port: int, api_key: str) -> None:
+    """List pending approval requests from a running `missy gateway start` session.
+
+    SR-2.2: approval state lives in-process inside the running gateway
+    (proactive triggers with requires_confirmation=True gate through an
+    ApprovalGate there); this CLI command is a separate process and can
+    only see that state via the gateway's own Web API.
+    """
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    url = f"http://{host}:{port}/api/v1/approvals"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.get(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        console.print(
+            f"[dim]No active gateway session at [bold]http://{host}:{port}[/] — "
+            "approvals are only processed while `missy gateway start` is running.[/]"
+        )
+        return
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        return
+
+    if resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        return
+    if resp.status_code != 200:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        return
+
+    approvals_data = resp.json().get("data", {}).get("approvals", [])
+    if not approvals_data:
+        console.print("[dim]No pending approval requests.[/]")
+        return
+
+    table = Table(title="Pending Approvals", show_lines=True)
+    table.add_column("ID", style="bold")
+    table.add_column("Action")
+    table.add_column("Reason")
+    for item in approvals_data:
+        table.add_row(item.get("id", ""), item.get("action", ""), item.get("reason", ""))
+    console.print(table)
+
+
+def _resolve_approval(
+    host: str, port: int, api_key: str, approval_id: str, *, approve: bool
+) -> None:
+    import httpx
+
+    resolved_key = _resolve_approvals_api_key(api_key)
+    verb = "approve" if approve else "deny"
+    url = f"http://{host}:{port}/api/v1/approvals/{approval_id}/{verb}"
+    headers = {"X-API-Key": resolved_key} if resolved_key else {}
+
+    try:
+        resp = httpx.post(url, headers=headers, timeout=3.0)
+    except httpx.ConnectError:
+        _print_error(
+            f"No active gateway session at http://{host}:{port}.",
+            hint="Approvals are only processed while `missy gateway start` is running.",
+        )
+        sys.exit(1)
+    except Exception as exc:
+        _print_error(f"Could not reach gateway API: {exc}")
+        sys.exit(1)
+
+    if resp.status_code == 200:
+        _print_success(f"Request {approval_id!r} {verb}d.")
+    elif resp.status_code == 404:
+        _print_error(f"No pending approval with id {approval_id!r}.")
+        sys.exit(1)
+    elif resp.status_code == 401:
+        _print_error(
+            "Authentication required.",
+            hint="Pass --api-key or ensure ~/.missy/secrets/web_console.key is readable.",
+        )
+        sys.exit(1)
+    else:
+        _print_error(f"Gateway API responded with HTTP {resp.status_code}.")
+        sys.exit(1)
+
+
+@approvals.command("approve")
+@click.argument("approval_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_approve(approval_id: str, host: str, port: int, api_key: str) -> None:
+    """Approve a pending request by ID (see `missy approvals list`)."""
+    _resolve_approval(host, port, api_key, approval_id, approve=True)
+
+
+@approvals.command("deny")
+@click.argument("approval_id")
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+def approvals_deny(approval_id: str, host: str, port: int, api_key: str) -> None:
+    """Deny a pending request by ID (see `missy approvals list`)."""
+    _resolve_approval(host, port, api_key, approval_id, approve=False)
 
 
 # ---------------------------------------------------------------------------
@@ -3190,7 +3981,7 @@ def patches_approve(ctx: click.Context, patch_id: str) -> None:
     if mgr.approve(patch_id):
         _print_success(f"Patch [bold]{patch_id}[/] approved.")
     else:
-        _print_error(f"Patch {patch_id!r} not found.")
+        _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
 
 
 @patches.command("reject")
@@ -3205,7 +3996,7 @@ def patches_reject(ctx: click.Context, patch_id: str) -> None:
     if mgr.reject(patch_id):
         _print_success(f"Patch [bold]{patch_id}[/] rejected.")
     else:
-        _print_error(f"Patch {patch_id!r} not found.")
+        _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
 
 
 # ---------------------------------------------------------------------------
@@ -3226,9 +4017,17 @@ def mcp_list(ctx: click.Context) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # McpManager() starts with an empty in-memory client dict -- list_servers()
+    # only reflects self._clients, which stays empty until connect_all() loads
+    # and connects every server declared in mcp.json. Without this call, `missy
+    # mcp list` always reported "No MCP servers configured" regardless of
+    # actual state (matching the pattern already correctly applied by `mcp
+    # pin`, below).
+    mgr.connect_all()
     servers = mgr.list_servers()
     if not servers:
         console.print("[dim]No MCP servers configured. Add one with missy mcp add.[/]")
+        mgr.shutdown()
         return
     table = Table(title="MCP Servers", show_lines=True)
     table.add_column("Name", style="bold")
@@ -3238,6 +4037,7 @@ def mcp_list(ctx: click.Context) -> None:
         alive = Text("yes", style="green") if s["alive"] else Text("no", style="red")
         table.add_row(s["name"], alive, str(s["tools"]))
     console.print(table)
+    mgr.shutdown()
 
 
 @mcp.command("add")
@@ -3251,12 +4051,19 @@ def mcp_add(ctx: click.Context, name: str, command: str | None, url: str | None)
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # add_server() persists via _save_config(), which rewrites mcp.json from
+    # scratch using only the currently in-memory self._clients -- without
+    # first loading every already-configured server via connect_all(), adding
+    # one new server silently destroyed every previously-configured one.
+    mgr.connect_all()
     try:
         client = mgr.add_server(name, command=command, url=url)
         _print_success(f"Connected to MCP server [bold]{name}[/] ({len(client.tools)} tools).")
     except Exception as exc:
         _print_error(f"Failed to connect: {exc}")
         sys.exit(1)
+    finally:
+        mgr.shutdown()
 
 
 @mcp.command("remove")
@@ -3268,7 +4075,12 @@ def mcp_remove_cmd(ctx: click.Context, name: str) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = McpManager()
+    # remove_server() is a no-op unless `name` is already in self._clients --
+    # without connect_all() first, self._clients is always empty on a fresh
+    # CLI process, so this was silently doing nothing to mcp.json.
+    mgr.connect_all()
     mgr.remove_server(name)
+    mgr.shutdown()
     _print_success(f"MCP server [bold]{name}[/] removed.")
 
 
@@ -3321,7 +4133,7 @@ def devices_list(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    nodes = reg.all()
+    nodes = reg.list_nodes()
     if not nodes:
         console.print(
             "[dim]No edge nodes registered. Use a node's pair command to initiate pairing.[/]"
@@ -3336,20 +4148,20 @@ def devices_list(ctx: click.Context) -> None:
     table.add_column("Last Seen")
     table.add_column("Paired", justify="center")
     for node in nodes:
-        paired = node.get("paired", False)
+        paired = node.paired
         status_text = Text("paired", style="green") if paired else Text("pending", style="yellow")
         paired_text = Text("yes", style="green") if paired else Text("no", style="yellow")
-        last_seen_ts = node.get("last_seen")
+        last_seen_ts = node.last_seen
         if last_seen_ts:
             last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
         else:
             last_seen = "never"
         table.add_row(
-            node.get("node_id", "")[:8],
-            node.get("name", ""),
-            node.get("room", ""),
+            node.node_id[:8],
+            node.friendly_name,
+            node.room,
             status_text,
-            node.get("policy", "full"),
+            node.policy_mode,
             last_seen,
             paired_text,
         )
@@ -3375,23 +4187,21 @@ def devices_pair(ctx: click.Context, node_id: str | None) -> None:
     mgr = PairingManager(registry=reg)
 
     if node_id is None:
-        pending = [n for n in reg.all() if not n.get("paired", False)]
+        pending = reg.list_pending()
         if not pending:
             console.print("[dim]No pending pairing requests.[/]")
             return
         console.print("[bold]Pending nodes:[/]")
         for i, node in enumerate(pending):
-            console.print(
-                f"  [{i}] {node.get('node_id', '')[:8]}  {node.get('name', '')}  {node.get('room', '')}"
-            )
+            console.print(f"  [{i}] {node.node_id[:8]}  {node.friendly_name}  {node.room}")
         idx = click.prompt("Select index to approve", type=int)
         if idx < 0 or idx >= len(pending):
             _print_error("Invalid selection.")
             sys.exit(1)
-        node_id = pending[idx]["node_id"]
+        node_id = pending[idx].node_id
 
     try:
-        token = mgr.approve(node_id)
+        token = mgr.approve_pairing(node_id)
         _print_success(f"Node [bold]{node_id[:8]}[/] approved.")
         console.print(f"[bold yellow]Auth token (shown once):[/] [green]{token}[/]")
     except Exception as exc:
@@ -3409,13 +4219,11 @@ def devices_unpair(ctx: click.Context, node_id: str) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    try:
-        reg.remove(node_id)
-        reg.save()
-        _print_success(f"Node [bold]{node_id[:8]}[/] removed.")
-    except KeyError:
+    if reg.get_node(node_id) is None:
         _print_error(f"Node {node_id!r} not found.")
         sys.exit(1)
+    reg.remove_node(node_id)
+    _print_success(f"Node [bold]{node_id[:8]}[/] removed.")
 
 
 @devices.command("status")
@@ -3428,7 +4236,7 @@ def devices_status(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    nodes = reg.all()
+    nodes = reg.list_nodes()
     if not nodes:
         console.print("[dim]No edge nodes registered.[/]")
         return
@@ -3441,21 +4249,21 @@ def devices_status(ctx: click.Context) -> None:
     table.add_column("Occupancy", justify="center")
     table.add_column("Noise Level", justify="right")
     for node in nodes:
-        online = node.get("online", False)
+        online = node.status == "online"
         status_text = Text("online", style="green") if online else Text("offline", style="red")
-        last_seen_ts = node.get("last_seen")
+        last_seen_ts = node.last_seen
         if last_seen_ts:
             last_seen = datetime.fromtimestamp(last_seen_ts).strftime("%Y-%m-%d %H:%M")
         else:
             last_seen = "never"
-        occupancy = node.get("occupancy")
+        occupancy = node.sensor_data.get("occupancy")
         occupancy_str = str(occupancy) if occupancy is not None else "-"
-        noise = node.get("noise_level")
+        noise = node.sensor_data.get("noise_level")
         noise_str = f"{noise:.1f} dB" if noise is not None else "-"
         table.add_row(
-            node.get("node_id", "")[:8],
-            node.get("name", ""),
-            node.get("room", ""),
+            node.node_id[:8],
+            node.friendly_name,
+            node.room,
             status_text,
             last_seen,
             occupancy_str,
@@ -3480,8 +4288,7 @@ def devices_policy(ctx: click.Context, node_id: str, mode: str) -> None:
     reg = DeviceRegistry()
     reg.load()
     try:
-        reg.set_policy(node_id, mode)
-        reg.save()
+        reg.update_node(node_id, policy_mode=mode)
         _print_success(f"Node [bold]{node_id[:8]}[/] policy set to [bold]{mode}[/].")
     except KeyError:
         _print_error(f"Node {node_id!r} not found.")
@@ -3542,7 +4349,7 @@ def voice_status(ctx: click.Context) -> None:
 
     reg = DeviceRegistry()
     reg.load()
-    paired_count = sum(1 for n in reg.all() if n.get("paired", False))
+    paired_count = len(reg.list_paired())
 
     table = Table(title="Voice Channel Status", show_lines=True)
     table.add_column("Setting", style="bold")
@@ -3583,7 +4390,7 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
     # Validate node exists
     reg = DeviceRegistry()
     reg.load()
-    node = next((n for n in reg.all() if n.get("node_id", "").startswith(node_id)), None)
+    node = next((n for n in reg.list_nodes() if n.node_id.startswith(node_id)), None)
     if node is None:
         _print_error(f"Node {node_id!r} not found in registry.")
         sys.exit(1)
@@ -3607,8 +4414,8 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
             f"{len(audio_bytes):,} bytes, ~{duration_s:.1f}s of audio."
         )
         console.print(
-            f"[dim]Would send to node {node.get('name', node_id[:8])} "
-            f"in room {node.get('room', 'unknown')} via gateway WebSocket.[/]"
+            f"[dim]Would send to node {node.friendly_name or node_id[:8]} "
+            f"in room {node.room or 'unknown'} via gateway WebSocket.[/]"
         )
     except FileNotFoundError:
         _print_error("piper binary not found in PATH. Install piper and ensure it is on your PATH.")
@@ -4833,7 +5640,11 @@ def api_start(
         logger.debug("Memory store unavailable: %s", _mem_exc)
         memory_store = None
 
-    agent_config = AgentConfig(provider=provider, **_agent_tool_policy_kwargs(cfg))
+    agent_config = AgentConfig(
+        provider=provider,
+        max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        **_agent_tool_policy_kwargs(cfg),
+    )
     runtime = AgentRuntime(agent_config)
 
     api_config = ApiConfig(host=host, port=port, api_key=api_key)

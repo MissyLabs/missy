@@ -643,6 +643,47 @@ class TestMessageLoopDirect:
         ws.send.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_revoked_session_disconnects_on_next_message(
+        self, srv: ScreencastServer, registry: ScreencastTokenRegistry
+    ) -> None:
+        """Regression: `!screen stop` (revoke_session()) only ever flipped
+        session.active in the registry -- it never touched an already
+        authenticated live connection, so a revoked session kept streaming
+        frames (and being posted to Discord by the analyzer) indefinitely
+        until the browser tab was manually closed. _message_loop() must
+        re-check the session's active flag on every message and disconnect
+        as soon as a revoked session sends anything.
+        """
+        session_id, _ = registry.create_session()
+        state = self._make_state(session_id)
+
+        # Revoke the session -- simulating a `!screen stop` command that
+        # arrived after the browser's WebSocket connection was already
+        # authenticated and streaming.
+        assert registry.revoke_session(session_id) is True
+
+        # The still-open (not-yet-disconnected) browser tab sends another
+        # heartbeat, followed by a frame it should never get to process.
+        ws = self._make_iter_ws(
+            json.dumps({"type": "heartbeat"}),
+            json.dumps({"type": "frame", "format": "jpeg", "width": 640, "height": 480, "seq": 1}),
+            _JPEG_MAGIC + b"\x00" * 100,
+        )
+        await srv._message_loop(ws, session_id, state)
+
+        ws.close.assert_awaited_once()
+        close_args = ws.close.call_args.args
+        assert close_args[0] == 1000
+        ws.send.assert_awaited_once()
+        payload = json.loads(ws.send.call_args_list[0].args[0])
+        assert payload["type"] == "error"
+        assert "revoked" in payload["message"].lower()
+        # The subsequent "frame" message must never have been processed --
+        # the loop must have broken out immediately on the first message
+        # after revocation, not merely warned and continued.
+        assert state.frame_count == 0
+
+    @pytest.mark.asyncio
     async def test_unexpected_binary_without_pending_meta(
         self, srv: ScreencastServer, registry: ScreencastTokenRegistry
     ) -> None:

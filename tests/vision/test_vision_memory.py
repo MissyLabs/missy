@@ -44,9 +44,23 @@ def _make_sqlite_mock(turns: list | None = None) -> MagicMock:
 
 
 def _make_vector_mock(results: list[tuple[float, dict]] | None = None) -> MagicMock:
-    """Return a VectorMemoryStore mock with sensible defaults."""
+    """Return a VectorMemoryStore mock with sensible defaults.
+
+    Accepts the convenient ``(score, metadata)`` tuple shape for callers,
+    but the mocked ``search()`` return value is the *real*
+    ``VectorMemoryStore.search()`` contract -- a list of dicts with
+    "text"/"metadata"/"score" keys (see missy/memory/vector_store.py) --
+    not tuples. recall_observations() previously unpacked search()'s
+    return value as `for score, meta in vector_results`, which always
+    raised ValueError against the real dict shape; these tests originally
+    mocked the same (wrong) tuple shape the buggy code expected, so they
+    passed without ever exercising the real integration contract.
+    """
     store = MagicMock()
-    store.search.return_value = results or []
+    store.search.return_value = [
+        {"text": meta.get("observation", ""), "metadata": meta, "score": score}
+        for score, meta in (results or [])
+    ]
     return store
 
 
@@ -218,23 +232,30 @@ class TestStoreObservation:
         uuid.UUID(result)
 
     def test_calls_add_turn_on_sqlite(self) -> None:
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments (FX-B / SR-3.1 fix) -- passing
+        # kwargs against a real store previously raised TypeError on every
+        # call, silently swallowed, so vision observations were never
+        # actually persisted.
+        from missy.memory.sqlite_store import ConversationTurn
+
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "puzzle", "a piece observation")
         mstore.add_turn.assert_called_once()
-        _, kwargs = mstore.add_turn.call_args
-        assert kwargs["session_id"] == "s1"
-        assert kwargs["role"] == "vision"
-        assert kwargs["content"] == "a piece observation"
-        assert kwargs["provider"] == "vision"
+        (turn,), _kwargs = mstore.add_turn.call_args
+        assert isinstance(turn, ConversationTurn)
+        assert turn.session_id == "s1"
+        assert turn.role == "vision"
+        assert turn.content == "a piece observation"
+        assert turn.provider == "vision"
 
     def test_metadata_passed_to_add_turn(self) -> None:
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "puzzle", "obs", metadata={"extra": "data"})
-        _, kwargs = mstore.add_turn.call_args
-        stored_meta = kwargs["metadata"]
-        assert stored_meta["extra"] == "data"
+        (turn,), _kwargs = mstore.add_turn.call_args
+        assert turn.metadata["extra"] == "data"
 
     def test_entry_contains_all_fields(self) -> None:
         mstore = _make_sqlite_mock()
@@ -247,8 +268,8 @@ class TestStoreObservation:
             source="webcam:/dev/video0",
             frame_id=3,
         )
-        _, kwargs = mstore.add_turn.call_args
-        meta = kwargs["metadata"]
+        (turn,), _kwargs = mstore.add_turn.call_args
+        meta = turn.metadata
         assert meta["session_id"] == "s1"
         assert meta["task_type"] == "painting"
         assert meta["observation"] == "brush stroke analysis"
@@ -315,8 +336,8 @@ class TestStoreObservation:
         mstore = _make_sqlite_mock()
         bridge = VisionMemoryBridge(memory_store=mstore)
         bridge.store_observation("s1", "general", "obs")
-        _, kwargs = mstore.add_turn.call_args
-        meta = kwargs["metadata"]
+        (turn,), _kwargs = mstore.add_turn.call_args
+        meta = turn.metadata
         assert meta["confidence"] == 0.0
         assert meta["source"] == ""
         assert meta["frame_id"] == 0
@@ -846,6 +867,42 @@ class TestClearSession:
 
         mstore.get_session_turns.assert_called_once_with("s1", limit=1000)
 
+    def test_purges_matching_entries_from_vector_store(self) -> None:
+        """clear_session() must also purge the vector-store copy.
+
+        Previously it only called self._memory.delete_turn(...) and never
+        touched self._vector, so a "cleared" session's observation could
+        still surface via recall_observations()'s semantic-search path.
+        """
+        mstore = _make_sqlite_mock(turns=[])
+        vstore = MagicMock()
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=vstore)
+        bridge._initialized = True
+
+        bridge.clear_session("s1")
+
+        vstore.delete_by_metadata.assert_called_once_with({"session_id": "s1"})
+
+    def test_vector_store_delete_exception_is_swallowed(self) -> None:
+        mstore = _make_sqlite_mock(turns=[])
+        vstore = MagicMock()
+        vstore.delete_by_metadata.side_effect = RuntimeError("boom")
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=vstore)
+        bridge._initialized = True
+
+        count = bridge.clear_session("s1")  # must not raise
+
+        assert count == 0
+
+    def test_no_vector_store_does_not_raise(self) -> None:
+        mstore = _make_sqlite_mock(turns=[])
+        bridge = VisionMemoryBridge(memory_store=mstore, vector_store=None)
+        bridge._initialized = True
+
+        count = bridge.clear_session("s1")  # must not raise
+
+        assert count == 0
+
     def test_calls_ensure_init(self) -> None:
         mstore = _make_sqlite_mock(turns=[])
         bridge = VisionMemoryBridge(memory_store=mstore)
@@ -867,12 +924,10 @@ class TestStoreRecallRoundTrip:
         """Stored observations should be retrievable via SQLite fallback."""
         stored_meta: dict[str, Any] = {}
 
-        def fake_add_turn(
-            session_id: str, role: str, content: str, provider: str, metadata: dict
-        ) -> None:
-            stored_meta.update(metadata)
-            stored_meta["_content"] = content
-            stored_meta["_session_id"] = session_id
+        def fake_add_turn(turn) -> None:
+            stored_meta.update(turn.metadata)
+            stored_meta["_content"] = turn.content
+            stored_meta["_session_id"] = turn.session_id
 
         def fake_get_recent(limit: int = 10) -> list:
             if stored_meta:

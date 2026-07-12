@@ -112,11 +112,18 @@ class HatchingState:
             status = HatchingStatus(raw_status)
         except ValueError:
             status = HatchingStatus.UNHATCHED
+        raw_steps = data.get("steps_completed")
+        # hatching.yaml is hand-editable; a manual edit that leaves
+        # steps_completed as a non-list scalar (e.g. "steps_completed: 5")
+        # would otherwise crash list(raw_steps or []) with an unhandled
+        # TypeError -- fail closed to an empty list instead, matching this
+        # field's own documented "names of individual steps" list contract.
+        steps_completed = list(raw_steps) if isinstance(raw_steps, list) else []
         return cls(
             status=status,
             started_at=data.get("started_at"),
             completed_at=data.get("completed_at"),
-            steps_completed=list(data.get("steps_completed") or []),
+            steps_completed=steps_completed,
             persona_generated=bool(data.get("persona_generated", False)),
             environment_validated=bool(data.get("environment_validated", False)),
             provider_verified=bool(data.get("provider_verified", False)),
@@ -321,7 +328,7 @@ class HatchingManager:
                 logger.warning("Hatching state file is not a mapping; using defaults.")
                 return HatchingState()
             return HatchingState.from_dict(raw)
-        except (OSError, yaml.YAMLError) as exc:
+        except (OSError, yaml.YAMLError, ValueError, TypeError) as exc:
             logger.warning("Could not load hatching state from %s: %s", self._state_path, exc)
             return HatchingState()
 
@@ -730,6 +737,24 @@ class HatchingManager:
             )
 
             store = SQLiteMemoryStore(db_path=_MEMORY_DB_PATH)
+            # Unlike every sibling step (_initialize_config checks
+            # _CONFIG_PATH.exists(), _generate_persona checks
+            # _PERSONA_PATH.exists()), this step had no existence guard --
+            # reset() only deletes hatching.yaml, leaving memory.db
+            # untouched, so a reset() + re-hatch cycle (the documented,
+            # supported way to force a re-hatch) re-ran every step, and
+            # since ConversationTurn.new() always generates a fresh UUID
+            # with no dedup at the storage layer, it inserted a second
+            # welcome turn into the same "hatching" session every time.
+            if store.get_session_turns("hatching", limit=1):
+                self._log.log(
+                    "seed_memory",
+                    "ok",
+                    f"Memory store already seeded at {_MEMORY_DB_PATH}",
+                )
+                state.memory_seeded = True
+                return
+
             welcome_turn = ConversationTurn.new(
                 session_id="hatching",
                 role="system",

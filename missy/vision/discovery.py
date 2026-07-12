@@ -84,7 +84,13 @@ class CameraDiscovery:
     ) -> None:
         self._cache_ttl = cache_ttl_seconds
         self._sysfs_base = Path(sysfs_base)
-        self._cache: list[CameraDevice] = []
+        # `None` means "never scanned yet", distinct from `[]` (scanned,
+        # found zero devices -- a common, legitimate result). Checking
+        # truthiness alone can't tell those apart, which previously made
+        # discover()'s TTL cache silently never engage whenever the last
+        # scan found zero devices, rescanning on every call regardless of
+        # how fresh the cache actually was.
+        self._cache: list[CameraDevice] | None = None
         self._cache_time: float = 0.0
 
     # -- public API --
@@ -95,7 +101,7 @@ class CameraDiscovery:
         Uses cached results if still valid unless *force* is True.
         """
         now = time.monotonic()
-        if not force and self._cache and (now - self._cache_time) < self._cache_ttl:
+        if not force and self._cache is not None and (now - self._cache_time) < self._cache_ttl:
             return list(self._cache)
 
         devices = self._scan_sysfs()

@@ -69,6 +69,50 @@ class TestEdgeNode:
         assert n.node_id == "n2"
         assert not hasattr(n, "unknown_field")
 
+    def test_from_dict_quoted_string_false_paired_stays_unpaired(self):
+        """Regression: `paired: bool = False` is not enforced by Python at
+        dataclass construction -- a hand-edited or tool-generated
+        devices.json with a JSON *string* "paired": "false" was
+        previously stored verbatim as the string "false", and
+        `not "false"` is False in Python (any non-empty string is
+        truthy). `paired` is a genuine authorization gate
+        (VoiceServer rejects the connection when `not node.paired`),
+        so this silently treated an unapproved edge node as fully
+        paired -- an auth bypass, not just a data-typing nit.
+        """
+        d = {
+            "node_id": "n3",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "paired": "false",
+        }
+        n = _node_from_dict(d)
+        assert n.paired is False
+        assert not n.paired  # the exact gate check VoiceServer performs
+
+    def test_from_dict_quoted_string_true_paired_is_paired(self):
+        d = {
+            "node_id": "n4",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "paired": "true",
+        }
+        n = _node_from_dict(d)
+        assert n.paired is True
+
+    def test_from_dict_quoted_string_false_audio_logging_stays_disabled(self):
+        d = {
+            "node_id": "n5",
+            "friendly_name": "X",
+            "room": "Y",
+            "ip_address": "0.0.0.0",
+            "audio_logging": "false",
+        }
+        n = _node_from_dict(d)
+        assert n.audio_logging is False
+
 
 class TestDeviceRegistryPersistence:
     def test_load_empty_file(self, registry):
@@ -213,6 +257,43 @@ class TestDeviceRegistryTokens:
         new_token = registry.generate_token("node-1")
         assert registry.verify_token("node-1", new_token) is True
         assert registry.verify_token("node-1", old_token) is False
+
+    def test_verify_nonexistent_node_costs_the_same_as_existing_node(self, registry, sample_node):
+        """Regression: verify_token() previously returned immediately
+        (skipping the ~100k-iteration PBKDF2 hash entirely) when the node
+        didn't exist -- a node-existence timing oracle letting an
+        unauthenticated remote client enumerate real, registered node_ids
+        by timing auth attempts, without ever knowing a valid token.
+        Both paths must now cost approximately the same real wall-clock
+        time (one PBKDF2 computation either way).
+        """
+        import time as _time
+
+        registry.load()
+        registry.add_node(sample_node)
+        registry.generate_token("node-1")
+
+        n = 20
+        start = _time.perf_counter()
+        for _ in range(n):
+            registry.verify_token("node-1", "wrong-token-guess")
+        existing_node_elapsed = (_time.perf_counter() - start) / n
+
+        start = _time.perf_counter()
+        for _ in range(n):
+            registry.verify_token("totally-nonexistent-node-id", "wrong-token-guess")
+        nonexistent_node_elapsed = (_time.perf_counter() - start) / n
+
+        # Both paths perform a real PBKDF2 computation, so their average
+        # per-call cost should be within the same order of magnitude --
+        # nowhere near the >100x gap the pre-fix "return False immediately"
+        # shortcut produced (a fast-path measured in microseconds vs a real
+        # PBKDF2 hash measured in tens of milliseconds).
+        assert nonexistent_node_elapsed > existing_node_elapsed * 0.5, (
+            f"nonexistent-node path ({nonexistent_node_elapsed * 1000:.2f}ms avg) is "
+            f"suspiciously faster than the existing-node path "
+            f"({existing_node_elapsed * 1000:.2f}ms avg) -- looks like a timing oracle"
+        )
 
 
 class TestDeviceRegistrySensorData:

@@ -400,26 +400,39 @@ class TestCheckPairing:
         channel._check_pairing("u-new", "/pair")
         assert "u-new" in channel._pending_pairs
 
-    def test_accept_command_moves_to_allowlist(self, channel):
+    def test_accept_command_via_dm_is_refused(self, channel):
+        # SR-1.12: an in-band "!pair accept" DM must never approve a
+        # pairing -- there is no way to authenticate the sender as an
+        # authorized operator from message content alone. The request
+        # stays pending and the allowlist is untouched.
         channel._pending_pairs.add("u-pending")
         channel._check_pairing("admin", "!pair accept u-pending")
-        assert "u-pending" not in channel._pending_pairs
-        assert "u-pending" in channel.account_config.dm_allowlist
+        assert "u-pending" in channel._pending_pairs
+        assert "u-pending" not in channel.account_config.dm_allowlist
 
     def test_accept_command_returns_false(self, channel):
         channel._pending_pairs.add("u-pending")
         result = channel._check_pairing("admin", "!pair accept u-pending")
         assert result is False
 
-    def test_deny_command_removes_from_pending(self, channel):
+    def test_deny_command_via_dm_is_refused(self, channel):
         channel._pending_pairs.add("u-pending")
         channel._check_pairing("admin", "!pair deny u-pending")
-        assert "u-pending" not in channel._pending_pairs
+        assert "u-pending" in channel._pending_pairs
 
     def test_deny_command_returns_false(self, channel):
         channel._pending_pairs.add("u-pending")
         result = channel._check_pairing("admin", "!pair deny u-pending")
         assert result is False
+
+    def test_accept_pair_only_available_via_programmatic_api(self, channel):
+        # The only supported way to resolve a pending pairing is calling
+        # accept_pair()/deny_pair() directly -- from an authenticated
+        # operator surface (Web console/API), never from DM content.
+        channel._pending_pairs.add("u-pending")
+        channel.accept_pair("u-pending")
+        assert "u-pending" not in channel._pending_pairs
+        assert "u-pending" in channel.account_config.dm_allowlist
 
     def test_regular_message_denied_when_not_in_allowlist(self, channel):
         channel.account_config.dm_allowlist = []
@@ -526,6 +539,97 @@ class TestCheckGuildPolicy:
         }
         # Without own_id the code checks the mentions list; no mentions → deny.
         result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hello", {})
+        assert result is False
+
+    # -- allowed_roles enforcement (task #15) --
+
+    def test_role_allowlist_allows_member_with_matching_role(self, channel, mock_rest):
+        mock_rest.get_guild_roles.return_value = [
+            {"id": "role-999", "name": "moderator"},
+            {"id": "role-111", "name": "everyone"},
+        ]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-999"]}}
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        assert result is True
+
+    def test_role_allowlist_denies_member_without_matching_role(self, channel, mock_rest):
+        mock_rest.get_guild_roles.return_value = [
+            {"id": "role-999", "name": "moderator"},
+            {"id": "role-111", "name": "everyone"},
+        ]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-111"]}}
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        assert result is False
+
+    def test_role_allowlist_denies_member_with_no_roles_at_all(self, channel, mock_rest):
+        mock_rest.get_guild_roles.return_value = [{"id": "role-999", "name": "moderator"}]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", {})
+        assert result is False
+
+    def test_role_allowlist_empty_means_no_restriction(self, channel, mock_rest):
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=[])
+        }
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", {})
+        assert result is True
+        # Empty allowlist means "no restriction" -- must not even bother
+        # resolving roles via the REST API.
+        mock_rest.get_guild_roles.assert_not_called()
+
+    def test_role_allowlist_fails_closed_on_rest_error(self, channel, mock_rest):
+        mock_rest.get_guild_roles.side_effect = Exception("Discord API unreachable")
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-999"]}}
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        assert result is False
+
+    def test_role_allowlist_caches_guild_roles_across_calls(self, channel, mock_rest):
+        mock_rest.get_guild_roles.return_value = [{"id": "role-999", "name": "moderator"}]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-999"]}}
+        channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        channel._check_guild_policy("guild-1", "ch-1", "user-2", "hi again", data)
+        # Two messages, same guild, well within the TTL -- only one REST call.
+        assert mock_rest.get_guild_roles.call_count == 1
+
+    def test_role_allowlist_refetches_after_cache_ttl_expires(self, channel, mock_rest):
+        mock_rest.get_guild_roles.return_value = [{"id": "role-999", "name": "moderator"}]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-999"]}}
+        channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        assert mock_rest.get_guild_roles.call_count == 1
+
+        # Force the cached entry to look stale.
+        stale_time, role_map = channel._guild_roles_cache["guild-1"]
+        channel._guild_roles_cache["guild-1"] = (stale_time - 10_000, role_map)
+
+        channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
+        assert mock_rest.get_guild_roles.call_count == 2
+
+    def test_role_allowlist_unresolvable_role_id_is_ignored(self, channel, mock_rest):
+        # A role ID the guild-roles lookup doesn't recognize (e.g. a role
+        # deleted since the cache was populated) must not match anything.
+        mock_rest.get_guild_roles.return_value = [{"id": "role-999", "name": "moderator"}]
+        channel.account_config.guild_policies = {
+            "guild-1": DiscordGuildPolicy(enabled=True, allowed_roles=["moderator"])
+        }
+        data = {"member": {"roles": ["role-does-not-exist"]}}
+        result = channel._check_guild_policy("guild-1", "ch-1", "user-1", "hi", data)
         assert result is False
 
 

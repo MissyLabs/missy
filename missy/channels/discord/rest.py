@@ -102,6 +102,59 @@ class DiscordRestClient:
             hdrs.update(extra)
         return hdrs
 
+    _RETRY_STATUSES = frozenset({429, 502, 503, 504})
+    _RETRY_BACKOFFS = (1.0, 2.0, 4.0)
+
+    def _request_with_retry(self, method: str, url: str, **kwargs: Any) -> Any:
+        """Issue an HTTP request, retrying transient Discord statuses.
+
+        Applies the same Retry-After-aware backoff strategy
+        :meth:`send_message` uses to every other REST call. Previously only
+        ``send_message`` retried on 429/502/503/504 -- every other method
+        (``add_reaction``, ``get_guild_roles``, ``create_thread``, etc.)
+        called ``response.raise_for_status()`` directly with no retry at
+        all, so a single transient rate-limit or upstream hiccup on any of
+        those routes failed the whole operation immediately instead of
+        recovering the way a chat message send already did.
+
+        Returns the final response (2xx, a non-retryable error status, or
+        the last retryable-status response once retries are exhausted) so
+        the caller's own ``response.raise_for_status()``/status-code checks
+        behave exactly as if no retry had happened.
+        """
+        attempt_count = len(self._RETRY_BACKOFFS) + 1
+        response = None
+        for attempt in range(attempt_count):
+            response = getattr(self._http, method)(url, **kwargs)
+            if response.status_code not in self._RETRY_STATUSES:
+                return response
+            if attempt >= len(self._RETRY_BACKOFFS):
+                return response
+
+            delay: float | None = None
+            if response.status_code == 429:
+                ra = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+                if ra:
+                    try:
+                        delay = float(ra)
+                    except Exception:
+                        delay = None
+            if delay is None:
+                delay = self._RETRY_BACKOFFS[attempt]
+
+            delay = float(delay) + secrets.SystemRandom().uniform(0.0, 0.25)
+            logger.warning(
+                "Discord %s %s transient HTTP %d; retrying in %.2fs (attempt %d/%d)",
+                method.upper(),
+                url,
+                response.status_code,
+                delay,
+                attempt + 1,
+                attempt_count,
+            )
+            time.sleep(delay)
+        return response
+
     # ------------------------------------------------------------------
     # Public methods
     # ------------------------------------------------------------------
@@ -118,7 +171,7 @@ class DiscordRestClient:
             httpx.HTTPStatusError: On non-2xx responses.
         """
         url = f"{BASE}/users/@me"
-        response = self._http.get(url, headers=self._headers())
+        response = self._request_with_retry("get", url, headers=self._headers())
         response.raise_for_status()
         return response.json()
 
@@ -134,7 +187,7 @@ class DiscordRestClient:
             httpx.HTTPStatusError: On non-2xx responses.
         """
         url = f"{BASE}/gateway/bot"
-        response = self._http.get(url, headers=self._headers())
+        response = self._request_with_retry("get", url, headers=self._headers())
         response.raise_for_status()
         return response.json()
 
@@ -230,9 +283,24 @@ class DiscordRestClient:
                                 delay = float(ra)
                             except Exception:
                                 delay = None
+
+                    # Exhaustion check must happen regardless of where
+                    # *delay* came from. Previously this was nested inside
+                    # `if delay is None:`, so a delay sourced from a real
+                    # Retry-After header (the common case under sustained
+                    # 429 rate-limiting) skipped it entirely even on the
+                    # final allotted attempt -- the loop just slept and
+                    # looped one more time, the for-loop then ended, and
+                    # execution fell through to a bare, uninformative
+                    # "failed without exception" RuntimeError instead of
+                    # the real, logged httpx.HTTPStatusError every other
+                    # exhaustion path produces (and instead of ever calling
+                    # _log_final_failure at all).
+                    if attempt >= len(backoffs):
+                        _log_final_failure(response=response, exc=None, attempt_index=attempt_count)
+                        response.raise_for_status()
+
                     if delay is None:
-                        if attempt >= len(backoffs):
-                            response.raise_for_status()
                         delay = backoffs[attempt]
 
                     delay = float(delay) + secrets.SystemRandom().uniform(0.0, 0.25)
@@ -329,7 +397,8 @@ class DiscordRestClient:
         encoded = quote(emoji, safe="")
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
         # Discord expects a PUT with empty body; returns 204 No Content.
-        response = self._http.put(
+        response = self._request_with_retry(
+            "put",
             url,
             headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
             timeout=10,
@@ -375,7 +444,8 @@ class DiscordRestClient:
         _validate_snowflake(message_id, "message_id")
         url = f"{BASE}/channels/{channel_id}/messages/{message_id}"
         try:
-            response = self._http.delete(
+            response = self._request_with_retry(
+                "delete",
                 url,
                 headers={k: v for k, v in self._headers().items() if k != "Content-Type"},
                 timeout=10,
@@ -433,7 +503,7 @@ class DiscordRestClient:
                 "auto_archive_duration": auto_archive_duration,
                 "type": 11,  # PUBLIC_THREAD
             }
-        response = self._http.post(url, headers=self._headers(), json=body)
+        response = self._request_with_retry("post", url, headers=self._headers(), json=body)
         response.raise_for_status()
         return response.json()
 
@@ -448,7 +518,27 @@ class DiscordRestClient:
         """
         _validate_snowflake(channel_id, "channel_id")
         url = f"{BASE}/channels/{channel_id}"
-        response = self._http.get(url, headers=self._headers())
+        response = self._request_with_retry("get", url, headers=self._headers())
+        response.raise_for_status()
+        return response.json()
+
+    def get_guild_roles(self, guild_id: str) -> list[dict[str, Any]]:
+        """Fetch the list of roles defined in a guild.
+
+        Used to resolve the role ID snowflakes carried on a message's
+        ``member.roles`` field to the human-readable role names that
+        ``DiscordGuildPolicy.allowed_roles`` is configured with (task
+        #12/allowed_roles enforcement).
+
+        Args:
+            guild_id: The guild snowflake ID.
+
+        Returns:
+            A list of Discord Role objects (each with ``id``/``name``).
+        """
+        _validate_snowflake(guild_id, "guild_id")
+        url = f"{BASE}/guilds/{guild_id}/roles"
+        response = self._request_with_retry("get", url, headers=self._headers())
         response.raise_for_status()
         return response.json()
 
@@ -472,7 +562,7 @@ class DiscordRestClient:
         body: dict[str, Any] = {"type": response_type}
         if data is not None:
             body["data"] = data
-        response = self._http.post(url, headers=self._headers(), json=body)
+        response = self._request_with_retry("post", url, headers=self._headers(), json=body)
         response.raise_for_status()
 
     def edit_interaction_response(
@@ -493,7 +583,8 @@ class DiscordRestClient:
         """
         _validate_snowflake(application_id, "application_id")
         url = f"{BASE}/webhooks/{application_id}/{interaction_token}/messages/@original"
-        response = self._http.patch(
+        response = self._request_with_retry(
+            "patch",
             url,
             headers=self._headers(),
             json={"content": content[:2000]},
@@ -525,7 +616,7 @@ class DiscordRestClient:
         params: dict[str, Any] = {"limit": limit}
         if before:
             params["before"] = before
-        response = self._http.get(url, headers=self._headers(), params=params)
+        response = self._request_with_retry("get", url, headers=self._headers(), params=params)
         response.raise_for_status()
         return response.json()
 
@@ -554,7 +645,7 @@ class DiscordRestClient:
                 f"Not a Discord CDN URL: {url!r}. "
                 "Only cdn.discordapp.com and media.discordapp.net are allowed."
             )
-        response = self._http.get(url, timeout=timeout)
+        response = self._request_with_retry("get", url, timeout=timeout)
         response.raise_for_status()
         return response.content
 
@@ -588,6 +679,6 @@ class DiscordRestClient:
             url = f"{BASE}/applications/{application_id}/commands"
 
         # PUT = bulk overwrite; POST expects a single command object, not a list.
-        response = self._http.put(url, headers=self._headers(), json=commands)
+        response = self._request_with_retry("put", url, headers=self._headers(), json=commands)
         response.raise_for_status()
         return response.json()

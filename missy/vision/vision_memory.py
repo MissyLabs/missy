@@ -147,16 +147,25 @@ class VisionMemoryBridge:
             **safe_metadata,
         }
 
-        # Store in SQLite memory as a "vision" role turn
+        # Store in SQLite memory as a "vision" role turn.
+        #
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments -- passing kwargs here previously
+        # raised a TypeError on every call against a real store (silently
+        # swallowed by the except below), so vision observations were
+        # never actually persisted (see FX-B / SR-3.1).
         if self._memory is not None:
             try:
-                self._memory.add_turn(
+                from missy.memory.sqlite_store import ConversationTurn
+
+                turn = ConversationTurn.new(
                     session_id=session_id,
                     role="vision",
                     content=observation,
                     provider="vision",
-                    metadata=entry,
                 )
+                turn.metadata = entry
+                self._memory.add_turn(turn)
             except Exception as exc:
                 logger.warning("Failed to store vision observation in SQLite: %s", exc)
 
@@ -213,7 +222,16 @@ class VisionMemoryBridge:
             try:
                 search_query = f"[{task_type}] {query}" if task_type else query
                 vector_results = self._vector.search(search_query, top_k=limit)
-                for score, meta in vector_results:
+                # VectorMemoryStore.search() returns a list of dicts with
+                # "text"/"metadata"/"score" keys, not 2-tuples -- unpacking
+                # any non-empty result as `for score, meta in vector_results`
+                # always raised ValueError ("too many values to unpack"),
+                # silently caught by the except Exception below, so vector
+                # search never actually returned a result and this always
+                # fell through to the SQLite keyword/FTS fallback.
+                for entry in vector_results:
+                    meta = entry["metadata"]
+                    score = entry["score"]
                     if task_type and meta.get("task_type") != task_type:
                         continue
                     if session_id and meta.get("session_id") != session_id:
@@ -277,7 +295,9 @@ class VisionMemoryBridge:
     def clear_session(self, session_id: str) -> int:
         """Remove all vision observations for a session.
 
-        Returns the number of observations removed.
+        Returns the number of observations removed from the SQLite store.
+        Also purges any matching entries from the vector store so a
+        cleared session cannot still surface via semantic recall.
         """
         self._ensure_init()
         count = 0
@@ -293,4 +313,9 @@ class VisionMemoryBridge:
                             pass
             except Exception as exc:
                 logger.debug("Failed to clear session: %s", exc)
+        if self._vector is not None:
+            try:
+                self._vector.delete_by_metadata({"session_id": session_id})
+            except Exception as exc:
+                logger.debug("Failed to clear vector store entries for session: %s", exc)
         return count

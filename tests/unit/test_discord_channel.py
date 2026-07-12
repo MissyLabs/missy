@@ -412,15 +412,20 @@ class TestPairingWorkflow:
         result = channel._check_dm_policy("user-bad", "hello!")
         assert result is False
 
-    def test_accept_pair_via_command_message(self) -> None:
+    def test_accept_via_dm_command_is_refused(self) -> None:
+        # SR-1.12: a DM sender must never approve a pairing by sending
+        # "!pair accept <id>" -- there is no way to authenticate that
+        # sender as an authorized operator from message content. Only
+        # accept_pair(), called from an authenticated operator surface,
+        # may resolve a pending request.
         account = DiscordAccountConfig(account_id="b", dm_policy=DiscordDMPolicy.PAIRING)
         channel = _make_channel(account)
         channel._pending_pairs.add("target-user")
 
         result = channel._check_pairing("admin", "!pair accept target-user")
         assert result is False  # Command itself not forwarded.
-        assert "target-user" not in channel.get_pending_pairs()
-        assert "target-user" in channel.account_config.dm_allowlist
+        assert "target-user" in channel.get_pending_pairs()
+        assert "target-user" not in channel.account_config.dm_allowlist
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +493,83 @@ class TestGuildPolicy:
         channel = _make_channel(account)
         result = channel._check_guild_policy("guild-1", "chan-1", "user-allowed", "hi", {})
         assert result is True
+
+    def test_channel_allowlist_denies_unlisted_channel(self, event_bus_fresh: EventBus) -> None:
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account, bus=event_bus_fresh)
+        result = channel._check_guild_policy("guild-1", "other-chan", "user-1", "hi", {})
+        assert result is False
+        denied = event_bus_fresh.get_events(result="deny")
+        assert any(e.detail.get("reason") for e in denied if "allowlist" in str(e.event_type))
+
+    def test_channel_allowlist_allows_listed_channel(self) -> None:
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        result = channel._check_guild_policy("guild-1", "parent-chan", "user-1", "hi", {})
+        assert result is True
+
+    def test_channel_allowlist_allows_thread_under_allowed_parent(self) -> None:
+        """Regression: a message posted inside a thread carries channel_id
+        = the thread's own snowflake, never its parent's -- but
+        allowed_channels is naturally configured with parent-channel
+        IDs/names (operators can't know a dynamically-created thread's ID
+        ahead of time). Without resolving the thread's parent, a thread
+        the bot itself creates under an allowed channel (e.g. via
+        auto_thread_threshold) is silently denied by the channel
+        allowlist forever, even though its parent channel is allowed.
+        """
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "thread-under-parent"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel.create_thread("parent-chan", "Auto Thread"))
+        finally:
+            loop.close()
+
+        result = channel._check_guild_policy("guild-1", "thread-under-parent", "user-1", "hi", {})
+        assert result is True
+
+    def test_channel_allowlist_denies_thread_under_unlisted_parent(self) -> None:
+        """A thread created under a channel that is NOT in the allowlist
+        must still be denied -- the parent-resolution fix must not
+        accidentally allow every known thread regardless of its parent.
+        """
+        account = DiscordAccountConfig(
+            account_id="b",
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True, allowed_channels=["parent-chan"])
+            },
+        )
+        channel = _make_channel(account)
+        channel._rest = MagicMock()
+        channel._rest.create_thread.return_value = {"id": "thread-under-other"}
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(channel.create_thread("other-chan", "Auto Thread"))
+        finally:
+            loop.close()
+
+        result = channel._check_guild_policy("guild-1", "thread-under-other", "user-1", "hi", {})
+        assert result is False
 
     def test_require_mention_filters_unmention(self, event_bus_fresh: EventBus) -> None:
         account = DiscordAccountConfig(
@@ -862,6 +944,39 @@ class TestDiscordThreadManagement:
         try:
             loop.run_until_complete(channel._handle_message(msg))
             assert channel._channel_message_counts.get("chan-1") == 1
+        finally:
+            loop.close()
+
+    def test_auto_thread_created_once_threshold_reached(self, event_bus_fresh: EventBus) -> None:
+        """Regression: the message counter was written but never read --
+        create_thread() had zero production callers anywhere. An operator
+        setting auto_thread_threshold: N got a counter that silently
+        incremented forever and a feature that never actually fired.
+        """
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            dm_policy=DiscordDMPolicy.DISABLED,
+            guild_policies={
+                "guild-1": DiscordGuildPolicy(enabled=True),
+            },
+            auto_thread_threshold=3,
+        )
+        channel = _make_channel(account, bus=event_bus_fresh)
+        channel._bot_user_id = "bot-001"
+        channel._rest.create_thread = MagicMock(return_value={"id": "new-thread-1"})
+
+        loop = asyncio.new_event_loop()
+        try:
+            for i in range(3):
+                msg = _make_message(content=f"message {i}", guild_id="guild-1", channel_id="chan-1")
+                loop.run_until_complete(channel._handle_message(msg))
+
+            channel._rest.create_thread.assert_called_once()
+            # The counter resets after the thread fires, rather than
+            # continuing to grow (and re-triggering on every subsequent
+            # message).
+            assert channel._channel_message_counts.get("chan-1") == 0
         finally:
             loop.close()
 

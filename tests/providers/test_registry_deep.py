@@ -366,6 +366,41 @@ class TestRotateKey:
 
 
 # ===========================================================================
+# ProviderRegistry – key_for (SR-4.8)
+# ===========================================================================
+
+
+class TestKeyFor:
+    def test_key_for_returns_registration_key(self):
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        registry.register("anthropic_primary", provider)
+        assert registry.key_for(provider) == "anthropic_primary"
+
+    def test_key_for_returns_none_for_unregistered_provider(self):
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        assert registry.key_for(provider) is None
+
+    def test_key_for_uses_identity_not_equality(self):
+        """Two distinct provider instances with equal attributes must not alias."""
+        registry = ProviderRegistry()
+        registered = _make_provider("dup")
+        other = _make_provider("dup")
+        registry.register("dup", registered)
+        assert registry.key_for(other) is None
+        assert registry.key_for(registered) == "dup"
+
+    def test_key_for_differs_from_provider_name_when_aliased(self):
+        """Registry key need not match the provider's own .name attribute."""
+        registry = ProviderRegistry()
+        provider = _make_provider("anthropic")
+        registry.register("my_alias", provider)
+        assert registry.key_for(provider) == "my_alias"
+        assert registry.key_for(provider) != provider.name
+
+
+# ===========================================================================
 # ProviderRegistry – from_config
 # ===========================================================================
 
@@ -430,6 +465,78 @@ class TestFromConfig:
         )
         ProviderRegistry.from_config(config)
         assert "myhost.internal" in config.network.provider_allowed_hosts
+
+    def test_from_config_base_url_widening_emits_audit_event(self):
+        """Availability/transparency hardening: base_url auto-widening
+        the 'provider' egress allowlist must not be silent -- it's a
+        security-relevant policy mutation and needs a durable audit
+        trail, same as any other policy decision."""
+        from missy.core.events import event_bus
+
+        captured = []
+        event_bus.subscribe("provider.base_url_egress_widened", captured.append)
+        try:
+            config = _make_config(
+                providers={
+                    "custom": _make_provider_config(
+                        "ollama",
+                        model="llama3.2",
+                        base_url="http://audited-host.internal:11434",
+                    ),
+                }
+            )
+            ProviderRegistry.from_config(config)
+        finally:
+            event_bus.unsubscribe("provider.base_url_egress_widened", captured.append)
+
+        assert len(captured) == 1
+        event = captured[0]
+        assert event.category == "network"
+        assert event.result == "allow"
+        assert event.detail["host"] == "audited-host.internal"
+        assert event.detail["base_url"] == "http://audited-host.internal:11434"
+
+    def test_from_config_base_url_widening_logs_at_warning_not_debug(self, caplog):
+        """The old logger.debug() call was invisible at default log
+        levels -- an operator would never see their egress policy grew."""
+        import logging
+
+        config = _make_config(
+            providers={
+                "custom": _make_provider_config(
+                    "ollama",
+                    model="llama3.2",
+                    base_url="http://visible-host.internal:11434",
+                ),
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="missy.providers.registry"):
+            ProviderRegistry.from_config(config)
+        assert any("visible-host.internal" in r.message for r in caplog.records)
+
+    def test_from_config_no_duplicate_widening_events_for_already_allowed_host(self):
+        """A host already present in provider_allowed_hosts is not a
+        *new* widening -- no redundant audit event for it."""
+        from missy.core.events import event_bus
+
+        captured = []
+        event_bus.subscribe("provider.base_url_egress_widened", captured.append)
+        try:
+            config = _make_config(
+                providers={
+                    "custom": _make_provider_config(
+                        "ollama",
+                        model="llama3.2",
+                        base_url="http://already-allowed.internal:11434",
+                    ),
+                }
+            )
+            config.network.provider_allowed_hosts.append("already-allowed.internal")
+            ProviderRegistry.from_config(config)
+        finally:
+            event_bus.unsubscribe("provider.base_url_egress_widened", captured.append)
+
+        assert captured == []
 
     def test_from_config_does_not_duplicate_already_allowed_hosts(self):
         config = _make_config(

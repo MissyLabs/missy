@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from missy.scheduler.parser import parse_schedule
+from missy.scheduler.parser import convert_crontab_dow_to_apscheduler, parse_schedule
 
 
 class TestRawCronExpression:
@@ -25,6 +25,58 @@ class TestRawCronExpression:
         result = parse_schedule("*/10 * * * *", tz="US/Eastern")
         assert result["timezone"] == "US/Eastern"
         assert result["_cron_expression"] == "*/10 * * * *"
+
+
+class TestConvertCrontabDowToApscheduler:
+    """Regression: standard crontab numbers day-of-week Sunday=0..Saturday=6,
+    but APScheduler's day_of_week field follows date.weekday()'s convention
+    (Monday=0..Sunday=6). Passing a raw numeric crontab day-of-week field
+    straight through to APScheduler (as the manager previously did via
+    CronTrigger.from_crontab) silently produces a *different, valid*
+    schedule instead of an error -- e.g. crontab's "1-5" ("weekdays")
+    actually fired Tuesday-Saturday under APScheduler's own numbering.
+    """
+
+    def test_wildcard_passthrough(self):
+        assert convert_crontab_dow_to_apscheduler("*") == "*"
+
+    def test_single_digit_monday(self):
+        # crontab Monday=1 -> APScheduler Monday=0
+        assert convert_crontab_dow_to_apscheduler("1") == "0"
+
+    def test_single_digit_sunday(self):
+        # crontab Sunday=0 -> APScheduler Sunday=6
+        assert convert_crontab_dow_to_apscheduler("0") == "6"
+
+    def test_single_digit_saturday(self):
+        # crontab Saturday=6 -> APScheduler Saturday=5
+        assert convert_crontab_dow_to_apscheduler("6") == "5"
+
+    def test_sunday_alias_seven(self):
+        # crontab allows 7 as an alias for Sunday
+        assert convert_crontab_dow_to_apscheduler("7") == "6"
+
+    def test_weekdays_range(self):
+        # crontab "1-5" (Mon-Fri) -> APScheduler "0-4" (Mon-Fri)
+        assert convert_crontab_dow_to_apscheduler("1-5") == "0-4"
+
+    def test_wraparound_range_splits_into_two(self):
+        # crontab "5-1" (Fri,Sat,Sun,Mon) -> APScheduler "4-6,0-0"
+        assert convert_crontab_dow_to_apscheduler("5-1") == "4-6,0-0"
+
+    def test_comma_list(self):
+        # crontab "0,6" (Sun,Sat weekend) -> APScheduler "6,5"
+        assert convert_crontab_dow_to_apscheduler("0,6") == "6,5"
+
+    def test_step_expression(self):
+        assert convert_crontab_dow_to_apscheduler("*/2") == "*/2"
+
+    def test_day_name_range_passthrough(self):
+        # Day names carry no numbering ambiguity; left untouched.
+        assert convert_crontab_dow_to_apscheduler("mon-fri") == "mon-fri"
+
+    def test_day_name_passthrough(self):
+        assert convert_crontab_dow_to_apscheduler("sun") == "sun"
 
 
 class TestAtOneShot:

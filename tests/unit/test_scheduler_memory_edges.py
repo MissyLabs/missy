@@ -227,8 +227,8 @@ class TestCleanupMemory:
         assert result >= 0
 
     def test_cleanup_memory_returns_zero_on_exception(self, mgr: SchedulerManager) -> None:
-        # MemoryStore is imported inside cleanup_memory, so patch the source module
-        with patch("missy.memory.store.MemoryStore", side_effect=RuntimeError("boom")):
+        # SQLiteMemoryStore is imported inside cleanup_memory, so patch the source module
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", side_effect=RuntimeError("boom")):
             result = mgr.cleanup_memory(older_than_days=7)
         assert result == 0
 

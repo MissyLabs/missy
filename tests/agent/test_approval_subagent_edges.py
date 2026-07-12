@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
-from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -313,50 +312,55 @@ class TestApprovalGateEdges:
 
 
 class TestSubAgentRunnerEdges:
-    def _factory(self, return_value: str = "result") -> Callable:
-        """Return a factory that always produces a runtime returning *return_value*."""
+    """SR-4.2: SubAgentRunner now runs every subtask through a single
+    shared ``runtime``/``session_id`` (reused, not a fresh runtime per
+    subtask via a factory) so spend and policy aggregate correctly. The
+    old ``runtime_factory=`` constructor no longer exists.
+    """
 
-        def _make():
-            rt = MagicMock()
-            rt.run.return_value = return_value
-            return rt
+    def _make_runtime(self, return_value: str = "result") -> MagicMock:
+        rt = MagicMock()
+        rt.run.return_value = return_value
+        return rt
 
-        return _make
+    def _runner(self, runtime: MagicMock, depth: int = 0) -> SubAgentRunner:
+        return SubAgentRunner(runtime=runtime, session_id="sess-1", depth=depth)
 
     # --- spawn a sub-agent with valid config ---
 
     def test_run_subtask_returns_runtime_result(self):
         """run_subtask must return exactly what runtime.run() returns."""
-        runner = SubAgentRunner(runtime_factory=self._factory("precise output"))
+        runner = self._runner(self._make_runtime("precise output"))
         task = SubTask(id=0, description="step one")
         assert runner.run_subtask(task) == "precise output"
 
     def test_run_subtask_sets_result_on_subtask(self):
         """On success, subtask.result must be populated."""
-        runner = SubAgentRunner(runtime_factory=self._factory("done"))
+        runner = self._runner(self._make_runtime("done"))
         task = SubTask(id=0, description="step one")
         runner.run_subtask(task)
         assert task.result == "done"
         assert task.error is None
 
-    def test_factory_called_once_per_run_subtask(self):
-        """run_subtask() must call the factory exactly once per invocation."""
-        factory = MagicMock(return_value=MagicMock(run=MagicMock(return_value="ok")))
-        runner = SubAgentRunner(runtime_factory=factory)
+    def test_run_subtask_calls_runtime_once_with_session_and_depth(self):
+        """run_subtask() must call runtime.run() exactly once, forwarding
+        the runner's session_id and depth (needed for budget aggregation
+        and recursion bounding respectively)."""
+        runtime = self._make_runtime("ok")
+        runner = self._runner(runtime, depth=1)
         runner.run_subtask(SubTask(id=0, description="x"))
-        assert factory.call_count == 1
+        assert runtime.run.call_count == 1
+        assert runtime.run.call_args.kwargs["session_id"] == "sess-1"
+        assert runtime.run.call_args.kwargs["_delegation_depth"] == 1
 
     # --- handle sub-agent failure gracefully ---
 
     def test_run_subtask_exception_sets_error_field(self):
         """On failure, subtask.error must be set and result must remain None."""
+        rt = MagicMock()
+        rt.run.side_effect = ValueError("something went wrong")
 
-        def _boom():
-            rt = MagicMock()
-            rt.run.side_effect = ValueError("something went wrong")
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_boom)
+        runner = self._runner(rt)
         task = SubTask(id=7, description="will fail")
         result = runner.run_subtask(task)
 
@@ -367,31 +371,25 @@ class TestSubAgentRunnerEdges:
 
     def test_run_subtask_exception_does_not_propagate(self):
         """Exceptions from runtime.run() must be caught; run_subtask() must not raise."""
+        rt = MagicMock()
+        rt.run.side_effect = RuntimeError("hard crash")
 
-        def _boom():
-            rt = MagicMock()
-            rt.run.side_effect = RuntimeError("hard crash")
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_boom)
+        runner = self._runner(rt)
         # Should not raise
         result = runner.run_subtask(SubTask(id=0, description="fail"))
         assert "hard crash" in result
 
     def test_run_all_continues_after_one_failure(self):
         """A failed subtask must not abort the remaining ones."""
-        call_count = [0]
 
-        def _factory():
-            call_count[0] += 1
-            rt = MagicMock()
-            if call_count[0] == 1:
-                rt.run.side_effect = RuntimeError("first fails")
-            else:
-                rt.run.return_value = "ok"
-            return rt
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "task 0" in prompt:
+                raise RuntimeError("first fails")
+            return "ok"
 
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [SubTask(id=i, description=f"task {i}") for i in range(3)]
         results = runner.run_all(tasks)
 
@@ -405,17 +403,13 @@ class TestSubAgentRunnerEdges:
     def test_run_subtask_slow_runtime_still_returns(self):
         """A runtime that takes a moment must still resolve (no deadlock)."""
 
-        def _slow_factory():
-            rt = MagicMock()
+        def _slow_run(prompt, session_id="", _delegation_depth=0):
+            time.sleep(0.05)
+            return "slow ok"
 
-            def _slow_run(prompt):
-                time.sleep(0.05)
-                return "slow ok"
-
-            rt.run.side_effect = _slow_run
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_slow_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _slow_run
+        runner = self._runner(rt)
         task = SubTask(id=0, description="slow task")
         result = runner.run_subtask(task)
         assert result == "slow ok"
@@ -423,31 +417,30 @@ class TestSubAgentRunnerEdges:
     # --- max concurrent sub-agents limit ---
 
     def test_semaphore_limits_concurrent_executions(self):
-        """No more than MAX_CONCURRENT runtimes should be active simultaneously."""
+        """No more than MAX_CONCURRENT runtimes should be active simultaneously,
+        even when run_subtask() is called directly from several threads
+        rather than through run_all()'s own ThreadPoolExecutor -- the
+        semaphore in run_subtask() is what enforces this for that path."""
         active = [0]
         peak = [0]
         lock = threading.Lock()
         barrier = threading.Barrier(MAX_CONCURRENT)
 
-        def _factory():
-            rt = MagicMock()
+        def _run(prompt, session_id="", _delegation_depth=0):
+            with lock:
+                active[0] += 1
+                if active[0] > peak[0]:
+                    peak[0] = active[0]
+            # Synchronise so all MAX_CONCURRENT slots fill up simultaneously
+            with contextlib.suppress(threading.BrokenBarrierError):
+                barrier.wait(timeout=2.0)
+            with lock:
+                active[0] -= 1
+            return "ok"
 
-            def _run(prompt):
-                with lock:
-                    active[0] += 1
-                    if active[0] > peak[0]:
-                        peak[0] = active[0]
-                # Synchronise so all MAX_CONCURRENT slots fill up simultaneously
-                with contextlib.suppress(threading.BrokenBarrierError):
-                    barrier.wait(timeout=2.0)
-                with lock:
-                    active[0] -= 1
-                return "ok"
-
-            rt.run.side_effect = _run
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [SubTask(id=i, description=f"t{i}") for i in range(MAX_CONCURRENT * 2)]
 
         threads = [
@@ -462,24 +455,24 @@ class TestSubAgentRunnerEdges:
 
     def test_run_all_caps_total_tasks(self):
         """run_all() must not execute more than max_total tasks."""
-        factory = MagicMock(return_value=MagicMock(run=MagicMock(return_value="ok")))
-        runner = SubAgentRunner(runtime_factory=factory)
+        rt = self._make_runtime("ok")
+        runner = self._runner(rt)
         tasks = [SubTask(id=i, description=f"t{i}") for i in range(MAX_SUB_AGENTS + 5)]
         results = runner.run_all(tasks, max_total=4)
         assert len(results) == 4
-        assert factory.call_count == 4
+        assert rt.run.call_count == 4
 
     def test_run_all_zero_tasks(self):
         """run_all() with an empty task list must return an empty list."""
-        factory = MagicMock()
-        runner = SubAgentRunner(runtime_factory=factory)
+        rt = MagicMock()
+        runner = self._runner(rt)
         results = runner.run_all([])
         assert results == []
-        factory.assert_not_called()
+        rt.run.assert_not_called()
 
     def test_run_all_single_task(self):
         """run_all() with a single task must return a one-element list."""
-        runner = SubAgentRunner(runtime_factory=self._factory("solo"))
+        runner = self._runner(self._make_runtime("solo"))
         results = runner.run_all([SubTask(id=0, description="only one")])
         assert results == ["solo"]
 
@@ -488,23 +481,16 @@ class TestSubAgentRunnerEdges:
     def test_dependency_result_injected_as_context(self):
         """The result of a dependency task must appear in the next task's prompt."""
         call_args_log: list[str] = []
-        call_count = [0]
 
-        def _factory():
-            call_count[0] += 1
-            rt = MagicMock()
-            if call_count[0] == 1:
-                rt.run.return_value = "parent result data"
-            else:
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "parent task" in prompt:
+                return "parent result data"
+            call_args_log.append(prompt)
+            return "child done"
 
-                def _capture(prompt):
-                    call_args_log.append(prompt)
-                    return "child done"
-
-                rt.run.side_effect = _capture
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [
             SubTask(id=0, description="parent task"),
             SubTask(id=1, description="child task", depends_on=[0]),
@@ -519,24 +505,17 @@ class TestSubAgentRunnerEdges:
     def test_dependency_context_truncated_to_200_chars(self):
         """Context injected from a dependency must be capped at 200 characters."""
         long_result = "X" * 500
-        call_count = [0]
         captured_prompts: list[str] = []
 
-        def _factory():
-            call_count[0] += 1
-            rt = MagicMock()
-            if call_count[0] == 1:
-                rt.run.return_value = long_result
-            else:
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "first" in prompt:
+                return long_result
+            captured_prompts.append(prompt)
+            return "ok"
 
-                def _cap(prompt):
-                    captured_prompts.append(prompt)
-                    return "ok"
-
-                rt.run.side_effect = _cap
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [
             SubTask(id=0, description="first"),
             SubTask(id=1, description="second", depends_on=[0]),
@@ -550,26 +529,19 @@ class TestSubAgentRunnerEdges:
 
     def test_multiple_dependencies_all_injected(self):
         """A task depending on two prior steps must receive both results as context."""
-        results_by_id = {0: "alpha output", 1: "beta output"}
-        call_count = [0]
         captured: list[str] = []
 
-        def _factory():
-            call_count[0] += 1
-            idx = call_count[0] - 1
-            rt = MagicMock()
-            if idx in results_by_id:
-                rt.run.return_value = results_by_id[idx]
-            else:
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "step-a" in prompt:
+                return "alpha output"
+            if "step-b" in prompt:
+                return "beta output"
+            captured.append(prompt)
+            return "merged"
 
-                def _cap(prompt):
-                    captured.append(prompt)
-                    return "merged"
-
-                rt.run.side_effect = _cap
-            return rt
-
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [
             SubTask(id=0, description="step-a"),
             SubTask(id=1, description="step-b"),
@@ -583,18 +555,15 @@ class TestSubAgentRunnerEdges:
 
     def test_error_in_dependency_does_not_block_dependent(self):
         """A failed dependency (no result set) must not crash the dependent task."""
-        call_count = [0]
 
-        def _factory():
-            call_count[0] += 1
-            rt = MagicMock()
-            if call_count[0] == 1:
-                rt.run.side_effect = RuntimeError("dep failed")
-            else:
-                rt.run.return_value = "independent result"
-            return rt
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "bad dep" in prompt:
+                raise RuntimeError("dep failed")
+            return "independent result"
 
-        runner = SubAgentRunner(runtime_factory=_factory)
+        rt = MagicMock()
+        rt.run.side_effect = _run
+        runner = self._runner(rt)
         tasks = [
             SubTask(id=0, description="bad dep"),
             SubTask(id=1, description="good task", depends_on=[0]),

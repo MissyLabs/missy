@@ -59,6 +59,24 @@ class TestExtractTaskType:
     def test_priority_shell_file_over_shell_alone(self):
         assert extract_task_type(["shell_exec", "file_write", "calculator"]) == "shell+file"
 
+    def test_file_delete(self):
+        """file_delete is a real registered builtin tool (missy/tools/
+        builtin/__init__.py) alongside file_read/file_write, but was
+        previously missing from this classifier's file-tool set, so a
+        filesystem-cleanup task using only file_delete/list_files fell
+        through to the "chat" default.
+        """
+        assert extract_task_type(["file_delete"]) == "file"
+
+    def test_list_files(self):
+        assert extract_task_type(["list_files"]) == "file"
+
+    def test_list_files_and_file_delete_combo(self):
+        assert extract_task_type(["list_files", "file_delete", "file_delete"]) == "file"
+
+    def test_shell_and_file_delete(self):
+        assert extract_task_type(["shell_exec", "file_delete"]) == "shell+file"
+
 
 class TestExtractOutcome:
     def test_success_keywords(self):
@@ -85,6 +103,30 @@ class TestExtractOutcome:
 
     def test_empty_string(self):
         assert extract_outcome("") == "partial"
+
+    def test_words_containing_done_as_substring_are_not_misread_as_success(self):
+        """Regression: plain "done" in low substring matching previously
+        misclassified any response containing "abandoned", "undone", or
+        "condone" (all contain "done" as a literal substring) as a false
+        "success" -- even when the surrounding text clearly describes a
+        failure. This is wired into production learnings persistence, so a
+        genuine failure phrased this way was actively teaching the agent a
+        false lesson that a failed approach worked.
+        """
+        assert (
+            extract_outcome(
+                "I abandoned the task because the deployment failed and the server is down"
+            )
+            == "failure"
+        )
+        assert extract_outcome("The undone work needs revisiting") == "partial"
+        assert extract_outcome("I condone this approach for future tasks") == "partial"
+
+    def test_words_containing_worked_as_substring_are_not_misread_as_success(self):
+        assert (
+            extract_outcome("The service is networked and overworked but still running")
+            == "partial"
+        )
 
 
 class TestExtractLearnings:

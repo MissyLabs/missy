@@ -540,8 +540,10 @@ class SQLiteMemoryStore:
         Uses the FTS5 ``turns_fts`` virtual table for fast ranked search.
 
         Args:
-            query: FTS5 query string (supports prefix, phrase, and boolean
-                operators, e.g. ``"python AND async"``).
+            query: Search text, matched as a literal phrase. FTS5 prefix
+                (``*``) and boolean (``AND``/``OR``) operators are escaped
+                and treated as ordinary text rather than query syntax, to
+                prevent FTS5 syntax injection.
             limit: Maximum number of results to return.
             session_id: When given, restrict results to this session.
 

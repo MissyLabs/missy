@@ -4,6 +4,19 @@ Provides utilities for detecting multi-step compound prompts, defining
 verifiable completion conditions, and generating verification prompts that
 guide the model to confirm task outcomes.
 
+Wiring status (SR-4.4): only :func:`make_verification_prompt` is used by
+:class:`~missy.agent.runtime.AgentRuntime` today -- it's injected as a
+static prompt fragment after every round of tool results. The real,
+code-level completion gate lives in ``AgentRuntime._tool_loop()``: it
+rejects a model's "done" claim (deterministically, from the actual
+``ToolResult.is_error`` flags of the immediately preceding round, not
+from anything in this module) when that round contained an unresolved
+error, up to a bounded number of retries. :func:`is_compound_task`,
+:func:`make_done_prompt`, and the :class:`DoneCriteria` dataclass are
+not currently wired into any production code path -- they remain
+available for a future feature that surfaces the model's own declared
+per-condition completion state, but no such feature exists yet.
+
 Example::
 
     from missy.agent.done_criteria import is_compound_task, DoneCriteria

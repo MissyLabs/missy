@@ -676,6 +676,71 @@ class TestRuntimeCapabilityMode:
         assert tools == []
 
 
+class TestRunLoopPriorityTools:
+    """Regression: the AttentionSystem's ExecutiveAttention.prioritise()
+    computed priority_tools every turn, but the only production call site
+    (run()) previously only logged it at DEBUG level -- nothing downstream
+    ever acted on it, despite README.md advertising this subsystem as one
+    that "prioritizes tools." _run_loop() must now move priority_tools to
+    the front of the tool definitions sent to the provider.
+    """
+
+    def test_priority_tools_moved_to_front(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_a, tool_b, tool_c = MagicMock(), MagicMock(), MagicMock()
+        tool_a.name, tool_b.name, tool_c.name = "tool_a", "tool_b", "tool_c"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            with (
+                patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b, tool_c]),
+                patch.object(runtime, "_tool_loop", return_value=("done", [])) as mock_tool_loop,
+            ):
+                runtime._run_loop(
+                    provider=provider,
+                    system_prompt="sys",
+                    messages=[],
+                    session_id="s",
+                    task_id="t",
+                    priority_tools=["tool_c"],
+                )
+
+        ordered_names = [t.name for t in mock_tool_loop.call_args.kwargs["tools"]]
+        assert ordered_names[0] == "tool_c"
+        assert set(ordered_names) == {"tool_a", "tool_b", "tool_c"}
+
+    def test_no_priority_tools_leaves_order_unchanged(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_a, tool_b = MagicMock(), MagicMock()
+        tool_a.name, tool_b.name = "tool_a", "tool_b"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            with (
+                patch.object(runtime, "_get_tools", return_value=[tool_a, tool_b]),
+                patch.object(runtime, "_tool_loop", return_value=("done", [])) as mock_tool_loop,
+            ):
+                runtime._run_loop(
+                    provider=provider,
+                    system_prompt="sys",
+                    messages=[],
+                    session_id="s",
+                    task_id="t",
+                    priority_tools=None,
+                )
+
+        ordered_names = [t.name for t in mock_tool_loop.call_args.kwargs["tools"]]
+        assert ordered_names == ["tool_a", "tool_b"]
+
+
 class TestRuntimeExecuteTool:
     """Tests for _execute_tool error paths (lines 706-750)."""
 
@@ -822,6 +887,205 @@ class TestRuntimeExecuteTool:
         assert "path" in call_kwargs
 
 
+class TestRuntimeExecuteToolAllowSet:
+    """SR-2.3: dispatch must reject any tool name outside the per-turn
+    allow-set resolved by _get_tools() (capability_mode + tool_policy),
+    rather than trusting the registry alone. The capability_mode/
+    tool_policy layer is meant to be an earlier, independent gate --
+    without this check, a hallucinated, stale, or provider-ignored-the-
+    constraint tool name would still dispatch via the registry even
+    though it was never presented to the model for this turn."""
+
+    def test_tool_outside_allow_set_is_refused_without_reaching_registry(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ran anyway", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="1", name="shell_exec", arguments={"command": "echo hi"})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator"}
+            )
+
+        assert result.is_error is True
+        assert "not available this turn" in result.content
+        tool_reg.execute.assert_not_called()
+
+    def test_tool_inside_allow_set_dispatches_normally(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_result_mock = MagicMock()
+        tool_result_mock.success = True
+        tool_result_mock.output = "4"
+        tool_result_mock.error = None
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = tool_result_mock
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="2", name="calculator", arguments={"expr": "2+2"})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator", "file_read"}
+            )
+
+        assert result.is_error is False
+        assert result.content == "4"
+        tool_reg.execute.assert_called_once()
+
+    def test_none_allow_set_skips_check_for_backward_compatibility(self):
+        """Call sites with no resolved per-turn set (allowed_tool_names=None,
+        the default) must behave exactly as before this fix."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ok", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="3", name="anything", arguments={})
+            result = runtime._execute_tool(tc, session_id="s", task_id="t")
+
+        assert result.is_error is False
+        tool_reg.execute.assert_called_once()
+
+    def test_empty_allow_set_refuses_every_tool(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        tool_reg = MagicMock()
+        tool_reg.execute.return_value = MagicMock(success=True, output="ok", error=None)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="4", name="calculator", arguments={})
+            result = runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names=set()
+            )
+
+        assert result.is_error is True
+        tool_reg.execute.assert_not_called()
+
+    def test_denial_emits_audit_event(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        tool_reg = MagicMock()
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.agent.runtime.event_bus") as mock_bus,
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="5", name="shell_exec", arguments={})
+            runtime._execute_tool(
+                tc, session_id="s", task_id="t", allowed_tool_names={"calculator"}
+            )
+
+        assert mock_bus.publish.called
+        published_event = mock_bus.publish.call_args[0][0]
+        assert published_event.result == "deny"
+        assert published_event.detail["tool"] == "shell_exec"
+
+    def test_tool_loop_threads_resolved_allow_set_into_dispatch(self):
+        """End-to-end through _tool_loop: the exact set _get_tools()
+        resolved for this turn is what gates dispatch, not a hardcoded
+        or stale set."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.providers.base import CompletionResponse
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        calc_tool = MagicMock()
+        calc_tool.name = "calculator"
+
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["calculator"]
+        tool_reg.is_enabled.return_value = True
+        tool_reg.get.return_value = calc_tool
+        tool_reg.execute.return_value = MagicMock(
+            success=True, output="ran shell anyway", error=None
+        )
+
+        shell_call = ToolCall(id="1", name="shell_exec", arguments={"command": "echo hi"})
+        tool_response = CompletionResponse(
+            content="",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="tool_calls",
+            tool_calls=[shell_call],
+        )
+        final_response = CompletionResponse(
+            content="done",
+            model="m",
+            provider="fake",
+            usage={},
+            raw={},
+            finish_reason="stop",
+            tool_calls=None,
+        )
+        # SR-4.4: the denied shell_exec call counts as this round's error,
+        # so the done-criteria gate rejects the "done" claim and retries
+        # (up to _MAX_DONE_VERIFICATION_RETRIES) before accepting it --
+        # supply enough repeated final_response entries for that to
+        # resolve naturally without affecting what this test actually
+        # asserts (that the denied call never reaches registry.execute()).
+        provider.complete_with_tools = MagicMock(
+            side_effect=[tool_response, final_response, final_response, final_response]
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake", capability_mode="full"))
+            with patch("missy.agent.done_criteria.make_verification_prompt", return_value=""):
+                result_text, tools_used = runtime._tool_loop(
+                    provider=provider,
+                    tools=[calc_tool],
+                    system_prompt="",
+                    messages=[{"role": "user", "content": "hi"}],
+                    session_id="s",
+                    task_id="t",
+                )
+
+        # shell_exec was requested by the model but is not in the resolved
+        # `tools=[calc_tool]` set passed into _tool_loop -- it must never
+        # reach registry.execute() even though the registry itself knows
+        # nothing about a per-turn restriction.
+        tool_reg.execute.assert_not_called()
+
+
 class TestRuntimeDictsToMessages:
     """Tests for _dicts_to_messages (lines 940-951)."""
 
@@ -864,6 +1128,96 @@ class TestRuntimeDictsToMessages:
         messages = runtime._dicts_to_messages("my system", [{"role": "user", "content": "hi"}])
         assert messages[0].role == "system"
         assert messages[0].content == "my system"
+
+    def test_tool_call_only_assistant_turn_never_has_empty_content(self):
+        """Claude (and other providers) frequently emit a tool_use block
+        with no accompanying text -- behavior.py explicitly tells the model
+        to avoid preamble -- so an assistant turn's "content" is
+        legitimately "" while "tool_calls" is populated. The Anthropic
+        Messages API rejects any non-final message with empty content, so
+        re-serializing this turn verbatim on the next tool-loop round would
+        send an invalid request and abort the whole multi-round task --
+        not an edge case, since a tool-call-only assistant turn is the
+        common case for Claude.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {"role": "user", "content": "List files in /tmp"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "toolu_01", "name": "shell_exec", "arguments": {"command": "ls /tmp"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_01",
+                "name": "shell_exec",
+                "content": "a.txt",
+                "is_error": False,
+            },
+        ]
+        messages = runtime._dicts_to_messages("sys", dicts)
+
+        assert not any(m.content == "" for m in messages)
+        assistant_msg = next(m for m in messages if m.role == "assistant")
+        assert "shell_exec" in assistant_msg.content
+
+    def test_empty_content_assistant_turn_without_tool_calls_gets_placeholder(self):
+        """A second, sibling call site (the SR-4.4 done-criteria-rejection
+        retry path in _tool_loop()) appends
+        {"role": "assistant", "content": final_text} where final_text can
+        itself be "" if the provider returned blank text with
+        finish_reason="stop" -- with no "tool_calls" key at all. This is
+        the same empty-content-rejected-by-Anthropic bug fixed for the
+        tool-call-only case, just via a different, non-tool_calls trigger.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {"role": "user", "content": "Do the thing"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "do_thing", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "do_thing",
+                "content": "boom: permission denied",
+                "is_error": True,
+            },
+            {"role": "user", "content": "[verification prompt]"},
+            {"role": "assistant", "content": ""},  # no tool_calls key at all
+            {"role": "user", "content": "DONE-CRITERIA CHECK FAILED: ..."},
+        ]
+        messages = runtime._dicts_to_messages("system prompt", dicts)
+
+        assert not any(m.content == "" for m in messages)
+
+    def test_assistant_turn_with_real_content_and_tool_calls_unaffected(self):
+        """When the assistant turn already has real text alongside its
+        tool_calls, the placeholder substitution must not kick in and
+        overwrite it.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [
+            {
+                "role": "assistant",
+                "content": "Let me check that for you.",
+                "tool_calls": [{"id": "toolu_02", "name": "shell_exec", "arguments": {}}],
+            },
+        ]
+        messages = runtime._dicts_to_messages("sys", dicts)
+        assistant_msg = next(m for m in messages if m.role == "assistant")
+        assert assistant_msg.content == "Let me check that for you."
 
 
 class TestRuntimeBuildContextMessages:
@@ -994,7 +1348,10 @@ class TestRuntimeSaveTurn:
             runtime._save_turn("s1", "user", "hello")
 
     def test_save_turn_calls_memory_store(self):
+        # SQLiteMemoryStore.add_turn() takes a single ConversationTurn
+        # object, not keyword arguments (FX-B / SR-3.1 fix).
         from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.memory.sqlite_store import ConversationTurn
 
         provider = _make_provider()
         reg = _make_registry({"fake": provider})
@@ -1006,12 +1363,35 @@ class TestRuntimeSaveTurn:
 
             runtime._save_turn("s1", "assistant", "reply", provider="fake")
 
-        good_store.add_turn.assert_called_once_with(
-            session_id="s1",
-            role="assistant",
-            content="reply",
-            provider="fake",
-        )
+        good_store.add_turn.assert_called_once()
+        (turn,), _kwargs = good_store.add_turn.call_args
+        assert isinstance(turn, ConversationTurn)
+        assert turn.session_id == "s1"
+        assert turn.role == "assistant"
+        assert turn.content == "reply"
+        assert turn.provider == "fake"
+
+    def test_save_turn_failure_emits_audit_event(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            bad_store = MagicMock()
+            bad_store.add_turn.side_effect = Exception("write error")
+            runtime._memory_store = bad_store
+
+            with patch.object(runtime, "_emit_event") as mock_emit:
+                runtime._save_turn("s1", "user", "hello", task_id="t1")
+
+        mock_emit.assert_called_once()
+        _, kwargs = mock_emit.call_args
+        assert kwargs["event_type"] == "memory.persist_failed"
+        assert kwargs["result"] == "error"
+        assert kwargs["session_id"] == "s1"
+        assert kwargs["task_id"] == "t1"
 
 
 class TestRuntimeRecordLearnings:
@@ -1047,6 +1427,125 @@ class TestRuntimeRecordLearnings:
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             with patch("missy.agent.learnings.extract_learnings", return_value=mock_learning):
                 runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+    def test_record_learnings_persists_to_memory_store(self):
+        """SR-4.1: extraction alone is not enough -- the extracted
+        TaskLearning must actually be persisted via save_learning(), not
+        just logged and discarded."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        mock_learning = MagicMock()
+        mock_learning.task_type = "shell"
+        mock_learning.outcome = "success"
+        mock_learning.lesson = "ls works"
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = MagicMock()
+            with patch("missy.agent.learnings.extract_learnings", return_value=mock_learning):
+                runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+        runtime._memory_store.save_learning.assert_called_once_with(mock_learning)
+
+    def test_record_learnings_no_memory_store_does_not_raise(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = None
+            # Should not raise.
+            runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+    def test_record_learnings_save_failure_does_not_raise(self):
+        """A broken memory store must not crash the run -- persistence is
+        best-effort, matching the existing extraction error handling."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = MagicMock()
+            runtime._memory_store.save_learning.side_effect = RuntimeError("disk full")
+            # Should not raise.
+            runtime._record_learnings(["shell_exec"], "done", "run ls")
+
+    def test_record_learnings_end_to_end_via_real_sqlite_store(self, tmp_path):
+        """Live-reproduction of the fix: a real SQLiteMemoryStore must
+        actually contain the learning afterward, and get_learnings() (the
+        context-injection read path) must be able to retrieve it."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        store = SQLiteMemoryStore(db_path=str(tmp_path / "memory.db"))
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = store
+            runtime._record_learnings(["shell_exec"], "Successfully ran the command.", "run ls")
+
+        lessons = store.get_learnings(limit=5)
+        assert len(lessons) == 1
+        assert "shell" in lessons[0]
+
+    def test_record_learnings_writes_a_real_playbook_pattern_on_success(self, tmp_path):
+        """Regression: Playbook.record() (the "auto-capture successful
+        tool patterns" half of the advertised AI Playbook feature) had
+        zero production callers anywhere -- get_relevant()'s read side
+        always worked, but nothing ever wrote a pattern, so the on-disk
+        store stayed permanently empty and get_promotable()/mark_promoted()
+        (auto-promotion after 3+ successes) were permanently inert too.
+        """
+        from missy.agent.playbook import Playbook
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        playbook_path = tmp_path / "playbook.json"
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.playbook.Playbook", lambda: Playbook(store_path=str(playbook_path))),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._record_learnings(
+                ["shell_exec", "file_write"], "Successfully deployed the app.", "deploy the app"
+            )
+
+        pb = Playbook(store_path=str(playbook_path))
+        entries = pb.get_relevant("shell+file")
+        assert len(entries) == 1
+        assert entries[0].tool_sequence == ["shell_exec", "file_write"]
+        assert entries[0].success_count == 1
+
+    def test_record_learnings_does_not_write_playbook_pattern_on_failure(self, tmp_path):
+        from missy.agent.playbook import Playbook
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        playbook_path = tmp_path / "playbook.json"
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.playbook.Playbook", lambda: Playbook(store_path=str(playbook_path))),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._record_learnings(
+                ["shell_exec"], "The command failed with an error.", "run something"
+            )
+
+        pb = Playbook(store_path=str(playbook_path))
+        assert pb.get_relevant("shell") == []
 
 
 class TestRuntimeAcquireRateLimit:
@@ -1106,7 +1605,7 @@ class TestRuntimeRecordCost:
 
         with patch("missy.agent.runtime.get_registry", return_value=reg):
             runtime = AgentRuntime(AgentConfig(provider="fake"))
-            runtime._cost_tracker = None
+            runtime._cost_tracking_enabled = False
             response = MagicMock()
             # Should not raise
             runtime._record_cost(response)
@@ -1136,11 +1635,11 @@ class TestRuntimeRecordCost:
 
             store = DirectStore()
 
-            runtime._cost_tracker = cost_tracker
-            runtime._memory_store = store
+            with patch.object(runtime, "_get_cost_tracker", return_value=cost_tracker):
+                runtime._memory_store = store
 
-            response = MagicMock()
-            runtime._record_cost(response, session_id="s1")
+                response = MagicMock()
+                runtime._record_cost(response, session_id="s1")
 
         assert hasattr(store, "last_call")
         assert store.last_call["session_id"] == "s1"
@@ -1155,10 +1654,10 @@ class TestRuntimeRecordCost:
             runtime = AgentRuntime(AgentConfig(provider="fake"))
             bad_tracker = MagicMock()
             bad_tracker.record_from_response.side_effect = Exception("cost error")
-            runtime._cost_tracker = bad_tracker
 
-            # Should not raise
-            runtime._record_cost(MagicMock())
+            with patch.object(runtime, "_get_cost_tracker", return_value=bad_tracker):
+                # Should not raise
+                runtime._record_cost(MagicMock())
 
 
 class TestRuntimeToolLoop:

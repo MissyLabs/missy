@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -131,7 +132,26 @@ class PluginPolicy:
 
 @dataclass
 class ToolPolicyConfig:
-    """Controls which registered tools are exposed to an agent turn."""
+    """Controls which registered tools are exposed to an agent turn.
+
+    Attributes:
+        disabled_tools: Tool names to disable registry-wide via
+            :meth:`~missy.tools.registry.ToolRegistry.disable`, applied
+            once at tool-registration time (`missy/cli/main.py`). Unlike
+            ``deny`` (which only narrows the set *offered* to the model
+            for a given turn, re-resolved per call in
+            :meth:`~missy.agent.runtime.AgentRuntime._get_tools`),
+            disabling a tool here also makes
+            :meth:`~missy.tools.registry.ToolRegistry.execute` refuse to
+            run it outright — a stronger, execute()-level kill switch
+            that still applies even if a tool_call somehow reaches
+            ``execute()`` through a path other than the per-turn
+            resolved allow-set (e.g. a hallucinated tool name, or a
+            future call site that doesn't go through ``_get_tools()``).
+            ``ToolRegistry.disable()``/``is_enabled()`` were fully built
+            and tested but had no caller anywhere in the codebase before
+            this field existed.
+    """
 
     profile: str = "full"
     allow: list[str] = field(default_factory=list)
@@ -140,6 +160,7 @@ class ToolPolicyConfig:
     by_provider: dict[str, dict[str, Any]] = field(default_factory=dict)
     by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
     groups: dict[str, list[str]] = field(default_factory=dict)
+    disabled_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -217,6 +238,15 @@ class ProviderConfig:
             (0 = unlimited).
         max_wait_seconds: Maximum time :meth:`RateLimiter.acquire` blocks
             waiting for capacity before raising.
+        circuit_breaker_threshold: Consecutive failures before this
+            provider's :class:`~missy.agent.circuit_breaker.CircuitBreaker`
+            opens (SR-4.8 residual — previously hardcoded to the
+            breaker's own default for every provider alike, with no way
+            to give a flakier or higher-stakes provider a different
+            threshold).
+        circuit_breaker_cooldown_seconds: Initial recovery timeout in
+            seconds before this provider's breaker moves from OPEN to
+            HALF_OPEN to probe recovery.
     """
 
     name: str
@@ -231,6 +261,8 @@ class ProviderConfig:
     requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
     tokens_per_minute: int = 100_000  # RateLimiter TPM budget (0 = unlimited)
     max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
+    circuit_breaker_threshold: int = 5  # Consecutive failures before opening
+    circuit_breaker_cooldown_seconds: float = 60.0  # OPEN -> HALF_OPEN delay
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +376,12 @@ class ProactiveTriggerConfig:
     name: str
     trigger_type: str
     enabled: bool = True
-    requires_confirmation: bool = False
+    # SR-2.2: default to requiring human confirmation before an
+    # unattended proactive trigger's agent callback executes. Explicit
+    # opt-out (requires_confirmation: false) is available per trigger for
+    # operators who have reviewed a specific trigger and want it to
+    # auto-run.
+    requires_confirmation: bool = True
     prompt_template: str = ""
     watch_path: str = ""
     watch_patterns: list = field(default_factory=list)
@@ -418,7 +455,91 @@ class MissyConfig:
 # ---------------------------------------------------------------------------
 
 
+def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None:
+    """Warn when a YAML config section has keys its dataclass doesn't define.
+
+    Config parsing has historically been silently forgiving of typos or
+    stale/renamed keys -- e.g. a real operator config carried
+    ``shell.unrestricted: true`` for a field ``ShellPolicy`` never had,
+    dead since a stricter fail-closed rewrite made an empty
+    ``allowed_commands`` deny everything regardless. The operator had no
+    signal that the key they added did nothing. This never fails config
+    loading (a stricter posture would be a breaking change for anyone
+    with genuinely-extra keys); it only logs a visible warning so a typo
+    or a config written against a different Missy version doesn't
+    silently produce a different security posture than the operator
+    believes they configured.
+
+    The known-key set is derived directly from *schema*'s own
+    dataclass fields rather than a separately maintained list, so it
+    can never drift out of sync as fields are added, renamed, or
+    removed.
+
+    Args:
+        section: Human-readable name of the YAML section (e.g. ``"shell"``).
+        data: The raw dict parsed from that YAML section.
+        schema: The dataclass type the section is parsed into.
+    """
+    known = {f.name for f in dataclass_fields(schema)}
+    unknown = set(data.keys()) - known
+    if unknown:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Config section '%s' has unrecognized key(s) (ignored): %s -- "
+            "check for typos or a field renamed/removed in this Missy version.",
+            section,
+            ", ".join(sorted(unknown)),
+        )
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    """Coerce a YAML-sourced value to a bool, failing loud on ambiguous strings.
+
+    Guards against a realistic operator/tooling mistake: quoting a
+    boolean literal in YAML (e.g. ``enabled: "false"``) parses as the
+    Python string ``"false"``, not ``False``. A bare ``bool("false")`` is
+    ``True`` (any non-empty string is truthy in Python), which would
+    silently invert a security-relevant flag like ``shell.enabled`` or
+    ``plugins.enabled`` the operator explicitly tried to disable -- with
+    no error, warning, or log line anywhere. This function recognizes the
+    common human-readable string forms and raises rather than silently
+    coercing anything else via Python's truthiness rules.
+
+    Args:
+        value: The raw value from the parsed YAML mapping (``None`` if
+            the key was absent -- callers pass ``data.get(key)`` with no
+            default so this function is the single place that applies
+            *default*).
+        default: Value to use when *value* is ``None``.
+
+    Returns:
+        The coerced boolean.
+
+    Raises:
+        ConfigurationError: If *value* is a string that isn't a
+            recognized boolean spelling.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "yes", "on", "1"):
+            return True
+        if lowered in ("false", "no", "off", "0"):
+            return False
+        raise ConfigurationError(
+            f"Cannot interpret {value!r} as a boolean. Use an unquoted "
+            "YAML boolean (true/false) or one of: true/false, yes/no, "
+            "on/off, 1/0."
+        )
+    return bool(value)
+
+
 def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
+    _warn_unknown_keys("network", data, NetworkPolicy)
     presets = list(data.get("presets", []))
     allowed_hosts = list(data.get("allowed_hosts", []))
     allowed_domains = list(data.get("allowed_domains", []))
@@ -452,7 +573,7 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
                 existing_cidrs.add(c)
 
     return NetworkPolicy(
-        default_deny=bool(data.get("default_deny", True)),
+        default_deny=_coerce_bool(data.get("default_deny"), True),
         allowed_cidrs=allowed_cidrs,
         allowed_domains=allowed_domains,
         allowed_hosts=allowed_hosts,
@@ -465,6 +586,7 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
 
 
 def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
+    _warn_unknown_keys("filesystem", data, FilesystemPolicy)
     return FilesystemPolicy(
         allowed_write_paths=list(data.get("allowed_write_paths", [])),
         allowed_read_paths=list(data.get("allowed_read_paths", [])),
@@ -472,15 +594,17 @@ def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
 
 
 def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
+    _warn_unknown_keys("shell", data, ShellPolicy)
     return ShellPolicy(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         allowed_commands=list(data.get("allowed_commands", [])),
     )
 
 
 def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
+    _warn_unknown_keys("plugins", data, PluginPolicy)
     return PluginPolicy(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         allowed_plugins=list(data.get("allowed_plugins", [])),
     )
 
@@ -545,6 +669,7 @@ def _parse_tool_policy(data: Any, *, context: str = "tools") -> ToolPolicyConfig
             context=f"{context}.byModel",
         ),
         groups=_parse_tool_groups(data.get("groups"), context=f"{context}.groups"),
+        disabled_tools=_as_list_of_strings(data.get("disabled_tools")),
     )
 
 
@@ -572,14 +697,14 @@ def _parse_tool_intelligence(data: Any) -> ToolIntelligenceConfig:
             f"got {type(candidate_runtime).__name__}."
         )
     return ToolIntelligenceConfig(
-        candidate_generation_enabled=bool(candidate_gen.get("enabled", False)),
+        candidate_generation_enabled=_coerce_bool(candidate_gen.get("enabled"), False),
         min_pattern_count=int(candidate_gen.get("min_pattern_count", 3)),
-        allow_shell=bool(candidate_gen.get("allow_shell", False)),
+        allow_shell=_coerce_bool(candidate_gen.get("allow_shell"), False),
         check_every_n_requests=int(candidate_gen.get("check_every_n_requests", 5)),
-        provider_gating_enabled=bool(provider_gating.get("enabled", False)),
+        provider_gating_enabled=_coerce_bool(provider_gating.get("enabled"), False),
         provider_gating_min_samples=int(provider_gating.get("min_samples", 3)),
         provider_gating_min_composite=float(provider_gating.get("min_composite", 0.4)),
-        candidate_runtime_loading_enabled=bool(candidate_runtime.get("enabled", False)),
+        candidate_runtime_loading_enabled=_coerce_bool(candidate_runtime.get("enabled"), False),
     )
 
 
@@ -609,8 +734,18 @@ def _parse_agents(data: Any) -> dict[str, AgentPolicyConfig]:
     return agents
 
 
-def _resolve_vault_ref(value: str | None) -> str | None:
+def _resolve_vault_ref(value: str | None, vault_dir: str = "~/.missy/secrets") -> str | None:
     """Resolve a ``vault://`` or ``$ENV`` reference in a config value.
+
+    Args:
+        value: The raw config value, possibly a ``vault://`` or ``$ENV``
+            reference.
+        vault_dir: The directory to open the vault from -- must match
+            the ``vault.vault_dir`` setting from the same config file, or
+            a reference will silently fail to resolve against a
+            differently-configured vault (see the caller in
+            :func:`load_config`, which threads the real configured value
+            through here instead of always using ``Vault()``'s default).
 
     Returns the resolved secret string, or the original value unchanged
     if it is not a vault/env reference.  Returns ``None`` if *value* is
@@ -622,7 +757,7 @@ def _resolve_vault_ref(value: str | None) -> str | None:
         try:
             from missy.security.vault import Vault
 
-            return Vault().resolve(value)
+            return Vault(vault_dir).resolve(value)
         except Exception:
             import logging
 
@@ -632,7 +767,9 @@ def _resolve_vault_ref(value: str | None) -> str | None:
     return value
 
 
-def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
+def _parse_providers(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> dict[str, ProviderConfig]:
     providers: dict[str, ProviderConfig] = {}
     for key, raw in data.items():
         if not isinstance(raw, dict):
@@ -641,6 +778,7 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             )
         if "model" not in raw:
             raise ConfigurationError(f"Provider '{key}' is missing required field 'model'.")
+        _warn_unknown_keys(f"providers.{key}", raw, ProviderConfig)
         api_keys = list(raw.get("api_keys", []))
         env_key = f"{key.upper().replace('-', '_')}_API_KEY"
         api_key = raw.get("api_key") or os.environ.get(env_key)
@@ -649,28 +787,32 @@ def _parse_providers(data: dict[str, Any]) -> dict[str, ProviderConfig]:
             api_key = api_keys[0]
         # Resolve vault:// and $ENV references so providers receive the
         # actual secret, not the reference string.
-        api_key = _resolve_vault_ref(api_key)
-        api_keys = [_resolve_vault_ref(k) or k for k in api_keys]
+        api_key = _resolve_vault_ref(api_key, vault_dir)
+        api_keys = [_resolve_vault_ref(k, vault_dir) or k for k in api_keys]
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
             api_key=api_key,
             base_url=raw.get("base_url"),
             timeout=int(raw.get("timeout", 30)),
-            enabled=bool(raw.get("enabled", True)),
+            enabled=_coerce_bool(raw.get("enabled"), True),
             api_keys=api_keys,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
             requests_per_minute=int(raw.get("requests_per_minute", 60)),
             tokens_per_minute=int(raw.get("tokens_per_minute", 100_000)),
             max_wait_seconds=float(raw.get("max_wait_seconds", 30.0)),
+            circuit_breaker_threshold=int(raw.get("circuit_breaker_threshold", 5)),
+            circuit_breaker_cooldown_seconds=float(
+                raw.get("circuit_breaker_cooldown_seconds", 60.0)
+            ),
         )
     return providers
 
 
 def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
     return SchedulingPolicy(
-        enabled=bool(data.get("enabled", True)),
+        enabled=_coerce_bool(data.get("enabled"), True),
         max_jobs=int(data.get("max_jobs", 0)),
         active_hours=str(data.get("active_hours", "")),
     )
@@ -678,7 +820,7 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
 
 def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
     return HeartbeatConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         interval_seconds=int(data.get("interval_seconds", 1800)),
         workspace=str(data.get("workspace", "~/workspace")),
         active_hours=str(data.get("active_hours", "")),
@@ -687,7 +829,7 @@ def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
 
 def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
     return ObservabilityConfig(
-        otel_enabled=bool(data.get("otel_enabled", False)),
+        otel_enabled=_coerce_bool(data.get("otel_enabled"), False),
         otel_endpoint=str(data.get("otel_endpoint", "http://localhost:4317")),
         otel_protocol=str(data.get("otel_protocol", "grpc")),
         otel_service_name=str(data.get("otel_service_name", "missy")),
@@ -698,7 +840,7 @@ def _parse_observability(data: dict[str, Any]) -> ObservabilityConfig:
 
 def _parse_vault(data: dict[str, Any]) -> VaultConfig:
     return VaultConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         vault_dir=str(data.get("vault_dir", "~/.missy/secrets")),
     )
 
@@ -720,12 +862,12 @@ def _parse_proactive_trigger(raw: Any) -> ProactiveTriggerConfig:
     return ProactiveTriggerConfig(
         name=str(name),
         trigger_type=str(trigger_type),
-        enabled=bool(raw.get("enabled", True)),
-        requires_confirmation=bool(raw.get("requires_confirmation", False)),
+        enabled=_coerce_bool(raw.get("enabled"), True),
+        requires_confirmation=_coerce_bool(raw.get("requires_confirmation"), True),
         prompt_template=str(raw.get("prompt_template", "")),
         watch_path=str(raw.get("watch_path", "")),
         watch_patterns=list(raw.get("watch_patterns", [])),
-        watch_recursive=bool(raw.get("watch_recursive", False)),
+        watch_recursive=_coerce_bool(raw.get("watch_recursive"), False),
         disk_path=str(raw.get("disk_path", "/")),
         disk_threshold_pct=float(raw.get("disk_threshold_pct", 90.0)),
         load_threshold=float(raw.get("load_threshold", 4.0)),
@@ -738,7 +880,7 @@ def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
     """Parse the ``proactive`` section of a Missy config dict."""
     triggers = [_parse_proactive_trigger(raw) for raw in data.get("triggers", [])]
     return ProactiveConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         triggers=triggers,
     )
 
@@ -753,7 +895,7 @@ def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
 def _parse_vision(data: dict[str, Any]) -> VisionConfig:
     """Parse the ``vision`` section of a Missy config dict."""
     return VisionConfig(
-        enabled=bool(data.get("enabled", True)),
+        enabled=_coerce_bool(data.get("enabled"), True),
         preferred_device=str(data.get("preferred_device", "")),
         capture_width=int(data.get("capture_width", 1920)),
         capture_height=int(data.get("capture_height", 1080)),
@@ -812,12 +954,21 @@ def load_config(path: str) -> MissyConfig:
         )
 
     try:
+        # Extracted once, up front, so both providers and Discord accounts
+        # resolve vault:// references against the vault directory the user
+        # actually configured -- previously each resolution path opened
+        # Vault() with its hardcoded default path, silently ignoring a
+        # custom vault.vault_dir and returning the unresolved reference
+        # string as the "secret" (a broken provider API key or bot token
+        # with no clear diagnostic pointing at the mismatch).
+        vault_dir = str((data.get("vault") or {}).get("vault_dir", "~/.missy/secrets"))
+
         discord_raw = data.get("discord")
         discord_cfg: DiscordConfig | None = None
         if discord_raw is not None:
             from missy.channels.discord.config import parse_discord_config
 
-            discord_cfg = parse_discord_config(discord_raw)
+            discord_cfg = parse_discord_config(discord_raw, vault_dir=vault_dir)
 
         return MissyConfig(
             network=_parse_network(data.get("network") or {}),
@@ -827,7 +978,7 @@ def load_config(path: str) -> MissyConfig:
             tools=_parse_tool_policy(data.get("tools"), context="tools"),
             agents=_parse_agents(data.get("agents")),
             tool_intelligence=_parse_tool_intelligence(data.get("tool_intelligence")),
-            providers=_parse_providers(data.get("providers") or {}),
+            providers=_parse_providers(data.get("providers") or {}, vault_dir=vault_dir),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
             discord=discord_cfg,

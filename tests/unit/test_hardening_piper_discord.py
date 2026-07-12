@@ -122,7 +122,7 @@ class TestAgentToolLoopEdgeCases:
         rt._rate_limiter = None
         rt._context_manager = None
         rt._memory_store = None
-        rt._cost_tracker = None
+        rt._cost_tracking_enabled = False
         rt._sanitizer = None
         rt._pending_recovery = []
         rt._progress = MagicMock()

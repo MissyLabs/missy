@@ -197,6 +197,38 @@ class TestResizeAlreadySmall:
 # ---------------------------------------------------------------------------
 
 
+class TestResizeExtremeAspectRatio:
+    """Regression: a frame with an extreme aspect ratio (e.g. a
+    corrupted/glitched capture with a 1px-thin dimension) scales the
+    short side down to 0 before clamping, and cv2.resize() rejects a
+    zero target dimension with "Assertion failed) inv_scale_x > 0"
+    instead of a catchable ValueError -- crashing the whole pipeline on
+    that one frame instead of degrading it to a thin-but-valid image.
+    """
+
+    def test_extreme_tall_aspect_ratio_does_not_crash(self) -> None:
+        pipe = _pipeline()
+        img = _bgr(3000, 1)  # 1px wide, 3000px tall
+        result = pipe.resize(img, 1280)
+        assert result.shape[0] == 1280
+        assert result.shape[1] >= 1
+
+    def test_extreme_wide_aspect_ratio_does_not_crash(self) -> None:
+        pipe = _pipeline()
+        img = _bgr(1, 3000)  # 3000px wide, 1px tall
+        result = pipe.resize(img, 1280)
+        assert result.shape[1] == 1280
+        assert result.shape[0] >= 1
+
+    def test_full_process_pipeline_survives_extreme_aspect_ratio(self) -> None:
+        """The full process() pipeline (not just resize() in isolation)
+        must not crash on this shape either."""
+        pipe = _pipeline(normalize_exposure=True, target_dimension=1280)
+        img = _bgr(3000, 1)
+        result = pipe.process(img)
+        assert result is not None
+
+
 class TestResizeZeroMaxDim:
     """max_dim=0 is explicitly invalid and must raise ValueError."""
 

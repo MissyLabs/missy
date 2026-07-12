@@ -21,6 +21,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from missy.channels.voice.registry import EdgeNode
 from missy.cli.main import cli
 from tests.cli.conftest import _make_cli_runner
 
@@ -526,6 +527,7 @@ class TestDoctor:
         mock_job = MagicMock()
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [mock_job, mock_job, mock_job]
+        mock_mgr.load_jobs.return_value = [mock_job, mock_job, mock_job]
 
         with (
             _SubsystemsPatch(),
@@ -544,6 +546,7 @@ class TestDoctor:
         mock_registry.list_providers.return_value = []
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
+        mock_mgr.load_jobs.return_value = []
 
         with (
             _SubsystemsPatch() as cfg,
@@ -1021,6 +1024,7 @@ class TestScheduleList:
         cfg_path = _write_temp_config()
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = []
+        mock_mgr.load_jobs.return_value = []
 
         with (
             _SubsystemsPatch(),
@@ -1044,6 +1048,7 @@ class TestScheduleList:
         job.name = "Daily digest"
         job.schedule = "daily at 09:00"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         job.enabled = True
         job.run_count = 0
         job.last_run = None
@@ -1051,6 +1056,7 @@ class TestScheduleList:
 
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
+        mock_mgr.load_jobs.return_value = [job]
 
         with (
             _SubsystemsPatch(),
@@ -1074,6 +1080,7 @@ class TestScheduleList:
         job.name = "Hourly check"
         job.schedule = "every hour"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         job.enabled = True
         job.run_count = 5
         job.last_run = None
@@ -1081,6 +1088,7 @@ class TestScheduleList:
 
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = [job]
+        mock_mgr.load_jobs.return_value = [job]
 
         with (
             _SubsystemsPatch(),
@@ -1105,6 +1113,7 @@ class TestScheduleList:
             job.name = name
             job.schedule = schedule
             job.provider = "anthropic"
+            job.capability_mode = "safe-chat"
             job.enabled = True
             job.run_count = 0
             job.last_run = None
@@ -1114,6 +1123,7 @@ class TestScheduleList:
         jobs = [make_job("Task A", "every 5 minutes"), make_job("Task B", "daily at 08:00")]
         mock_mgr = MagicMock()
         mock_mgr.list_jobs.return_value = jobs
+        mock_mgr.load_jobs.return_value = jobs
 
         with (
             _SubsystemsPatch(),
@@ -1142,7 +1152,7 @@ class TestDevicesList:
     def test_devices_list_no_nodes(self, runner: CliRunner) -> None:
         """When no nodes are registered, prints 'No edge nodes registered'."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = []
+        mock_reg.list_nodes.return_value = []
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
             result = runner.invoke(cli, ["devices", "list"])
@@ -1153,15 +1163,15 @@ class TestDevicesList:
     def test_devices_list_shows_node_id(self, runner: CliRunner) -> None:
         """A registered node's truncated ID appears in the table."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "abcdef1234567890",
-                "name": "Kitchen Pi",
-                "room": "kitchen",
-                "paired": True,
-                "policy": "full",
-                "last_seen": None,
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="abcdef1234567890",
+                friendly_name="Kitchen Pi",
+                room="kitchen",
+                ip_address="",
+                paired=True,
+                last_seen=0.0,
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
@@ -1173,15 +1183,15 @@ class TestDevicesList:
     def test_devices_list_shows_node_name_and_room(self, runner: CliRunner) -> None:
         """Node name and room appear in the output."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "node-111-aaa",
-                "name": "Bedroom Speaker",
-                "room": "bedroom",
-                "paired": True,
-                "policy": "full",
-                "last_seen": None,
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="node-111-aaa",
+                friendly_name="Bedroom Speaker",
+                room="bedroom",
+                ip_address="",
+                paired=True,
+                last_seen=0.0,
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
@@ -1194,15 +1204,15 @@ class TestDevicesList:
     def test_devices_list_shows_pending_status(self, runner: CliRunner) -> None:
         """An unpaired node shows 'pending' status."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "node-pending-xyz",
-                "name": "New Device",
-                "room": "office",
-                "paired": False,
-                "policy": "full",
-                "last_seen": None,
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="node-pending-xyz",
+                friendly_name="New Device",
+                room="office",
+                ip_address="",
+                paired=False,
+                last_seen=0.0,
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):
@@ -1214,15 +1224,15 @@ class TestDevicesList:
     def test_devices_list_last_seen_never(self, runner: CliRunner) -> None:
         """A node with no last_seen timestamp shows 'never'."""
         mock_reg = MagicMock()
-        mock_reg.all.return_value = [
-            {
-                "node_id": "node-no-ts",
-                "name": "Silent Node",
-                "room": "garage",
-                "paired": True,
-                "policy": "full",
-                "last_seen": None,
-            }
+        mock_reg.list_nodes.return_value = [
+            EdgeNode(
+                node_id="node-no-ts",
+                friendly_name="Silent Node",
+                room="garage",
+                ip_address="",
+                paired=True,
+                last_seen=0.0,
+            )
         ]
 
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg):

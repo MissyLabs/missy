@@ -82,7 +82,10 @@ def test_repeated_error_fingerprint_injects_lastToolError():
     from missy.agent.runtime import AgentConfig, AgentRuntime
     from missy.providers.base import CompletionResponse, ToolCall, ToolResult
 
-    config = AgentConfig(max_iterations=4)
+    # SR-4.4: a "stop" response following an errored tool round is now
+    # rejected and retried up to _MAX_DONE_VERIFICATION_RETRIES (2) times
+    # before being accepted -- allow enough iterations/responses for that.
+    config = AgentConfig(max_iterations=6)
     rt = AgentRuntime(config)
 
     provider = MagicMock()
@@ -111,14 +114,17 @@ def test_repeated_error_fingerprint_injects_lastToolError():
         tool_calls=None,
         **_base,
     )
-    # Return tool_calls twice, then stop
+    # Return tool_calls twice, then stop (repeated to satisfy the SR-4.4
+    # done-criteria retry gate, since the tool call never actually succeeds).
     provider.complete_with_tools.side_effect = [
         tool_response,
         tool_response,
         final_response,
+        final_response,
+        final_response,
     ]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         return error_tr
 
     rt._execute_tool = mock_execute  # type: ignore[method-assign]
@@ -141,6 +147,107 @@ def test_repeated_error_fingerprint_injects_lastToolError():
     # What we can assert is that the final text was returned without exception.
     assert isinstance(result_text, str)
     assert "shell_exec" in tools_used
+
+
+def test_strategy_rotation_fires_for_non_last_tool_in_a_multi_tool_round():
+    """Regression: `should_inject` was a single bool overwritten (not
+    accumulated) on every iteration of the per-round tool-call loop. If an
+    EARLIER tool call in a round crosses its failure threshold but a LATER
+    one in the same round succeeds, the True flag from the earlier call was
+    silently clobbered by the later call's False -- the strategy-rotation
+    prompt was never injected for that round even though FailureTracker's
+    own per-tool state correctly recorded the threshold crossing. Providers
+    that support parallel tool calling make this a real scenario: three
+    rounds build shell_exec up to 3 consecutive failures (the default
+    threshold), with round 3 also calling read_file (which succeeds) in
+    the SAME round, ordered AFTER shell_exec in tool_calls.
+    """
+    from missy.agent.runtime import AgentConfig, AgentRuntime
+    from missy.providers.base import CompletionResponse, ToolCall, ToolResult
+
+    config = AgentConfig(max_iterations=8)
+    rt = AgentRuntime(config)
+
+    provider = MagicMock()
+    provider.name = "mock_provider"
+    provider.accepts_message_dicts = False
+
+    shell_tc = ToolCall(id="tc-shell", name="shell_exec", arguments={"command": "fail"})
+    read_tc = ToolCall(id="tc-read", name="read_file", arguments={"path": "/tmp/x"})
+    shell_error_tr = ToolResult(
+        tool_call_id="tc-shell",
+        name="shell_exec",
+        content="permission denied",
+        is_error=True,
+    )
+    read_ok_tr = ToolResult(
+        tool_call_id="tc-read",
+        name="read_file",
+        content="file contents",
+        is_error=False,
+    )
+
+    _base = {"model": "mock", "provider": "mock_provider", "usage": {}, "raw": {}}
+    round1 = CompletionResponse(
+        content="", finish_reason="tool_calls", tool_calls=[shell_tc], **_base
+    )
+    round2 = CompletionResponse(
+        content="", finish_reason="tool_calls", tool_calls=[shell_tc], **_base
+    )
+    # Round 3: shell_exec (3rd consecutive failure, crosses threshold=3)
+    # ordered BEFORE read_file (succeeds) in the same round.
+    round3 = CompletionResponse(
+        content="", finish_reason="tool_calls", tool_calls=[shell_tc, read_tc], **_base
+    )
+    final_response = CompletionResponse(
+        content="Done.", finish_reason="stop", tool_calls=None, **_base
+    )
+    provider.complete_with_tools.side_effect = [
+        round1,
+        round2,
+        round3,
+        final_response,
+        final_response,
+        final_response,
+    ]
+
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
+        return shell_error_tr if tc.name == "shell_exec" else read_ok_tr
+
+    rt._execute_tool = mock_execute  # type: ignore[method-assign]
+
+    with patch("missy.agent.done_criteria.make_verification_prompt", return_value="[verify]"):
+        rt._tool_loop(
+            provider=provider,
+            tools=[],
+            system_prompt="",
+            messages=[{"role": "user", "content": "do the thing"}],
+            session_id="test-sess",
+            task_id="test-task",
+            user_input="do the thing",
+        )
+
+    # The round-4 call (the first call made AFTER round 3's results were
+    # appended) must have received the strategy-rotation prompt for
+    # shell_exec in its messages -- not silently dropped because
+    # read_file's success came later in the same round.
+    round4_messages = provider.complete_with_tools.call_args_list[3].args[0]
+
+    def _role(m: object) -> str:
+        return m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+
+    def _content(m: object) -> str:
+        return str(m.get("content", "")) if isinstance(m, dict) else str(getattr(m, "content", ""))
+
+    injected = [
+        m
+        for m in round4_messages
+        if _role(m) == "user" and "shell_exec" in _content(m) and "failed" in _content(m)
+    ]
+    assert injected, (
+        f"expected a strategy-rotation prompt for shell_exec in round 4's messages, "
+        f"got: {round4_messages}"
+    )
 
 
 def test_successful_retry_clears_fingerprint_error():
@@ -177,7 +284,7 @@ def test_successful_retry_clears_fingerprint_error():
     )
     provider.complete_with_tools.side_effect = [tool_response, final_response]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         return success_tr
 
     rt._execute_tool = mock_execute  # type: ignore[method-assign]
@@ -202,7 +309,10 @@ def test_different_args_do_not_trigger_mutation_injection():
     from missy.agent.runtime import AgentConfig, AgentRuntime
     from missy.providers.base import CompletionResponse, ToolCall, ToolResult
 
-    config = AgentConfig(max_iterations=4)
+    # SR-4.4: tc2 also errors (error_tr2), so the done-criteria gate still
+    # rejects/retries the "stop" claim even though the two calls don't
+    # share a mutation fingerprint -- allow enough iterations/responses.
+    config = AgentConfig(max_iterations=6)
     rt = AgentRuntime(config)
 
     provider = MagicMock()
@@ -219,11 +329,11 @@ def test_different_args_do_not_trigger_mutation_injection():
     resp1 = CompletionResponse(content="", finish_reason="tool_calls", tool_calls=[tc1], **_base)
     resp2 = CompletionResponse(content="", finish_reason="tool_calls", tool_calls=[tc2], **_base)
     final = CompletionResponse(content="All done.", finish_reason="stop", tool_calls=None, **_base)
-    provider.complete_with_tools.side_effect = [resp1, resp2, final]
+    provider.complete_with_tools.side_effect = [resp1, resp2, final, final, final]
 
     call_count = [0]
 
-    def mock_execute(tc, session_id="", task_id=""):
+    def mock_execute(tc, session_id="", task_id="", **_kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
             return error_tr1

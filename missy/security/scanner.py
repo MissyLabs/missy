@@ -18,16 +18,18 @@ Example::
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from missy.config.settings import MissyConfig
@@ -331,6 +333,16 @@ class SecurityScanner:
         self.config_path = Path(config_path).expanduser()
         self.missy_dir = Path(missy_dir).expanduser()
         self._findings: list[Finding] = []
+        # Raw (pre-vault-resolution) provider api_key/api_keys strings, keyed
+        # by provider name -- populated by _try_load_config() from the raw
+        # YAML file. load_config() resolves "vault://KEY"/"$ENV" references
+        # into the actual secret before constructing ProviderConfig, so by
+        # the time self.config.providers[...].api_key is inspected it's
+        # already plaintext, indistinguishable from a key typed directly
+        # into config.yaml -- see SEC-002/SEC-060 below. Empty when a config
+        # was passed in directly (no file to re-read raw), which preserves
+        # prior behavior for that construction path.
+        self._raw_provider_keys: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -402,6 +414,7 @@ class SecurityScanner:
             from missy.config.settings import load_config
 
             self.config = load_config(str(self.config_path))
+            self._load_raw_provider_keys()
         except Exception as exc:
             self._add(
                 Finding(
@@ -417,6 +430,31 @@ class SecurityScanner:
                     details={"path": str(self.config_path), "error": str(exc)},
                 )
             )
+
+    def _load_raw_provider_keys(self) -> None:
+        """Populate ``self._raw_provider_keys`` from the raw YAML file.
+
+        Best-effort: any failure here just leaves ``_raw_provider_keys``
+        empty, which makes SEC-002/SEC-060 fall back to inspecting the
+        already-resolved ``ProviderConfig.api_key`` (the pre-existing
+        behavior) rather than raising or blocking the rest of the scan.
+        """
+        try:
+            import yaml
+
+            with open(self.config_path, encoding="utf-8") as fh:
+                raw_data = yaml.safe_load(fh) or {}
+            raw_providers = raw_data.get("providers") or {}
+            if not isinstance(raw_providers, dict):
+                return
+            for name, raw_cfg in raw_providers.items():
+                if isinstance(raw_cfg, dict):
+                    self._raw_provider_keys[str(name)] = {
+                        "api_key": raw_cfg.get("api_key"),
+                        "api_keys": raw_cfg.get("api_keys") or [],
+                    }
+        except Exception:
+            logger.debug("Could not read raw provider keys from config file", exc_info=True)
 
     # ------------------------------------------------------------------
     # Check: config security (SEC-001 .. SEC-004)
@@ -470,7 +508,14 @@ class SecurityScanner:
 
         # SEC-002: Plaintext API keys in config
         for provider_name, provider_cfg in self.config.providers.items():
-            raw_key = provider_cfg.api_key or ""
+            # Prefer the raw, pre-vault-resolution reference string when
+            # available (real file load) -- load_config() already resolved
+            # provider_cfg.api_key into the actual secret, so checking that
+            # directly would flag every correctly-vaulted key as plaintext.
+            # Falls back to provider_cfg.api_key when no raw file was read
+            # (e.g. a MissyConfig constructed and passed in directly).
+            raw_entry = self._raw_provider_keys.get(provider_name)
+            raw_key = (raw_entry["api_key"] if raw_entry else provider_cfg.api_key) or ""
             # Only flag real keys — skip vault/env references and short tokens.
             if raw_key and not raw_key.startswith(("vault://", "$")) and len(raw_key.strip()) > 10:
                 self._add(
@@ -552,8 +597,28 @@ class SecurityScanner:
             )
 
         # SEC-011: Overly broad CIDR allowances
-        _OPEN_CIDRS = {"0.0.0.0/0", "::/0", "0.0.0.0/1", "128.0.0.0/1"}
-        broad_cidrs = [c for c in net.allowed_cidrs if c in _OPEN_CIDRS]
+        #
+        # Real enforcement (policy/network.py) parses every configured CIDR
+        # via ipaddress.ip_network(cidr, strict=False), which normalizes
+        # host bits away -- so "1.2.3.4/1"/"10.0.0.0/1"/"8.8.8.8/0" are
+        # functionally identical to "0.0.0.0/1"/"0.0.0.0/0" (half or all of
+        # the IPv4 space). A bare string-set membership check (as this used
+        # to be) never catches these differently-written-but-equally-broad
+        # CIDRs -- the same "realistic-input matching" bug class already
+        # fixed for SEC-013. Normalize the same way the real engine does
+        # before comparing.
+        _OPEN_NETWORKS = {
+            ipaddress.ip_network(c, strict=False)
+            for c in ("0.0.0.0/0", "::/0", "0.0.0.0/1", "128.0.0.0/1")
+        }
+
+        def _is_overly_broad_cidr(cidr: str) -> bool:
+            try:
+                return ipaddress.ip_network(cidr, strict=False) in _OPEN_NETWORKS
+            except ValueError:
+                return False
+
+        broad_cidrs = [c for c in net.allowed_cidrs if _is_overly_broad_cidr(c)]
         if broad_cidrs:
             self._add(
                 Finding(
@@ -600,12 +665,24 @@ class SecurityScanner:
             )
 
         # SEC-013: Wildcard domains too broad
-        _VERY_BROAD = {".com", ".net", ".org", ".io", ".co"}
+        #
+        # NetworkPolicyEngine._check_domain() (missy/policy/network.py) only
+        # treats a "*."-prefixed entry as a wildcard; a bare entry like
+        # "anthropic.com" is an EXACT match only and never matches any other
+        # host. The previous heuristic here (endswith(".com") etc. with
+        # count(".") <= 1) flagged every ordinary, fully-specific apex
+        # domain -- e.g. "anthropic.com" or "github.com" -- as "matching
+        # almost any public hostname", which is simply false under the
+        # actual matching semantics: only a genuine wildcard entry over a
+        # bare TLD (e.g. "*.com") actually matches an unbounded set of
+        # hosts. Live-verified: a config with allowed_domains=["anthropic.com"]
+        # (textbook-correct, narrow allowlisting) triggered a HIGH-severity
+        # false positive under the old logic.
+        _VERY_BROAD_SUFFIXES = {"com", "net", "org", "io", "co"}
         broad_domains = [
             d
             for d in net.allowed_domains
-            if any(d == suffix or d.endswith(suffix) for suffix in _VERY_BROAD)
-            and d.count(".") <= 1
+            if d.lower().startswith("*.") and d.lower()[2:] in _VERY_BROAD_SUFFIXES
         ]
         if broad_domains:
             self._add(
@@ -660,13 +737,21 @@ class SecurityScanner:
             )
 
         # SEC-021: Write access to sensitive directories
+        def _under_sensitive_prefix(path_str: str) -> bool:
+            # A bare `str.startswith(prefix)` has no path-segment boundary,
+            # so an unrelated path that merely shares the prefix's
+            # characters (e.g. "/etcd-data", "/usrlocal-apps", "/bootstrap")
+            # false-positives identically to the already-fixed SEC-013
+            # apex-domain bug. Require an exact match or a following "/".
+            return any(
+                path_str == prefix or path_str.startswith(prefix + "/")
+                for prefix in _SENSITIVE_WRITE_PREFIXES
+            )
+
         sensitive_writes = [
             p
             for p in fs.allowed_write_paths
-            if any(
-                Path(p).expanduser().as_posix().startswith(prefix)
-                for prefix in _SENSITIVE_WRITE_PREFIXES
-            )
+            if _under_sensitive_prefix(Path(p).expanduser().as_posix())
             or str(p) in ("/", "~", str(Path.home()))
         ]
         if sensitive_writes:
@@ -727,6 +812,14 @@ class SecurityScanner:
             return  # Shell disabled — no shell findings
 
         allowed = set(shell.allowed_commands)
+        # ShellPolicyEngine._match_allowed() matches by *basename*, so an
+        # entry like "/usr/bin/rm" permits "rm" execution exactly as if
+        # the bare name were listed (a common hardening convention to
+        # avoid PATH hijacking). Comparing `allowed` as literal strings
+        # against bare-name sets below would miss any path-qualified
+        # dangerous/interpreter entry entirely; compare basenames instead
+        # so the scanner sees what the real policy actually permits.
+        allowed_basenames = {os.path.basename(cmd) for cmd in allowed}
 
         # SEC-030: Shell enabled with no allowlist (anything goes)
         if not allowed:
@@ -751,7 +844,8 @@ class SecurityScanner:
             return  # further checks are moot
 
         # SEC-031: Dangerous commands in allowlist
-        dangerous = allowed & _DANGEROUS_COMMANDS
+        dangerous_basenames = allowed_basenames & _DANGEROUS_COMMANDS
+        dangerous = {cmd for cmd in allowed if os.path.basename(cmd) in dangerous_basenames}
         if dangerous:
             self._add(
                 Finding(
@@ -774,7 +868,8 @@ class SecurityScanner:
             )
 
         # SEC-032: Interpreter commands allowed (policy bypass risk)
-        interpreters = allowed & _INTERPRETER_COMMANDS
+        interpreter_basenames = allowed_basenames & _INTERPRETER_COMMANDS
+        interpreters = {cmd for cmd in allowed if os.path.basename(cmd) in interpreter_basenames}
         if interpreters:
             self._add(
                 Finding(
@@ -852,6 +947,15 @@ class SecurityScanner:
             "uvx",
             "pipx",
         }
+        # Matches a bare interpreter name, optionally version-suffixed
+        # (e.g. "python3.11", "node20") -- applied to each token's
+        # basename below so a full-path invocation (e.g.
+        # "/usr/bin/python3" or ".venv/bin/python") is still recognized
+        # as launching via a shell interpreter, not just a bare command
+        # name with no path component.
+        _INTERPRETER_BASENAME_RE = re.compile(
+            r"^(" + "|".join(sorted(_SHELL_INTERPRETERS_RE_TOKENS)) + r")(\d+(\.\d+)*)?$"
+        )
 
         for server in servers:
             if not isinstance(server, dict):
@@ -881,8 +985,10 @@ class SecurityScanner:
                 )
 
             # SEC-042: Shell interpreter in command
-            cmd_tokens = set(command.split())
-            interpreter_tokens = cmd_tokens & _SHELL_INTERPRETERS_RE_TOKENS
+            cmd_tokens = command.split()
+            interpreter_tokens = {
+                t for t in cmd_tokens if _INTERPRETER_BASENAME_RE.match(os.path.basename(t))
+            }
             if interpreter_tokens:
                 self._add(
                     Finding(
@@ -983,12 +1089,23 @@ class SecurityScanner:
 
         # SEC-060: Vault not enabled but API keys are configured
         if has_providers and not vault_enabled:
-            # Only flag this if at least one provider has an API key not from vault
+            # Only flag this if at least one provider has an API key not from
+            # vault. As with SEC-002, prefer the raw pre-resolution
+            # reference string when available (real file load) rather than
+            # the already-resolved ProviderConfig.api_key, which would
+            # otherwise flag every correctly-vaulted key as plaintext.
+            def _raw_keys_for(name: str, p: Any) -> tuple[str | None, list[str]]:
+                raw_entry = self._raw_provider_keys.get(name)
+                if raw_entry is not None:
+                    return raw_entry["api_key"], list(raw_entry["api_keys"])
+                return p.api_key, list(p.api_keys or [])
+
             has_plain_key = any(
-                (p.api_key and not (p.api_key.startswith(("vault://", "$"))))
-                or any(not k.startswith(("vault://", "$")) for k in (p.api_keys or []))
-                for p in self.config.providers.values()
-                if p.api_key or p.api_keys
+                (raw_key and not raw_key.startswith(("vault://", "$")))
+                or any(not k.startswith(("vault://", "$")) for k in raw_keys)
+                for name, p in self.config.providers.items()
+                for raw_key, raw_keys in [_raw_keys_for(name, p)]
+                if raw_key or raw_keys
             )
             if has_plain_key:
                 self._add(
@@ -1205,29 +1322,43 @@ class SecurityScanner:
         if self.config is None:
             return
 
-        # SEC-090: Container sandbox disabled
-        container_enabled = False
-        if self.config.container is not None:
-            container_enabled = getattr(self.config.container, "enabled", False)
-        if not container_enabled:
-            self._add(
-                Finding(
-                    id="SEC-090",
-                    title="Container sandbox is disabled",
-                    description=(
-                        "container.enabled is false, so tool execution runs in the "
-                        "host process with full user permissions.  A container "
-                        "sandbox isolates tool execution with no network, limited "
-                        "memory, and a restricted filesystem."
-                    ),
-                    severity=Severity.LOW,
-                    category="config",
-                    recommendation=(
-                        "Enable Docker sandboxing: set `container.enabled: true` "
-                        "and install Docker.  Run `missy sandbox status` to verify."
-                    ),
-                )
+        # SEC-090: Container sandbox not wired into tool execution.
+        #
+        # ContainerSandbox (missy/security/container.py) has zero production
+        # callers anywhere in the tool-dispatch path -- shell_exec and every
+        # other builtin tool always run in the host process regardless of
+        # this config flag; ToolRegistry never routes through
+        # ContainerSandbox.execute(). The finding previously recommended
+        # "set container.enabled: true" as if that alone changed how tools
+        # execute -- it does not. Reporting it as fixed by that config
+        # change would give the operator a false sense of security (the
+        # scanner would stop flagging this while tool execution is
+        # completely unchanged), so this finding is now unconditional and
+        # honest about the actual, current state rather than gated on the
+        # config value.
+        self._add(
+            Finding(
+                id="SEC-090",
+                title="Container sandbox is not wired into tool execution",
+                description=(
+                    "Tool execution always runs in the host process with full "
+                    "user permissions, regardless of the `container.enabled` "
+                    "config value -- ContainerSandbox exists but is not called "
+                    "from the tool-dispatch path in this version. Setting "
+                    "`container.enabled: true` does not change how tools "
+                    "actually execute."
+                ),
+                severity=Severity.LOW,
+                category="config",
+                recommendation=(
+                    "Do not rely on `container.enabled` for isolation in this "
+                    "version. If host-process tool execution is a concern, run "
+                    "Missy itself inside an external sandbox (container, VM, "
+                    "restricted user account) until this is wired into "
+                    "tool dispatch."
+                ),
             )
+        )
 
         # SEC-091: max_spend not configured
         if self.config.max_spend_usd == 0.0:
@@ -1290,6 +1421,56 @@ class SecurityScanner:
                     recommendation=(
                         "Run Missy in a terminal (TTY) to enable the interactive "
                         "approval TUI, which prompts on policy-sensitive operations."
+                    ),
+                )
+            )
+
+        # SEC-094: Landlock LSM available but never applied.
+        #
+        # LandlockPolicy/apply_landlock_from_config (missy/security/landlock.py)
+        # is fully implemented and documented (README.md, docs/threat-model.md)
+        # as an active kernel-level filesystem enforcement layer
+        # "complementing" and even surviving a bypass of the userspace
+        # FilesystemPolicyEngine -- but has zero production callers anywhere
+        # in the codebase. No CLI command, config flag, or runtime bootstrap
+        # path ever calls apply_landlock_from_config(), so on a kernel that
+        # supports it just as much as one that doesn't, this defense-in-depth
+        # layer provides zero actual protection today. Mirrors SEC-090's
+        # honest, unconditional treatment of ContainerSandbox's identical
+        # "documented as active, zero callers" gap -- only fires when the
+        # kernel actually supports Landlock (>= 5.13), since flagging an
+        # unusable feature on an unsupported kernel would just be noise.
+        try:
+            from missy.security.landlock import LandlockPolicy
+
+            landlock_available = LandlockPolicy.is_available()
+        except Exception:
+            landlock_available = False
+        if landlock_available:
+            self._add(
+                Finding(
+                    id="SEC-094",
+                    title="Landlock LSM is supported but never applied",
+                    description=(
+                        "This kernel supports Landlock (>= 5.13), and "
+                        "missy/security/landlock.py implements a full "
+                        "ruleset builder for it, but nothing in Missy's "
+                        "startup path ever calls "
+                        "apply_landlock_from_config() -- the kernel-level "
+                        "filesystem enforcement layer described in the "
+                        "project's documentation is not actually active on "
+                        "any real Missy invocation."
+                    ),
+                    severity=Severity.LOW,
+                    category="config",
+                    recommendation=(
+                        "Do not rely on Landlock for defense-in-depth in "
+                        "this version. If kernel-level filesystem "
+                        "enforcement beyond the userspace policy engine is "
+                        "needed, call "
+                        "missy.security.landlock.apply_landlock_from_config() "
+                        "explicitly at process startup until this is wired "
+                        "into a supported CLI/runtime bootstrap path."
                     ),
                 )
             )

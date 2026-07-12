@@ -39,14 +39,14 @@ class TestListAction:
     def test_list_empty_dir(self, tool, tools_dir):
         r = tool.execute(action="list")
         assert r.success
-        assert "No custom tools" in r.output
+        assert "No custom tool proposals" in r.output
 
     def test_list_no_dir(self, tool, tmp_path):
         nonexistent = tmp_path / "does-not-exist"
         with patch("missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR", nonexistent):
             r = tool.execute(action="list")
         assert r.success
-        assert "No custom tools" in r.output
+        assert "No custom tool proposals" in r.output
 
     def test_list_with_tools(self, tool, tools_dir):
         meta = {"name": "my_tool", "description": "does stuff"}
@@ -61,7 +61,7 @@ class TestListAction:
         r = tool.execute(action="list")
         assert r.success
         # Corrupt file silently skipped, shows empty
-        assert "No custom tools" in r.output
+        assert "No custom tool proposals" in r.output
 
     def test_list_multiple_tools(self, tool, tools_dir):
         for name in ["alpha", "beta", "gamma"]:

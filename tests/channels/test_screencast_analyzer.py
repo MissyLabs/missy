@@ -139,6 +139,49 @@ class TestFrameAnalyzer:
 
         callback.assert_called_once_with(session_id, "chan789", "Desktop visible")
 
+    @pytest.mark.asyncio
+    async def test_vision_model_secret_is_redacted_before_discord_post(
+        self, session_manager: SessionManager, registry: ScreencastTokenRegistry
+    ) -> None:
+        """Regression: every other agent-output surface (CLI, /api/v1/chat,
+        Discord text replies, run_stream()) applies censor_response() to
+        its final text before it reaches a caller/channel. This path
+        never goes through AgentRuntime at all -- it's a direct
+        vision-model call -- so a shared screen showing a visible
+        credential got transcribed verbatim by the vision model and
+        posted UNREDACTED into Discord, unlike the credential-detection
+        Discord's own inbound text messages already get.
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        session_manager.set_queue(queue)
+
+        session_id, _ = registry.create_session(discord_channel_id="chan789")
+        callback = AsyncMock()
+
+        analyzer = FrameAnalyzer(
+            session_manager=session_manager,
+            token_registry=registry,
+            discord_callback=callback,
+        )
+
+        secret_text = "I can see an AWS key: AKIAIOSFODNN7EXAMPLE123456 in the terminal."
+        with patch.object(analyzer, "_call_vision_model", return_value=secret_text):
+            await analyzer.start()
+
+            meta = FrameMetadata(session_id=session_id, frame_number=1, format="jpeg")
+            session_manager.enqueue_frame(meta, b"\xff\xd8\xff" + b"\x00" * 100)
+
+            await asyncio.sleep(0.5)
+            await analyzer.stop()
+
+        callback.assert_called_once()
+        posted_text = callback.call_args[0][2]
+        assert "AKIAIOSFODNN7EXAMPLE123456" not in posted_text
+
+        stored_result = session_manager.get_latest_result(session_id)
+        assert stored_result is not None
+        assert "AKIAIOSFODNN7EXAMPLE123456" not in stored_result.analysis_text
+
     def test_call_vision_model(
         self, session_manager: SessionManager, registry: ScreencastTokenRegistry
     ) -> None:

@@ -650,6 +650,32 @@ class TestHatchingStateFromDictEdgeCases:
         assert 1 in state.steps_completed
         assert "three" in state.steps_completed
 
+    def test_steps_completed_non_list_scalar_falls_back_to_empty_list(self):
+        """Regression: hatching.yaml is hand-editable, and a manual edit
+        that leaves steps_completed as a non-list scalar (e.g.
+        "steps_completed: 5") previously crashed
+        list(data.get("steps_completed") or []) with an unhandled
+        TypeError ('int' object is not iterable) -- not caught by
+        get_state()'s except clause, so the crash propagated all the way
+        up through HatchingManager.needs_hatching(), called
+        unconditionally at CLI startup (missy/cli/main.py), making the
+        CLI entirely unusable until the file was manually fixed.
+        """
+        state = HatchingState.from_dict({"steps_completed": 5})
+        assert state.steps_completed == []
+
+    def test_steps_completed_bool_scalar_falls_back_to_empty_list(self):
+        state = HatchingState.from_dict({"steps_completed": True})
+        assert state.steps_completed == []
+
+    def test_steps_completed_string_scalar_falls_back_to_empty_list(self):
+        """A bare string would otherwise iterate character-by-character
+        (list("abc") == ["a", "b", "c"]) rather than crash -- also wrong,
+        also must fall back to empty.
+        """
+        state = HatchingState.from_dict({"steps_completed": "not_a_list"})
+        assert state.steps_completed == []
+
     def test_all_status_values_parse_correctly(self):
         for status in HatchingStatus:
             state = HatchingState.from_dict({"status": status.value})
@@ -676,6 +702,35 @@ class TestHatchingStateFromDictEdgeCases:
             "error",
         }
         assert expected_keys.issubset(set(d.keys()))
+
+
+class TestHatchingManagerMalformedStateFile:
+    """Regression: HatchingManager.needs_hatching() is called unconditionally
+    at CLI startup (missy/cli/main.py), before any other subsystem is
+    initialized. A malformed hand-edited hatching.yaml must not crash the
+    entire CLI -- it must fall back to a default state, the same
+    guarantee get_state()'s except clause already provides for
+    OSError/yaml.YAMLError.
+    """
+
+    def test_non_list_steps_completed_does_not_crash_needs_hatching(self, tmp_path):
+        state_path = tmp_path / "hatching.yaml"
+        state_path.write_text("steps_completed: 5\nstatus: in_progress\n")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+
+        result = mgr.needs_hatching()  # must not raise
+
+        assert isinstance(result, bool)
+
+    def test_non_list_steps_completed_does_not_crash_get_state(self, tmp_path):
+        state_path = tmp_path / "hatching.yaml"
+        state_path.write_text("steps_completed: 5\nstatus: in_progress\n")
+        mgr = HatchingManager(state_path=state_path, log_path=tmp_path / "log.jsonl")
+
+        state = mgr.get_state()  # must not raise
+
+        assert state.steps_completed == []
+        assert state.status == HatchingStatus.IN_PROGRESS
 
 
 # ===========================================================================
@@ -936,10 +991,17 @@ class TestScanForRecoveryEdgeCases:
     def test_stale_checkpoint_abandoned_then_not_in_results(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cid = cm.create("s", "t", "p")
+        # abandon_old() filters on updated_at (last write), not created_at
+        # (original start time) -- age both so this represents a
+        # checkpoint that's genuinely been inactive, not just old.
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 2 * _RESTART_THRESHOLD_SECS, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                cid,
+            ),
         )
         results = scan_for_recovery(db_path=tmp_db)
         ids_in_results = [r.checkpoint_id for r in results]
@@ -951,8 +1013,12 @@ class TestScanForRecoveryEdgeCases:
         stale_id = cm.create("s-stale", "t-stale", "stale prompt")
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=? WHERE id=?",
-            (time.time() - 2 * _RESTART_THRESHOLD_SECS, stale_id),
+            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            (
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                stale_id,
+            ),
         )
         results = scan_for_recovery(db_path=tmp_db)
         ids = [r.checkpoint_id for r in results]

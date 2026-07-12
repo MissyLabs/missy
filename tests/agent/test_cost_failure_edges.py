@@ -60,6 +60,44 @@ class TestCostTrackerEdgeCases:
         expected = (1000 / 1000) * 0.0025 + (500 / 1000) * 0.01
         assert abs(rec.cost_usd - expected) < 1e-8
 
+    def test_gpt4_1_mini_pricing_not_overcharged_at_base_rate(self):
+        """Regression: "gpt-4.1-mini".startswith("gpt-4.1") is True, so
+        when the bare "gpt-4.1" pricing entry appeared before the more
+        specific "gpt-4.1-mini"/"gpt-4.1-nano" entries in the table, every
+        call on these two real, currently-shipping models was billed at
+        the base gpt-4.1 rate instead of their own (cheaper) rate -- a
+        real 5x overcharge for gpt-4.1-mini.
+        """
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        rec = tracker.record(model="gpt-4.1-mini", prompt_tokens=1000, completion_tokens=500)
+        expected = (1000 / 1000) * 0.0004 + (500 / 1000) * 0.0016
+        assert abs(rec.cost_usd - expected) < 1e-8
+
+    def test_gpt4_1_nano_pricing_not_overcharged_at_base_rate(self):
+        """Regression: same prefix-ordering bug as gpt-4.1-mini above, but
+        for gpt-4.1-nano -- a real 20x overcharge pre-fix.
+        """
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        rec = tracker.record(model="gpt-4.1-nano", prompt_tokens=1000, completion_tokens=500)
+        expected = (1000 / 1000) * 0.0001 + (500 / 1000) * 0.0004
+        assert abs(rec.cost_usd - expected) < 1e-8
+
+    def test_gpt4_1_base_pricing_still_correct(self):
+        """The bare gpt-4.1 model itself (not -mini/-nano) must still get
+        its own base rate, confirming the reorder didn't break the
+        non-suffixed case.
+        """
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        rec = tracker.record(model="gpt-4.1-2025-04-14", prompt_tokens=1000, completion_tokens=500)
+        expected = (1000 / 1000) * 0.002 + (500 / 1000) * 0.008
+        assert abs(rec.cost_usd - expected) < 1e-8
+
     def test_ollama_model_zero_cost(self):
         """Ollama models should have zero cost."""
         from missy.agent.cost_tracker import CostTracker

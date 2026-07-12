@@ -202,9 +202,17 @@ class RunRegistry:
             bus.subscribe(_SUMMARY_TOPIC, summary_handler)
 
         handle.status = "running"
+        # Must be "run.start", not "run.started" -- the Web TUI's EventSource
+        # listener (web_console.py) only binds to 'run.start' (matching the
+        # name _EVENT_NAME_BY_TOPIC below maps "agent.run.start" to). The
+        # "Agent picked up the task" UI line only ever appeared via that
+        # second, bus-forwarded event with the same intent; if the message
+        # bus is unavailable, this event was silently dropped by the browser
+        # (no listener bound to the mismatched name) and the run looked
+        # stalled with no explanation until run.complete/run.error.
         handle.push(
             {
-                "event": "run.started",
+                "event": "run.start",
                 "data": {
                     "run_id": handle.run_id,
                     "session_id": handle.session_id,
@@ -227,14 +235,27 @@ class RunRegistry:
             logger.warning("Background run %s failed: %s", handle.run_id, handle.error)
         else:
             handle.status = "complete"
-            handle.response = response
+            # Unlike POST /api/v1/chat (which censors response_text via
+            # censor_response() before returning it), this background-run
+            # path previously stored/streamed the raw agent response with
+            # no redaction at all -- every other field pushed by this same
+            # method (handle.message, handle.error, cost) already goes
+            # through redact_audit_value(), which uses the same
+            # SecretsDetector-backed redaction censor_response() does. If
+            # the agent's final answer echoes a credential (e.g. quoting a
+            # config value or a leaked API key from its own context), a
+            # client polling GET /api/v1/runs/{run_id} or the SSE stream
+            # got it unredacted, while the identical content through
+            # /chat would have been redacted.
+            redacted_response = redact_audit_value(response)
+            handle.response = redacted_response
             handle.finished_at = datetime.now(UTC).isoformat()
             handle.push(
                 {
                     "event": "run.complete",
                     "data": {
                         "run_id": handle.run_id,
-                        "response": response,
+                        "response": redacted_response,
                         "provider": handle.resolved_provider,
                         "tools_used": handle.tools_used,
                         "cost": handle.cost,
@@ -293,6 +314,25 @@ class RunRegistry:
             try:
                 item = handle._queue.get(timeout=timeout)
             except queue.Empty:
+                if handle.status in _TERMINAL_STATUSES:
+                    # The run finished, but the terminal queue marker
+                    # (__done__ / _STREAM_DONE) may have been silently
+                    # dropped by push()'s queue.Full suppression if the
+                    # queue was already at capacity when _execute()'s
+                    # finally block tried to enqueue it (e.g. a
+                    # tool-call-heavy run outpacing this consumer).
+                    # Fall back to handle.status -- the same signal the
+                    # late-join fast path above already trusts -- instead
+                    # of pinging forever.
+                    while True:
+                        try:
+                            queued = handle._queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        if queued is not _STREAM_DONE and queued.get("event") != "__done__":
+                            yield queued
+                    yield _terminal_event(handle)
+                    return
                 yield {"event": "ping", "data": {}}
                 continue
             if item is _STREAM_DONE:

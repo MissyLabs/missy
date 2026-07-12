@@ -37,6 +37,7 @@ def _disk_trigger(name: str = "disk1", threshold_pct: float = 0.0) -> ProactiveT
         disk_threshold_pct=threshold_pct,
         interval_seconds=1,
         cooldown_seconds=0,
+        requires_confirmation=False,
     )
 
 
@@ -47,6 +48,7 @@ def _load_trigger(name: str = "load1", threshold: float = 0.0) -> ProactiveTrigg
         load_threshold=threshold,
         interval_seconds=1,
         cooldown_seconds=0,
+        requires_confirmation=False,
     )
 
 
@@ -57,6 +59,7 @@ def _schedule_trigger(name: str = "s1", cooldown: int = 0) -> ProactiveTrigger:
         interval_seconds=1,
         cooldown_seconds=cooldown,
         prompt_template="tick {trigger_name}",
+        requires_confirmation=False,
     )
 
 

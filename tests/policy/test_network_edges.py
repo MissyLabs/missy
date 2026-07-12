@@ -43,8 +43,8 @@ test_dns_rebinding.py:
   38. _check_exact_host returns None for non-match
   39. Mixed IPv4 address vs IPv6 CIDR does not crash (_check_cidr skip)
   40. Wildcard domain does NOT match unrelated domain with shared suffix chars
-  41. check_host short-circuits at exact host — no DNS call made
-  42. check_host short-circuits at domain match — no DNS call made
+  41. check_host still verifies resolved IP on exact host match (SR-1.9a)
+  42. check_host still verifies resolved IP on domain match (SR-1.9a)
   43. DNS returns multiple IPs — all private addresses checked before allowing
   44. Mixed public+private DNS records — private without CIDR still blocked
   45. Discord category host is denied when category is "tool" instead
@@ -942,22 +942,85 @@ class TestPrivateHelpers:
 
 
 # ---------------------------------------------------------------------------
-# 40. Short-circuit: exact host match skips DNS
+# 40. SR-1.9a: exact host / domain matches still verify the resolved IP.
+#
+# A name match alone used to be sufficient to allow -- no DNS-rebinding
+# check applied to steps 3/4 at all, unlike step 5 (the no-name-match
+# fallback). That meant an explicitly allowlisted hostname resolving to
+# internal infrastructure connected with zero IP-level verification. Bare
+# IP/CIDR matches (step 2) legitimately never need DNS -- there's no name
+# to resolve.
 # ---------------------------------------------------------------------------
 
 
 class TestShortCircuitBehaviour:
-    def test_exact_host_match_does_not_call_dns(self):
+    def test_exact_host_match_also_checks_dns_for_rebinding(self):
         engine = _make_engine(allowed_hosts=["exact.example.com"])
-        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns:
-            engine.check_host("exact.example.com")
-        mock_dns.assert_not_called()
+        with patch(
+            "missy.policy.network.socket.getaddrinfo",
+            return_value=_addrinfo("93.184.216.34"),
+        ) as mock_dns:
+            result = engine.check_host("exact.example.com")
+        mock_dns.assert_called_once()
+        assert result is True
 
-    def test_domain_match_does_not_call_dns(self):
+    def test_domain_match_also_checks_dns_for_rebinding(self):
         engine = _make_engine(allowed_domains=["*.example.com"])
-        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns:
-            engine.check_host("sub.example.com")
-        mock_dns.assert_not_called()
+        with patch(
+            "missy.policy.network.socket.getaddrinfo",
+            return_value=_addrinfo("93.184.216.34"),
+        ) as mock_dns:
+            result = engine.check_host("sub.example.com")
+        mock_dns.assert_called_once()
+        assert result is True
+
+    def test_exact_host_match_denied_when_resolves_to_private_ip(self):
+        """SR-1.9a core fix: an allowlisted hostname resolving to internal
+        infrastructure must be denied, not silently trusted by name alone."""
+        engine = _make_engine(allowed_hosts=["build.corp.example.com"])
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                return_value=_addrinfo("10.0.0.5"),
+            ),
+            pytest.raises(PolicyViolationError, match="rebinding"),
+        ):
+            engine.check_host("build.corp.example.com")
+
+    def test_domain_match_denied_when_resolves_to_loopback(self):
+        engine = _make_engine(allowed_domains=["*.corp.example.com"])
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                return_value=_addrinfo("127.0.0.1"),
+            ),
+            pytest.raises(PolicyViolationError, match="rebinding"),
+        ):
+            engine.check_host("internal.corp.example.com")
+
+    def test_exact_host_match_allowed_when_private_ip_explicitly_in_cidr(self):
+        """A private IP is fine if the operator explicitly allowlisted that
+        CIDR range -- this is not a rebinding attack, it's configured intent."""
+        engine = _make_engine(
+            allowed_hosts=["build.corp.example.com"],
+            allowed_cidrs=["10.0.0.0/8"],
+        )
+        with patch(
+            "missy.policy.network.socket.getaddrinfo",
+            return_value=_addrinfo("10.0.0.5"),
+        ):
+            assert engine.check_host("build.corp.example.com") is True
+
+    def test_exact_host_match_allowed_when_dns_resolution_fails(self):
+        """A hostname that doesn't resolve at all can't be rebound to
+        anything -- the name match still stands and the host is allowed,
+        preserving existing behaviour for names with no live DNS record."""
+        engine = _make_engine(allowed_hosts=["exact.example.com"])
+        with patch(
+            "missy.policy.network.socket.getaddrinfo",
+            side_effect=OSError("Name or service not known"),
+        ):
+            assert engine.check_host("exact.example.com") is True
 
     def test_ip_cidr_match_does_not_call_dns(self):
         engine = _make_engine(allowed_cidrs=["10.0.0.0/8"])

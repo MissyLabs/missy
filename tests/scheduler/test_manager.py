@@ -88,6 +88,65 @@ class TestAddJob:
         assert len(ids) == 2
 
 
+class TestRawCronDayOfWeekEndToEnd:
+    """Regression: CronTrigger.from_crontab() applies no conversion between
+    standard crontab's day-of-week numbering (Sunday=0..Saturday=6) and
+    APScheduler's own (Monday=0..Sunday=6) -- so scheduling "0 9 * * 1-5"
+    (intended as "weekdays" per this module's own docstring) silently
+    fired Tuesday-Saturday instead. These tests actually schedule a job
+    and check which real calendar dates it fires on, not just that the
+    raw string is preserved (which the existing parser-only tests
+    already cover but can't catch this class of bug).
+    """
+
+    def test_numeric_weekdays_fire_monday_through_friday(self, started_manager: SchedulerManager):
+        from datetime import datetime
+
+        job = started_manager.add_job("weekdays", "0 9 * * 1-5", "task")
+        trigger = started_manager._scheduler.get_job(job.id).trigger
+
+        # 2026-07-12 is a Sunday; walk a week forward and collect which
+        # weekday names the trigger actually fires on.
+        prev = None
+        d = datetime(2026, 7, 12)
+        fire_days = []
+        for _ in range(5):
+            nxt = trigger.get_next_fire_time(prev, d)
+            fire_days.append(nxt.strftime("%A"))
+            prev = nxt
+            d = nxt
+
+        assert fire_days == ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+    def test_numeric_sunday_fires_on_sunday(self, started_manager: SchedulerManager):
+        from datetime import datetime
+
+        job = started_manager.add_job("sunday-only", "0 9 * * 0", "task")
+        trigger = started_manager._scheduler.get_job(job.id).trigger
+
+        d = datetime(2026, 7, 12)  # a Sunday
+        nxt = trigger.get_next_fire_time(None, d)
+        assert nxt.strftime("%A") == "Sunday"
+
+    def test_six_field_cron_with_seconds_schedules_successfully(
+        self, started_manager: SchedulerManager
+    ):
+        """The 6-field-with-seconds format this module's docstring
+        advertises previously always failed with a SchedulerError, since
+        CronTrigger.from_crontab() hard-rejects anything but exactly 5
+        fields.
+        """
+        from datetime import datetime
+
+        job = started_manager.add_job("sixfield", "0 30 8 * * 1", "task")
+        trigger = started_manager._scheduler.get_job(job.id).trigger
+
+        d = datetime(2026, 7, 12)  # a Sunday
+        nxt = trigger.get_next_fire_time(None, d)
+        assert nxt.strftime("%A") == "Monday"
+        assert (nxt.hour, nxt.minute, nxt.second) == (8, 30, 0)
+
+
 class TestRemoveJob:
     def test_remove_job_removes_from_list(self, started_manager: SchedulerManager):
         job = started_manager.add_job("tmp", "every 5 minutes", "t")
@@ -137,6 +196,53 @@ class TestListJobs:
         a = started_manager.list_jobs()
         b = started_manager.list_jobs()
         assert a is not b
+
+
+class TestLoadJobs:
+    """Regression tests for the read-only ``load_jobs()`` diagnostic path.
+
+    ``missy schedule list`` and ``missy doctor`` construct a fresh
+    ``SchedulerManager`` and only want to read the persisted job list --
+    they must not call ``start()``, since that registers every job with a
+    live APScheduler ``BackgroundScheduler`` and starts its thread, risking
+    a due job actually firing before ``stop()`` shuts it down.
+    """
+
+    def test_list_jobs_is_empty_before_any_load(self, tmp_jobs_file: str):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        # Without start() or load_jobs(), _jobs was never populated from disk.
+        assert mgr.list_jobs() == []
+
+    def test_load_jobs_reads_persisted_jobs_without_starting_scheduler(self, tmp_jobs_file: str):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        jobs = mgr.load_jobs()
+
+        assert len(jobs) == 1
+        assert jobs[0].id == job.id
+        assert mgr._scheduler.running is False
+
+    def test_load_jobs_matches_subsequent_list_jobs(self, tmp_jobs_file: str):
+        job = ScheduledJob(name="persisted", schedule="every 10 minutes", task="hello")
+        jobs_path = Path(tmp_jobs_file)
+        jobs_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs_path.write_text(json.dumps([job.to_dict()]), encoding="utf-8")
+        jobs_path.chmod(0o600)
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        mgr.load_jobs()
+        assert [j.id for j in mgr.list_jobs()] == [job.id]
 
 
 class TestLoadSave:

@@ -177,6 +177,36 @@ class TestCandidateGeneratorEnabled:
         )
         assert not result.ok
 
+    def test_generate_from_schema_denies_shell_without_allow_shell(self):
+        """Regression: generate_from_pattern's _derive_permissions() gates
+        "shell" behind allow_shell, but generate_from_schema() took
+        caller-supplied permissions verbatim and only ran them through
+        _validate() (which merely checks _SAFE_PERMISSIONS membership,
+        which itself includes "shell") -- bypassing the class's own
+        documented always-denied-without-override contract for this
+        permission on the direct-schema path.
+        """
+        gen = CandidateGenerator(tool_creation_enabled=True, allow_shell=False)
+        result = gen.generate_from_schema(
+            name="run_shell_thing",
+            description="does a shell thing",
+            parameters={"command": {"type": "string", "required": True}},
+            permissions={"shell": True},
+        )
+        assert not result.ok
+        assert result.candidate is None
+
+    def test_generate_from_schema_allows_shell_with_allow_shell(self):
+        gen = CandidateGenerator(tool_creation_enabled=True, allow_shell=True)
+        result = gen.generate_from_schema(
+            name="run_shell_thing",
+            description="does a shell thing",
+            parameters={"command": {"type": "string", "required": True}},
+            permissions={"shell": True},
+        )
+        assert result.ok
+        assert result.candidate.permissions.get("shell") is True
+
     def test_owner_propagated(self):
         gen = CandidateGenerator(tool_creation_enabled=True, owner="test_owner")
         result = gen.generate_from_pattern(_make_pattern())

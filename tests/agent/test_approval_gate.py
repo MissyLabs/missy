@@ -156,6 +156,68 @@ class TestApprovalGate:
             gate.request("test")
         assert gate.list_pending() == []
 
+    def test_approve_by_id(self):
+        gate = ApprovalGate(default_timeout=2.0)
+        result = {}
+
+        def do_request():
+            try:
+                gate.request("action")
+                result["approved"] = True
+            except (ApprovalTimeout, ApprovalDenied) as e:
+                result["error"] = str(e)
+
+        t = threading.Thread(target=do_request)
+        t.start()
+
+        import time
+
+        for _ in range(50):
+            pending = gate.list_pending()
+            if pending:
+                break
+            time.sleep(0.01)
+
+        approval_id = pending[0]["id"]
+        assert gate.approve_by_id(approval_id) is True
+        t.join(timeout=2.0)
+        assert result.get("approved") is True
+
+    def test_deny_by_id(self):
+        gate = ApprovalGate(default_timeout=2.0)
+        result = {}
+
+        def do_request():
+            try:
+                gate.request("action")
+                result["approved"] = True
+            except ApprovalDenied:
+                result["denied"] = True
+
+        t = threading.Thread(target=do_request)
+        t.start()
+
+        import time
+
+        for _ in range(50):
+            pending = gate.list_pending()
+            if pending:
+                break
+            time.sleep(0.01)
+
+        approval_id = pending[0]["id"]
+        assert gate.deny_by_id(approval_id) is True
+        t.join(timeout=2.0)
+        assert result.get("denied") is True
+
+    def test_approve_by_id_unknown_id_returns_false(self):
+        gate = ApprovalGate()
+        assert gate.approve_by_id("nonexistent") is False
+
+    def test_deny_by_id_unknown_id_returns_false(self):
+        gate = ApprovalGate()
+        assert gate.deny_by_id("nonexistent") is False
+
     def test_handle_response_case_insensitive(self):
         gate = ApprovalGate(default_timeout=2.0)
         result = {}

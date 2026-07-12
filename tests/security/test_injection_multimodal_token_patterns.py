@@ -97,8 +97,11 @@ class TestSession26InjectionPatterns:
         assert len(InputSanitizer.INJECTION_PATTERNS) == 98
 
     def test_total_secret_pattern_count(self) -> None:
-        """Should have 50 secret patterns after session 26 additions."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 50
+        """Should have 54 secret patterns after SR-1.10 additions
+        (bearer_token, basic_auth_header, aws_presigned_signature) plus
+        github_fine_grained_pat (round-17 checkpoint: GitHub's fine-grained
+        PAT format matched no existing pattern)."""
+        assert len(SecretsDetector.SECRET_PATTERNS) == 54
 
 
 # ---------------------------------------------------------------------------

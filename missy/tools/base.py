@@ -62,11 +62,18 @@ class ToolResult:
         output: The primary result value.  Type varies by tool.
         error: Human-readable error description when ``success`` is
             ``False``.  ``None`` on success.
+        policy_denied: ``True`` when ``success is False`` specifically
+            because the policy engine raised ``PolicyViolationError`` (see
+            :meth:`missy.tools.registry.ToolRegistry.execute`), as opposed
+            to the tool itself failing internally. Lets callers apply a
+            harsher trust-score penalty for policy violations than for
+            ordinary tool failures without re-parsing ``error`` text.
     """
 
     success: bool
     output: Any
     error: str | None = None
+    policy_denied: bool = False
 
 
 class BaseTool(ABC):
@@ -99,6 +106,60 @@ class BaseTool(ABC):
             A :class:`ToolResult` describing success or failure.
         """
         ...
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str | list[str] | None:
+        """Return the actual host command this invocation will execute.
+
+        The registry's default heuristic reads a ``command`` kwarg to decide
+        what to check against the shell allow-list. That heuristic is wrong
+        for tools whose real host-level program is fixed (or otherwise not
+        carried verbatim in a ``command`` kwarg) — e.g. a tool that always
+        shells out to a specific binary regardless of what the model passes
+        as an argument, or one where a ``command`` kwarg describes something
+        *other* than the host program invoked (such as a command run inside
+        a sandboxed guest). Overriding this method lets such a tool declare
+        the real target explicitly instead of letting an unrelated or
+        missing kwarg silently skip enforcement.
+
+        Returning ``None`` (the default) tells the registry to fall back to
+        its generic ``command`` kwarg heuristic, preserving existing
+        behaviour for tools that don't need this.
+        """
+        return None
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        """Return additional hostnames this invocation will contact.
+
+        Unlike the filesystem/shell checks, the registry has no kwarg-name
+        heuristic for network targets at all by default — it only checks
+        ``permissions.allowed_hosts`` (a static declaration). A tool whose
+        real destination is only known at call time (e.g. a URL kwarg, or
+        a browser-automation tool that hands the URL to something other
+        than :class:`~missy.gateway.client.PolicyHTTPClient`) must
+        override this method, or the network policy engine never sees the
+        real destination and the declared ``network=True`` permission
+        enforces nothing.
+
+        Returning ``[]`` (the default) means no additional hosts beyond
+        ``permissions.allowed_hosts`` are checked, preserving existing
+        behaviour for tools that don't need this.
+        """
+        return []
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Return the ``(read_paths, write_paths)`` this invocation will touch.
+
+        The registry's default heuristic reads ``path``/``file_path``/
+        ``target``/``destination`` kwargs to find the real filesystem target
+        to check. Tools that carry their target under a different kwarg name
+        must override this method, or the filesystem policy engine never
+        sees the real path and the declared permission enforces nothing.
+
+        Returning ``([], [])`` (the default) tells the registry to fall back
+        to its generic-name heuristic, preserving existing behaviour for
+        tools that don't need this.
+        """
+        return ([], [])
 
     def get_schema(self) -> dict[str, Any]:
         """Return a JSON Schema dict describing the tool's parameters.

@@ -789,7 +789,12 @@ class TestInteractiveApprovalSessionMemory:
         k1 = approval._make_key("network_request", "https://example.com")
         k2 = approval._make_key("network_request", "https://example.com")
         assert k1 == k2
-        expected = hashlib.sha256(b"network_request:https://example.com").hexdigest()
+        # Key format is now "{session_id}:{action}:{detail}" (round-17
+        # checkpoint: a session_id component was added so an "allow
+        # always" decision for one session/user doesn't leak to another
+        # sharing the same InteractiveApproval instance); session_id
+        # defaults to "" for the single-operator CLI case.
+        expected = hashlib.sha256(b":network_request:https://example.com").hexdigest()
         assert k1 == expected
 
     def test_interactive_approval_overrides_gateway_denial(self) -> None:

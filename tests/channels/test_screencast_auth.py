@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from missy.channels.screencast import auth as auth_module
 from missy.channels.screencast.auth import ScreencastTokenRegistry
 
 
@@ -116,3 +117,66 @@ class TestScreencastTokenRegistry:
         assert reg.verify_token(s2, t2) is True
         assert reg.verify_token(s1, t2) is False
         assert reg.verify_token(s2, t1) is False
+
+
+class TestScreencastSessionPruning:
+    """Regression: revoked/stale sessions must not accumulate forever.
+
+    revoke_session() previously only flipped session.active to False and
+    never removed the dict entry, with no TTL or cap anywhere in the
+    registry -- a long-running gateway process would leak one permanent
+    entry per `!screen share` command, even after `!screen stop`.
+    """
+
+    def test_revoked_session_removed_after_ttl(self, monkeypatch) -> None:
+        reg = ScreencastTokenRegistry()
+        session_id, _token = reg.create_session()
+        reg.revoke_session(session_id)
+        assert reg.get_session(session_id) is not None  # still tracked briefly
+
+        future = auth_module.time.time() + 7200
+        monkeypatch.setattr(auth_module.time, "time", lambda: future)
+        # Pruning runs opportunistically on the next create_session/revoke_session call.
+        reg.create_session()
+        assert reg.get_session(session_id) is None
+
+    def test_active_session_never_pruned_by_ttl(self, monkeypatch) -> None:
+        reg = ScreencastTokenRegistry()
+        session_id, _token = reg.create_session()
+
+        future = auth_module.time.time() + 7200
+        monkeypatch.setattr(auth_module.time, "time", lambda: future)
+        reg.create_session()
+        assert reg.get_session(session_id) is not None
+
+    def test_overflow_evicts_oldest_inactive_sessions_first(self, monkeypatch) -> None:
+        reg = ScreencastTokenRegistry()
+        monkeypatch.setattr(auth_module, "_MAX_TRACKED_SESSIONS", 3)
+
+        ids = []
+        for _ in range(3):
+            sid, _tok = reg.create_session()
+            ids.append(sid)
+        reg.revoke_session(ids[0])  # oldest, now inactive -- eviction candidate
+
+        # Adding a 4th session pushes the registry over the cap.
+        new_sid, _tok = reg.create_session()
+
+        assert reg.get_session(ids[0]) is None  # evicted
+        assert reg.get_session(ids[1]) is not None
+        assert reg.get_session(ids[2]) is not None
+        assert reg.get_session(new_sid) is not None
+
+    def test_active_sessions_not_evicted_by_overflow(self, monkeypatch) -> None:
+        reg = ScreencastTokenRegistry()
+        monkeypatch.setattr(auth_module, "_MAX_TRACKED_SESSIONS", 2)
+
+        s1, _ = reg.create_session()  # active, oldest
+        reg.create_session()  # active
+
+        # A 3rd active session pushes past the cap, but there are no
+        # inactive sessions to evict, so all active sessions survive.
+        s3, _ = reg.create_session()
+
+        assert reg.get_session(s1) is not None
+        assert reg.get_session(s3) is not None

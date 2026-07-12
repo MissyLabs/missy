@@ -146,7 +146,7 @@ class TestWebhookHandlerLogMessage:
             srv = MagicMock()
             return srv
 
-        with patch("missy.channels.webhook.HTTPServer", side_effect=capturing_httpserver):
+        with patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=capturing_httpserver):
             ch = WebhookChannel(host="127.0.0.1", port=0)
             ch.start()
 
@@ -168,7 +168,7 @@ class TestWebhookHandlerLogMessage:
             captured["handler_cls"] = handler_cls_arg
             return MagicMock()
 
-        with patch("missy.channels.webhook.HTTPServer", side_effect=capturing_httpserver):
+        with patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=capturing_httpserver):
             ch = WebhookChannel(host="127.0.0.1", port=0)
             ch.start()
 

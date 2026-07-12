@@ -242,10 +242,11 @@ class TestURLParsingEdgeCases:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             client._check_url("https://api.example.com:8443/resource")
         # hostname is "api.example.com" — no port suffix
-        args, kwargs = mock_engine.check_network.call_args
+        args, kwargs = mock_engine.check_network_resolved.call_args
         assert args[0] == "api.example.com"
 
     def test_url_with_fragment_extracts_path_without_fragment(self) -> None:
@@ -253,6 +254,7 @@ class TestURLParsingEdgeCases:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = None
             mock_get_engine.return_value = mock_engine
             client._check_url("https://example.com/page#section", method="GET")
@@ -267,6 +269,7 @@ class TestURLParsingEdgeCases:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = MagicMock()
             mock_engine.rest_policy.check.return_value = "allow"
             mock_get_engine.return_value = mock_engine
@@ -279,6 +282,7 @@ class TestURLParsingEdgeCases:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = MagicMock()
             mock_engine.rest_policy.check.return_value = "allow"
             mock_get_engine.return_value = mock_engine
@@ -337,6 +341,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = MagicMock()
             mock_engine.rest_policy.check.return_value = "allow"
             mock_get_engine.return_value = mock_engine
@@ -350,6 +355,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = MagicMock()
             mock_get_engine.return_value = mock_engine
             client._check_url("https://example.com/resource")
@@ -359,6 +365,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = MagicMock()
             mock_get_engine.return_value = mock_engine
             client._check_url("https://example.com/resource", method="")
@@ -368,6 +375,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy.check.return_value = "deny"
             mock_get_engine.return_value = mock_engine
             with pytest.raises(PolicyViolationError) as exc_info:
@@ -381,6 +389,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy.check.return_value = "deny"
             mock_get_engine.return_value = mock_engine
             with pytest.raises(PolicyViolationError) as exc_info:
@@ -391,6 +400,7 @@ class TestRESTPolicyMethodForwarding:
         client = PolicyHTTPClient()
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy.check.side_effect = ValueError("crash")
             mock_get_engine.return_value = mock_engine
             with pytest.raises(PolicyViolationError) as exc_info:
@@ -808,11 +818,12 @@ class TestCategoryAndSessionForwarding:
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = None
             mock_get_engine.return_value = mock_engine
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/x")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "s", "t", category=category
         )
 
@@ -821,11 +832,12 @@ class TestCategoryAndSessionForwarding:
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = None
             mock_get_engine.return_value = mock_engine
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/x")
-        args, kwargs = mock_engine.check_network.call_args
+        args, kwargs = mock_engine.check_network_resolved.call_args
         assert args[1] == "my-session"
 
     def test_task_id_forwarded_to_check_network(self) -> None:
@@ -833,11 +845,12 @@ class TestCategoryAndSessionForwarding:
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = None
             mock_get_engine.return_value = mock_engine
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 client.get("https://api.example.com/x")
-        args, kwargs = mock_engine.check_network.call_args
+        args, kwargs = mock_engine.check_network_resolved.call_args
         assert args[2] == "my-task"
 
     async def test_category_forwarded_for_async_get(self) -> None:
@@ -845,13 +858,14 @@ class TestCategoryAndSessionForwarding:
         mock_resp = _mock_response(200)
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_engine.rest_policy = None
             mock_get_engine.return_value = mock_engine
             with patch.object(
                 httpx.AsyncClient, "get", new_callable=AsyncMock, return_value=mock_resp
             ):
                 await client.aget("https://api.example.com/x")
-        mock_engine.check_network.assert_called_once_with(
+        mock_engine.check_network_resolved.assert_called_once_with(
             "api.example.com", "as", "at", category="provider"
         )
 

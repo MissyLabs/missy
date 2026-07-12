@@ -61,10 +61,12 @@ class ContainerConfig:
 
 def parse_container_config(data: dict) -> ContainerConfig:
     """Parse a ``container:`` YAML section into :class:`ContainerConfig`."""
+    from missy.config.settings import _coerce_bool
+
     if not isinstance(data, dict):
         return ContainerConfig()
     return ContainerConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
         image=str(data.get("image", "python:3.12-slim")),
         memory_limit=str(data.get("memory_limit", "256m")),
         cpu_quota=float(data.get("cpu_quota", 0.5)),
@@ -239,12 +241,16 @@ class ContainerSandbox:
         self._container_id = None
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["docker", "rm", "-f", cid],
                 capture_output=True,
                 timeout=15,
             )
-            logger.info("Container removed: %s", cid[:12])
+            if result.returncode != 0:
+                err = result.stderr.decode("utf-8", errors="replace").strip()
+                logger.error("Failed to remove container %s: %s", cid[:12], err)
+            else:
+                logger.info("Container removed: %s", cid[:12])
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.error("Failed to remove container %s: %s", cid[:12], exc)
 

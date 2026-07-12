@@ -274,12 +274,27 @@ _ROBOTIC_PHRASES: list[re.Pattern[str]] = [
         r"(?:Please note|Note) that I(?:'m| am) an AI[^.]*\.\s*",
         r"As (?:your|an?) (?:AI |virtual |digital )?assistant[,.]?\s*",
         r"I(?:'m| am) here to (?:help|assist)(?: you)?[,.]?\s*",
-        r"Certainly[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
-        r"Of course[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
-        r"Absolutely[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?[!.]?\s*)?",
+        # Regression: "Certainly/Of course/Absolutely, I'll help you {X}."
+        # and "I'd be happy to help you {X}." are only pure filler when
+        # "help"/"assist" is the LAST substantive word (nothing meaningful
+        # follows). The old patterns unconditionally consumed "help"/
+        # "assist"(+ "you") with only optional trailing punctuation, so a
+        # realistic reply like "I'd be happy to help you understand
+        # recursion." had "help you" silently eaten along with the filler,
+        # mangling the sentence into "understand recursion." -- and
+        # sequential stripping of an earlier "As an AI, I don't have
+        # feelings, but" prefix on the same reply left a dangling "but"
+        # with no clause before it. The lookahead below requires what
+        # follows "help"/"assist"(+"you") to be sentence-terminal
+        # punctuation or end-of-string; when a real object/continuation
+        # follows instead (no punctuation), the whole phrase is left
+        # untouched rather than partially stripped into something garbled.
+        r"Certainly[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
+        r"Of course[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
+        r"Absolutely[,!]\s*(?:I(?:'ll| will) (?:help|assist)(?: you)?(?=[!.]|$)[!.]?\s*)?",
         r"Great question[,!]\s*",
         r"That(?:'s| is) a great question[,!]\s*",
-        r"I(?:'d| would) be happy to (?:help|assist)(?: you)?[,.]?\s*",
+        r"I(?:'d| would) be happy to (?:help|assist)(?: you)?(?=[,.!]|$)[,.!]?\s*",
     ]
 ]
 
@@ -398,7 +413,13 @@ class BehaviorLayer:
             return "casual"
 
         combined = " ".join(user_texts).lower()
-        words = combined.split()
+        # combined.split() previously left trailing punctuation attached
+        # (e.g. "thanks," or "kindly."), so a keyword immediately followed
+        # by a comma/period/exclamation mark -- extremely common in
+        # realistic phrasing -- never equaled the bare signal word and
+        # silently dropped out of the set intersection below, systematically
+        # under-counting formal/technical signals relative to casual ones.
+        words = re.findall(r"[a-z']+", combined)
         word_set = frozenset(words)
 
         # Frustration takes priority — it overrides tone when clearly present
@@ -655,8 +676,21 @@ class IntentInterpreter:
         """
         text = user_input.strip()
 
-        if _GREETING_PATTERNS.match(text):
-            return "greeting"
+        greeting_match = _GREETING_PATTERNS.match(text)
+        if greeting_match:
+            # _GREETING_PATTERNS only anchors on the leading word(s), with no
+            # check that the REST of the message is actually just a plain
+            # greeting -- so any realistic message that happens to open with
+            # "hey"/"hi"/"hello" (extremely common in natural chat) was
+            # unconditionally classified as "greeting" regardless of
+            # content, including urgent technical troubleshooting requests
+            # (e.g. "hello, my server keeps crashing, please help asap").
+            # Only treat this as a bare greeting when little else remains
+            # after the greeting phrase; otherwise fall through so the
+            # message's real content drives classification.
+            remainder_words = re.findall(r"[a-z']+", text[greeting_match.end() :].lower())
+            if len(remainder_words) <= 3:
+                return "greeting"
 
         if _FAREWELL_PATTERNS.search(text):
             return "farewell"
@@ -758,6 +792,23 @@ class ResponseShaper:
             return f"\x00CODE_BLOCK_{len(stash) - 1}\x00"
 
         working = _CODE_BLOCK_RE.sub(_stash_block, response)
+
+        # An unterminated/truncated triple-backtick fence -- e.g. a
+        # code-heavy response cut off at max_tokens before the closing ```,
+        # or the model simply forgetting to close it -- has no match in
+        # _CODE_BLOCK_RE above, which only pairs complete ``` ... ```
+        # blocks. Every *paired* fence has already been replaced by a
+        # placeholder (containing no backticks) by the .sub() call above,
+        # so any ``` still present in `working` at this point must belong
+        # to an unpaired opening fence. Stash everything from there to the
+        # end of the string as one more code block -- otherwise this
+        # content falls through unprotected into the robotic-phrase
+        # stripping below, directly violating this class's own documented
+        # guarantee that it never modifies code-block content.
+        unterminated_start = working.find("```")
+        if unterminated_start != -1:
+            stash.append(working[unterminated_start:])
+            working = working[:unterminated_start] + f"\x00CODE_BLOCK_{len(stash) - 1}\x00"
 
         # Strip robotic phrases
         for pattern in _ROBOTIC_PHRASES:

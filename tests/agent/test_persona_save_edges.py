@@ -949,18 +949,38 @@ class TestDiffNoBackups:
 
 class TestConcurrentSave:
     def test_concurrent_saves_do_not_corrupt(self, tmp_path):
-        """Multiple threads calling save() must not leave a corrupted file."""
+        """Multiple threads calling save() must not leave a corrupted file.
+
+        Regression: PersonaManager had no lock at all around save()'s
+        non-atomic exists()-check / _create_backup() / version-increment /
+        temp-write / os.replace() sequence, nor around rollback()'s
+        equivalent sequence. Concurrent callers on the same instance could
+        race in several ways -- two threads' _create_backup() calls both
+        passing the same "does this timestamped backup filename exist yet"
+        check before either had written it (producing a SameFileError or
+        overwriting each other's backup), or a concurrent _prune_backups()
+        unlinking a backup file a different thread's shutil.copy2() was
+        still writing to (a FileNotFoundError propagating out of save()
+        itself, not just the internally-caught prune-time case this file's
+        own code comments already discuss). Live-reproduced directly with
+        20 threads x 10 saves: 10 of 15 runs produced a real, unhandled
+        FileNotFoundError or SameFileError before this fix (this test's
+        original 4x5 parameters happened to reproduce it once in CI but
+        not reliably in every environment, hence the larger stress here).
+        Fixed by adding a threading.Lock() around the entirety of both
+        save() and rollback().
+        """
         pm = make_manager(tmp_path)
         errors: list[Exception] = []
 
         def do_saves():
             try:
-                for _ in range(5):
+                for _ in range(10):
                     pm.save()
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=do_saves) for _ in range(4)]
+        threads = [threading.Thread(target=do_saves) for _ in range(20)]
         for t in threads:
             t.start()
         for t in threads:

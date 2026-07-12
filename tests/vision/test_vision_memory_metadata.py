@@ -72,8 +72,8 @@ class TestVisionMemoryMetadataFiltering:
         # The returned ID must be a UUID generated internally, not the attacker value.
         assert returned_id != attacker_id
         # The metadata passed to add_turn must also carry the real ID.
-        _, kwargs = store.add_turn.call_args
-        stored_meta = kwargs["metadata"]
+        (turn,) = store.add_turn.call_args.args
+        stored_meta = turn.metadata
         assert stored_meta["observation_id"] == returned_id
         assert stored_meta["observation_id"] != attacker_id
 
@@ -89,8 +89,8 @@ class TestVisionMemoryMetadataFiltering:
             metadata={"session_id": "injected-session"},
         )
 
-        _, kwargs = store.add_turn.call_args
-        stored_meta = kwargs["metadata"]
+        (turn,) = store.add_turn.call_args.args
+        stored_meta = turn.metadata
         assert stored_meta["session_id"] == real_session
 
     def test_timestamp_not_overridden(self) -> None:
@@ -104,8 +104,8 @@ class TestVisionMemoryMetadataFiltering:
             metadata={"timestamp": "1970-01-01T00:00:00+00:00"},
         )
 
-        _, kwargs = store.add_turn.call_args
-        stored_meta = kwargs["metadata"]
+        (turn,) = store.add_turn.call_args.args
+        stored_meta = turn.metadata
         # Should not be the epoch sentinel we injected.
         assert stored_meta["timestamp"] != "1970-01-01T00:00:00+00:00"
 
@@ -133,8 +133,8 @@ class TestVisionMemoryMetadataFiltering:
             metadata=reserved_payload,
         )
 
-        _, kwargs = store.add_turn.call_args
-        m = kwargs["metadata"]
+        (turn,) = store.add_turn.call_args.args
+        m = turn.metadata
 
         assert m["observation_id"] == returned_id
         assert m["session_id"] == "sess-all"
@@ -160,8 +160,8 @@ class TestVisionMemoryMetadataFiltering:
             },
         )
 
-        _, kwargs = store.add_turn.call_args
-        m = kwargs["metadata"]
+        (turn,) = store.add_turn.call_args.args
+        m = turn.metadata
         assert m["camera_model"] == "Logitech C922"
         assert m["operator"] == "alice"
 

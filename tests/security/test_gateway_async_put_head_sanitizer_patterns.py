@@ -27,7 +27,7 @@ class TestGatewayAsyncPut:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=200)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()
@@ -37,7 +37,7 @@ class TestGatewayAsyncPut:
         with patch.object(client, "_emit_request_event"):
             resp = await client.aput("https://example.com/resource", json={"k": "v"})
 
-        client._check_url.assert_called_once_with("https://example.com/resource", "PUT")
+        client._check_url_async.assert_called_once_with("https://example.com/resource", "PUT")
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -45,7 +45,7 @@ class TestGatewayAsyncPut:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=200)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()
@@ -65,7 +65,7 @@ class TestGatewayAsyncPut:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=201)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()
@@ -85,7 +85,7 @@ class TestGatewayAsyncHead:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=200)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()
@@ -95,7 +95,7 @@ class TestGatewayAsyncHead:
         with patch.object(client, "_emit_request_event"):
             resp = await client.ahead("https://example.com/check")
 
-        client._check_url.assert_called_once_with("https://example.com/check", "HEAD")
+        client._check_url_async.assert_called_once_with("https://example.com/check", "HEAD")
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
@@ -103,7 +103,7 @@ class TestGatewayAsyncHead:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=200)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()
@@ -121,7 +121,7 @@ class TestGatewayAsyncHead:
         from missy.gateway.client import PolicyHTTPClient
 
         client = PolicyHTTPClient(session_id="s", task_id="t")
-        client._check_url = MagicMock()
+        client._check_url_async = AsyncMock()
         mock_resp = MagicMock(status_code=204)
         mock_async = AsyncMock(return_value=mock_resp)
         mock_http = MagicMock()

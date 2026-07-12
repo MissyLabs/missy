@@ -149,6 +149,42 @@ class TestBuildMessagesWithSummaries:
         summary_msgs = [m for m in messages if "Summary" in m.get("content", "")]
         assert len(summary_msgs) >= 1  # At least first summary fits
 
+    def test_oversized_early_summary_does_not_starve_later_smaller_ones(self):
+        """An over-budget summary must be skipped on its own, not stop
+        every later (smaller, more recent) summary from being included.
+
+        Summaries are supplied oldest-first (SQLiteMemoryStore.get_summaries()
+        orders by depth, created_at). Previously the loop used `break` on
+        the first summary that didn't fit, so one oversized early summary
+        silently dropped every subsequent, smaller, more-recent summary
+        too -- even though each of them individually fit comfortably
+        within the remaining budget.
+        """
+        budget = TokenBudget(
+            total=500,
+            system_reserve=50,
+            tool_definitions_reserve=50,
+            memory_fraction=0.0,
+            learnings_fraction=0.0,
+            fresh_tail_count=0,
+        )
+        cm = ContextManager(budget)
+        summaries = [
+            FakeSummary(depth=0, content="X " * 3000, descendant_count=5),  # huge, oldest
+            FakeSummary(depth=0, content="NEWER-SMALL-A", descendant_count=5),
+            FakeSummary(depth=0, content="NEWER-SMALL-B", descendant_count=5),
+        ]
+        _, messages = cm.build_messages(
+            system="S",
+            new_message="new",
+            history=[],
+            summaries=summaries,
+        )
+        contents = [m["content"] for m in messages]
+        assert any("NEWER-SMALL-A" in c for c in contents)
+        assert any("NEWER-SMALL-B" in c for c in contents)
+        assert not any(c.count("X ") > 100 for c in contents)  # oversized one excluded
+
 
 class TestIntegration:
     """Full cycle: summaries + fresh tail + evictable."""

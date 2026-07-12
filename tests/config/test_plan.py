@@ -36,6 +36,66 @@ class TestBackupConfig:
         backups = list_backups(backup_dir)
         assert len(backups) <= 5
 
+    def test_two_backups_within_the_same_second_do_not_collide(self, tmp_path, monkeypatch):
+        """Regression: two backup_config() calls within the same wall-clock
+        second (the timestamp's resolution) previously produced the
+        identical filename, and shutil.copy2() silently overwrote the first
+        backup with the second's content -- no error, no warning, the first
+        backup's data simply gone.
+        """
+        from missy.config.plan import backup_config
+
+        # Freeze the timestamp so both calls fall in the "same second"
+        # deterministically, rather than relying on real clock timing.
+        monkeypatch.setattr("missy.config.plan.time.strftime", lambda fmt: "20260101_120000")
+
+        config_file = tmp_path / "config.yaml"
+        backup_dir = tmp_path / "config.d"
+
+        config_file.write_text("version: 1\n")
+        path1 = backup_config(config_file, backup_dir)
+
+        config_file.write_text("version: 2\n")
+        path2 = backup_config(config_file, backup_dir)
+
+        assert path1 != path2, "same-second backups must not share a filename"
+        assert path1.exists()
+        assert path2.exists()
+        assert path1.read_text() == "version: 1\n"
+        assert path2.read_text() == "version: 2\n"
+
+    def test_ordering_survives_tied_mtimes_from_unchanged_source(self, tmp_path, monkeypatch):
+        """Regression: list_backups()/rollback()/_prune_backups() sorted by
+        stat().st_mtime, but shutil.copy2() (used by backup_config())
+        preserves the *source* config file's mtime on the copy, not the
+        time the backup was actually made. Two backups of an unchanged
+        source file get IDENTICAL mtimes, even when their filenames
+        (and the disambiguating _N suffix backup_config() already adds
+        for same-second collisions) correctly encode true creation order.
+        Sorting must use the filename, not mtime, so ties can't scramble
+        backup ordering.
+        """
+        from missy.config.plan import backup_config, list_backups
+
+        config_file = tmp_path / "config.yaml"
+        backup_dir = tmp_path / "config.d"
+        config_file.write_text("version: 1\n")
+
+        # Two backups of the SAME unchanged content: shutil.copy2() gives
+        # both copies the identical source mtime, regardless of real
+        # wall-clock time between the two calls.
+        path1 = backup_config(config_file, backup_dir)
+        path2 = backup_config(config_file, backup_dir)
+
+        assert path1.stat().st_mtime == path2.stat().st_mtime
+        assert path1 != path2
+
+        backups = list_backups(backup_dir)
+        assert backups[-1] == path2, (
+            "the true most-recent backup must sort last despite tied mtimes"
+        )
+        assert backups[0] == path1
+
 
 class TestRollback:
     """Tests for rollback."""

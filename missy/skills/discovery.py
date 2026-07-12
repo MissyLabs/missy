@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -153,9 +154,18 @@ class SkillDiscovery:
     def search(self, query: str, skills: list[SkillManifest]) -> list[SkillManifest]:
         """Fuzzy-match skills by name and description.
 
-        Performs a case-insensitive substring match of *query* against
-        the ``name`` and ``description`` fields.  Name matches are
-        ranked higher than description-only matches.
+        Each word of *query* is matched independently (case-insensitive,
+        with ``-``/``_`` normalised to spaces) against the ``name`` and
+        ``description`` fields; a skill matches only if EVERY query word
+        appears somewhere in the target text, in any order. A single
+        contiguous-substring check previously required the query to
+        appear verbatim (same word order, same delimiters) in one field
+        -- a natural multi-word query like ``"web search"`` matched
+        neither ``"web-search"`` (hyphen vs. space) nor a description
+        with the words in the opposite order, a false negative on
+        exactly the kind of realistic phrasing "fuzzy" search implies
+        it handles. Name matches are ranked higher than
+        description-only matches.
 
         Args:
             query: Search string.
@@ -167,14 +177,22 @@ class SkillDiscovery:
         if not query:
             return list(skills)
 
-        q = query.lower()
+        def _normalize(text: str) -> str:
+            return re.sub(r"[-_]+", " ", text.lower())
+
+        query_words = _normalize(query).split()
+        if not query_words:
+            return list(skills)
+
         name_matches: list[SkillManifest] = []
         desc_matches: list[SkillManifest] = []
 
         for skill in skills:
-            if q in skill.name.lower():
+            name_norm = _normalize(skill.name)
+            desc_norm = _normalize(skill.description)
+            if all(w in name_norm for w in query_words):
                 name_matches.append(skill)
-            elif q in skill.description.lower():
+            elif all(w in name_norm or w in desc_norm for w in query_words):
                 desc_matches.append(skill)
 
         return name_matches + desc_matches
@@ -216,12 +234,31 @@ class SkillDiscovery:
     def _parse_yaml(text: str) -> dict:
         """Minimal YAML-subset parser for frontmatter.
 
-        Handles simple ``key: value`` pairs and inline lists
-        (``[a, b, c]``).  Does NOT require PyYAML to be installed.
+        Handles simple ``key: value`` pairs, inline lists (``[a, b, c]``),
+        and the standard multi-line block-list form::
+
+            tools:
+              - web_fetch
+              - shell_exec
+
+        Does NOT require PyYAML to be installed. Multi-line block lists
+        are the common, standard YAML syntax used by real SKILL.md files
+        (e.g. the SKILL.md open standard's own ``allowed-tools:`` field) --
+        without support for this form, a ``key:`` line with nothing after
+        the colon was silently treated as an empty string, and the
+        following ``- item`` lines (having no ``:``) were silently
+        discarded entirely, so a skill's ``tools:`` list quietly came out
+        as ``[]`` with no error, warning, or log line anywhere.
         """
         result: dict[str, str | list[str]] = {}
-        for line in text.splitlines():
-            line = line.strip()
+        lines = text.splitlines()
+        i = 0
+        n = len(lines)
+        while i < n:
+            raw_line = lines[i]
+            line = raw_line.strip()
+            key_indent = len(raw_line) - len(raw_line.lstrip())
+            i += 1
             if not line or line.startswith("#"):
                 continue
             if ":" not in line:
@@ -229,6 +266,35 @@ class SkillDiscovery:
             key, _, value = line.partition(":")
             key = key.strip()
             value = value.strip()
+
+            if not value:
+                # Possible block-list: collect subsequent "- item" lines.
+                # Standard YAML permits block-sequence items at the SAME
+                # indentation as their parent mapping key, not just deeper
+                # (this is in fact what PyYAML's own default block-style
+                # dumper produces for a top-level list) -- a strict
+                # "must be indented more" check silently dropped this
+                # equally-common form as an empty string with no error.
+                items: list[str] = []
+                while i < n:
+                    next_raw = lines[i]
+                    next_stripped = next_raw.strip()
+                    if not next_stripped:
+                        i += 1
+                        continue
+                    next_indent = len(next_raw) - len(next_raw.lstrip())
+                    if next_indent >= key_indent and next_stripped.startswith("-"):
+                        item = next_stripped[1:].strip().strip("\"'")
+                        if item:
+                            items.append(item)
+                        i += 1
+                        continue
+                    break
+                if items:
+                    result[key] = items
+                else:
+                    result[key] = value
+                continue
 
             # Inline list: [a, b, c]
             if value.startswith("[") and value.endswith("]"):

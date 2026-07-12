@@ -36,6 +36,18 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     backup_path = dest_dir / f"config.yaml.{timestamp}"
+    # Two backup_config() calls within the same wall-clock second (the
+    # timestamp's resolution) previously produced the identical filename,
+    # and shutil.copy2() overwrites an existing file with no collision
+    # check -- the second call silently destroyed the first backup's
+    # content, with no error raised. Disambiguate with a numeric suffix so
+    # rapid successive backups (e.g. configuring two providers back-to-back,
+    # or migrate_config() immediately followed by another write) are never
+    # lost.
+    suffix = 1
+    while backup_path.exists():
+        backup_path = dest_dir / f"config.yaml.{timestamp}_{suffix}"
+        suffix += 1
     shutil.copy2(str(src), str(backup_path))
 
     _prune_backups(dest_dir)
@@ -44,7 +56,7 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
 
 def _prune_backups(backup_dir: Path, max_keep: int = MAX_BACKUPS) -> None:
     """Remove oldest backups so that at most *max_keep* remain."""
-    backups = sorted(list_backups(backup_dir), key=lambda p: p.stat().st_mtime)
+    backups = list_backups(backup_dir)
     while len(backups) > max_keep:
         oldest = backups.pop(0)
         oldest.unlink()
@@ -61,7 +73,7 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
         Path to the restored backup, or ``None`` if no backups exist.
     """
     dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None)
-    backups = sorted(list_backups(dest_dir), key=lambda p: p.stat().st_mtime)
+    backups = list_backups(dest_dir)
     if not backups:
         return None
 
@@ -80,7 +92,19 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
 
 
 def list_backups(backup_dir: str | Path | None = None) -> list[Path]:
-    """Return all backup files sorted by modification time (oldest first).
+    """Return all backup files sorted by true backup creation order (oldest first).
+
+    Sorted by filename rather than ``stat().st_mtime``: ``shutil.copy2()``
+    (used by :func:`backup_config`) preserves the *source* config file's
+    mtime on the copy, not the time the backup was actually made -- two
+    backups of an unchanged source file get identical mtimes, and even
+    across edits, mtime reflects "when the config content was last
+    written," not "when this backup was created." The filename's
+    ``YYYYMMDD_HHMMSS[_N]`` timestamp (with the ``_N`` disambiguating
+    suffix :func:`backup_config` already adds for same-second collisions)
+    sorts lexicographically in true chronological order, which
+    ``_prune_backups()``/:func:`rollback` rely on to correctly identify
+    the oldest/latest backup.
 
     Args:
         backup_dir: Directory to scan (default ``~/.missy/config.d``).
@@ -92,8 +116,8 @@ def list_backups(backup_dir: str | Path | None = None) -> list[Path]:
     if not dest_dir.exists():
         return []
     return sorted(
-        [p for p in dest_dir.iterdir() if p.name.startswith("config.yaml.")],
-        key=lambda p: p.stat().st_mtime,
+        (p for p in dest_dir.iterdir() if p.name.startswith("config.yaml.")),
+        key=lambda p: p.name,
     )
 
 

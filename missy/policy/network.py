@@ -93,6 +93,43 @@ class NetworkPolicyEngine:
             PolicyViolationError: When the host is denied by policy.
             ValueError: When *host* is ``None`` or an empty string.
         """
+        allowed, _ip = self.check_host_resolved(
+            host, session_id=session_id, task_id=task_id, category=category
+        )
+        return allowed
+
+    def check_host_resolved(
+        self,
+        host: str,
+        session_id: str = "",
+        task_id: str = "",
+        category: str = "",
+    ) -> tuple[bool, str | None]:
+        """Like :meth:`check_host`, but also returns the validated IP.
+
+        SR-1.9b: ``check_host`` alone tells a caller *that* a host is
+        allowed, but the IP it validated is discarded — if the caller
+        then makes its own, independent DNS resolution to actually
+        connect (as ``httpx``/``httpcore`` does by default), a low-TTL
+        DNS record can return a different address between the check and
+        the connect (DNS rebinding), silently bypassing every check this
+        method just performed. Callers that go on to make the actual
+        connection (:class:`~missy.gateway.client.PolicyHTTPClient`)
+        must use the returned IP to pin that connection, not re-resolve.
+
+        Returns:
+            ``(True, ip)`` when allowed and a concrete IP was resolved
+            and validated; ``(True, None)`` only in ``default_deny=False``
+            mode, which never performs DNS resolution at all (an
+            established, deliberately-tested property of that mode) and
+            so has nothing to pin -- but also has no security boundary
+            to protect, since everything is already allowed. Raises on
+            denial, same as :meth:`check_host`.
+
+        Raises:
+            PolicyViolationError: When the host is denied by policy.
+            ValueError: When *host* is ``None`` or an empty string.
+        """
         if not host:
             raise ValueError("host must be a non-empty string")
 
@@ -100,17 +137,26 @@ class NetworkPolicyEngine:
         # [::1] that arrive from URL parsers.
         host = host.strip("[]").lower()
 
-        # Step 1 – default-allow mode bypasses all remaining checks.
+        # Step 1 – default-allow mode bypasses all remaining checks,
+        # including DNS resolution (an established, deliberately-tested
+        # property: default_deny=False must never trigger a DNS lookup,
+        # e.g. for pure offline/local-only setups). No security boundary
+        # exists to protect in this mode, so there is nothing to pin the
+        # connection against -- the transport falls back to normal,
+        # unpinned resolution for this one request (see
+        # missy.gateway.pinned_transport: a ``None`` pin is treated as
+        # "resolve normally," not "deny").
         if not self._policy.default_deny:
             self._emit_event(host, "allow", "default_allow", session_id, task_id)
-            return True
+            return True, None
 
-        # Step 2 – bare IP: check CIDR lists only (no DNS).
+        # Step 2 – bare IP: check CIDR lists only (no DNS) — the "resolved"
+        # IP is simply the literal itself.
         if self._is_ip(host):
             rule = self._check_cidr(host)
             if rule:
                 self._emit_event(host, "allow", rule, session_id, task_id)
-                return True
+                return True, host
             # IP not in any CIDR – deny immediately without DNS.
             self._emit_event(host, "deny", None, session_id, task_id)
             raise PolicyViolationError(
@@ -120,78 +166,41 @@ class NetworkPolicyEngine:
             )
 
         # Step 3 – exact hostname match (global + per-category).
+        #
+        # SR-1.9a: a name match alone is not sufficient — still verify the
+        # resolved IP isn't private/rebound (see _resolve_and_check_rebinding).
+        # Previously this step allowed immediately with zero IP check, so an
+        # explicitly allowlisted hostname (e.g. "build.corp.example.com")
+        # that resolves to internal infrastructure (10.0.0.5) connected with
+        # no verification at all — the opposite of every other host, which
+        # gets this same check via step 5 below. Trusting a *name* is not the
+        # same as trusting whatever IP it happens to resolve to right now.
         rule = self._check_exact_host(host, category=category)
         if rule:
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True
+            return True, (resolved[0][0] if resolved else None)
 
-        # Step 4 – wildcard / suffix domain match.
+        # Step 4 – wildcard / suffix domain match. Same SR-1.9a rebinding
+        # check as step 3.
         rule = self._check_domain(host)
         if rule:
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True
+            return True, (resolved[0][0] if resolved else None)
 
-        # Step 5 – DNS resolution + CIDR re-check.
-        # Defense against DNS rebinding: when a *hostname* (not a direct IP)
-        # resolves to a private/reserved address, deny unless that private
-        # range is explicitly allowed via CIDR.  This prevents an attacker
-        # from pointing evil.example.com at 169.254.169.254 (cloud metadata)
-        # or 10.0.0.1 (internal infrastructure) and bypassing domain checks.
-        #
-        # IMPORTANT: We check ALL resolved addresses before making a decision.
-        # If ANY address is private/reserved and not in allowed CIDRs, the
-        # entire request is denied.  This prevents mixed-record attacks where
-        # a hostname resolves to both a public and a private IP.
+        # Step 5 – DNS resolution + CIDR re-check for hostnames not matched
+        # by name at all.
         try:
-            infos = socket.getaddrinfo(host, None)
-            # De-duplicate resolved IPs.
-            seen_ips: set[str] = set()
-            resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
-            for info in infos:
-                ip_str = info[4][0]
-                if ip_str in seen_ips:
-                    continue
-                seen_ips.add(ip_str)
-                try:
-                    addr = ipaddress.ip_address(ip_str)
-                except ValueError:
-                    continue
-                resolved.append((ip_str, addr))
-
-            # First pass: deny if ANY resolved IP is private and not allowed.
-            for ip_str, addr in resolved:
-                if addr.is_private or addr.is_loopback or addr.is_link_local:
+            resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
+            if resolved:
+                for ip_str, _addr in resolved:
                     rule = self._check_cidr(ip_str)
-                    if not rule:
-                        logger.warning(
-                            "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
-                            "private address %s which is not in allowed_cidrs",
-                            host,
-                            ip_str,
-                        )
-                        self._emit_event(host, "deny", None, session_id, task_id)
-                        raise PolicyViolationError(
-                            f"Network access denied: {host!r} resolved to private "
-                            f"address {ip_str} (possible DNS rebinding attack).",
-                            category="network",
-                            detail=(
-                                f"Hostname {host!r} resolved to {ip_str} which is a "
-                                "private/reserved address not explicitly allowed by policy."
-                            ),
-                        )
-
-            # Second pass: all private IPs (if any) are allowed; check public
-            # IPs against CIDR allowlist.
-            for ip_str, _addr in resolved:
-                rule = self._check_cidr(ip_str)
-                if rule:
-                    self._emit_event(host, "allow", rule, session_id, task_id)
-                    return True
+                    if rule:
+                        self._emit_event(host, "allow", rule, session_id, task_id)
+                        return True, ip_str
         except PolicyViolationError:
             raise
-        except OSError:
-            # DNS failure – treat as unresolvable and fall through to deny.
-            logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
 
         # Step 6 – deny.
         self._emit_event(host, "deny", None, session_id, task_id)
@@ -204,9 +213,118 @@ class NetworkPolicyEngine:
             ),
         )
 
+    @staticmethod
+    def _resolve_best_effort(
+        host: str,
+    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]]:
+        """Resolve *host* with no rebinding/CIDR checks.
+
+        Used both for ``default_deny=False`` mode (no security boundary
+        to enforce, but still worth pinning to *some* validated-at-
+        lookup-time address) and by :mod:`missy.gateway.client`'s
+        interactive-approval override path (an explicit human override
+        of a policy denial still needs a best-effort pin so the
+        connection doesn't fail closed against the SR-1.9b transport).
+        """
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return []
+        seen_ips: set[str] = set()
+        resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
+        for info in infos:
+            ip_str = info[4][0]
+            if ip_str in seen_ips:
+                continue
+            seen_ips.add(ip_str)
+            try:
+                addr = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            resolved.append((ip_str, addr))
+        return resolved
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _resolve_and_check_rebinding(
+        self,
+        host: str,
+        session_id: str,
+        task_id: str,
+    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] | None:
+        """Resolve *host* and deny if any resolved IP is an unallowed private address.
+
+        Applied uniformly to every hostname match — exact, domain, and the
+        no-name-match DNS fallback — so that an explicitly allowlisted
+        hostname gets the same DNS-rebinding protection as any other host
+        (SR-1.9a). This prevents an attacker (or a hostname whose DNS record
+        later changes) from pointing an allowlisted name at
+        ``169.254.169.254`` (cloud metadata) or ``10.0.0.1`` (internal
+        infrastructure) and bypassing the name-based checks entirely.
+
+        We check ALL resolved addresses before allowing. If ANY address is
+        private/loopback/link-local and not covered by ``allowed_cidrs``,
+        the entire request is denied — this prevents mixed-record attacks
+        where a hostname resolves to both a public and a private IP.
+
+        Args:
+            host: Normalised (lowercase, no brackets) hostname.
+            session_id: Calling session identifier, for the audit event.
+            task_id: Calling task identifier, for the audit event.
+
+        Returns:
+            De-duplicated ``(ip_str, addr)`` pairs for every resolved
+            address, or ``None`` if DNS resolution failed (nothing to rebind
+            if the name doesn't resolve — the caller's own name-based match,
+            if any, still stands).
+
+        Raises:
+            PolicyViolationError: When a resolved IP is private/reserved and
+                not covered by ``allowed_cidrs``.
+        """
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
+            return None
+
+        seen_ips: set[str] = set()
+        resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
+        for info in infos:
+            ip_str = info[4][0]
+            if ip_str in seen_ips:
+                continue
+            seen_ips.add(ip_str)
+            try:
+                addr = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            resolved.append((ip_str, addr))
+
+        for ip_str, addr in resolved:
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                rule = self._check_cidr(ip_str)
+                if not rule:
+                    logger.warning(
+                        "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
+                        "private address %s which is not in allowed_cidrs",
+                        host,
+                        ip_str,
+                    )
+                    self._emit_event(host, "deny", None, session_id, task_id)
+                    raise PolicyViolationError(
+                        f"Network access denied: {host!r} resolved to private "
+                        f"address {ip_str} (possible DNS rebinding attack).",
+                        category="network",
+                        detail=(
+                            f"Hostname {host!r} resolved to {ip_str} which is a "
+                            "private/reserved address not explicitly allowed by policy."
+                        ),
+                    )
+
+        return resolved
 
     @staticmethod
     def _is_ip(host: str) -> bool:

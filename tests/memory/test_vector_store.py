@@ -152,6 +152,82 @@ class TestVectorMemoryStoreWithFaiss:
         store.load()  # Should not raise
         assert store.count() == 0
 
+    def test_load_rebuilds_index_on_dimension_mismatch(self, tmp_path: Path) -> None:
+        """A saved index at one dimension, loaded with a different configured
+        dimension (e.g. across an upgrade that changes the default), must not
+        crash on the next add()/search() -- it should transparently rebuild.
+        """
+        index_path = str(tmp_path / "mismatch.faiss")
+
+        store64 = VectorMemoryStore(dimension=64, index_path=index_path)
+        store64.add("hello world", {"category": "greeting"})
+        store64.add("the deployment failed", {"category": "solution"})
+        store64.save()
+
+        store384 = VectorMemoryStore(dimension=384, index_path=index_path)
+        store384.load()
+
+        assert store384._index.d == 384
+        assert store384.count() == 2
+
+        # Must not raise (pre-fix: FAISS AssertionError on shape mismatch).
+        store384.add("another entry")
+        assert store384.count() == 3
+
+        results = store384.search("deployment", top_k=2)
+        texts = {r["text"] for r in results}
+        assert "the deployment failed" in texts
+
+    def test_delete_by_metadata_removes_only_matching_entries(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete.faiss"),
+        )
+        store.add("edge piece found near sky", {"session_id": "sess-A"})
+        store.add("corner piece found", {"session_id": "sess-B"})
+        store.add("another sess-A fragment", {"session_id": "sess-A"})
+
+        removed = store.delete_by_metadata({"session_id": "sess-A"})
+
+        assert removed == 2
+        assert store.count() == 1
+        results = store.search("piece", top_k=5)
+        assert all(r["metadata"]["session_id"] == "sess-B" for r in results)
+
+    def test_delete_by_metadata_no_match_returns_zero(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_nomatch.faiss"),
+        )
+        store.add("entry", {"session_id": "sess-B"})
+
+        removed = store.delete_by_metadata({"session_id": "sess-does-not-exist"})
+
+        assert removed == 0
+        assert store.count() == 1
+
+    def test_delete_by_metadata_on_empty_store_returns_zero(self, tmp_path: Path) -> None:
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_empty.faiss"),
+        )
+        assert store.delete_by_metadata({"session_id": "sess-A"}) == 0
+
+    def test_delete_by_metadata_index_still_usable_after_delete(self, tmp_path: Path) -> None:
+        """The rebuilt index must remain fully functional for further add/search."""
+        store = VectorMemoryStore(
+            dimension=64,
+            index_path=str(tmp_path / "delete_reuse.faiss"),
+        )
+        store.add("edge piece found near sky", {"session_id": "sess-A"})
+        store.add("corner piece found", {"session_id": "sess-B"})
+        store.delete_by_metadata({"session_id": "sess-A"})
+
+        store.add("brand new entry", {"session_id": "sess-C"})
+        assert store.count() == 2
+        results = store.search("brand new entry", top_k=1)
+        assert results[0]["text"] == "brand new entry"
+
 
 # ---------------------------------------------------------------------------
 # Graceful degradation without FAISS
@@ -178,3 +254,4 @@ class TestGracefulWithoutFaiss:
             assert results == []
             store.save()  # Should not raise
             store.load()  # Should not raise
+            assert store.delete_by_metadata({"session_id": "x"}) == 0  # Should not raise

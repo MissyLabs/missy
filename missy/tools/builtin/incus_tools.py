@@ -21,6 +21,24 @@ _MAX_OUTPUT_BYTES = 65_536
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
 _SHELL_PERMS = ToolPermissions(shell=True)
+_FILE_PERMS = ToolPermissions(shell=True, filesystem_read=True, filesystem_write=True)
+
+
+class _IncusHostCommandMixin:
+    """Declares the real host command every Incus tool invokes.
+
+    SR-1.5: every Incus tool declares ``shell=True`` but the registry's
+    default policy check derives the checked command from a generic
+    ``command`` kwarg. Most of these tools have no such kwarg (so the
+    registry falls back to checking the meaningless literal ``"shell"``),
+    and ``incus_exec`` *does* have a ``command`` kwarg but it names the
+    command run inside the guest, not the ``incus`` binary actually
+    executed on the host. Every one of these tools always runs ``incus ...``
+    via :func:`_run_incus`, so that is the one true host command to check.
+    """
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        return "incus"
 
 
 def _run_incus(
@@ -72,10 +90,49 @@ def _run_incus(
         return ToolResult(success=False, output=None, error=str(exc))
 
 
+def _recheck_instance_state(instance: str, project: str | None) -> str:
+    """Perform a fresh, read-only state check for *instance* after a timeout.
+
+    A client-side subprocess timeout on a mutating instance action
+    (start/stop/restart/pause/delete) says nothing about whether the
+    Incus daemon actually completed the action server-side -- the
+    daemon has no obligation to abort its own work just because our
+    subprocess gave up waiting for it. Silently reporting only "timed
+    out" leaves the caller with no way to tell current reality from a
+    guess. This performs one more read-only ``incus list`` call
+    (itself timeout-bounded, so a hung daemon can't cascade into an
+    unbounded second wait) and summarizes what was actually observed.
+
+    Args:
+        instance: Name of the instance to recheck.
+        project: Optional Incus project scope, matching the original
+            action's own ``--project`` (if any).
+
+    Returns:
+        A short, human-readable summary of the instance's observed
+        state, or an honest statement that the recheck itself could not
+        determine it.
+    """
+    args = ["list", instance, "--format", "json"]
+    if project:
+        args.extend(["--project", project])
+    recheck = _run_incus(args, timeout=30)
+
+    if not recheck.success:
+        return f"could not be determined (recheck itself failed: {recheck.error})"
+    rows = recheck.output
+    if not isinstance(rows, list) or not rows:
+        # A cleanly empty list means "no such instance" (e.g. a `delete`
+        # that raced past the client-side timeout actually completed).
+        return f"instance {instance!r} no longer exists"
+    status = rows[0].get("status", "unknown") if isinstance(rows[0], dict) else "unknown"
+    return f"instance {instance!r} is currently {status!r}"
+
+
 # ---------------------------------------------------------------------------
 # 1. List instances
 # ---------------------------------------------------------------------------
-class IncusListTool(BaseTool):
+class IncusListTool(_IncusHostCommandMixin, BaseTool):
     """List Incus instances (containers and VMs)."""
 
     name = "incus_list"
@@ -132,7 +189,7 @@ class IncusListTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 2. Launch instance
 # ---------------------------------------------------------------------------
-class IncusLaunchTool(BaseTool):
+class IncusLaunchTool(_IncusHostCommandMixin, BaseTool):
     """Launch a new Incus container or VM."""
 
     name = "incus_launch"
@@ -227,7 +284,7 @@ class IncusLaunchTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 3. Instance lifecycle actions
 # ---------------------------------------------------------------------------
-class IncusInstanceActionTool(BaseTool):
+class IncusInstanceActionTool(_IncusHostCommandMixin, BaseTool):
     """Start, stop, restart, pause, delete, or rename an instance."""
 
     name = "incus_instance_action"
@@ -271,7 +328,33 @@ class IncusInstanceActionTool(BaseTool):
                 args.append("--force")
         if project:
             args.extend(["--project", project])
-        return _run_incus(args, timeout=timeout)
+
+        result = _run_incus(args, timeout=timeout)
+
+        # A client-side timeout on a mutating action must never be
+        # reported as a bare, uninformative failure -- the daemon may
+        # have completed the action anyway just as our subprocess gave
+        # up waiting. `rename` is excluded: after a rename times out we
+        # don't know which name (old or new) to recheck under, and
+        # guessing either could itself misreport state.
+        if (
+            not result.success
+            and result.error
+            and result.error.startswith("Command timed out")
+            and action != "rename"
+        ):
+            state_note = _recheck_instance_state(instance, project)
+            result = ToolResult(
+                success=False,
+                output=result.output,
+                error=(
+                    f"{result.error}. The action's effect is unknown at the "
+                    f"moment of timeout (the client gave up waiting, but the "
+                    f"Incus daemon may have completed it anyway). Fresh "
+                    f"read-only recheck: {state_note}."
+                ),
+            )
+        return result
 
     def get_schema(self) -> dict[str, Any]:
         return {
@@ -314,7 +397,7 @@ class IncusInstanceActionTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 4. Instance info
 # ---------------------------------------------------------------------------
-class IncusInfoTool(BaseTool):
+class IncusInfoTool(_IncusHostCommandMixin, BaseTool):
     """Get detailed information about an Incus instance."""
 
     name = "incus_info"
@@ -367,7 +450,7 @@ class IncusInfoTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 5. Execute command in instance
 # ---------------------------------------------------------------------------
-class IncusExecTool(BaseTool):
+class IncusExecTool(_IncusHostCommandMixin, BaseTool):
     """Execute a command inside an Incus instance."""
 
     name = "incus_exec"
@@ -464,7 +547,7 @@ class IncusExecTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 6. File transfer
 # ---------------------------------------------------------------------------
-class IncusFileTool(BaseTool):
+class IncusFileTool(_IncusHostCommandMixin, BaseTool):
     """Push or pull files between the host and an Incus instance."""
 
     name = "incus_file"
@@ -473,7 +556,26 @@ class IncusFileTool(BaseTool):
         "push: host → instance, pull: instance → host. "
         "Paths use 'instance/path' format for the instance side."
     )
-    permissions = _SHELL_PERMS
+    permissions = _FILE_PERMS
+
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """SR-1.5: this tool reads/writes ``host_path`` — declare it.
+
+        ``push`` reads ``host_path`` (uploaded to the instance); ``pull``
+        writes ``host_path`` (downloaded from the instance). For a
+        missing/unrecognized action, check both directions rather than
+        silently skipping enforcement — :meth:`execute` rejects invalid
+        actions on its own before either check's outcome matters.
+        """
+        host_path = kwargs.get("host_path")
+        if not host_path:
+            return ([], [])
+        action = str(kwargs.get("action", "")).lower()
+        if action == "push":
+            return ([host_path], [])
+        if action == "pull":
+            return ([], [host_path])
+        return ([host_path], [host_path])
 
     def execute(
         self,
@@ -557,7 +659,7 @@ class IncusFileTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 7. Snapshots
 # ---------------------------------------------------------------------------
-class IncusSnapshotTool(BaseTool):
+class IncusSnapshotTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus instance snapshots."""
 
     name = "incus_snapshot"
@@ -664,7 +766,7 @@ class IncusSnapshotTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 8. Instance config
 # ---------------------------------------------------------------------------
-class IncusConfigTool(BaseTool):
+class IncusConfigTool(_IncusHostCommandMixin, BaseTool):
     """Get or set Incus instance configuration."""
 
     name = "incus_config"
@@ -765,7 +867,7 @@ class IncusConfigTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 9. Image management
 # ---------------------------------------------------------------------------
-class IncusImageTool(BaseTool):
+class IncusImageTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus images."""
 
     name = "incus_image"
@@ -880,7 +982,7 @@ class IncusImageTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 10. Network management
 # ---------------------------------------------------------------------------
-class IncusNetworkTool(BaseTool):
+class IncusNetworkTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus networks."""
 
     name = "incus_network"
@@ -1027,7 +1129,7 @@ class IncusNetworkTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 11. Storage management
 # ---------------------------------------------------------------------------
-class IncusStorageTool(BaseTool):
+class IncusStorageTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus storage pools and volumes."""
 
     name = "incus_storage"
@@ -1211,7 +1313,7 @@ class IncusStorageTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 12. Profile management
 # ---------------------------------------------------------------------------
-class IncusProfileTool(BaseTool):
+class IncusProfileTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus profiles."""
 
     name = "incus_profile"
@@ -1332,7 +1434,7 @@ class IncusProfileTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 13. Project management
 # ---------------------------------------------------------------------------
-class IncusProjectTool(BaseTool):
+class IncusProjectTool(_IncusHostCommandMixin, BaseTool):
     """Manage Incus projects."""
 
     name = "incus_project"
@@ -1429,7 +1531,7 @@ class IncusProjectTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 14. Device management
 # ---------------------------------------------------------------------------
-class IncusDeviceTool(BaseTool):
+class IncusDeviceTool(_IncusHostCommandMixin, BaseTool):
     """Manage devices attached to Incus instances."""
 
     name = "incus_device"
@@ -1459,7 +1561,12 @@ class IncusDeviceTool(BaseTool):
                 error=f"Invalid action '{action}'. Must be one of: {', '.join(sorted(valid))}",
             )
         if action == "list":
-            args = ["config", "device", "list", instance, "--format", "json"]
+            # `incus config device list` has no --format flag (unlike most
+            # other incus subcommands) -- it always prints one device name
+            # per line as plain text. Passing --format json here made
+            # every "list" call fail with "Error: unknown flag: --format",
+            # found via live validation against a real Incus instance.
+            args = ["config", "device", "list", instance]
         elif action == "show":
             if not device_name:
                 return ToolResult(
@@ -1550,7 +1657,7 @@ class IncusDeviceTool(BaseTool):
 # ---------------------------------------------------------------------------
 # 15. Copy/Move instances
 # ---------------------------------------------------------------------------
-class IncusCopyMoveTool(BaseTool):
+class IncusCopyMoveTool(_IncusHostCommandMixin, BaseTool):
     """Copy or move Incus instances."""
 
     name = "incus_copy_move"

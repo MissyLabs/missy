@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolResult
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,7 @@ class MemorySearchTool(BaseTool):
         "Returns matching turns and summary excerpts with timestamps."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {
@@ -47,7 +44,13 @@ class MemorySearchTool(BaseTool):
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query (supports FTS5 syntax: phrases, AND/OR).",
+                        "description": (
+                            "Search query, matched as a literal phrase. "
+                            "FTS5 boolean/prefix operators (AND, OR, *) are "
+                            "escaped and treated as ordinary text, not query "
+                            "syntax, to prevent injection -- use plain "
+                            "keywords or short phrases."
+                        ),
                     },
                     "scope": {
                         "type": "string",
@@ -126,10 +129,7 @@ class MemoryDescribeTool(BaseTool):
         "parent/child relationships, and source turn count."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {
@@ -165,7 +165,19 @@ class MemoryDescribeTool(BaseTool):
 
     @staticmethod
     def _describe_summary(store: Any, summary_id: str) -> ToolResult:
-        summary = store.get_summary_by_id(summary_id)
+        # FX-C: a lookup exception must never be presented as "not found" --
+        # those are different facts. A missing record means the ID is
+        # genuinely absent; a raised exception means the lookup itself
+        # failed and the record's existence is unverified.
+        try:
+            summary = store.get_summary_by_id(summary_id)
+        except Exception as exc:
+            logger.warning("memory_describe: lookup failed for %s: %s", summary_id, exc)
+            return _err(
+                f"Lookup for '{summary_id}' failed due to an internal error ({exc}). "
+                "This does not mean the ID does not exist -- the record's existence is "
+                "unverified. Retry or report the failure; do not claim the record is missing."
+            )
         if summary is None:
             return _err(f"Summary '{summary_id}' not found.")
 
@@ -195,7 +207,15 @@ class MemoryDescribeTool(BaseTool):
 
     @staticmethod
     def _describe_large_content(store: Any, content_id: str) -> ToolResult:
-        record = store.get_large_content(content_id)
+        try:
+            record = store.get_large_content(content_id)
+        except Exception as exc:
+            logger.warning("memory_describe: lookup failed for %s: %s", content_id, exc)
+            return _err(
+                f"Lookup for '{content_id}' failed due to an internal error ({exc}). "
+                "This does not mean the ID does not exist -- the record's existence is "
+                "unverified. Retry or report the failure; do not claim the record is missing."
+            )
         if record is None:
             return _err(f"Large content '{content_id}' not found.")
 
@@ -223,10 +243,7 @@ class MemoryExpandTool(BaseTool):
         "For large-content refs: retrieves the full stored content."
     )
 
-    requires_filesystem_read = []
-    requires_filesystem_write = []
-    requires_network = []
-    requires_shell = False
+    permissions = ToolPermissions()
 
     def get_schema(self) -> dict:
         return {
@@ -268,7 +285,15 @@ class MemoryExpandTool(BaseTool):
 
     @staticmethod
     def _expand_large_content(store: Any, content_id: str, max_tokens: int) -> ToolResult:
-        record = store.get_large_content(content_id)
+        try:
+            record = store.get_large_content(content_id)
+        except Exception as exc:
+            logger.warning("memory_expand: lookup failed for %s: %s", content_id, exc)
+            return _err(
+                f"Lookup for '{content_id}' failed due to an internal error ({exc}). "
+                "This does not mean the ID does not exist -- the record's existence is "
+                "unverified. Retry or report the failure; do not claim the record is missing."
+            )
         if record is None:
             return _err(f"Large content '{content_id}' not found.")
 
@@ -286,7 +311,15 @@ class MemoryExpandTool(BaseTool):
 
     @staticmethod
     def _expand_summary(store: Any, summary_id: str, max_tokens: int) -> ToolResult:
-        summary = store.get_summary_by_id(summary_id)
+        try:
+            summary = store.get_summary_by_id(summary_id)
+        except Exception as exc:
+            logger.warning("memory_expand: lookup failed for %s: %s", summary_id, exc)
+            return _err(
+                f"Lookup for '{summary_id}' failed due to an internal error ({exc}). "
+                "This does not mean the ID does not exist -- the record's existence is "
+                "unverified. Retry or report the failure; do not claim the record is missing."
+            )
         if summary is None:
             return _err(f"Summary '{summary_id}' not found.")
 

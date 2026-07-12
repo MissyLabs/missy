@@ -93,10 +93,25 @@ class ShellPolicyEngine:
             )
 
         # Step 3 – allow-list check.
-        # Empty allowed_commands means allow-all (shell is unrestricted when enabled).
+        # SR-1.8: enabled=True with an empty allowed_commands list must deny
+        # ALL commands, matching ShellPolicy.allowed_commands's own
+        # documented contract ("An empty list means no commands are allowed
+        # even when enabled is True"). Configuration ambiguity must never
+        # become allow-all -- a previous version of this engine inverted
+        # that contract and treated an empty list as unrestricted shell
+        # access whenever enabled=True, which is exactly backwards.
         if not self._policy.allowed_commands:
-            self._emit_event(command, "allow", "*", session_id, task_id)
-            return True
+            self._emit_event(command, "deny", "empty_allowlist", session_id, task_id)
+            raise PolicyViolationError(
+                "Shell command denied: allowed_commands is empty.",
+                category="shell",
+                detail=(
+                    "ShellPolicy.enabled is True but allowed_commands is empty -- "
+                    "per policy, an empty allowlist denies all commands rather than "
+                    "permitting them. Configure allowed_commands explicitly to permit "
+                    "specific programs."
+                ),
+            )
 
         # Every program in a compound command must be allowed.
         for program in programs:
@@ -167,6 +182,70 @@ class ShellPolicyEngine:
         }
     )
 
+    # SR-1.7: redirection operators that write to / read from a filesystem
+    # path. ">&"/"<&" (fd duplication, e.g. "2>&1") are deliberately
+    # excluded -- their target is a file descriptor number, not a path.
+    _REDIRECT_WRITE_OPS = frozenset({">", ">>", ">|", "&>", "&>>"})
+    _REDIRECT_READ_OPS = frozenset({"<", "<>"})
+
+    def extract_redirect_targets(self, command: str) -> tuple[list[str], list[str]]:
+        """Return ``(write_targets, read_targets)`` for every redirection
+        operator in *command*, across every sub-command of a compound chain.
+
+        SR-1.7: an allowed program name says nothing about what files a
+        shell redirection lets it touch — ``echo x > /etc/cron.d/pwn``
+        with only ``echo`` allowlisted writes an arbitrary host file with
+        no filesystem policy check at all. This extracts every redirect
+        target so the caller (:meth:`~missy.policy.engine.PolicyEngine.check_shell`)
+        can route them through the filesystem policy engine too.
+
+        Uses POSIX-punctuation-aware tokenisation (``shlex`` with
+        ``punctuation_chars=True``) so operators are recognised whether or
+        not they're surrounded by whitespace — ``echo x>file`` and
+        ``echo x > file`` both correctly yield ``file`` as a write target.
+        Content inside quotes is treated as a literal argument and not
+        re-scanned for nested operators, matching real shell semantics —
+        this deliberately does NOT see redirects hidden inside a quoted
+        string handed to a launcher (e.g. ``sh -c 'echo x > file'``); that
+        is a distinct, known limitation of static command-string analysis,
+        not a gap in this parser specifically (see ``_LAUNCHER_COMMANDS`
+        and the module-level residual-risk note).
+
+        Args:
+            command: The raw shell command string (as passed to
+                :meth:`check_command`).
+
+        Returns:
+            A ``(write_targets, read_targets)`` tuple of path strings, in
+            the order encountered. Empty lists when the command has no
+            redirections or cannot be tokenised (malformed quoting is
+            already denied earlier in :meth:`check_command`'s own
+            tokenisation, so this treats that case as "nothing to add"
+            rather than raising here).
+        """
+        try:
+            lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return ([], [])
+
+        write_targets: list[str] = []
+        read_targets: list[str] = []
+        for i in range(len(tokens) - 1):
+            tok = tokens[i]
+            nxt = tokens[i + 1]
+            if nxt.startswith("&"):
+                # Duplicates a file descriptor (e.g. "2>&1", ">&2") rather
+                # than naming a file — not a filesystem target.
+                continue
+            if tok in self._REDIRECT_WRITE_OPS:
+                write_targets.append(nxt)
+            elif tok in self._REDIRECT_READ_OPS:
+                read_targets.append(nxt)
+
+        return (write_targets, read_targets)
+
     @staticmethod
     def _extract_program(command: str) -> str | None:
         """Return the program token from a shell command string.
@@ -236,7 +315,15 @@ class ShellPolicyEngine:
         # Replace chain operators with a unique delimiter, then split.
         # Order matters: && and || must be checked before single & or |.
         # Also split on bare & (background execution) via negative lookahead.
-        pattern = r"\s*(?:&&|\|\||&(?!&)|[;|\n])\s*"
+        # Bug fix (found while implementing SR-1.7): a lone "&" preceded by
+        # "<" or ">" is a file-descriptor-duplication redirect (2>&1, >&2,
+        # <&0), not the background-execution operator -- the previous
+        # pattern split "cmd 2>&1" into "cmd 2>" and "1", denying the
+        # extremely common ">&1"/"2>&1" idiom outright by misparsing "1" as
+        # a fake sub-command's program name. The negative lookbehind
+        # excludes that case while leaving genuine background "&" (not
+        # preceded by a redirect operator) splitting unchanged.
+        pattern = r"\s*(?:&&|\|\||(?<![<>])&(?!&)|[;|\n])\s*"
         parts = re.split(pattern, command)
 
         programs: list[str] = []

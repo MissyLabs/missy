@@ -251,6 +251,87 @@ class TestBuildConfigYaml:
         parsed = yaml.safe_load(content)
         assert parsed["workspace_path"] == "/my/ws"
 
+    def test_workspace_with_double_quote_produces_valid_yaml(self):
+        """Regression: workspace was spliced into config.yaml via a raw
+        f-string (f'workspace_path: "{workspace}"') with none of
+        _yaml_safe_value()'s escaping -- a workspace path containing a
+        double quote (a perfectly legal Linux directory name) produced
+        config.yaml that failed to parse as YAML at all. The wizard
+        reported "Configuration written" success while silently leaving
+        the operator with a broken config that fails on next load.
+        """
+        workspace = '/home/user/my"workspace'
+        content = self._call(workspace=workspace)
+        parsed = yaml.safe_load(content)  # must not raise
+        assert parsed["workspace_path"] == workspace
+        assert workspace in parsed["filesystem"]["allowed_write_paths"]
+        assert workspace in parsed["filesystem"]["allowed_read_paths"]
+
+    def test_workspace_with_colon_and_hash_produces_valid_yaml(self):
+        workspace = "/home/user/ws: notes # here"
+        content = self._call(workspace=workspace)
+        parsed = yaml.safe_load(content)
+        assert parsed["workspace_path"] == workspace
+
+    def test_allowed_host_with_special_chars_produces_valid_yaml(self):
+        content = self._call(allowed_hosts=['evil.example.com"; injected'])
+        parsed = yaml.safe_load(content)
+        assert 'evil.example.com"; injected' in parsed["network"]["allowed_hosts"]
+
+    def test_discord_ack_reaction_with_quote_produces_valid_yaml(self):
+        discord_cfg = {
+            "token_env_var": "DISCORD_BOT_TOKEN",
+            "bot_token": None,
+            "application_id": None,
+            "dm_policy": "disabled",
+            "dm_allowlist": [],
+            "ack_reaction": 'x"y',
+            "ignore_bots": True,
+            "guild_policies": [],
+        }
+        content = self._call(discord_cfg=discord_cfg)
+        parsed = yaml.safe_load(content)
+        assert parsed["discord"]["accounts"][0]["ack_reaction"] == 'x"y'
+
+    def test_discord_dm_allowlist_entry_with_quote_produces_valid_yaml(self):
+        discord_cfg = {
+            "token_env_var": "DISCORD_BOT_TOKEN",
+            "bot_token": None,
+            "application_id": None,
+            "dm_policy": "allowlist",
+            "dm_allowlist": ['123"456'],
+            "ack_reaction": "",
+            "ignore_bots": True,
+            "guild_policies": [],
+        }
+        content = self._call(discord_cfg=discord_cfg)
+        parsed = yaml.safe_load(content)
+        assert parsed["discord"]["accounts"][0]["dm_allowlist"] == ['123"456']
+
+    def test_discord_guild_id_with_quote_produces_valid_yaml(self):
+        discord_cfg = {
+            "token_env_var": "DISCORD_BOT_TOKEN",
+            "bot_token": None,
+            "application_id": None,
+            "dm_policy": "disabled",
+            "dm_allowlist": [],
+            "ack_reaction": "",
+            "ignore_bots": True,
+            "guild_policies": [
+                {
+                    "guild_id": 'guild"1',
+                    "require_mention": True,
+                    "mode": "full",
+                    "allowed_channels": ['chan"1'],
+                }
+            ],
+        }
+        content = self._call(discord_cfg=discord_cfg)
+        parsed = yaml.safe_load(content)
+        guild_policies = parsed["discord"]["accounts"][0]["guild_policies"]
+        assert 'guild"1' in guild_policies
+        assert guild_policies['guild"1']["allowed_channels"] == ['chan"1']
+
     def test_anthropic_provider_emitted(self):
         providers_cfg = [
             {

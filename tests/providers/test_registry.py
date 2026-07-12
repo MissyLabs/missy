@@ -86,6 +86,30 @@ class TestRegisterAndGet:
 
 
 # ---------------------------------------------------------------------------
+# ProviderRegistry.get_config (SR-4.8 residual: per-provider
+# CircuitBreaker tunables need a lookup path from a provider name back to
+# its ProviderConfig, which previously had no public accessor at all)
+# ---------------------------------------------------------------------------
+
+
+class TestGetConfig:
+    def test_get_config_returns_registered_config(self):
+        registry = ProviderRegistry()
+        cfg = ProviderConfig(name="anthropic", model="claude-sonnet-4-6")
+        registry.register("anthropic", _make_provider("anthropic"), config=cfg)
+        assert registry.get_config("anthropic") is cfg
+
+    def test_get_config_returns_none_when_registered_without_config(self):
+        registry = ProviderRegistry()
+        registry.register("anthropic", _make_provider("anthropic"))  # no config= passed
+        assert registry.get_config("anthropic") is None
+
+    def test_get_config_returns_none_for_unregistered_provider(self):
+        registry = ProviderRegistry()
+        assert registry.get_config("nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
 # ProviderRegistry.list_providers
 # ---------------------------------------------------------------------------
 

@@ -122,9 +122,60 @@ class ConfigWatcher:
 
 def _apply_config(new_config) -> None:
     """Re-initialise subsystems with updated config."""
-    from missy.policy.engine import init_policy_engine
-    from missy.providers.registry import init_registry
+    from missy.observability.audit_logger import init_audit_logger
+    from missy.observability.otel import init_otel
+    from missy.policy.engine import PolicyEngine, init_policy_engine
+    from missy.providers.registry import ProviderRegistry, init_registry
+
+    # Construct both new subsystem instances before installing either one
+    # globally. init_policy_engine()/init_registry() each construct their
+    # replacement before atomically swapping it in, but _apply_config()
+    # previously called them sequentially with no such guarantee across
+    # the pair: if init_policy_engine() succeeded but init_registry()
+    # then raised (e.g. a config that passes load_config()'s own
+    # validation but still fails ProviderRegistry.from_config(), such as
+    # a malformed provider block), the process ended up with a policy
+    # engine on the NEW config and a provider registry still on the OLD
+    # config -- a genuinely inconsistent runtime state masked by a
+    # generic "reload failed" log line that reads as "nothing changed".
+    # Building both here first (discarded; PolicyEngine's __init__ and
+    # ProviderRegistry.from_config() are pure config-driven construction
+    # with no side effect that isn't idempotent on a second call with the
+    # same config) surfaces either construction failure before either
+    # singleton is touched.
+    PolicyEngine(new_config)
+    ProviderRegistry.from_config(new_config)
 
     init_policy_engine(new_config)
     init_registry(new_config)
     logger.info("ConfigWatcher: policy engine and provider registry updated")
+
+    # SR-4.6/observability: init_otel() was only ever called once, at
+    # process bootstrap (missy/cli/main.py's _load_subsystems()) -- toggling
+    # observability.otel_enabled (or changing otel_endpoint/otel_protocol)
+    # on a running `missy gateway start` daemon had no effect whatsoever,
+    # despite ConfigWatcher/_apply_config existing specifically to make
+    # config changes take effect without a restart. init_otel() itself
+    # unwinds any previously active exporter's publish() wrapper before
+    # installing a new one, so this is safe to call on every reload.
+    try:
+        init_otel(new_config)
+        logger.info("ConfigWatcher: OpenTelemetry exporter updated")
+    except Exception as exc:
+        logger.warning("ConfigWatcher: OpenTelemetry re-init failed: %s", exc)
+
+    # init_audit_logger() was only ever called once, at process bootstrap
+    # (_load_subsystems()) -- editing audit_log_path on a running `missy
+    # gateway start` daemon (e.g. moving to a different volume, or because
+    # the old location became unwritable/full) had no effect whatsoever:
+    # every subsequent event kept being written to the stale path forever,
+    # with no error surfaced anywhere. init_audit_logger() reuses and
+    # reconfigures the same, already-subscribed AuditLogger instance in
+    # place rather than constructing a new one (see AuditLogger.reconfigure()'s
+    # docstring for why a fresh instance would silently fail to actually
+    # replace it), so this is safe to call on every reload.
+    try:
+        init_audit_logger(new_config.audit_log_path)
+        logger.info("ConfigWatcher: audit logger updated")
+    except Exception as exc:
+        logger.warning("ConfigWatcher: audit logger re-init failed: %s", exc)

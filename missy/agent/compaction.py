@@ -74,9 +74,13 @@ def compact_session(
         logger.debug("Session %s has %d turns (≤ fresh tail), skipping", session_id, len(turns))
         return stats
 
-    # Identify turns already covered by a leaf summary.
+    # Identify turns already covered by a leaf summary. get_summaries()
+    # orders ascending by created_at, so the last element of this
+    # already-fetched list (if any) is the most recently created leaf
+    # summary -- reused below for continuity instead of a second query.
+    existing_leaf_summaries = memory_store.get_summaries(session_id, depth=0, limit=10_000)
     existing_leaf_turn_ids: set[str] = set()
-    for s in memory_store.get_summaries(session_id, depth=0, limit=10_000):
+    for s in existing_leaf_summaries:
         existing_leaf_turn_ids.update(s.source_turn_ids)
 
     # Evictable turns = all except fresh tail, not yet summarized.
@@ -84,9 +88,13 @@ def compact_session(
     unsummarized = [t for t in evictable if t.id not in existing_leaf_turn_ids]
 
     if unsummarized:
-        # Get most recent existing summary for continuity.
-        prior_summaries = memory_store.get_summaries(session_id, depth=0, limit=1)
-        prior_summary = prior_summaries[-1].content if prior_summaries else ""
+        # Get most recent existing summary for continuity. A prior version
+        # called get_summaries(depth=0, limit=1), which -- since the query
+        # orders ascending by created_at, not descending -- always returned
+        # the single OLDEST leaf summary, not the newest, silently
+        # re-anchoring every compaction pass on a long-lived session to the
+        # very first summary ever created instead of the most recent one.
+        prior_summary = existing_leaf_summaries[-1].content if existing_leaf_summaries else ""
 
         # Chunk into groups of ~leaf_chunk_tokens.
         chunks = _chunk_turns(unsummarized, leaf_chunk_tokens)

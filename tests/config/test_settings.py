@@ -146,6 +146,30 @@ class TestLoadConfigToolPolicy:
         assert cfg.tools.profile == "full"
         assert cfg.agents == {}
 
+    def test_default_disabled_tools_is_empty(self):
+        cfg = get_default_config()
+        assert cfg.tools.disabled_tools == []
+
+    def test_loads_disabled_tools(self, tmp_path: Path):
+        """Regression: ToolRegistry.disable()/is_enabled() (an
+        execute()-level kill switch stronger than tools.deny, which only
+        narrows what's offered to the model per turn) was fully built and
+        tested but had zero callers anywhere in the codebase -- an
+        operator had no way to actually disable a tool via any
+        first-party surface. tools.disabled_tools makes this reachable.
+        """
+        path = _write_yaml(
+            tmp_path,
+            """
+            tools:
+              disabled_tools: ["shell_exec", "file_write"]
+            workspace_path: "/tmp/workspace"
+            audit_log_path: "/tmp/audit.log"
+            """,
+        )
+        cfg = load_config(str(path))
+        assert cfg.tools.disabled_tools == ["shell_exec", "file_write"]
+
     def test_loads_global_and_agent_tool_policy(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
@@ -440,6 +464,125 @@ class TestLoadConfigFilesystem:
 
 
 # ---------------------------------------------------------------------------
+# Config-hygiene gap: unrecognized keys in a policy section are silently
+# dropped, with no signal to the operator that a typo or a stale/renamed
+# field means the config isn't doing what they think it's doing. Found
+# live during task #10 validation: a real operator config carried
+# `shell.unrestricted: true`, which ShellPolicy never had a field for and
+# which was silently ignored -- SR-1.8's fail-closed rewrite (an empty
+# allowed_commands always denies regardless of "unrestricted") happened
+# to make this safe in practice, but the operator had no way to know
+# their config key was inert.
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownConfigKeyWarnings:
+    def test_shell_unrestricted_dead_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              unrestricted: true
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            cfg = load_config(path)
+
+        assert cfg.shell.enabled is True
+        assert cfg.shell.allowed_commands == ["ls"]
+        assert any("shell" in r.message and "unrestricted" in r.message for r in caplog.records)
+
+    def test_network_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            network:
+              default_deny: true
+              allowed_domain: "api.example.com"
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        # "allowed_domain" (singular, a plausible typo for the real
+        # "allowed_domains") must be flagged, not silently accepted as
+        # if it configured anything.
+        assert any("network" in r.message and "allowed_domain" in r.message for r in caplog.records)
+
+    def test_filesystem_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            filesystem:
+              allowed_read_paths: ["/tmp"]
+              readonly_paths: ["/etc"]
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any(
+            "filesystem" in r.message and "readonly_paths" in r.message for r in caplog.records
+        )
+
+    def test_plugins_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            plugins:
+              enabled: false
+              whitelist: ["foo"]
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any("plugins" in r.message and "whitelist" in r.message for r in caplog.records)
+
+    def test_no_warning_for_recognized_keys_only(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            network:
+              default_deny: true
+              allowed_domains: ["api.example.com"]
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+            filesystem:
+              allowed_read_paths: ["/tmp"]
+              allowed_write_paths: ["/tmp"]
+            plugins:
+              enabled: false
+              allowed_plugins: []
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert not any("unrecognized key" in r.message for r in caplog.records)
+
+    def test_unknown_keys_are_ignored_not_fatal(self, tmp_path: Path):
+        """The warning is visibility-only -- an unrecognized key must
+        never raise or otherwise fail config loading, since that would
+        be a breaking change for any operator with genuinely-extra keys
+        (e.g. comments-as-keys, keys meant for a newer/older version)."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              unrestricted: true
+            """,
+        )
+        cfg = load_config(path)  # must not raise
+        assert isinstance(cfg, MissyConfig)
+
+
+# ---------------------------------------------------------------------------
 # load_config — providers
 # ---------------------------------------------------------------------------
 
@@ -512,6 +655,60 @@ class TestLoadConfigProviders:
         cfg = load_config(path)
         assert cfg.providers["anthropic"].timeout == 30
 
+    def test_provider_circuit_breaker_tunables_default(self, tmp_path: Path):
+        """SR-4.8 residual: per-provider CircuitBreaker cooldown config.
+        Defaults must match CircuitBreaker's own hardcoded defaults
+        (threshold=5, base_timeout=60.0) exactly, so a config that
+        doesn't set these fields at all behaves identically to before
+        this option existed."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              anthropic:
+                name: anthropic
+                model: "claude-3-5-sonnet-20241022"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["anthropic"].circuit_breaker_threshold == 5
+        assert cfg.providers["anthropic"].circuit_breaker_cooldown_seconds == 60.0
+
+    def test_provider_circuit_breaker_tunables_explicit(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              flaky-provider:
+                name: flaky-provider
+                model: "some-model"
+                circuit_breaker_threshold: 2
+                circuit_breaker_cooldown_seconds: 15.0
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["flaky-provider"].circuit_breaker_threshold == 2
+        assert cfg.providers["flaky-provider"].circuit_breaker_cooldown_seconds == 15.0
+
+    def test_provider_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              anthropic:
+                name: anthropic
+                model: "claude-3-5-sonnet-20241022"
+                circuit_breaker_threshhold: 2
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert any(
+            "providers.anthropic" in r.message and "circuit_breaker_threshhold" in r.message
+            for r in caplog.records
+        )
+
     def test_provider_base_url_optional(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
@@ -583,6 +780,72 @@ class TestLoadConfigProviders:
         path = _write_yaml(tmp_path, "workspace_path: /tmp\n")
         cfg = load_config(path)
         assert cfg.providers == {}
+
+
+# ---------------------------------------------------------------------------
+# load_config — vault:// reference resolution against a custom vault_dir
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfigVaultResolutionCustomDir:
+    """Regression tests: a vault:// reference must resolve against the
+    SAME vault.vault_dir the config file itself declares, not always
+    Vault()'s hardcoded ~/.missy/secrets default.
+
+    _resolve_vault_ref() and DiscordAccountConfig.resolve_token() both
+    previously called the bare Vault() constructor, silently ignoring
+    any custom vault.vault_dir -- a provider api_key or Discord bot
+    token configured as a vault:// reference alongside a non-default
+    vault_dir resolved to the literal, unresolved reference string
+    (an unusable "secret") instead of raising a clear error, with no
+    diagnostic beyond a logging.debug() call.
+    """
+
+    def test_provider_api_key_resolves_against_custom_vault_dir(self, tmp_path: Path):
+        pytest.importorskip("cryptography")
+        from missy.security.vault import Vault
+
+        vault_dir = tmp_path / "custom_vault_location"
+        Vault(str(vault_dir)).set("OPENAI_API_KEY", "sk-REAL-SECRET-VALUE")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            vault:
+              vault_dir: "{vault_dir}"
+            providers:
+              openai:
+                model: "gpt-4"
+                api_key: "vault://OPENAI_API_KEY"
+            """,
+        )
+        cfg = load_config(path)
+
+        assert cfg.providers["openai"].api_key == "sk-REAL-SECRET-VALUE"
+
+    def test_discord_token_resolves_against_custom_vault_dir(self, tmp_path: Path):
+        pytest.importorskip("cryptography")
+        from missy.security.vault import Vault
+
+        vault_dir = tmp_path / "custom_vault_location"
+        Vault(str(vault_dir)).set("DISCORD_BOT_TOKEN", "discord-real-secret-token")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            vault:
+              vault_dir: "{vault_dir}"
+            discord:
+              enabled: true
+              accounts:
+                - token: "vault://DISCORD_BOT_TOKEN"
+                  application_id: "123"
+            """,
+        )
+        cfg = load_config(path)
+
+        assert cfg.discord is not None
+        assert cfg.discord.accounts[0].resolve_token() == "discord-real-secret-token"
 
 
 # ---------------------------------------------------------------------------
@@ -712,3 +975,106 @@ class TestDataclasses:
         p2 = ShellPolicy()
         p1.allowed_commands.append("ls")
         assert p2.allowed_commands == []
+
+
+# ---------------------------------------------------------------------------
+# _coerce_bool -- quoted-string YAML boolean values must not silently invert
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceBool:
+    """Regression: bool(data.get(key, default)) treats ANY non-empty string
+    as truthy in Python, so a quoted YAML boolean like enabled: "false"
+    parses as the string "false" and bool("false") is True -- silently
+    inverting a security-relevant flag the operator explicitly tried to
+    disable, with no error, warning, or log line anywhere. _coerce_bool()
+    must recognize common human-readable string forms and fail loud on
+    anything genuinely ambiguous, rather than falling back to Python's
+    truthiness rules.
+    """
+
+    def test_none_returns_default(self):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(None, True) is True
+        assert _coerce_bool(None, False) is False
+
+    def test_real_bool_passed_through(self):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(True, False) is True
+        assert _coerce_bool(False, True) is False
+
+    @pytest.mark.parametrize("value", ["true", "True", "TRUE", "yes", "on", "1"])
+    def test_truthy_strings(self, value: str):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(value, False) is True
+
+    @pytest.mark.parametrize("value", ["false", "False", "FALSE", "no", "off", "0"])
+    def test_falsy_strings(self, value: str):
+        from missy.config.settings import _coerce_bool
+
+        assert _coerce_bool(value, True) is False
+
+    def test_ambiguous_string_raises(self):
+        from missy.config.settings import _coerce_bool
+
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            _coerce_bool("maybe", False)
+
+    def test_empty_string_raises(self):
+        from missy.config.settings import _coerce_bool
+
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            _coerce_bool("", False)
+
+
+class TestQuotedBooleanConfigValues:
+    """End-to-end regression: a quoted-string boolean in the actual YAML
+    config file must not silently invert the resulting policy flag.
+    """
+
+    def test_quoted_false_shell_enabled_stays_disabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "false"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.enabled is False
+
+    def test_quoted_false_plugins_enabled_stays_disabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            plugins:
+              enabled: "false"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.plugins.enabled is False
+
+    def test_quoted_true_shell_enabled_is_enabled(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "true"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.enabled is True
+
+    def test_ambiguous_string_value_raises_configuration_error(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: "maybe"
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            load_config(path)

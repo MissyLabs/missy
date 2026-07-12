@@ -568,6 +568,32 @@ class TestFindRelated:
         result = store.find_related("concept", limit=5)
         assert len(result.entities) <= 5
 
+    def test_directly_matched_seed_entity_survives_truncation(
+        self, store: GraphMemoryStore
+    ) -> None:
+        """The directly name-matched entity -- the actual subject of the
+        query -- must always be present in the truncated result, even when
+        popular, merely co-occurring neighbor entities (higher
+        mention_count) would otherwise crowd it out of a pure
+        mention_count-descending sort.
+        """
+        for i in range(15):
+            store.ingest_turn(f"I used shell_exec to run task {i}", "assistant", "sess")
+        for i in range(15):
+            store.ingest_turn(f"I used file_write to write report {i}", "assistant", "sess")
+        for i in range(15):
+            store.ingest_turn(f"I used web_fetch to download page {i}", "assistant", "sess")
+        store.ingest_turn(
+            "I used shell_exec and file_write and web_fetch together while "
+            "editing ~/.missy/config.yaml",
+            "assistant",
+            "sess",
+        )
+
+        result = store.find_related("config.yaml", limit=3)
+        names = [e.name for e in result.entities]
+        assert any("config.yaml" in n for n in names)
+
 
 # ---------------------------------------------------------------------------
 # GraphMemoryStore — get_context_subgraph
@@ -764,6 +790,53 @@ class TestMergeEntities:
     def test_merge_unknown_ids_is_noop(self, store: GraphMemoryStore):
         # Should not raise
         store.merge_entities("ent_fake_1", "ent_fake_2")
+
+    def test_merge_with_duplicate_outbound_relationship_does_not_raise(
+        self, store: GraphMemoryStore
+    ):
+        """Regression: merging two entities that both already relate to the
+        same third entity via the same relation_type must not crash.
+
+        relationships has UNIQUE(source_id, target_id, relation_type). A
+        plain UPDATE reassigning merge_id's rows to keep_id previously
+        collided with an equivalent row keep_id already had, raising an
+        unhandled sqlite3.IntegrityError -- exactly the documented use case
+        (merging two spellings of the same entity, e.g. a file path,
+        discovered relating to the same target).
+        """
+        keep_id = store.add_entity(Entity.new("keep_ent", "concept"))
+        merge_id = store.add_entity(Entity.new("merge_ent", "concept"))
+        third_id = store.add_entity(Entity.new("third_ent", "concept"))
+
+        store.add_relationship(Relationship.new(keep_id, third_id, "related_to"))
+        store.add_relationship(Relationship.new(merge_id, third_id, "related_to"))
+
+        # Must not raise sqlite3.IntegrityError.
+        store.merge_entities(keep_id, merge_id)
+
+        rels = store.get_relationships(keep_id, direction="outbound")
+        matching = [r for r in rels if r.target_id == third_id and r.relation_type == "related_to"]
+        assert len(matching) == 1  # the duplicate was dropped, not left dangling
+        assert store.get_entity(merge_id) is None  # merge succeeded fully
+
+    def test_merge_with_duplicate_inbound_relationship_does_not_raise(
+        self, store: GraphMemoryStore
+    ):
+        """Same collision, but on the target_id side (both entities are the
+        target of an equivalent relationship from the same source)."""
+        keep_id = store.add_entity(Entity.new("keep_ent", "concept"))
+        merge_id = store.add_entity(Entity.new("merge_ent", "concept"))
+        third_id = store.add_entity(Entity.new("third_ent", "concept"))
+
+        store.add_relationship(Relationship.new(third_id, keep_id, "related_to"))
+        store.add_relationship(Relationship.new(third_id, merge_id, "related_to"))
+
+        store.merge_entities(keep_id, merge_id)
+
+        rels = store.get_relationships(keep_id, direction="inbound")
+        matching = [r for r in rels if r.source_id == third_id and r.relation_type == "related_to"]
+        assert len(matching) == 1
+        assert store.get_entity(merge_id) is None
 
 
 # ---------------------------------------------------------------------------

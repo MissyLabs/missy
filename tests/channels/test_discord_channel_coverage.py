@@ -397,14 +397,17 @@ class TestCheckDMPolicyPairing:
 
 
 class TestCheckPairingDeny:
-    def test_pair_deny_removes_from_pending(self):
+    def test_pair_deny_via_dm_is_refused_not_processed(self):
+        # SR-1.12: pairing decisions must never be reachable from in-band
+        # DM content -- there is no way to authenticate the sender as an
+        # authorized operator. The pending request must be left untouched.
         account = _make_account(dm_policy=DiscordDMPolicy.PAIRING)
         ch = _make_channel(account)
         ch._pending_pairs.add("user-pending")
 
         result = ch._check_pairing("admin", "!pair deny user-pending")
 
-        assert "user-pending" not in ch._pending_pairs
+        assert "user-pending" in ch._pending_pairs
         assert result is False
 
 
@@ -513,6 +516,427 @@ class TestHandleInteraction:
             await ch._handle_interaction(data)
 
         assert any("deferred interaction response failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# SR-1.13 (critical): _handle_interaction() previously had NO authorization
+# check at all -- /ask (and every other slash command) dispatched straight
+# to handle_slash_command()/the full agent for any Discord user in any
+# guild/channel/DM, completely bypassing allowed_channels/allowed_users/
+# dm_policy. This is a separate Gateway event (INTERACTION_CREATE) from
+# regular messages, so it needed its own authorization gate.
+# ---------------------------------------------------------------------------
+
+
+class TestHandleInteractionAuthorizationSR113:
+    @pytest.mark.asyncio
+    async def test_guild_interaction_denied_when_unauthorized_never_dispatches(self):
+        import sys
+
+        ch = _make_channel()  # no guild_policies configured -> default deny
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "unauthorized-guild",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+        # A denial response is sent (type 4), never the deferred type 5.
+        ch._rest.send_interaction_response.assert_called_once()
+        call = ch._rest.send_interaction_response.call_args
+        assert call.kwargs.get("response_type") == 4 or call.args[2] == 4
+        ch._rest.edit_interaction_response.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_guild_interaction_authorized_dispatches_normally(self):
+        import sys
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+        ch._rest.edit_interaction_response.assert_called_once_with("app-1", "tok-abc", "ok reply")
+
+    @pytest.mark.asyncio
+    async def test_guild_interaction_authorized_even_when_require_mention_set(self):
+        # Slash commands are inherently addressed to the bot by Discord's
+        # own routing; require_mention (a text-message rule) must not
+        # block them.
+        import sys
+
+        account = _make_account(
+            guild_policies={"guild-1": DiscordGuildPolicy(enabled=True, require_mention=True)}
+        )
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "help", "options": []},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_denied_when_dm_policy_disabled(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.DISABLED)
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "stranger"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_denied_when_unpaired(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.PAIRING)
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "unpaired-user"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dm_interaction_allowed_when_on_allowlist(self):
+        import sys
+
+        account = _make_account(dm_policy=DiscordDMPolicy.ALLOWLIST, dm_allowlist=["trusted-user"])
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "dm-chan-1",
+                "user": {"id": "trusted-user"},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# DISC-CMD-008: per-user rate limiting on both dispatch paths.
+#
+# Previously no rate limiter existed anywhere in the Discord channel --
+# a single user could trigger unbounded LLM-calling commands (slash or
+# natural-language) with only the overall session CostTracker budget as
+# a backstop. Verifies the real _handle_message/_handle_interaction
+# dispatch functions actually consult DiscordChannel._rate_limiter and
+# refuse (with a clear reply, not a silent drop) once a user's per-minute
+# budget is exhausted, while an authorized-but-under-budget user is
+# unaffected and a different user's budget is tracked independently.
+# ---------------------------------------------------------------------------
+
+
+class TestPerUserRateLimitMessage:
+    @pytest.mark.asyncio
+    async def test_message_allowed_under_limit(self):
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch.account_config.rate_limit_per_minute = 2
+        data = {
+            "id": "msg-1",
+            "channel_id": "chan-1",
+            "guild_id": "guild-1",
+            "content": "hi",
+            "author": {"id": "user-1", "bot": False},
+        }
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_message_denied_after_limit_exceeded(self):
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch.account_config.rate_limit_per_minute = 1
+        # Rebuild the limiter to pick up the lowered per-test limit --
+        # __init__ already read the default before this test overrode it.
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        ch._rate_limiter = DiscordUserRateLimiter(requests_per_minute=1)
+
+        def _payload(msg_id: str) -> dict:
+            return {
+                "id": msg_id,
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "content": "hi",
+                "author": {"id": "user-1", "bot": False},
+            }
+
+        await ch._handle_message(_payload("msg-1"))
+        assert not ch._queue.empty()
+        ch._queue.get_nowait()
+
+        await ch._handle_message(_payload("msg-2"))
+        assert ch._queue.empty()  # second message this minute is refused
+        ch._rest.send_message.assert_called_once()
+        warning_text = ch._rest.send_message.call_args[0][1]
+        assert "too quickly" in warning_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_denial_emits_audit_event(self):
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rate_limiter = DiscordUserRateLimiter(requests_per_minute=1)
+        emitted: list[tuple] = []
+        ch._emit_audit = lambda *a: emitted.append(a)  # type: ignore[method-assign]
+
+        def _payload(msg_id: str) -> dict:
+            return {
+                "id": msg_id,
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "content": "hi",
+                "author": {"id": "user-1", "bot": False},
+            }
+
+        await ch._handle_message(_payload("msg-1"))
+        await ch._handle_message(_payload("msg-2"))
+
+        assert any(e[0] == "discord.channel.rate_limited" for e in emitted)
+
+    @pytest.mark.asyncio
+    async def test_different_users_tracked_independently(self):
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rate_limiter = DiscordUserRateLimiter(requests_per_minute=1)
+
+        def _payload(author_id: str, msg_id: str) -> dict:
+            return {
+                "id": msg_id,
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "content": "hi",
+                "author": {"id": author_id, "bot": False},
+            }
+
+        await ch._handle_message(_payload("user-a", "m1"))
+        assert not ch._queue.empty()
+        ch._queue.get_nowait()
+
+        # user-a is now over budget, but user-b has an independent bucket.
+        await ch._handle_message(_payload("user-a", "m2"))
+        assert ch._queue.empty()
+
+        await ch._handle_message(_payload("user-b", "m3"))
+        assert not ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_disabled_when_zero(self):
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rate_limiter = DiscordUserRateLimiter(requests_per_minute=0)
+
+        def _payload(msg_id: str) -> dict:
+            return {
+                "id": msg_id,
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "content": "hi",
+                "author": {"id": "user-1", "bot": False},
+            }
+
+        for i in range(20):
+            await ch._handle_message(_payload(f"m{i}"))
+            assert not ch._queue.empty()
+            ch._queue.get_nowait()
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_message_never_reaches_rate_limiter(self):
+        """Authorization must be checked first -- an unauthorized user
+        should never consume rate-limit budget or trigger the rate-limit
+        warning message (which would leak that the bot is present/active
+        to someone who isn't supposed to be interacting with it)."""
+        account = _make_account(guild_policies={})  # no policy -> default deny
+        ch = _make_channel(account)
+        data = {
+            "id": "msg-1",
+            "channel_id": "chan-1",
+            "guild_id": "unauthorized-guild",
+            "content": "hi",
+            "author": {"id": "user-1", "bot": False},
+        }
+        await ch._handle_message(data)
+        ch._rest.send_message.assert_not_called()
+
+
+class TestPerUserRateLimitInteraction:
+    @pytest.mark.asyncio
+    async def test_interaction_allowed_under_limit(self):
+        import sys
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_interaction_denied_after_limit_exceeded_never_dispatches(self):
+        import sys
+
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        account = _make_account(guild_policies={"guild-1": DiscordGuildPolicy(enabled=True)})
+        ch = _make_channel(account)
+        ch._rate_limiter = DiscordUserRateLimiter(requests_per_minute=1)
+        ch._rest.send_interaction_response = MagicMock()
+        ch._rest.edit_interaction_response = MagicMock()
+        ch.account_config.application_id = "app-1"
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="ok reply")
+
+        def _interaction(int_id: str) -> dict:
+            return {
+                "id": int_id,
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "guild-1",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            await ch._handle_interaction(_interaction("int-1"))
+            await ch._handle_interaction(_interaction("int-2"))
+
+        mock_commands_module.handle_slash_command.assert_awaited_once()  # only the first
+        # The second interaction gets an immediate (type 4) rate-limit
+        # response, never the deferred (type 5) one.
+        second_call = ch._rest.send_interaction_response.call_args_list[-1]
+        assert second_call.kwargs.get("response_type") == 4 or second_call.args[2] == 4
+        content = second_call.kwargs.get("data", {}).get("content", "") or (
+            second_call.args[3].get("content", "") if len(second_call.args) > 3 else ""
+        )
+        assert "too quickly" in content.lower()
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_interaction_never_reaches_rate_limiter(self):
+        import sys
+
+        ch = _make_channel()  # no guild_policies -> default deny
+        ch._rest.send_interaction_response = MagicMock()
+
+        mock_commands_module = MagicMock()
+        mock_commands_module.handle_slash_command = AsyncMock(return_value="should not run")
+
+        with patch.dict(sys.modules, {"missy.channels.discord.commands": mock_commands_module}):
+            data = {
+                "id": "int-1",
+                "token": "tok-abc",
+                "channel_id": "chan-1",
+                "guild_id": "unauthorized-guild",
+                "member": {"user": {"id": "user-1"}},
+                "data": {"name": "ask", "options": [{"name": "prompt", "value": "hi"}]},
+            }
+            await ch._handle_interaction(data)
+
+        # Only the authorization-denial response was sent -- the
+        # rate-limit path was never reached for an unauthorized user.
+        ch._rest.send_interaction_response.assert_called_once()
+        call = ch._rest.send_interaction_response.call_args
+        content = call.kwargs.get("data", {}).get("content", "") or (
+            call.args[3].get("content", "") if len(call.args) > 3 else ""
+        )
+        assert "not authorized" in content.lower()
 
 
 # ---------------------------------------------------------------------------

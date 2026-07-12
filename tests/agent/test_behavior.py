@@ -163,6 +163,21 @@ class TestAnalyzeUserToneFormal:
         )
         assert layer.analyze_user_tone(msgs) == "formal"
 
+    def test_formal_keywords_with_trailing_punctuation_still_count(self):
+        """combined.split() previously left trailing punctuation attached
+        (e.g. "kindly," or "thanks."), so a keyword immediately followed by
+        a comma/period -- extremely common in realistic phrasing -- never
+        equaled the bare signal word and silently dropped out of the tone
+        scoring, systematically under-counting formal signals relative to
+        casual ones.
+        """
+        layer = BehaviorLayer()
+        msgs = _user_messages(
+            "kindly, furthermore, therefore, nevertheless, accordingly, "
+            "please, respectfully, review the matter thoroughly for us thanks"
+        )
+        assert layer.analyze_user_tone(msgs) == "formal"
+
 
 class TestAnalyzeUserToneFrustrated:
     def test_wrong_triggers_frustrated(self):
@@ -408,6 +423,40 @@ class TestClassifyIntentGreeting:
         assert interpreter.classify_intent("howdy partner") == "greeting"
 
 
+class TestClassifyIntentGreetingPrefixWithSubstantiveContent:
+    """_GREETING_PATTERNS only anchors on the leading word(s), with no
+    check that the rest of the message is actually just a plain greeting.
+    Pre-fix, ANY realistic message opening with "hey"/"hi"/"hello" --
+    extremely common in natural chat -- was unconditionally classified as
+    "greeting" regardless of substantive content, including urgent
+    technical troubleshooting requests. A greeting-prefixed message with
+    more than a few trailing words must fall through to real content
+    classification instead.
+    """
+
+    def test_greeting_prefixed_crash_report_is_not_greeting(self):
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent("hello, my server keeps crashing, please help asap")
+        assert result != "greeting"
+
+    def test_greeting_prefixed_urgent_question_is_not_greeting(self):
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent(
+            "hi, can you help me fix this urgent production outage?"
+        )
+        assert result != "greeting"
+
+    def test_greeting_prefixed_technical_question_is_not_greeting(self):
+        """This is the module's own docstring worked example."""
+        interpreter = IntentInterpreter()
+        result = interpreter.classify_intent("hey, quick q — how do i restart nginx?")
+        assert result != "greeting"
+
+    def test_short_greeting_with_a_couple_trailing_words_still_greeting(self):
+        interpreter = IntentInterpreter()
+        assert interpreter.classify_intent("hey there friend") == "greeting"
+
+
 class TestClassifyIntentCommand:
     def test_run_this_is_command(self):
         interpreter = IntentInterpreter()
@@ -598,10 +647,13 @@ class TestShapeResponseRemovesRoboticPhrases:
         assert "42" in result
 
     def test_removes_id_be_happy_to(self):
+        """ "I'd be happy to help/assist(?: you)?" is only pure filler
+        when it's the LAST substantive content in the sentence (nothing
+        but punctuation follows) -- use that shape here rather than a
+        case with a real trailing object clause (see
+        TestRoboticPhraseStrippingPreservesRealContent below for why)."""
         shaper = ResponseShaper()
-        result = shaper.shape_response(
-            "I'd be happy to help you with that.", persona=None, context={}
-        )
+        result = shaper.shape_response("I'd be happy to help!", persona=None, context={})
         assert "I'd be happy to" not in result
 
     def test_removes_i_am_here_to_help(self):
@@ -629,6 +681,69 @@ class TestShapeResponseRemovesRoboticPhrases:
         assert "As an AI language model" not in result
         assert "Great question" not in result
         assert "configuration" in result
+
+
+class TestRoboticPhraseStrippingPreservesRealContent:
+    """Regression: "I'd be happy to help/assist(?: you)?" and the
+    "Certainly/Of course/Absolutely, I'll help/assist you" family were
+    unconditionally stripped up through "help"/"assist"(+"you") with
+    only OPTIONAL trailing punctuation -- so a realistic reply where
+    "help you {object}" carries the actual substantive content (e.g.
+    "I'd be happy to help you understand recursion.") had "help you"
+    silently eaten along with the filler, mangling the sentence into
+    something that dropped the verb and/or object entirely. These
+    phrases are only genuinely pure filler when "help"/"assist"(+"you")
+    is the LAST substantive word in the sentence; when a real object/
+    continuation follows with no intervening punctuation, the whole
+    phrase must be left untouched rather than partially stripped into
+    something garbled.
+    """
+
+    def test_id_be_happy_to_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "I'd be happy to help you understand recursion.", persona=None, context={}
+        )
+        assert "help you understand recursion" in result
+
+    def test_certainly_ill_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "Certainly, I'll help you understand recursion, which is a fundamental concept.",
+            persona=None,
+            context={},
+        )
+        assert "help you understand recursion" in result
+        assert "Certainly" not in result  # the pure-filler prefix is still stripped
+
+    def test_of_course_ill_help_you_with_object_clause_is_untouched(self):
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "Of course, I'll help you debug this issue right now.", persona=None, context={}
+        )
+        assert "help you debug this issue" in result
+        assert "Of course" not in result
+
+    def test_sequential_stripping_no_longer_drops_real_words(self):
+        """The original reported failure case: sequential stripping of
+        multiple robotic phrases must not compound into losing the
+        substantive content of the reply."""
+        shaper = ResponseShaper()
+        result = shaper.shape_response(
+            "As an AI, I don't have feelings, but I'd be happy to help you understand recursion.",
+            persona=None,
+            context={},
+        )
+        assert "help you understand recursion" in result
+        assert "As an AI" not in result
+        assert "I don't have feelings" not in result
+
+    def test_genuinely_terminal_filler_still_fully_stripped(self):
+        """Sanity check: the fix must not regress the case where the
+        phrase really is pure filler with nothing after it."""
+        shaper = ResponseShaper()
+        assert shaper.shape_response("I'd be happy to help!", persona=None, context={}) == ""
+        assert shaper.shape_response("Of course, I'll help!", persona=None, context={}) == ""
 
 
 class TestShapeResponsePreservesCodeBlocks:
@@ -666,6 +781,29 @@ class TestShapeResponsePreservesCodeBlocks:
         assert "Certainly block two" in result
         assert "```bash" in result
         assert "```yaml" in result
+
+    def test_unterminated_code_block_preserved(self):
+        """Regression: _CODE_BLOCK_RE only matches *paired* triple-backtick
+        fences. A response cut off at max_tokens before the closing ```
+        (or a model that simply forgets to close the fence) left that
+        trailing code content completely unstashed, so it fell through
+        unprotected into the robotic-phrase-stripping pass -- directly
+        violating this class's own documented guarantee that it never
+        modifies code-block content. Here the code contains a substring
+        that happens to match one of the robotic-phrase patterns
+        ("As an AI") to prove the content was actually mangled, not just
+        coincidentally left alone.
+        """
+        shaper = ResponseShaper()
+        raw = (
+            "Here's the function:\n"
+            "```python\n"
+            "def greet():\n"
+            '    return "As an AI, I cannot help further."\n'
+        )
+        result = shaper.shape_response(raw, persona=None, context={})
+        assert 'return "As an AI, I cannot help further."' in result
+        assert "```python" in result
 
 
 class TestShapeResponseEdgeCases:
@@ -730,7 +868,7 @@ class TestDetectRoboticPatterns:
 
     def test_detects_id_be_happy_to(self):
         shaper = ResponseShaper()
-        found = shaper.detect_robotic_patterns("I'd be happy to help you with that.")
+        found = shaper.detect_robotic_patterns("I'd be happy to help!")
         assert len(found) > 0
 
     def test_clean_text_returns_empty_list(self):

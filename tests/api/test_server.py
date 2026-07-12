@@ -22,6 +22,7 @@ import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
 from missy.api.web_console import console_script, render_console
+from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
     DiscordConfig,
@@ -231,6 +232,12 @@ class TestOperatorConsole:
         assert 'id="scheduler-form"' in html
         assert 'id="memory-query"' in html
         assert 'id="memory-results"' in html
+        assert 'id="approvals"' in html
+        assert 'id="approvals-health"' in html
+        assert 'id="pairing"' in html
+        assert 'id="pairing-health"' in html
+        assert "Approvals" in html
+        assert "Discord Pairing" in html
 
     def test_console_script_keeps_safe_client_side_escaping_and_control_post(self) -> None:
         script = console_script()
@@ -240,6 +247,20 @@ class TestOperatorConsole:
         assert "X-CSRF-Token" in script
         assert "data-control-label" in script
         assert "data-target-label" in script
+
+    def test_memory_row_escapes_role_provider_timestamp_meta(self) -> None:
+        """Regression: every other composite "meta" string built from
+        server-supplied fields in this file is passed through esc() before
+        being inserted into innerHTML (e.g. the session row's provider,
+        the controls row's title, the diagnostics row's summary) --
+        memoryRow() was the one place that inserted its composed
+        role/provider/timestamp string raw via `${meta}` with no esc()
+        call at all, unlike turn.content (the actual free-text memory
+        content), which was already correctly escaped both here and in
+        the per-item inspector.
+        """
+        script = console_script()
+        assert ".filter(Boolean).map(esc).join(' &middot; ')" in script
 
     def test_console_script_includes_scheduler_and_memory_wiring(self) -> None:
         script = console_script()
@@ -257,6 +278,26 @@ class TestOperatorConsole:
         assert "data.tools_used" in script
         assert "data.cost" in script
         assert "JSON.stringify({target, confirm: confirmation})" in script
+
+    def test_console_script_includes_approvals_and_pairing_wiring(self) -> None:
+        """Web TUI browser page for /api/v1/approvals and
+        /api/v1/discord/pairing -- both REST endpoints were real and
+        authenticated (SR-2.2, SR-1.12) but had no browser UI; the
+        operator could only inspect/resolve pending requests via
+        `missy approvals`/`missy devices pair` or raw curl."""
+        script = console_script()
+
+        assert "api('/approvals')" in script
+        assert "api('/discord/pairing')" in script
+        assert "approval-action" in script
+        assert "pairing-action" in script
+        assert (
+            "/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}" in script
+        )
+        assert (
+            "/discord/pairing/${encodeURIComponent(userId)}/${approve ? 'approve' : 'deny'}"
+            in script
+        )
 
     def test_root_redirects_to_login_without_browser_session(self) -> None:
         port = _free_port()
@@ -598,6 +639,35 @@ class TestSessions:
         assert resp.status_code == 200
         assert len(resp.json()["data"]["sessions"]) <= 2
 
+    def test_list_sessions_calls_memory_store_once_regardless_of_session_count(self) -> None:
+        """Regression: the turn-count augmentation must query the memory
+        store once, not once per returned session.
+
+        `_handle_list_sessions` previously called `memory_store.list_sessions(limit=1000)`
+        inside the per-session loop, rebuilding the identical counts dict on
+        every iteration -- an N session response ran the same 1000-row query
+        N times.
+        """
+        port = _free_port()
+        mock_store = MagicMock()
+        mock_store.list_sessions.return_value = []
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, memory_store=mock_store)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            for _ in range(5):
+                httpx.post(f"http://127.0.0.1:{port}/api/v1/sessions", json={}, headers=HEADERS)
+
+            mock_store.list_sessions.reset_mock()
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/sessions?limit=5", headers=HEADERS)
+            assert resp.status_code == 200
+            assert len(resp.json()["data"]["sessions"]) >= 5
+            mock_store.list_sessions.assert_called_once_with(limit=1000)
+        finally:
+            srv.stop()
+
     def test_get_session(self, client: httpx.Client) -> None:
         create_resp = client.post("/sessions", json={"name": "get-test"})
         session_id = create_resp.json()["data"]["session_id"]
@@ -904,7 +974,7 @@ class TestRuns:
                     body += chunk
                     if "run.complete" in body or "run.error" in body:
                         break
-            assert "event: run.started" in body
+            assert "event: run.start" in body
             assert "event: run.complete" in body
             assert "streamed answer" in body
         finally:
@@ -1663,6 +1733,44 @@ class TestOperatorControls:
         finally:
             srv.stop()
 
+    def test_import_benchmarks_preserves_explicit_zero_thresholds(self, tmp_path) -> None:
+        """Regression: `body.get("min_safety") or 1.0`-style defaulting
+        silently discarded an operator-supplied falsy override (0 or 0.0),
+        since `0 or 1.0` evaluates to `1.0` in Python. An operator using
+        the Web TUI to explicitly loosen a threshold to "no minimum" had
+        that value silently replaced with the stricter hardcoded default,
+        with no error or warning.
+        """
+        from unittest.mock import patch
+
+        from missy.api.operator_controls import _execute_candidate_import_benchmarks
+
+        candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
+        benchmark_store = BenchmarkStore(db_path=tmp_path / "benchmarks.db")
+        candidate = candidate_store.add(_make_tool_candidate())
+
+        mock_reconciler_cls = MagicMock()
+        mock_reconciler_cls.return_value.reconcile_candidate.return_value = MagicMock(to_dict=dict)
+        with patch("missy.tools.intelligence.CandidateBenchmarkReconciler", mock_reconciler_cls):
+            _execute_candidate_import_benchmarks(
+                {
+                    "target": candidate.id,
+                    "confirm": f"import-candidate-benchmarks:{candidate.id}",
+                    "min_samples": 0,
+                    "min_composite": 0.0,
+                    "min_safety": 0.0,
+                    "min_schema_score": 0.0,
+                },
+                candidate_store=candidate_store,
+                benchmark_store=benchmark_store,
+            )
+
+        _, kwargs = mock_reconciler_cls.call_args
+        assert kwargs["min_samples"] == 0
+        assert kwargs["min_composite"] == 0.0
+        assert kwargs["min_safety"] == 0.0
+        assert kwargs["min_schema_score"] == 0.0
+
     def test_candidate_deny_requires_confirmation_and_reason(self, tmp_path) -> None:
         candidate_store = CandidateStore(db_path=tmp_path / "candidates.db")
         candidate = candidate_store.add(_make_tool_candidate())
@@ -1960,6 +2068,7 @@ class TestTools:
         port = _free_port()
         mock_reg = MagicMock()
         mock_reg.list_tools.return_value = ["calculator"]
+        mock_reg.is_enabled.return_value = True
 
         mock_tool = MagicMock()
         mock_tool.name = "calculator"
@@ -1978,6 +2087,40 @@ class TestTools:
             assert len(tools) == 1
             assert tools[0]["name"] == "calculator"
             assert tools[0]["description"] == "Evaluates expressions"
+            assert tools[0]["enabled"] is True
+        finally:
+            srv.stop()
+
+    def test_disabled_tool_marked_as_not_enabled(self) -> None:
+        """Regression: list_tools()'s own docstring notes it "Includes
+        disabled tools; use is_enabled() to check state" -- this endpoint
+        previously never called is_enabled() at all, so a disabled tool's
+        full name/description/schema was returned indistinguishable from
+        an enabled tool, contradicting the "excluded from tool schemas
+        exposed" defense-in-depth claim in ToolRegistry's own docstring,
+        just on the API-consumer axis instead of the model axis.
+        """
+        port = _free_port()
+        mock_reg = MagicMock()
+        mock_reg.list_tools.return_value = ["shell_exec"]
+        mock_reg.is_enabled.return_value = False
+
+        mock_tool = MagicMock()
+        mock_tool.name = "shell_exec"
+        mock_tool.description = "Runs a shell command"
+        mock_tool.get_schema.return_value = {}
+        mock_reg.get.return_value = mock_tool
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, tool_registry=mock_reg)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/tools", headers=HEADERS)
+            assert resp.status_code == 200
+            tools = resp.json()["data"]["tools"]
+            assert len(tools) == 1
+            assert tools[0]["enabled"] is False
         finally:
             srv.stop()
 
@@ -2375,3 +2518,261 @@ class TestApiServerLifecycle:
         cfg = ApiConfig(host="127.0.0.1", port=9999, api_key="k")
         srv = ApiServer(config=cfg)
         assert srv.url == "http://127.0.0.1:9999"
+
+
+# ---------------------------------------------------------------------------
+# SR-2.2: /approvals endpoints backed by a real ApprovalGate
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalsEndpoints:
+    """A real ApprovalGate wired into a real running ApiServer -- this is
+    the actual mechanism SR-2.2 introduces for an operator (a separate
+    `missy` CLI invocation) to see and resolve pending approval requests
+    from the in-process gateway that created them.
+    """
+
+    def test_approvals_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/approvals")
+        assert resp.status_code == 401
+
+    def test_list_approvals_empty_when_no_gate_attached(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/approvals", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"approvals": [], "count": 0}
+
+    def test_resolve_approval_without_gate_returns_503(self, base_url: str) -> None:
+        resp = httpx.post(f"{base_url}/approvals/whatever/approve", headers=HEADERS)
+        assert resp.status_code == 503
+
+    def _start_server_with_gate(self):
+        from missy.agent.approval import ApprovalGate
+
+        port = _free_port()
+        gate = ApprovalGate(default_timeout=5.0)
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, approval_gate=gate)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        return srv, gate, f"http://127.0.0.1:{port}/api/v1"
+
+    def test_list_pending_approval_via_api(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            pending_thread = threading.Thread(
+                target=lambda: gate.request("delete /tmp/work", reason="cleanup", risk="high"),
+                daemon=True,
+            )
+            pending_thread.start()
+
+            deadline = time.monotonic() + 2.0
+            approvals: list = []
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                approvals = resp.json()["data"]["approvals"]
+                if approvals:
+                    break
+                time.sleep(0.02)
+
+            assert len(approvals) == 1
+            assert approvals[0]["action"] == "delete /tmp/work"
+            assert approvals[0]["reason"] == "cleanup"
+
+            # Clean up: approve directly on the gate so the background
+            # thread doesn't hang the test on timeout.
+            gate.approve_by_id(approvals[0]["id"])
+            pending_thread.join(timeout=2.0)
+        finally:
+            srv.stop()
+
+    def test_approve_via_api_unblocks_waiting_caller(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            result: dict = {}
+
+            def do_request():
+                try:
+                    gate.request("risky action")
+                    result["approved"] = True
+                except Exception as exc:  # noqa: BLE001
+                    result["error"] = str(exc)
+
+            t = threading.Thread(target=do_request, daemon=True)
+            t.start()
+
+            deadline = time.monotonic() + 2.0
+            approval_id = None
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                pending = resp.json()["data"]["approvals"]
+                if pending:
+                    approval_id = pending[0]["id"]
+                    break
+                time.sleep(0.02)
+            assert approval_id is not None
+
+            resp = httpx.post(f"{url}/approvals/{approval_id}/approve", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "approved"
+
+            t.join(timeout=2.0)
+            assert result.get("approved") is True
+        finally:
+            srv.stop()
+
+    def test_deny_via_api_raises_denied_for_waiting_caller(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            result: dict = {}
+
+            def do_request():
+                try:
+                    gate.request("risky action")
+                    result["approved"] = True
+                except Exception as exc:  # noqa: BLE001
+                    result["error"] = type(exc).__name__
+
+            t = threading.Thread(target=do_request, daemon=True)
+            t.start()
+
+            deadline = time.monotonic() + 2.0
+            approval_id = None
+            while time.monotonic() < deadline:
+                resp = httpx.get(f"{url}/approvals", headers=HEADERS)
+                pending = resp.json()["data"]["approvals"]
+                if pending:
+                    approval_id = pending[0]["id"]
+                    break
+                time.sleep(0.02)
+            assert approval_id is not None
+
+            resp = httpx.post(f"{url}/approvals/{approval_id}/deny", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "denied"
+
+            t.join(timeout=2.0)
+            assert result.get("error") == "ApprovalDenied"
+        finally:
+            srv.stop()
+
+    def test_resolve_unknown_approval_id_returns_404(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            resp = httpx.post(f"{url}/approvals/does-not-exist/approve", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_resolve_approval_invalid_sub_action_returns_404(self) -> None:
+        srv, gate, url = self._start_server_with_gate()
+        try:
+            resp = httpx.post(f"{url}/approvals/some-id/not-a-real-action", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+
+class TestDiscordPairingEndpoints:
+    """SR-1.12/task #12: pairing decisions can never be made from in-band
+    DM content (any unpaired stranger could otherwise grant themselves
+    access). ``DiscordChannel.accept_pair()``/``deny_pair()`` were
+    previously unreachable from anywhere -- these are the real
+    authenticated endpoints an operator uses instead, mirroring the
+    ``/approvals`` pattern above but reading/mutating a real
+    ``DiscordChannel`` instance's pairing state.
+    """
+
+    def test_pairing_requires_auth(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/discord/pairing")
+        assert resp.status_code == 401
+
+    def test_list_pairing_empty_when_no_channels_attached(self, base_url: str) -> None:
+        resp = httpx.get(f"{base_url}/discord/pairing", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {"pending": [], "count": 0}
+
+    def test_resolve_pairing_without_channels_returns_503(self, base_url: str) -> None:
+        resp = httpx.post(f"{base_url}/discord/pairing/12345/approve", headers=HEADERS)
+        assert resp.status_code == 503
+
+    def _start_server_with_discord_channel(self):
+        account = DiscordAccountConfig(
+            token="test-token",
+            dm_policy=DiscordDMPolicy.PAIRING,
+            token_env_var="DISCORD_BOT_TOKEN",
+        )
+        ch = DiscordChannel(account_config=account)
+        # Real pairing-request flow: a DM of "!pair" adds the sender to
+        # _pending_pairs (see DiscordChannel._check_pairing) -- exercised
+        # here directly rather than via a real Discord gateway connection.
+        ch._check_pairing("999888777", "!pair")
+
+        port = _free_port()
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, discord_channels=[ch])
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        return srv, ch, f"http://127.0.0.1:{port}/api/v1"
+
+    def test_list_pending_pairing_via_api(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.get(f"{url}/discord/pairing", headers=HEADERS)
+            assert resp.status_code == 200
+            pending = resp.json()["data"]["pending"]
+            assert pending == [{"account": "DISCORD_BOT_TOKEN", "user_id": "999888777"}]
+        finally:
+            srv.stop()
+
+    def test_approve_pairing_via_api_adds_to_allowlist(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/999888777/approve", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "approved"
+
+            # The real effect: no longer pending, and now in the allowlist.
+            assert "999888777" not in ch.get_pending_pairs()
+            assert "999888777" in ch.account_config.dm_allowlist
+        finally:
+            srv.stop()
+
+    def test_deny_pairing_via_api_does_not_add_to_allowlist(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/999888777/deny", headers=HEADERS)
+            assert resp.status_code == 200
+            assert resp.json()["data"]["resolved"] == "denied"
+
+            assert "999888777" not in ch.get_pending_pairs()
+            assert "999888777" not in ch.account_config.dm_allowlist
+        finally:
+            srv.stop()
+
+    def test_resolve_unknown_pairing_user_id_returns_404(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/no-such-user/approve", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_resolve_pairing_invalid_sub_action_returns_404(self) -> None:
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resp = httpx.post(f"{url}/discord/pairing/999888777/not-a-real-action", headers=HEADERS)
+            assert resp.status_code == 404
+        finally:
+            srv.stop()
+
+    def test_in_band_dm_accept_command_still_never_resolves_pairing(self) -> None:
+        """Belt-and-suspenders: confirm the SR-1.12 in-band-command
+        rejection in DiscordChannel itself is still intact -- the only
+        real path to approval is the authenticated endpoint above."""
+        srv, ch, url = self._start_server_with_discord_channel()
+        try:
+            resolved = ch._check_pairing("999888777", "!pair accept 999888777")
+            assert resolved is False
+            assert "999888777" in ch.get_pending_pairs()
+        finally:
+            srv.stop()

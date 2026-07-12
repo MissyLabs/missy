@@ -226,16 +226,8 @@ class TestVisionMemoryBridgeRecall:
         )
 
         # Check that the add_turn call got the right metadata
-        call_args = bridge._memory.add_turn.call_args
-        meta = (
-            call_args[1]["metadata"]
-            if "metadata" in call_args[1]
-            else call_args[0][3]
-            if len(call_args[0]) > 3
-            else None
-        )
-        if meta is None:
-            meta = call_args.kwargs.get("metadata", {})
+        (turn,) = bridge._memory.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["observation_id"] != "INJECTED"
         assert meta.get("custom_field") == "ok"
 

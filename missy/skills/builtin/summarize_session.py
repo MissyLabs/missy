@@ -17,7 +17,7 @@ _CONTENT_PREVIEW_LEN = 200  # chars shown per turn in the summary
 
 
 def _format_turns(turns: list) -> str:  # type: ignore[type-arg]
-    """Render a list of :class:`~missy.memory.store.ConversationTurn` objects.
+    """Render a list of :class:`~missy.memory.sqlite_store.ConversationTurn` objects.
 
     Each turn is shown as a labelled block with its timestamp and a
     truncated preview of the message content.
@@ -33,7 +33,10 @@ def _format_turns(turns: list) -> str:  # type: ignore[type-arg]
 
     lines: list[str] = []
     for turn in turns:
-        ts = turn.timestamp.isoformat(timespec="seconds") if turn.timestamp else "unknown time"
+        # SQLiteMemoryStore.ConversationTurn.timestamp is an ISO-8601
+        # string (unlike the legacy JSON store's datetime object) --
+        # truncate to seconds precision rather than calling .isoformat().
+        ts = turn.timestamp[:19] if turn.timestamp else "unknown time"
         role_label = turn.role.capitalize() if turn.role else "Unknown"
         content = turn.content or ""
         if len(content) > _CONTENT_PREVIEW_LEN:
@@ -72,9 +75,16 @@ class SummarizeSessionSkill(BaseSkill):
             )
 
         try:
-            from missy.memory.store import MemoryStore  # local import to isolate failures
+            # SR-3.1/3.5: use the production SQLite backend, not the legacy
+            # JSON store -- since FX-B, real conversation turns are written
+            # to SQLiteMemoryStore, so reading from the JSON store here
+            # always returned an empty/stale history regardless of what
+            # actually happened in the session.
+            from missy.memory.sqlite_store import (
+                SQLiteMemoryStore,  # local import to isolate failures
+            )
 
-            store = MemoryStore()
+            store = SQLiteMemoryStore()
             turns = store.get_session_turns(session_id, limit=_TURN_LIMIT)
         except Exception as exc:  # pragma: no cover
             return SkillResult(

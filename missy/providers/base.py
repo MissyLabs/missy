@@ -287,12 +287,23 @@ class BaseProvider(ABC):
         if self.rate_limiter is not None:
             self.rate_limiter.acquire(tokens=estimated_tokens)
 
-    def _record_rate_limit_usage(self, response: CompletionResponse) -> None:
-        """Deduct actual token usage from the rate limiter budget."""
+    def _record_rate_limit_usage(
+        self, response: CompletionResponse, estimated_tokens: int = 0
+    ) -> None:
+        """Reconcile actual token usage against the rate limiter budget.
+
+        Args:
+            response: The completed response, used for actual usage counts.
+            estimated_tokens: The same estimate passed to the
+                :meth:`_acquire_rate_limit` call for this request, so
+                :meth:`RateLimiter.record_usage` can credit it back before
+                deducting the real total (see that method's docstring).
+        """
         if self.rate_limiter is not None:
             self.rate_limiter.record_usage(
                 prompt_tokens=response.usage.get("prompt_tokens", 0),
                 completion_tokens=response.usage.get("completion_tokens", 0),
+                estimated_tokens=estimated_tokens,
             )
 
     def _emit_event(

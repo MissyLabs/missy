@@ -31,7 +31,9 @@ Async example::
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import posixpath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -200,7 +202,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url, "GET")
+        await self._check_url_async(url, "GET")
         response = await self._get_async_client().get(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("GET", url, response.status_code)
@@ -221,7 +223,7 @@ class PolicyHTTPClient:
             PolicyViolationError: When the destination host is denied.
             httpx.HTTPError: On network or protocol errors.
         """
-        self._check_url(url, "POST")
+        await self._check_url_async(url, "POST")
         response = await self._get_async_client().post(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("POST", url, response.status_code)
@@ -229,7 +231,7 @@ class PolicyHTTPClient:
 
     async def adelete(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP DELETE after a policy check."""
-        self._check_url(url, "DELETE")
+        await self._check_url_async(url, "DELETE")
         response = await self._get_async_client().delete(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("DELETE", url, response.status_code)
@@ -237,7 +239,7 @@ class PolicyHTTPClient:
 
     async def apatch(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP PATCH after a policy check."""
-        self._check_url(url, "PATCH")
+        await self._check_url_async(url, "PATCH")
         response = await self._get_async_client().patch(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PATCH", url, response.status_code)
@@ -245,7 +247,7 @@ class PolicyHTTPClient:
 
     async def aput(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP PUT after a policy check."""
-        self._check_url(url, "PUT")
+        await self._check_url_async(url, "PUT")
         response = await self._get_async_client().put(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("PUT", url, response.status_code)
@@ -253,7 +255,7 @@ class PolicyHTTPClient:
 
     async def ahead(self, url: str, **kwargs: Any) -> httpx.Response:
         """Perform an asynchronous HTTP HEAD after a policy check."""
-        self._check_url(url, "HEAD")
+        await self._check_url_async(url, "HEAD")
         response = await self._get_async_client().head(url, **self._sanitize_kwargs(kwargs))
         self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
@@ -299,17 +301,16 @@ class PolicyHTTPClient:
 
     _ALLOWED_SCHEMES = {"http", "https"}
 
-    def _check_url(self, url: str, method: str = "") -> None:
-        """Extract the host from *url* and run network + REST policy checks.
+    def _validate_and_pin(self, url: str) -> tuple[str, str]:
+        """Parse *url*, run the network policy check, and pin the resolved IP.
 
-        Args:
-            url: A fully-qualified URL string.
-            method: HTTP method (e.g. ``"GET"``).  When provided the REST
-                policy is evaluated after the network policy passes.
+        Shared by both the sync and async approval-retry paths below.
+
+        Returns:
+            A ``(host, path)`` tuple for the L7 REST policy check.
 
         Raises:
-            PolicyViolationError: When the host is denied by the policy engine
-                or a REST policy rule denies the request.
+            PolicyViolationError: When the host is denied by the policy engine.
             ValueError: When the URL is malformed, uses a disallowed scheme,
                 or contains no host component.
         """
@@ -328,14 +329,85 @@ class PolicyHTTPClient:
                 f"Cannot determine host from URL {url!r}. "
                 "Ensure the URL includes a scheme (e.g. https://)."
             )
+        # SR-1.9b: check_network_resolved() returns the exact IP this
+        # check validated (not just True/False), and pin_host() binds
+        # it to the actual connection the client is about to make.
+        # Without this, the validated IP is discarded and httpx/
+        # httpcore re-resolve independently at connect time -- a
+        # classic check-then-use DNS-rebinding TOCTOU, even after
+        # SR-1.9a closed the "allowlisted names skip the IP check
+        # entirely" gap earlier this session.
+        _allowed, resolved_ip = get_policy_engine().check_network_resolved(
+            host,
+            self.session_id,
+            self.task_id,
+            category=self.category,
+        )
+        from missy.gateway.pinned_transport import pin_host
+
+        pin_host(host, resolved_ip)
+        return host, self._normalize_path(parsed.path)
+
+    @staticmethod
+    def _normalize_path(raw_path: str | None) -> str:
+        """Normalize a URL path the way httpx normalizes it before sending.
+
+        ``RestPolicy.check()`` (and its fnmatch-based glob matching)
+        operates on this path as a literal string with no dot-segment
+        resolution -- but httpx normalizes ``"/a/../b"`` -> ``"/b"``
+        (RFC 3986) before actually sending the request. Without matching
+        that normalization here, a narrow deny rule for a sensitive
+        subpath (e.g. ``"/repos/secret/**"``) could be silently bypassed
+        by a request to ``".../repos/foo/../secret/token"``: the
+        unnormalized literal path fails to match the deny glob and falls
+        through to a broader allow rule, while the actual bytes sent on
+        the wire target exactly the path the deny rule was meant to
+        block.
+        """
+        raw = raw_path or "/"
+        path = posixpath.normpath(raw)
+        if raw.endswith("/") and not path.endswith("/"):
+            path += "/"
+        return path
+
+    @staticmethod
+    def _pin_operator_override(host: str) -> None:
+        """Best-effort pin after an explicit operator interactive-approval override.
+
+        The policy check that led here raised before ever resolving/pinning
+        an IP (that's what "denied" means) -- an explicit human override
+        doesn't get the policy-validated pin, but must still get *some* pin
+        so the transport doesn't fail-closed on a legitimately
+        operator-approved request. Resolution failure here just means
+        normal, unpinned connection behavior for this one request.
+        """
+        from missy.gateway.pinned_transport import pin_host
+        from missy.policy.network import NetworkPolicyEngine
+
         try:
-            get_policy_engine().check_network(
-                host,
-                self.session_id,
-                self.task_id,
-                category=self.category,
-            )
-        except PolicyViolationError:
+            resolved = NetworkPolicyEngine._resolve_best_effort(host)
+        except Exception:
+            resolved = []
+        pin_host(host, resolved[0][0] if resolved else None)
+
+    def _check_url(self, url: str, method: str = "") -> None:
+        """Extract the host from *url* and run network + REST policy checks.
+
+        Args:
+            url: A fully-qualified URL string.
+            method: HTTP method (e.g. ``"GET"``).  When provided the REST
+                policy is evaluated after the network policy passes.
+
+        Raises:
+            PolicyViolationError: When the host is denied by the policy engine
+                or a REST policy rule denies the request.
+            ValueError: When the URL is malformed, uses a disallowed scheme,
+                or contains no host component.
+        """
+        try:
+            host, path = self._validate_and_pin(url)
+        except PolicyViolationError as exc:
+            host = urlparse(url).hostname or url
             # If an interactive approval instance is available, prompt the
             # operator before raising.  An "allow always" decision is
             # remembered for the remainder of the session.
@@ -344,17 +416,77 @@ class PolicyHTTPClient:
 
                 if isinstance(
                     _interactive_approval, InteractiveApproval
-                ) and _interactive_approval.prompt_user("network_request", url):
-                    logger.info(
-                        "Operator approved denied network request to %s",
-                        host,
-                    )
-                    return  # skip the rest — operator override
-            raise
+                ) and _interactive_approval.prompt_user(
+                    "network_request", url, session_id=self.session_id
+                ):
+                    logger.info("Operator approved denied network request to %s", host)
+                    self._pin_operator_override(host)
+                    # An operator override only overrides the NETWORK-level
+                    # host denial that triggered this prompt -- it is not
+                    # shown, and must not be treated as, a blanket approval
+                    # of the independent L7 REST method/path policy layer
+                    # below. Skipping straight to `return` here previously
+                    # let one "allow this host" click also silently bypass
+                    # any REST-policy deny rule for that same host (e.g. a
+                    # rule blocking DELETE /repos/**), even though the two
+                    # layers are deliberately enforced independently
+                    # everywhere else in this file.
+                    path = self._normalize_path(urlparse(url).path)
+                    if method:
+                        self._check_rest_policy(host, method, path)
+                    return
+            raise exc
 
         # L7 REST policy check (method + path level)
         if method:
-            self._check_rest_policy(host, method, parsed.path or "/")
+            self._check_rest_policy(host, method, path)
+
+    async def _check_url_async(self, url: str, method: str = "") -> None:
+        """Async counterpart of :meth:`_check_url`.
+
+        `InteractiveApproval.prompt_user()` calls a blocking, un-timed
+        ``console.input()`` (no ``await``, no offload). Every async gateway
+        method (`aget`/`apost`/etc.) previously called the *synchronous*
+        `_check_url` directly from inside a coroutine -- so a policy-denied
+        async request with interactive approval active blocked the entire
+        asyncio event loop for however long the operator took to respond,
+        stalling the Discord gateway heartbeat, any concurrent API-server
+        requests, and all other async work in the process, with no timeout
+        (unlike `ApprovalGate.request()`'s 60s default in this same
+        codebase). Offloading the blocking prompt to a thread executor lets
+        the event loop keep servicing other tasks while waiting for
+        operator input.
+        """
+        try:
+            host, path = self._validate_and_pin(url)
+        except PolicyViolationError as exc:
+            host = urlparse(url).hostname or url
+            if _interactive_approval is not None:
+                from missy.agent.interactive_approval import InteractiveApproval
+
+                if isinstance(_interactive_approval, InteractiveApproval):
+                    loop = asyncio.get_event_loop()
+                    approved = await loop.run_in_executor(
+                        None,
+                        _interactive_approval.prompt_user,
+                        "network_request",
+                        url,
+                        self.session_id,
+                    )
+                    if approved:
+                        logger.info("Operator approved denied network request to %s", host)
+                        self._pin_operator_override(host)
+                        # See _check_url's matching comment: an operator
+                        # override only overrides the network-level host
+                        # denial, not the independent L7 REST policy layer.
+                        path = self._normalize_path(urlparse(url).path)
+                        if method:
+                            self._check_rest_policy(host, method, path)
+                        return
+            raise exc
+
+        if method:
+            self._check_rest_policy(host, method, path)
 
     def _check_rest_policy(self, host: str, method: str, path: str) -> None:
         """Evaluate L7 REST policy rules for *host*, *method*, and *path*.
@@ -420,20 +552,29 @@ class PolicyHTTPClient:
     def _get_sync_client(self) -> httpx.Client:
         """Return the shared synchronous client, creating it on first call."""
         if self._sync_client is None:
+            # SR-1.9b: an explicit transport= is required for the pinned
+            # backend to take effect -- passing limits=/timeout= directly
+            # to httpx.Client() only affects the *default* transport it
+            # would otherwise build internally, and is ignored once a
+            # transport is supplied explicitly.
+            from missy.gateway.pinned_transport import PinnedHTTPTransport
+
             self._sync_client = httpx.Client(
                 timeout=self.timeout,
                 follow_redirects=False,
-                limits=self._POOL_LIMITS,
+                transport=PinnedHTTPTransport(limits=self._POOL_LIMITS),
             )
         return self._sync_client
 
     def _get_async_client(self) -> httpx.AsyncClient:
         """Return the shared async client, creating it on first call."""
         if self._async_client is None:
+            from missy.gateway.pinned_transport import PinnedAsyncHTTPTransport
+
             self._async_client = httpx.AsyncClient(
                 timeout=self.timeout,
                 follow_redirects=False,
-                limits=self._POOL_LIMITS,
+                transport=PinnedAsyncHTTPTransport(limits=self._POOL_LIMITS),
             )
         return self._async_client
 

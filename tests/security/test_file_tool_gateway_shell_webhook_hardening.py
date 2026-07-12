@@ -257,7 +257,7 @@ class TestWebhookContentTypeValidation:
             return MagicMock()
 
         with (
-            patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver),
+            patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=fake_httpserver),
             patch("missy.channels.webhook.threading.Thread"),
         ):
             ch.start()
@@ -342,7 +342,7 @@ class TestWebhookContentLengthValidation:
             return MagicMock()
 
         with (
-            patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver),
+            patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=fake_httpserver),
             patch("missy.channels.webhook.threading.Thread"),
         ):
             ch.start()
@@ -408,7 +408,7 @@ class TestWebhookHeaderFiltering:
             return MagicMock()
 
         with (
-            patch("missy.channels.webhook.HTTPServer", side_effect=fake_httpserver),
+            patch("missy.channels.webhook.ThreadingHTTPServer", side_effect=fake_httpserver),
             patch("missy.channels.webhook.threading.Thread"),
         ):
             ch.start()

@@ -56,6 +56,7 @@ vector = [
 vision = [
     "opencv-python-headless>=4.8",
     "numpy>=1.24",
+    "Pillow>=10.0",
 ]
 # Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
 # After installing playwright, run: playwright install firefox

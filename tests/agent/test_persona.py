@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import fields
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -110,6 +113,59 @@ class TestPersonaFromDict:
         persona = _persona_from_dict(d)
         assert persona.name == "Missy"
 
+    def test_wrong_typed_tone_raises_type_error(self):
+        # PersonaConfig(**kwargs) performs no runtime type validation on its
+        # own -- a malformed value (int instead of a list) would otherwise
+        # load "successfully" into a structurally-broken object that only
+        # fails later (e.g. ", ".join(persona.tone) in `missy persona show`
+        # raising an unhandled TypeError). _persona_from_dict must catch this
+        # itself so PersonaManager._load()'s ValueError/TypeError handler can
+        # fall back to defaults cleanly.
+        d = _persona_to_dict(PersonaConfig())
+        d["tone"] = 5
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_tone_list_with_non_string_item_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["tone"] = ["direct", 42]
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_name_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["name"] = ["not", "a", "string"]
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_version_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["version"] = "five"
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+    def test_wrong_typed_identity_description_raises_type_error(self):
+        d = _persona_to_dict(PersonaConfig())
+        d["identity_description"] = {"not": "a string"}
+        with pytest.raises(TypeError):
+            _persona_from_dict(d)
+
+
+class TestPersonaManagerLoadFallsBackOnTypeMismatch:
+    """PersonaManager._load() must recover from a well-formed-YAML,
+    wrong-typed persona.yaml rather than propagating a crash to the caller
+    (e.g. `missy persona show`)."""
+
+    def test_wrong_typed_tone_field_falls_back_to_defaults(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        path.write_text("version: 1\ntone: 5\n", encoding="utf-8")
+        pm = PersonaManager(persona_path=path)
+        persona = pm.get_persona()
+        assert persona.name == "Missy"
+        assert persona.tone == list(persona.tone)  # a real list, not an int
+        # The exact crash this regression guards against:
+        assert ", ".join(persona.tone)  # must not raise TypeError
+
 
 # ---------------------------------------------------------------------------
 # PersonaManager — construction
@@ -175,6 +231,79 @@ class TestPersonaManagerSave:
         pm = PersonaManager(persona_path=nested)
         pm.save()
         assert nested.exists()
+
+
+# ---------------------------------------------------------------------------
+# PersonaManager — cross-process reload (long-running daemon picks up an
+# edit made by a separate `missy persona edit`/`reset`/`rollback` CLI
+# invocation without requiring a restart)
+# ---------------------------------------------------------------------------
+
+
+class TestPersonaManagerCrossProcessReload:
+    """Regression: get_persona() only ever returned a copy of the
+    in-memory PersonaConfig loaded once at __init__ -- a long-running
+    daemon (`missy gateway start`/`missy run`) constructs one
+    PersonaManager at startup, but a separate `missy persona edit` CLI
+    invocation (a different process) writing persona.yaml had silently
+    zero effect on the running daemon's agent turns until it was
+    manually restarted.
+    """
+
+    def test_external_edit_is_picked_up_on_next_get_persona_call(self, tmp_path):
+        path = tmp_path / "persona.yaml"
+        # Simulates the long-running daemon's manager, constructed once.
+        daemon_mgr = PersonaManager(persona_path=path)
+        assert daemon_mgr.get_persona().name == "Missy"
+
+        # Simulates a separate `missy persona edit` CLI process writing
+        # the same file via its own independent PersonaManager instance.
+        editor_mgr = PersonaManager(persona_path=path)
+        editor_mgr.update(name="Jarvis")
+        editor_mgr.save()
+
+        # The daemon's original instance must pick this up without
+        # ever being told to reload explicitly.
+        assert daemon_mgr.get_persona().name == "Jarvis"
+
+    def test_no_change_does_not_reload_or_reset_in_memory_state(self, tmp_path, monkeypatch):
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.update(name="Local")
+        pm.save()
+
+        load_calls = []
+        original_load = pm._load
+
+        def _counting_load():
+            load_calls.append(1)
+            return original_load()
+
+        monkeypatch.setattr(pm, "_load", _counting_load)
+
+        pm.get_persona()
+        pm.get_persona()
+        assert load_calls == []  # no external change -- must not re-read the file
+
+    def test_own_save_does_not_trigger_redundant_reload(self, tmp_path, monkeypatch):
+        """A manager's own save() must not cause its very next
+        get_persona() call to needlessly re-read the file it just wrote."""
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.update(name="SelfSaved")
+        pm.save()
+
+        load_calls = []
+        original_load = pm._load
+
+        def _counting_load():
+            load_calls.append(1)
+            return original_load()
+
+        monkeypatch.setattr(pm, "_load", _counting_load)
+
+        assert pm.get_persona().name == "SelfSaved"
+        assert load_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +494,45 @@ class TestPersonaBackup:
         pm = PersonaManager(persona_path=path)
         assert pm.list_backups() == []
 
+    def test_list_backups_tolerates_file_vanishing_mid_scan(self, tmp_path):
+        """Regression: list_backups() called p.stat().st_mtime as a bare
+        sort key with no exception handling. Multiple PersonaManager
+        instances share no lock, so one instance's _prune_backups()
+        unlinking a backup file concurrently with another instance's
+        list_backups() iterdir()-then-stat() scan is a real TOCTOU race
+        (exposed more often after fixing the same-second backup-filename
+        collision, since threads no longer short-circuit via
+        shutil.SameFileError before reaching this code as often). Must
+        skip a file that vanishes between listing and stat()'ing it,
+        not propagate FileNotFoundError.
+        """
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()
+        pm.update(name="V2")
+        pm.save()
+        backups = pm.list_backups()
+        assert len(backups) == 1
+
+        # Simulate another instance's _prune_backups() deleting the backup
+        # file after this call's iterdir() would have seen it but before
+        # its stat() call -- monkeypatch Path.stat to unlink-then-raise
+        # exactly like the real race would produce.
+        real_stat = Path.stat
+        triggered = False
+
+        def _flaky_stat(self, *args, **kwargs):
+            nonlocal triggered
+            if not triggered and self.name.startswith("persona.yaml."):
+                triggered = True
+                self.unlink()
+                raise FileNotFoundError(2, "No such file or directory", str(self))
+            return real_stat(self, *args, **kwargs)
+
+        with patch.object(Path, "stat", _flaky_stat):
+            result = pm.list_backups()
+        assert result == []
+
     def test_multiple_saves_create_multiple_backups(self, tmp_path, monkeypatch):
         call_count = 0
         _orig_strftime = time.strftime
@@ -438,6 +606,31 @@ class TestPersonaRollback:
         pm.rollback()
         # rollback should create a backup of the current state
         assert len(pm.list_backups()) >= count_before
+
+    def test_rollback_restores_0o600_permissions_when_primary_file_missing(self, tmp_path):
+        # save() explicitly chmods 0o600 ("persona may contain sensitive
+        # identity info"). rollback()'s write_text() call preserves an
+        # existing file's mode, but if persona.yaml doesn't exist at
+        # rollback time (deleted/corrupted-and-removed), write_text()
+        # creates a brand-new file subject to the process umask -- silently
+        # losing that confidentiality guarantee on the one path (recovery)
+        # where it matters most.
+        path = tmp_path / "persona.yaml"
+        pm = PersonaManager(persona_path=path)
+        pm.save()  # v2, creates a backup-eligible file
+        pm.update(name="X")
+        pm.save()  # v3, backup of v2 now exists
+        path.unlink()  # simulate the primary file being deleted/corrupted-away
+
+        old_umask = os.umask(0o022)
+        try:
+            pm.rollback()
+        finally:
+            os.umask(old_umask)
+
+        assert path.exists()
+        mode = path.stat().st_mode & 0o777
+        assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
 
 class TestPersonaDiff:

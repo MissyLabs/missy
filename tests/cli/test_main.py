@@ -552,6 +552,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = []
+                    mock_mgr.load_jobs.return_value = []
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
@@ -572,6 +573,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = []
+                    mock_mgr.load_jobs.return_value = []
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
@@ -590,6 +592,7 @@ class TestScheduleList:
         job.name = "Daily summary"
         job.schedule = "daily at 09:00"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         job.enabled = True
         job.run_count = 3
         job.last_run = None
@@ -602,6 +605,7 @@ class TestScheduleList:
                 with patch("missy.scheduler.manager.SchedulerManager") as mock_mgr_cls:
                     mock_mgr = MagicMock()
                     mock_mgr.list_jobs.return_value = [job]
+                    mock_mgr.load_jobs.return_value = [job]
                     mock_mgr_cls.return_value = mock_mgr
 
                     result = runner.invoke(cli, ["--config", cfg_path, "schedule", "list"])
@@ -609,10 +613,11 @@ class TestScheduleList:
             os.unlink(cfg_path)
 
         assert result.exit_code == 0
-        # Rich may word-wrap "Daily summary" across two lines in the table cell,
-        # so assert on the individual words rather than the full string.
+        # Rich may truncate "Daily summary" with an ellipsis in a narrow
+        # table cell (the table has more columns now, e.g. "Mode"), so
+        # assert on a prefix rather than the full second word.
         assert "Daily" in result.output
-        assert "summary" in result.output
+        assert "summa" in result.output
 
     def test_schedule_list_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["schedule", "list", "--help"])

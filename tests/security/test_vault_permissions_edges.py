@@ -666,6 +666,15 @@ class TestConcurrentAccess:
         t2.join()
         # No exceptions must have been raised
         assert not errors, f"Concurrent write errors: {errors}"
+        # Regression: two separate Vault instances (simulating two
+        # overlapping `missy vault set` processes) previously had no shared
+        # lock around their read-modify-write cycle, so interleaved writes
+        # from v1 and v2 silently clobbered each other via _save_store()'s
+        # atomic rename -- no exception raised, but most keys simply
+        # vanished. All 30 keys across both writers must now survive.
+        v3 = Vault(vault_dir=vault_path)
+        expected = {f"V1_{i}" for i in range(15)} | {f"V2_{i}" for i in range(15)}
+        assert set(v3.list_keys()) == expected
 
     def test_single_instance_concurrent_reads_are_consistent(self, tmp_path):
         """Multiple threads reading the same vault get consistent values."""

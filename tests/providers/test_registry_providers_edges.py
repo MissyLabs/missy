@@ -366,31 +366,70 @@ class TestConcurrentSetDefault:
         assert default in ("a", "b", "c", "d")
 
     def test_concurrent_register_and_get_available(self):
-        """Concurrent register + get_available must not raise."""
+        """Concurrent register + get_available must not raise.
+
+        Regression: `get_available()` previously iterated
+        `self._providers.values()` directly with zero locking, so a
+        concurrent `register()` call adding a brand-new key (a dict
+        size change, not just a value update) could raise
+        "RuntimeError: dictionary changed size during iteration" --
+        reproduced live in this session (intermittently, since it's a
+        genuine race -- the exact interleaving needed isn't guaranteed
+        every run, which is why this looked like a flake at first
+        rather than a deterministic failure). Fixed by having
+        ProviderRegistry take a locked snapshot of the dict before
+        iterating in every read path that iterates (`get_available`,
+        `list_providers`, `key_for`), not just the single-key `.get()`
+        lookups that were already safe. This test now also exercises
+        `list_providers`/`key_for` concurrently (previously untested
+        for this race) and repeats several rounds to make the race
+        window easier to hit if the fix ever regresses."""
         registry = ProviderRegistry()
         errors: list[Exception] = []
         lock = threading.Lock()
 
         def registrar(name: str) -> None:
             try:
-                registry.register(name, _make_provider(name, available=True))
+                provider = _make_provider(name, available=True)
+                registry.register(name, provider)
             except Exception as exc:  # noqa: BLE001
                 with lock:
                     errors.append(exc)
 
-        def reader() -> None:
+        def reader_get_available() -> None:
             try:
                 registry.get_available()
             except Exception as exc:  # noqa: BLE001
                 with lock:
                     errors.append(exc)
 
-        threads = [threading.Thread(target=registrar, args=(f"p{i}",)) for i in range(10)]
-        threads += [threading.Thread(target=reader) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=5)
+        def reader_list_providers() -> None:
+            try:
+                registry.list_providers()
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(exc)
+
+        def reader_key_for() -> None:
+            try:
+                provider = _make_provider("probe", available=True)
+                registry.key_for(provider)  # not registered; exercises the full scan
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(exc)
+
+        for round_num in range(3):
+            threads = [
+                threading.Thread(target=registrar, args=(f"round{round_num}-p{i}",))
+                for i in range(10)
+            ]
+            threads += [threading.Thread(target=reader_get_available) for _ in range(10)]
+            threads += [threading.Thread(target=reader_list_providers) for _ in range(10)]
+            threads += [threading.Thread(target=reader_key_for) for _ in range(10)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
 
         assert errors == []
 

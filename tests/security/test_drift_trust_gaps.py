@@ -244,6 +244,7 @@ class TestAgentIdentityEdgeCases:
 
         bad_pem = tmp_path / "bad.pem"
         bad_pem.write_text("not a valid PEM file")
+        bad_pem.chmod(0o600)
         with pytest.raises(ValueError):
             AgentIdentity.from_key_file(str(bad_pem))
 

@@ -735,10 +735,25 @@ class TestBehaviorToneAnalysisStability:
 class TestIntentClassifierBoundaryCases:
     """Messages that match multiple intent patterns; ordering must be consistent."""
 
-    def test_greeting_plus_question_resolves_to_greeting(self) -> None:
-        """Greeting takes highest priority even when a question mark is present."""
+    def test_greeting_plus_substantive_question_resolves_to_question(self) -> None:
+        """A greeting-prefixed message with real question content is a
+        question, not a bare greeting -- this test previously asserted the
+        opposite ("Greeting takes highest priority even when a question
+        mark is present"), codifying the same greeting-override bug found
+        and fixed elsewhere: _GREETING_PATTERNS only anchors on the leading
+        word(s), with no check that the rest of the message is actually
+        just a plain greeting, so realistic messages that happen to open
+        with "hey"/"hi"/"hello" were unconditionally classified as
+        "greeting" regardless of substantive content (up to and including
+        urgent technical troubleshooting requests -- see
+        TestClassifyIntentGreetingPrefixWithSubstantiveContent in
+        test_behavior.py for the live-reproduced worse cases that surfaced
+        this). A short, genuinely bare greeting ("hey there friend") still
+        classifies as "greeting"; this one has real question content and
+        should not.
+        """
         interp = IntentInterpreter()
-        assert interp.classify_intent("hey, how does this work?") == "greeting"
+        assert interp.classify_intent("hey, how does this work?") == "question"
 
     def test_farewell_plus_question_resolves_to_farewell(self) -> None:
         """Farewell pattern wins over question when present."""
@@ -1017,6 +1032,19 @@ class TestPersonaAuditLogIntegrity:
         limitation of the backup naming scheme and must *not* corrupt the audit
         log — so we filter ``SameFileError`` out of the fatal-error list and
         only fail on unexpected exceptions.
+
+        This also guards a second, previously-undetected race: ``shutil.copy2``
+        is ``copyfile()`` + ``copystat()`` as two separate steps, not one
+        atomic operation. ``PersonaManager._lock`` only serializes save()/
+        rollback() *within a single instance* -- it does not span the multiple
+        independent instances this test constructs against the same path. A
+        different instance's ``_prune_backups()`` can unlink the backup file
+        this thread's ``copyfile()`` just created before this thread's
+        ``copystat()`` runs, making ``copystat()``'s ``utime()`` raise
+        ``FileNotFoundError``. At 5 threads x 10 saves this reproduced in real
+        CI (Test (Python 3.11), run 29209260077) but only ~1/20 locally; the
+        20x20 parameters below reproduced it in 13/15 local trials pre-fix and
+        0/15 post-fix.
         """
         import shutil
 
@@ -1039,11 +1067,11 @@ class TestPersonaAuditLogIntegrity:
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        threads = [threading.Thread(target=_write_audit, args=(10,)) for _ in range(5)]
+        threads = [threading.Thread(target=_write_audit, args=(20,)) for _ in range(20)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=15)
+            t.join(timeout=30)
 
         assert not errors, f"Threads raised unexpected errors: {errors}"
 
@@ -1404,6 +1432,39 @@ class TestPersonaManagerFieldIsolation:
         # Names must be distinct.
         names = [b.name for b in backups]
         assert len(set(names)) == 2
+
+    def test_same_second_backups_do_not_clobber_each_other(self, tmp_path: Path) -> None:
+        """Regression: _create_backup() used time.strftime("%Y%m%d_%H%M%S")
+        (one-second resolution) as the backup filename with no collision
+        check, and shutil.copy2() silently overwrites an existing file --
+        so two _create_backup() calls within the same real wall-clock
+        second (very plausible: two rapid save() calls, or a save()
+        immediately followed by rollback(), which also backs up first)
+        produced the identical filename and the second call destroyed the
+        first backup's content with zero error. This is the identical root
+        cause already found and fixed for missy/config/plan.py's
+        backup_config(). Calls _create_backup() directly, back-to-back,
+        with the real (unmocked) clock -- these two calls are fast enough
+        to reliably land in the same second on any real machine.
+        """
+        pm = PersonaManager(persona_path=tmp_path / "persona.yaml")
+        pm.update(name="V1")
+        pm.save()  # creates the file, no backup yet (nothing to back up)
+
+        pm.update(name="V2")
+        pm._path.write_text(yaml.dump({"name": "V2"}))
+        first_backup = pm._create_backup()
+
+        pm._path.write_text(yaml.dump({"name": "V3"}))
+        second_backup = pm._create_backup()
+
+        assert first_backup != second_backup, (
+            "two same-second backups collided onto the same filename"
+        )
+        assert "V2" in first_backup.read_text(), (
+            "first backup's content was clobbered by the second backup"
+        )
+        assert "V3" in second_backup.read_text()
 
 
 class TestResponseShaperCodeBlockStash:

@@ -109,14 +109,42 @@ class TestRunLifecycle:
         assert registry.get(handle.run_id).status == "complete"
         assert registry.get(handle.run_id).response == "42"
 
+    def test_response_secrets_are_redacted(self, registry: RunRegistry, bus: MessageBus) -> None:
+        """Regression: POST /api/v1/chat censors response_text via
+        censor_response() before returning it, but this background-run
+        path (used by GET /api/v1/runs/{run_id} and its SSE stream)
+        previously stored/streamed the raw agent response with no
+        redaction at all -- every other field this same method pushes
+        (message, error, cost) already goes through redact_audit_value().
+        If the agent's final answer echoes a credential, a client polling
+        this endpoint got it unredacted while the identical content
+        through /chat would have been redacted.
+        """
+        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcd"
+        runtime = FakeRuntime(bus, response=f"Here is the key you asked about: {secret}")
+        handle = registry.start(runtime=runtime, message="what's the key?", session_id="s1")
+        events = list(registry.stream(handle.run_id))
+        assert events[-1]["event"] == "run.complete"
+        assert secret not in events[-1]["data"]["response"]
+        assert "[REDACTED]" in events[-1]["data"]["response"]
+        assert secret not in registry.get(handle.run_id).response
+
     def test_stream_includes_bus_sourced_tool_events(
         self, registry: RunRegistry, bus: MessageBus
     ) -> None:
         runtime = FakeRuntime(bus, response="done")
         handle = registry.start(runtime=runtime, message="do a thing", session_id="s1")
         events = [e["event"] for e in registry.stream(handle.run_id)]
-        assert "run.started" in events
-        assert "run.start" in events
+        # _execute()'s own directly-pushed "run has begun" event and the
+        # bus-forwarded "agent.run.start" -> "run.start" event must use the
+        # IDENTICAL name -- web_console.py's EventSource only binds a
+        # listener to 'run.start'. Pre-fix, the directly-pushed event was
+        # named "run.started" (with a "d"), which no browser listener ever
+        # matched, so the "Agent picked up the task" UI line only appeared
+        # via the second, bus-sourced event -- silently never appearing at
+        # all if the message bus happened to be unavailable.
+        assert "run.started" not in events
+        assert events.count("run.start") == 2
         assert "tool.request" in events
         assert "tool.result" in events
         assert events[-1] == "run.complete"
@@ -252,6 +280,58 @@ class TestLateJoin:
         assert elapsed < 1.0
         assert events[-1]["event"] == "run.complete"
         assert events[-1]["data"]["response"] == "42"
+
+
+class TestQueueOverflowTerminalDelivery:
+    """A run's per-handle event queue is bounded (_MAX_QUEUE_EVENTS); push()
+    silently drops on queue.Full, including the terminal __done__/
+    _STREAM_DONE markers _execute()'s finally block relies on. A client
+    actively streaming an in-flight run must still reach a terminal event
+    (via the handle.status fallback in stream()'s polling loop) even if
+    those markers were dropped -- not hang forever on "ping" keepalives.
+    """
+
+    def test_stream_reaches_terminal_event_when_terminal_markers_are_dropped(
+        self, registry: RunRegistry
+    ) -> None:
+        import contextlib
+        import queue
+
+        from missy.api.run_stream import _MAX_QUEUE_EVENTS, _STREAM_DONE, RunHandle
+
+        handle = RunHandle(run_id="r1", session_id="s1", provider="mock", message="hi")
+        registry._runs["r1"] = handle
+        handle.status = "running"
+
+        # A client connects while the run is still in flight.
+        gen = registry.stream("r1", timeout=0.05)
+        first = next(gen)
+        assert first == {"event": "ping", "data": {}}
+
+        # Fill the queue to capacity with non-terminal events.
+        for i in range(_MAX_QUEUE_EVENTS):
+            handle.push({"event": "tool.request", "data": {"i": i}})
+
+        # The run finishes, but the queue is already full: both terminal
+        # markers are silently dropped by push()'s queue.Full suppression.
+        handle.status = "complete"
+        handle.response = "done"
+        handle.finished_at = "2026-01-01T00:00:00+00:00"
+        with contextlib.suppress(queue.Full):
+            handle.push({"event": "__done__", "data": {}})
+        with contextlib.suppress(queue.Full):
+            handle._queue.put_nowait(_STREAM_DONE)
+
+        events = [first]
+        for ev in gen:
+            events.append(ev)
+            if len(events) > _MAX_QUEUE_EVENTS + 10:
+                pytest.fail(
+                    "stream() never reached a terminal event -- it is stuck emitting pings forever"
+                )
+
+        assert events[-1]["event"] == "run.complete"
+        assert events[-1]["data"]["response"] == "done"
 
 
 # ---------------------------------------------------------------------------

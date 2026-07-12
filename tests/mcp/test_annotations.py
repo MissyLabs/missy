@@ -63,20 +63,40 @@ class TestToolAnnotationDefaults:
 
 class TestFromMcpDict:
     def test_empty_dict_uses_defaults(self):
+        """Per the MCP spec's cautious posture, an omitted hint is NOT
+        assumed safe: a server that provides an (empty) annotations object
+        with no hints at all is parsed as non-read-only/destructive/
+        open-world/approval-requiring, not silently trusted safe.
+        """
         ann = ToolAnnotation.from_mcp_dict({})
-        assert ann.read_only is True
-        assert ann.mutating is False
+        assert ann.read_only is False
+        assert ann.mutating is True
         assert ann.idempotent is False
-        assert ann.network_access is False
-        assert ann.requires_approval is False
+        assert ann.network_access is True
+        assert ann.requires_approval is True
         assert ann.cost_hint == "none"
         assert ann.estimated_latency_ms is None
-        assert ann.category == "general"
+        assert ann.category == "dangerous"
 
     def test_read_only_hint_false(self):
+        """readOnlyHint=False alone (no destructiveHint) must default
+        destructiveHint to True per spec, not silently assume non-destructive.
+        """
         ann = ToolAnnotation.from_mcp_dict({"readOnlyHint": False})
         assert ann.read_only is False
-        assert ann.category == "write"
+        assert ann.mutating is True
+        assert ann.requires_approval is True
+        assert ann.category == "dangerous"
+
+    def test_read_only_hint_true_is_never_destructive(self):
+        """destructiveHint is only meaningful for a non-read-only tool --
+        an explicit readOnlyHint=True must force mutating/requires_approval
+        to False regardless of any (spec-nonsensical) destructiveHint.
+        """
+        ann = ToolAnnotation.from_mcp_dict({"readOnlyHint": True})
+        assert ann.read_only is True
+        assert ann.mutating is False
+        assert ann.requires_approval is False
 
     def test_destructive_hint_sets_mutating_and_approval(self):
         ann = ToolAnnotation.from_mcp_dict({"destructiveHint": True})
@@ -89,7 +109,16 @@ class TestFromMcpDict:
         assert ann.idempotent is True
 
     def test_open_world_hint_sets_network_access(self):
+        """With no readOnlyHint given, readOnlyHint defaults to False per
+        spec, so destructiveHint also defaults to True -- destructive wins
+        over open-world in category priority.
+        """
         ann = ToolAnnotation.from_mcp_dict({"openWorldHint": True})
+        assert ann.network_access is True
+        assert ann.category == "dangerous"
+
+    def test_open_world_hint_with_explicit_read_only_sets_search_category(self):
+        ann = ToolAnnotation.from_mcp_dict({"readOnlyHint": True, "openWorldHint": True})
         assert ann.network_access is True
         assert ann.category == "search"
 
@@ -123,9 +152,13 @@ class TestFromMcpDict:
         assert ann.estimated_latency_ms is None
 
     def test_unknown_keys_ignored(self):
+        """Unknown keys don't affect parsing of the known hint fields, which
+        (since none of the real hint keys were provided) still resolve to
+        the spec's cautious defaults.
+        """
         ann = ToolAnnotation.from_mcp_dict({"unknownFutureProp": True, "anotherKey": 42})
-        assert ann.category == "general"
-        assert ann.read_only is True
+        assert ann.category == "dangerous"
+        assert ann.read_only is False
 
     def test_full_mcp_dict(self):
         data = {
@@ -145,6 +178,29 @@ class TestFromMcpDict:
         assert ann.estimated_latency_ms == 500
         assert ann.category == "write"
 
+    def test_filesystem_access_always_true_regardless_of_hints(self):
+        """Regression: the MCP spec has no standard hint distinguishing a
+        filesystem-touching tool from one that isn't, so from_mcp_dict()
+        must always set filesystem_access=True (cautious-by-omission, same
+        reasoning as read_only/openWorldHint's defaults) rather than
+        silently leaving it at the dataclass default of False. Before this
+        fix, EVERY MCP-sourced ToolAnnotation had filesystem_access=False
+        unconditionally -- McpToolWrapper's derived
+        ToolPermissions.filesystem_read/filesystem_write were therefore
+        always False too, structurally disabling ToolRegistry's filesystem
+        policy check for the entire MCP subsystem regardless of what a
+        tool actually does or declares.
+        """
+        assert ToolAnnotation.from_mcp_dict({}).filesystem_access is True
+        assert ToolAnnotation.from_mcp_dict({"readOnlyHint": True}).filesystem_access is True
+        assert (
+            ToolAnnotation.from_mcp_dict(
+                {"readOnlyHint": True, "openWorldHint": True}
+            ).filesystem_access
+            is True
+        )
+        assert ToolAnnotation.from_mcp_dict({"destructiveHint": True}).filesystem_access is True
+
 
 # ---------------------------------------------------------------------------
 # ToolAnnotation._infer_category
@@ -152,20 +208,38 @@ class TestFromMcpDict:
 
 
 class TestInferCategory:
+    """`_infer_category` now takes already-resolved booleans (read_only,
+    destructive, open_world) rather than the raw annotations dict, so its
+    notion of "unspecified" can never drift from `from_mcp_dict`'s own
+    spec-cautious defaults -- see `from_mcp_dict`'s docstring.
+    """
+
     def test_destructive_returns_dangerous(self):
-        assert ToolAnnotation._infer_category({"destructiveHint": True}) == "dangerous"
+        assert (
+            ToolAnnotation._infer_category(read_only=False, destructive=True, open_world=False)
+            == "dangerous"
+        )
 
     def test_non_readonly_returns_write(self):
-        assert ToolAnnotation._infer_category({"readOnlyHint": False}) == "write"
+        assert (
+            ToolAnnotation._infer_category(read_only=False, destructive=False, open_world=False)
+            == "write"
+        )
 
     def test_open_world_readonly_returns_search(self):
-        assert ToolAnnotation._infer_category({"openWorldHint": True}) == "search"
+        assert (
+            ToolAnnotation._infer_category(read_only=True, destructive=False, open_world=True)
+            == "search"
+        )
 
     def test_default_returns_general(self):
-        assert ToolAnnotation._infer_category({}) == "general"
+        assert (
+            ToolAnnotation._infer_category(read_only=True, destructive=False, open_world=False)
+            == "general"
+        )
 
     def test_destructive_wins_over_non_readonly(self):
-        result = ToolAnnotation._infer_category({"destructiveHint": True, "readOnlyHint": False})
+        result = ToolAnnotation._infer_category(read_only=False, destructive=True, open_world=False)
         assert result == "dangerous"
 
 
@@ -588,11 +662,16 @@ class TestMcpClientAnnotationParsing:
         assert ann.requires_approval is True
 
     def test_tool_with_empty_annotations_dict(self):
+        """An explicitly-empty annotations object (server provided the key
+        but no hints) must be parsed cautiously per spec, not trusted safe.
+        """
         tools = [{"name": "noop", "description": "No-op", "annotations": {}}]
         c = self._make_connected_client(tools)
         ann = c.tool_annotations.get("noop")
         assert ann is not None
-        assert ann.read_only is True  # default
+        assert ann.read_only is False
+        assert ann.mutating is True
+        assert ann.requires_approval is True
 
     def test_tool_with_non_dict_annotations_ignored(self):
         tools = [{"name": "weird", "description": "Weird", "annotations": "string"}]

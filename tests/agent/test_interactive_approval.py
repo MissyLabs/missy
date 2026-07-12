@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -30,6 +31,32 @@ class TestCheckRemembered:
 
         result = approval.check_remembered("network_request", "https://example.com")
         assert result is True
+
+    def test_allow_always_does_not_leak_across_sessions(
+        self, approval: InteractiveApproval
+    ) -> None:
+        """Regression: a single InteractiveApproval instance is shared
+        across every Discord user/Web API session an AgentRuntime serves
+        (one AgentRuntime per bot, not per user). Without a session_id
+        component in the remembered-decision key, an operator's one-time
+        "allow always" response to one user's blocked request silently
+        and permanently auto-approved that exact same action/detail for
+        every *other* user of the same process too -- contradicting this
+        class's own "remembered for the duration of the session" contract.
+        """
+        key = approval._make_key("network_request", "https://example.com", "session-A")
+        approval._remembered[key] = True
+
+        # Session A's approval applies to session A.
+        assert (
+            approval.check_remembered("network_request", "https://example.com", "session-A") is True
+        )
+        # A different session must NOT inherit session A's approval.
+        assert (
+            approval.check_remembered("network_request", "https://example.com", "session-B") is None
+        )
+        # The default (no session_id passed) is its own distinct scope too.
+        assert approval.check_remembered("network_request", "https://example.com") is None
 
 
 class TestPromptUser:
@@ -113,6 +140,92 @@ class TestThreadSafe:
             t.join()
 
         assert errors == [], f"Thread errors: {errors}"
+
+
+class TestConcurrentPromptsSerialized:
+    """Regression: concurrent callers (e.g. SubAgentRunner's ThreadPoolExecutor
+    running independent subtasks at once against one shared AgentRuntime)
+    must not both reach _do_prompt() at the same moment -- their Rich
+    panels would interleave on stderr and both block on console.input()
+    reading the same stdin, racing the operator's single typed response
+    against two different prompts.
+    """
+
+    def test_concurrent_prompts_never_overlap(self, approval: InteractiveApproval) -> None:
+        active = 0
+        max_active = 0
+        state_lock = threading.Lock()
+
+        def fake_do_prompt(action: str, detail: str, session_id: str = "") -> bool:
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with state_lock:
+                active -= 1
+            return True
+
+        with (
+            patch.object(InteractiveApproval, "_is_tty", return_value=True),
+            patch.object(InteractiveApproval, "_do_prompt", side_effect=fake_do_prompt),
+        ):
+            threads = [
+                threading.Thread(target=approval.prompt_user, args=(f"action_{i}", f"detail_{i}"))
+                for i in range(5)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        assert max_active == 1
+
+    def test_second_caller_reuses_decision_made_while_waiting_for_the_lock(
+        self, approval: InteractiveApproval
+    ) -> None:
+        """If two threads request approval for the identical action/detail/
+        session at nearly the same time, and the first thread's prompt
+        results in an "allow always" decision, the second thread (blocked
+        waiting for the prompt lock) must reuse that remembered decision
+        instead of showing the operator a second, redundant prompt for the
+        exact same request.
+        """
+        call_count = 0
+        call_lock = threading.Lock()
+
+        def fake_do_prompt(action: str, detail: str, session_id: str = "") -> bool:
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+            time.sleep(0.1)
+            key = InteractiveApproval._make_key(action, detail, session_id)
+            with approval._lock:
+                approval._remembered[key] = True
+            return True
+
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            r = approval.prompt_user("network_request", "https://example.com")
+            with results_lock:
+                results.append(r)
+
+        with (
+            patch.object(InteractiveApproval, "_is_tty", return_value=True),
+            patch.object(InteractiveApproval, "_do_prompt", side_effect=fake_do_prompt),
+        ):
+            t1 = threading.Thread(target=worker)
+            t2 = threading.Thread(target=worker)
+            t1.start()
+            time.sleep(0.02)  # ensure t1 is already inside _do_prompt first
+            t2.start()
+            t1.join()
+            t2.join()
+
+        assert results == [True, True]
+        assert call_count == 1  # second thread reused the remembered decision
 
 
 class TestMakeKey:

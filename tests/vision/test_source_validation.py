@@ -6,7 +6,6 @@ tool-name propagation in ScreenshotSource.acquire()/_take_screenshot().
 
 from __future__ import annotations
 
-import logging
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -127,9 +126,13 @@ class TestFileSourceDimensionValidation:
             source.acquire()
 
     @patch("missy.vision.sources._get_cv2")
-    def test_warns_on_oversized_dimensions(self, mock_cv2_fn, tmp_path, caplog):
-        """FileSource.acquire() emits a warning but still succeeds for images wider than MAX_DIMENSION."""
-        # Image larger than MAX_DIMENSION in width
+    def test_rejects_oversized_width_post_decode_safety_net(self, mock_cv2_fn, tmp_path):
+        """Availability hardening: FileSource.acquire() must reject (not just
+        warn about) images wider than MAX_DIMENSION. This exercises the
+        post-decode safety net specifically -- the file's bytes aren't a
+        real image PIL's header peek can parse (see
+        TestFileSourceDecompressionBombGuard below for the primary,
+        pre-decode defense), so this path is what catches it here."""
         huge_img = np.zeros((100, MAX_DIMENSION + 1, 3), dtype=np.uint8)
         mock_cv2_fn.return_value = _make_mock_cv2(huge_img)
 
@@ -137,17 +140,12 @@ class TestFileSourceDimensionValidation:
         f.write_bytes(b"fake image data")
 
         source = FileSource(str(f))
-        with caplog.at_level(logging.WARNING, logger="missy.vision.sources"):
-            frame = source.acquire()
-
-        # Acquire should succeed — the warning is advisory only
-        assert frame.source_type == SourceType.FILE
-        # At least one warning record should mention large dimensions
-        assert any("large" in record.message.lower() for record in caplog.records)
+        with pytest.raises(ValueError, match="exceed the maximum allowed"):
+            source.acquire()
 
     @patch("missy.vision.sources._get_cv2")
-    def test_warns_on_oversized_height(self, mock_cv2_fn, tmp_path, caplog):
-        """FileSource.acquire() warns when image height exceeds MAX_DIMENSION."""
+    def test_rejects_oversized_height_post_decode_safety_net(self, mock_cv2_fn, tmp_path):
+        """Availability hardening: same as above, for height."""
         huge_img = np.zeros((MAX_DIMENSION + 1, 100, 3), dtype=np.uint8)
         mock_cv2_fn.return_value = _make_mock_cv2(huge_img)
 
@@ -155,11 +153,92 @@ class TestFileSourceDimensionValidation:
         f.write_bytes(b"fake image data")
 
         source = FileSource(str(f))
-        with caplog.at_level(logging.WARNING, logger="missy.vision.sources"):
-            frame = source.acquire()
+        with pytest.raises(ValueError, match="exceed the maximum allowed"):
+            source.acquire()
 
+
+# ---------------------------------------------------------------------------
+# FileSource — decompression-bomb guard (pre-decode, availability hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestFileSourceDecompressionBombGuard:
+    """Live-reproduced before this fix: an 11 MB PNG declaring 30000x30000
+    pixels was fully decoded by cv2.imread() (allocating a ~2.5 GB numpy
+    array, taking ~2.8s) before MAX_DIMENSION was ever consulted -- which
+    at the time only logged a warning and let the oversized image through
+    regardless. The fix peeks the image header via PIL (cheap, no pixel
+    decode) and rejects before OpenCV is ever invoked.
+
+    Requires the optional Pillow dependency (part of the `vision` extra):
+    skips gracefully rather than erroring in an environment that installed
+    an older/stripped-down vision extra without it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_without_pillow(self):
+        pytest.importorskip("PIL", exc_type=ImportError)
+
+    def test_rejects_declared_oversized_dimensions_before_cv2_runs(self, tmp_path):
+        from PIL import Image
+
+        # Wide-but-thin so the total pixel count stays under Pillow's own
+        # MAX_IMAGE_PIXELS decompression-bomb threshold -- this exercises
+        # *this* fix's MAX_DIMENSION check specifically, not Pillow's own
+        # separate guard (see the test below for that one).
+        img = Image.new("RGB", (MAX_DIMENSION + 1, 100), color=(0, 0, 0))
+        f = tmp_path / "wide.png"
+        img.save(f, compress_level=1)
+
+        with (
+            patch("missy.vision.sources._get_cv2") as mock_cv2_fn,
+            pytest.raises(ValueError, match="refusing to decode"),
+        ):
+            FileSource(str(f)).acquire()
+        # The whole point: cv2.imread() must never be reached for a
+        # rejected image (cv2 itself may still be lazily resolved, but
+        # the actual decode call is what's expensive and must be skipped).
+        mock_cv2_fn.return_value.imread.assert_not_called()
+
+    def test_pillow_decompression_bomb_guard_is_propagated_as_rejection(self, tmp_path):
+        """A file whose declared pixel count trips Pillow's own built-in
+        MAX_IMAGE_PIXELS guard must be rejected, not silently treated as
+        'dimensions unknown, fall through to the slow path' -- that would
+        defeat the entire point of checking the header first."""
+        from PIL import Image
+
+        img = Image.new("RGB", (20000, 20000), color=(0, 0, 0))
+        f = tmp_path / "bomb.png"
+        img.save(f, compress_level=1)
+
+        with (
+            patch("missy.vision.sources._get_cv2") as mock_cv2_fn,
+            pytest.raises(ValueError, match="decompression-bomb"),
+        ):
+            FileSource(str(f)).acquire()
+        mock_cv2_fn.return_value.imread.assert_not_called()
+
+    def test_normal_image_still_decodes_successfully(self, tmp_path):
+        from PIL import Image
+
+        img = Image.new("RGB", (800, 600), color=(255, 0, 0))
+        f = tmp_path / "normal.png"
+        img.save(f)
+
+        frame = FileSource(str(f)).acquire()
         assert frame.source_type == SourceType.FILE
-        assert any("large" in record.message.lower() for record in caplog.records)
+        assert frame.width == 800
+        assert frame.height == 600
+
+    def test_corrupt_file_falls_through_to_post_decode_check(self, tmp_path):
+        """A file PIL can't parse at all (corrupt / not actually an image)
+        must not crash the pre-check -- it should fall through and let
+        the existing decode-failure handling take over."""
+        f = tmp_path / "corrupt.png"
+        f.write_bytes(b"not a real image")
+
+        with pytest.raises(ValueError, match="Failed to decode"):
+            FileSource(str(f)).acquire()
 
 
 # ---------------------------------------------------------------------------

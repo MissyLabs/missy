@@ -26,6 +26,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
@@ -141,14 +142,49 @@ def _persona_to_dict(persona: PersonaConfig) -> dict[str, Any]:
     return ordered
 
 
+_PERSONA_LIST_FIELDS = (
+    "tone",
+    "personality_traits",
+    "behavioral_tendencies",
+    "response_style_rules",
+    "boundaries",
+)
+
+
 def _persona_from_dict(data: dict[str, Any]) -> PersonaConfig:
     """Build a :class:`PersonaConfig` from a raw YAML-loaded mapping.
 
     Unknown keys are silently ignored so that future schema additions do not
-    break older installs reading a newer file.
+    break older installs reading a newer file. Known keys are type-checked
+    against the dataclass's actual field types: a plain ``PersonaConfig(**kwargs)``
+    call performs no runtime validation, so a malformed value (e.g. ``tone: 5``
+    instead of a list) would otherwise load "successfully" into a
+    structurally-broken object that only fails later, at first use (e.g.
+    ``", ".join(persona.tone)`` in ``missy persona show`` raising an unhandled
+    ``TypeError``). Raising here instead lets the caller's existing
+    ValueError/TypeError handler fall back to defaults cleanly.
     """
     known = {f.name for f in fields(PersonaConfig)}
     filtered = {k: v for k, v in data.items() if k in known}
+
+    if "name" in filtered and not isinstance(filtered["name"], str):
+        raise TypeError(f"persona 'name' must be a string, got {type(filtered['name']).__name__}")
+    if "identity_description" in filtered and not isinstance(filtered["identity_description"], str):
+        raise TypeError(
+            "persona 'identity_description' must be a string, got "
+            f"{type(filtered['identity_description']).__name__}"
+        )
+    if "version" in filtered and not isinstance(filtered["version"], int):
+        raise TypeError(
+            f"persona 'version' must be an int, got {type(filtered['version']).__name__}"
+        )
+    for key in _PERSONA_LIST_FIELDS:
+        if key not in filtered:
+            continue
+        value = filtered[key]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise TypeError(f"persona {key!r} must be a list of strings, got {value!r}")
+
     return PersonaConfig(**filtered)
 
 
@@ -174,6 +210,16 @@ class PersonaManager:
     ) -> None:
         self._path = Path(os.path.expanduser(str(persona_path)))
         self._persona: PersonaConfig = self._load()
+        self._loaded_mtime: float | None = self._current_mtime()
+        # Guards save()/rollback() end to end: without it, concurrent
+        # callers race on the same non-atomic
+        # exists()-check/backup/version-increment/temp-write/replace
+        # sequence -- e.g. two threads' _create_backup() calls can both
+        # pass the same "does this backup filename exist yet" check before
+        # either has written it, or a concurrent _prune_backups() can
+        # unlink a backup a different thread's shutil.copy2() is still
+        # writing to, mid-copy.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -182,12 +228,41 @@ class PersonaManager:
     def get_persona(self) -> PersonaConfig:
         """Return the current :class:`PersonaConfig` (a shallow copy).
 
+        Reloads from disk first if the file has changed since it was
+        last read (see :meth:`_reload_if_changed`) -- a long-running
+        daemon (``missy gateway start``/``missy run``) constructs one
+        ``PersonaManager`` at startup; without this check, a separate
+        ``missy persona edit``/``reset``/``rollback`` CLI invocation
+        (a different process) had silently zero effect on the running
+        daemon's agent turns until it was manually restarted.
+
         Returns:
             A copy of the in-memory persona so callers cannot mutate state
             accidentally.
         """
+        self._reload_if_changed()
         # Return a new instance with the same field values
         return PersonaConfig(**asdict(self._persona))
+
+    def _current_mtime(self) -> float | None:
+        """Return persona.yaml's current mtime, or None if it doesn't exist."""
+        try:
+            return self._path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _reload_if_changed(self) -> None:
+        """Reload the persona from disk if it changed since last read.
+
+        Cheap `stat()`-based staleness check (same polling pattern
+        already used by :mod:`missy.config.hotreload`), so a separate
+        process's edit is picked up on the next call without requiring
+        a filesystem watcher or process restart.
+        """
+        current = self._current_mtime()
+        if current != self._loaded_mtime:
+            self._persona = self._load()
+            self._loaded_mtime = current
 
     def get_system_prompt_prefix(self) -> str:
         """Build a persona description string for injection into system prompts.
@@ -246,39 +321,45 @@ class PersonaManager:
             OSError: If the directory cannot be created or the file cannot
                 be written.
         """
-        # Back up existing file before overwriting
-        if self._path.exists():
-            self._create_backup()
+        with self._lock:
+            # Back up existing file before overwriting
+            if self._path.exists():
+                self._create_backup()
 
-        self._persona.version += 1
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        data = _persona_to_dict(self._persona)
-        dir_ = str(self._path.parent)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".yaml.tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                yaml.dump(
-                    data,
-                    fh,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False,
+            self._persona.version += 1
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            data = _persona_to_dict(self._persona)
+            dir_ = str(self._path.parent)
+            fd, tmp_path = tempfile.mkstemp(dir=dir_, suffix=".yaml.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    yaml.dump(
+                        data,
+                        fh,
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+                os.replace(tmp_path, self._path)
+                # Restrict file permissions — persona may contain sensitive identity info
+                with contextlib.suppress(OSError):
+                    self._path.chmod(0o600)
+                # Record the mtime this same process just wrote so the next
+                # get_persona() call doesn't immediately re-trigger
+                # _reload_if_changed() and redundantly re-read what's already
+                # correctly held in memory.
+                self._loaded_mtime = self._current_mtime()
+                self._audit("save")
+                logger.debug(
+                    "Persona saved to %s (version %d)",
+                    self._path,
+                    self._persona.version,
                 )
-            os.replace(tmp_path, self._path)
-            # Restrict file permissions — persona may contain sensitive identity info
-            with contextlib.suppress(OSError):
-                self._path.chmod(0o600)
-            self._audit("save")
-            logger.debug(
-                "Persona saved to %s (version %d)",
-                self._path,
-                self._persona.version,
-            )
-        except Exception:
-            # Clean up temp file on failure; ignore errors during cleanup
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
+            except Exception:
+                # Clean up temp file on failure; ignore errors during cleanup
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                raise
 
     def reset(self) -> None:
         """Restore the persona to factory defaults and save.
@@ -404,7 +485,38 @@ class PersonaManager:
         bdir.mkdir(parents=True, exist_ok=True, mode=0o700)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         backup_path = bdir / f"persona.yaml.{timestamp}"
-        shutil.copy2(str(self._path), str(backup_path))
+        # Two _create_backup() calls within the same wall-clock second (the
+        # timestamp's resolution) previously produced the identical
+        # filename, and shutil.copy2() overwrites an existing file with no
+        # collision check -- the second call silently destroyed the first
+        # backup's content, with no error raised (the identical root cause
+        # already found and fixed for missy/config/plan.py's
+        # backup_config() -- same numeric-suffix disambiguation applied
+        # here). Two successive save() calls, or a save() immediately
+        # followed by rollback() (which also calls _create_backup()), are
+        # both realistic same-second scenarios.
+        suffix = 1
+        while backup_path.exists():
+            backup_path = bdir / f"persona.yaml.{timestamp}_{suffix}"
+            suffix += 1
+        try:
+            shutil.copy2(str(self._path), str(backup_path))
+        except FileNotFoundError:
+            # shutil.copy2() is copyfile() + copystat() as two separate
+            # steps, not one atomic operation. A different PersonaManager
+            # instance (no shared lock across instances -- self._lock only
+            # serializes save()/rollback() within a single instance) can run
+            # _prune_backups() concurrently and unlink backup_path between
+            # our copyfile() and copystat(), so copystat()'s utime() raises
+            # FileNotFoundError even though the copy itself "succeeded" and
+            # was immediately pruned. Nothing to preserve at that point --
+            # treat it like the same-second SameFileError race callers
+            # already tolerate.
+            logger.debug(
+                "Backup %s removed by a concurrent prune before it could be finalized",
+                backup_path,
+            )
+            return backup_path
         self._prune_backups()
         logger.debug("Persona backup created: %s", backup_path)
         return backup_path
@@ -428,10 +540,24 @@ class PersonaManager:
         bdir = self.backup_dir
         if not bdir.exists():
             return []
-        return sorted(
-            [p for p in bdir.iterdir() if p.name.startswith("persona.yaml.")],
-            key=lambda p: p.stat().st_mtime,
-        )
+        entries: list[tuple[Path, float]] = []
+        for p in bdir.iterdir():
+            if not p.name.startswith("persona.yaml."):
+                continue
+            try:
+                entries.append((p, p.stat().st_mtime))
+            except FileNotFoundError:
+                # Another PersonaManager instance's concurrent
+                # _prune_backups() unlinked this file between iterdir()
+                # listing it and this stat() call -- multiple instances
+                # share no lock, so this TOCTOU race is expected under
+                # concurrent access. Skip it rather than letting the whole
+                # call raise; _prune_backups() already tolerates the
+                # symmetric case (unlink() racing against another
+                # instance's concurrent removal of the same file).
+                continue
+        entries.sort(key=lambda entry: entry[1])
+        return [p for p, _ in entries]
 
     def rollback(self) -> Path | None:
         """Restore the latest backup, backing up the current persona first.
@@ -439,26 +565,35 @@ class PersonaManager:
         Returns:
             Path to the restored backup, or ``None`` if no backups exist.
         """
-        backups = self.list_backups()
-        if not backups:
-            return None
+        with self._lock:
+            backups = self.list_backups()
+            if not backups:
+                return None
 
-        latest = backups[-1]
-        restore_content = latest.read_text(encoding="utf-8")
+            latest = backups[-1]
+            restore_content = latest.read_text(encoding="utf-8")
 
-        # Back up current before overwriting (without incrementing version)
-        if self._path.exists():
-            self._create_backup()
+            # Back up current before overwriting (without incrementing version)
+            if self._path.exists():
+                self._create_backup()
 
-        self._path.write_text(restore_content, encoding="utf-8")
-        self._persona = self._load()
-        self._audit("rollback", {"from_backup": latest.name})
-        logger.info(
-            "Persona rolled back to backup %s (version %d)",
-            latest.name,
-            self._persona.version,
-        )
-        return latest
+            self._path.write_text(restore_content, encoding="utf-8")
+            # Restrict file permissions -- persona may contain sensitive identity
+            # info. write_text() preserves an existing file's mode, but if
+            # self._path didn't already exist (deleted/corrupted-and-removed), it
+            # creates a brand-new file subject to the process umask, silently
+            # losing the confidentiality guarantee save() establishes.
+            with contextlib.suppress(OSError):
+                self._path.chmod(0o600)
+            self._persona = self._load()
+            self._loaded_mtime = self._current_mtime()
+            self._audit("rollback", {"from_backup": latest.name})
+            logger.info(
+                "Persona rolled back to backup %s (version %d)",
+                latest.name,
+                self._persona.version,
+            )
+            return latest
 
     def diff(self) -> str:
         """Return a unified diff between the current persona and the latest backup.

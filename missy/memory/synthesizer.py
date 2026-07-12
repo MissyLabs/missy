@@ -34,8 +34,19 @@ def _approx_tokens(text: str) -> int:
 
 
 def _word_set(text: str) -> set[str]:
-    """Return a lowercase word set from *text*."""
-    return set(text.lower().split())
+    """Return a lowercase word set from *text*, with punctuation stripped.
+
+    Without stripping, "networking?" (a query token) and "networking"
+    (a fragment token) never match, and "first." vs "first" makes two
+    near-identical fragments from different sources (e.g. a learning
+    and a summary phrasing the same fact slightly differently) look
+    less similar than they are -- silently under-scoring relevant
+    fragments on any question-phrased query and keeping near-duplicate
+    fragments that should have been deduplicated. Matches the same
+    stripped-punctuation convention already used by
+    :mod:`missy.agent.attention`.
+    """
+    return {w.strip("!.,?;:\"'()") for w in text.lower().split() if w.strip("!.,?;:\"'()")}
 
 
 @dataclass

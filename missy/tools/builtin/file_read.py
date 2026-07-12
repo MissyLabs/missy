@@ -82,8 +82,16 @@ class FileReadTool(BaseTool):
                 p = p.resolve(strict=True)
                 fd = os.open(str(p), os.O_RDONLY)
             size = os.fstat(fd).st_size
-            with os.fdopen(fd, "r", encoding=encoding, errors="replace") as fh:
-                content = fh.read(max_bytes)
+            # Read in binary mode and decode the raw byte slice ourselves --
+            # a text-mode fh.read(max_bytes) reads up to max_bytes
+            # *characters*, not bytes, so for multi-byte UTF-8 content it
+            # reads the whole file (in-full) well before hitting max_bytes
+            # characters while the truncation check below still compared
+            # against the file's *byte* size, producing a false "Truncated"
+            # notice on fully-read multi-byte-encoded files.
+            with os.fdopen(fd, "rb") as fh:
+                raw = fh.read(max_bytes)
+            content = raw.decode(encoding, errors="replace")
 
             truncated = size > max_bytes
             suffix = (

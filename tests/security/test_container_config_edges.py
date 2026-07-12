@@ -70,10 +70,20 @@ class TestContainerConfigParsing:
         cfg = parse_container_config({"enabled": "yes"})
         assert cfg.enabled is True
 
-    def test_parse_string_enabled_falsy(self):
-        """Empty string for enabled should be falsy."""
-        cfg = parse_container_config({"enabled": ""})
-        assert cfg.enabled is False
+    def test_parse_string_enabled_empty_raises(self):
+        """An empty string for enabled is genuinely ambiguous input (e.g.
+        an unset template variable rendering as empty) -- it must fail
+        loud via ConfigurationError rather than silently coerce to
+        False. Previously bool("") happened to equal False, matching
+        this field's secure default by coincidence; that same silent
+        coercion would invert a field whose secure default is True
+        (e.g. network.default_deny), so this is now consistently
+        rejected rather than special-cased.
+        """
+        from missy.core.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            parse_container_config({"enabled": ""})
 
     def test_parse_cpu_quota_string(self):
         """String cpu_quota should be converted to float."""

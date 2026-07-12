@@ -19,6 +19,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from urllib.parse import urlparse
@@ -58,6 +59,16 @@ class ProviderRegistry:
         self._key_indices: dict[str, int] = {}
         self._provider_configs: dict[str, ProviderConfig] = {}
         self._default_name: str | None = None
+        # Guards every mutation of the dicts above, and every read that
+        # iterates them (rather than a single dict.get()/[] lookup,
+        # which CPython already makes atomic). Found live via a
+        # concurrency stress test: concurrent register() (a dict
+        # mutation) racing with get_available()/list_providers()/
+        # key_for() (each iterating self._providers directly) could
+        # raise "RuntimeError: dictionary changed size during
+        # iteration" -- a real, pre-existing thread-safety gap, not
+        # merely a theoretical one.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Mutation
@@ -75,10 +86,29 @@ class ProviderRegistry:
             provider: The provider instance to register.
             config: Optional provider configuration for key rotation support.
         """
-        self._providers[name] = provider
-        if config is not None:
-            self._provider_configs[name] = config
-            self._key_indices.setdefault(name, 0)
+        with self._lock:
+            self._providers[name] = provider
+            if config is not None:
+                self._provider_configs[name] = config
+                self._key_indices.setdefault(name, 0)
+
+    def get_config(self, provider_name: str) -> ProviderConfig | None:
+        """Return the :class:`ProviderConfig` registered for *provider_name*.
+
+        Used by callers that need per-provider tunables (e.g. the
+        runtime's per-provider :class:`~missy.agent.circuit_breaker.CircuitBreaker`
+        threshold/cooldown, SR-4.8 residual) without duplicating the
+        registry's own config bookkeeping.
+
+        Args:
+            provider_name: Registry key of the provider.
+
+        Returns:
+            The registered :class:`ProviderConfig`, or ``None`` if the
+            provider was registered without one (or isn't registered at
+            all).
+        """
+        return self._provider_configs.get(provider_name)
 
     def rotate_key(self, provider_name: str) -> None:
         """Rotate to the next API key for the named provider (round-robin).
@@ -90,22 +120,23 @@ class ProviderRegistry:
         Args:
             provider_name: Registry key of the provider to rotate.
         """
-        config = self._provider_configs.get(provider_name)
-        provider = self._providers.get(provider_name)
-        if config is None or provider is None:
-            logger.warning("rotate_key: provider %r not found.", provider_name)
-            return
-        keys = getattr(config, "api_keys", [])
-        if len(keys) < 2:
-            logger.debug(
-                "rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.",
-                provider_name,
-            )
-            return
-        current_idx = self._key_indices.get(provider_name, 0)
-        next_idx = (current_idx + 1) % len(keys)
-        self._key_indices[provider_name] = next_idx
-        next_key = keys[next_idx]
+        with self._lock:
+            config = self._provider_configs.get(provider_name)
+            provider = self._providers.get(provider_name)
+            if config is None or provider is None:
+                logger.warning("rotate_key: provider %r not found.", provider_name)
+                return
+            keys = getattr(config, "api_keys", [])
+            if len(keys) < 2:
+                logger.debug(
+                    "rotate_key: provider %r has fewer than 2 api_keys; skipping rotation.",
+                    provider_name,
+                )
+                return
+            current_idx = self._key_indices.get(provider_name, 0)
+            next_idx = (current_idx + 1) % len(keys)
+            self._key_indices[provider_name] = next_idx
+            next_key = keys[next_idx]
         # Update the provider's api_key attribute if accessible.
         if hasattr(provider, "api_key"):
             provider.api_key = next_key  # type: ignore[attr-defined]
@@ -126,6 +157,13 @@ class ProviderRegistry:
         provider = self._providers.get(name)
         if provider is None:
             raise ValueError(f"Provider {name!r} is not registered.")
+        # is_available() may perform real I/O (e.g. an HTTP health check);
+        # deliberately not held under self._lock so a slow/blocking check
+        # for one provider can't stall unrelated register()/rotate_key()
+        # calls on other providers. Only the final assignment needs the
+        # lock (a single attribute write is already atomic in CPython,
+        # but taking it anyway keeps this consistent with every other
+        # mutation of registry state going through the same guard).
         try:
             if not provider.is_available():
                 raise ValueError(f"Provider {name!r} is not available.")
@@ -133,7 +171,8 @@ class ProviderRegistry:
             if isinstance(exc, ValueError):
                 raise
             raise ValueError(f"Provider {name!r} availability check failed: {exc}") from exc
-        self._default_name = name
+        with self._lock:
+            self._default_name = name
         logger.info("Default provider set to %r.", name)
 
     def get_default_name(self) -> str | None:
@@ -156,13 +195,36 @@ class ProviderRegistry:
         """
         return self._providers.get(name)
 
+    def key_for(self, provider: BaseProvider) -> str | None:
+        """Return the registry key *provider* was registered under, or ``None``.
+
+        Used by callers that only hold a provider instance (e.g. selected
+        via :meth:`get_available`) but need the registry key to call
+        :meth:`rotate_key`, since a provider's registry key need not match
+        its class-level ``name`` attribute.
+
+        Args:
+            provider: A provider instance previously passed to :meth:`register`.
+
+        Returns:
+            The registry key, or ``None`` if *provider* is not registered
+            (identity comparison, not equality).
+        """
+        with self._lock:
+            snapshot = list(self._providers.items())
+        for key, registered in snapshot:
+            if registered is provider:
+                return key
+        return None
+
     def list_providers(self) -> list[str]:
         """Return a sorted list of all registered provider names.
 
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
-        return sorted(self._providers)
+        with self._lock:
+            return sorted(self._providers)
 
     def get_available(self) -> list[BaseProvider]:
         """Return providers that report themselves as available.
@@ -174,8 +236,15 @@ class ProviderRegistry:
             A list of available :class:`~.base.BaseProvider` instances in
             registration order (dict insertion order, Python 3.7+).
         """
+        # Snapshot under the lock, then iterate (and call each provider's
+        # potentially I/O-bound is_available()) outside it -- otherwise
+        # a slow health check would hold self._lock for its full
+        # duration, blocking unrelated register()/rotate_key() calls
+        # from other threads for no good reason.
+        with self._lock:
+            snapshot = list(self._providers.values())
         available: list[BaseProvider] = []
-        for provider in self._providers.values():
+        for provider in snapshot:
             try:
                 if provider.is_available():
                     available.append(provider)
@@ -208,6 +277,24 @@ class ProviderRegistry:
         registry = cls()
         # Auto-populate provider_allowed_hosts from provider base_url entries
         # so users don't have to duplicate hosts in network policy manually.
+        #
+        # Availability/transparency hardening: this mutates the network
+        # policy's "provider" category egress allowlist -- a security-
+        # relevant action -- but previously did so completely silently
+        # (logger.debug() only, invisible at default log levels; no audit
+        # trail at all). An operator setting base_url for one provider
+        # (e.g. pointing to a self-hosted OpenAI-compatible endpoint)
+        # would never see that their policy's effective allowlist grew,
+        # and nothing in AUDIT_SECURITY.md's "structured audit events for
+        # privileged actions" guarantee covered this path. SSRF/DNS-
+        # rebinding via a maliciously-crafted base_url is already closed
+        # independently by SR-1.9a's rebinding check (every hostname
+        # match, including ones added here, still re-verifies the
+        # resolved IP isn't private/loopback/link-local before any
+        # request is allowed) and by NetworkPolicyEngine's own bare-IP
+        # path never consulting allowed_hosts at all -- this fix is about
+        # making the widening itself visible and auditable, not about an
+        # exploitable bypass.
         existing = {h.lower() for h in config.network.provider_allowed_hosts}
         for provider_config in config.providers.values():
             if provider_config.enabled and provider_config.base_url:
@@ -216,10 +303,31 @@ class ProviderRegistry:
                 if host and host.lower() not in existing:
                     config.network.provider_allowed_hosts.append(host)
                     existing.add(host.lower())
-                    logger.debug(
-                        "Auto-allowed provider host %r from base_url.",
+                    logger.warning(
+                        "Provider %r's base_url expanded the network policy's "
+                        "'provider' category egress allowlist to include %r. "
+                        "If this host is unexpected, check config.providers "
+                        "for a stray or malicious base_url.",
+                        provider_config.name,
                         host,
                     )
+                    with contextlib.suppress(Exception):
+                        from missy.core.events import AuditEvent, event_bus
+
+                        event_bus.publish(
+                            AuditEvent.now(
+                                session_id="",
+                                task_id="",
+                                event_type="provider.base_url_egress_widened",
+                                category="network",
+                                result="allow",
+                                detail={
+                                    "provider": provider_config.name,
+                                    "host": host,
+                                    "base_url": provider_config.base_url,
+                                },
+                            )
+                        )
 
         for key, provider_config in config.providers.items():
             if not provider_config.enabled:

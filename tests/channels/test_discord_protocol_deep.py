@@ -592,6 +592,34 @@ class TestGetChannel:
 
 
 # ===========================================================================
+# get_guild_roles (allowed_roles enforcement, task #15)
+# ===========================================================================
+
+
+class TestGetGuildRoles:
+    def test_calls_correct_url(self):
+        expected = [{"id": "role-1", "name": "moderator"}]
+        client, mock_http = _make_rest(get_response=_make_response(json_data=expected))
+        client.get_guild_roles("111222333")
+        url = mock_http.get.call_args[0][0]
+        assert url == f"{BASE}/guilds/111222333/roles"
+
+    def test_returns_role_list(self):
+        expected = [
+            {"id": "role-1", "name": "moderator"},
+            {"id": "role-2", "name": "everyone"},
+        ]
+        client, _ = _make_rest(get_response=_make_response(json_data=expected))
+        assert client.get_guild_roles("111222333") == expected
+
+    def test_invalid_guild_id_raises(self):
+        client, mock_http = _make_rest()
+        with pytest.raises(ValueError, match="guild_id"):
+            client.get_guild_roles("not-a-snowflake")
+        mock_http.get.assert_not_called()
+
+
+# ===========================================================================
 # send_interaction_response
 # ===========================================================================
 

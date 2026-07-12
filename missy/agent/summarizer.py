@@ -72,8 +72,8 @@ class Summarizer:
     """Summarizes conversation chunks using an LLM provider.
 
     Args:
-        provider: A configured provider instance with a ``chat()`` or
-            ``complete()`` method.
+        provider: A configured provider instance implementing
+            ``BaseProvider.complete()`` (see ``missy/providers/base.py``).
         timeout: HTTP timeout in seconds for LLM calls.
     """
 
@@ -102,7 +102,7 @@ class Summarizer:
             prior_context = f"For continuity, here is the previous summary:\n{prior_summary}\n"
 
         prompt = _LEAF_PROMPT.format(prior_context=prior_context, transcript=transcript)
-        return self._escalate(prompt, input_tokens, target_tokens)
+        return self._escalate(prompt, input_tokens, target_tokens, content=transcript)
 
     def summarize_summaries(
         self,
@@ -125,14 +125,29 @@ class Summarizer:
         input_tokens = _approx_tokens(summaries_text)
 
         prompt = _CONDENSED_PROMPT.format(summaries_text=summaries_text)
-        return self._escalate(prompt, input_tokens, target_tokens)
+        return self._escalate(prompt, input_tokens, target_tokens, content=summaries_text)
 
     # ------------------------------------------------------------------
     # Three-tier escalation
     # ------------------------------------------------------------------
 
-    def _escalate(self, prompt: str, input_tokens: int, target_tokens: int) -> tuple[str, str]:
-        """Try normal → aggressive → fallback summarization."""
+    def _escalate(
+        self, prompt: str, input_tokens: int, target_tokens: int, *, content: str = ""
+    ) -> tuple[str, str]:
+        """Try normal → aggressive → fallback summarization.
+
+        Args:
+            prompt: The full assembled prompt sent to the LLM for tiers 1/2
+                (instructions + prior-summary continuity context + the new
+                content to summarize).
+            content: Just the new content being summarized (the transcript
+                for :meth:`summarize_turns`, or the joined summaries text
+                for :meth:`summarize_summaries`) -- distinct from *prompt*
+                so Tier 3's deterministic fallback (see below) truncates
+                the content this call actually exists to preserve, not
+                the fixed instructional header or a (potentially large)
+                prior-summary continuity block prepended ahead of it.
+        """
         # Tier 1: Normal
         try:
             result = self._call_llm(prompt, temperature=0.2)
@@ -161,10 +176,21 @@ class Summarizer:
         except Exception:
             logger.warning("Tier 2 summarization failed", exc_info=True)
 
-        # Tier 3: Deterministic fallback
+        # Tier 3: Deterministic fallback.
+        #
+        # Truncating the full *prompt* (as this used to do) risked keeping
+        # only the fixed instructional header plus a chunk of a
+        # (potentially large) prior-summary continuity block, with zero
+        # characters of the actual new content this call exists to
+        # preserve -- a real prior summary can legitimately be tens of
+        # thousands of characters, easily crowding out the whole
+        # target_tokens*4 budget on its own. Truncate *content* (the
+        # transcript / summaries text alone) instead, so this fallback
+        # always keeps at least some of the new material.
         logger.warning("Falling back to deterministic truncation")
         self.tier_counts["fallback"] += 1
-        truncated = prompt[: target_tokens * 4]  # ~target_tokens tokens
+        source = content or prompt
+        truncated = source[: target_tokens * 4]  # ~target_tokens tokens
         return truncated.rstrip() + "\n[TRUNCATED — summarization failed]", "fallback"
 
     def _call_llm(self, prompt: str, temperature: float = 0.2) -> str:
@@ -173,8 +199,8 @@ class Summarizer:
 
         messages = [Message(role="user", content=prompt)]
         start = time.monotonic()
-        response = self._provider.chat(
-            messages=messages,
+        response = self._provider.complete(
+            messages,
             temperature=temperature,
             max_tokens=4096,
         )

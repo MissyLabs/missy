@@ -23,12 +23,13 @@ import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import SchedulerError
-from missy.scheduler.jobs import ScheduledJob
+from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob
 from missy.scheduler.parser import parse_schedule
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,43 @@ class SchedulerManager:
     Args:
         jobs_file: Path to the JSON file used for job persistence.  Tilde
             expansion is performed automatically.
+        default_max_spend_usd: The operator's configured ``max_spend_usd``
+            cap (from ``config.yaml``), applied to every per-job
+            :class:`~missy.agent.runtime.AgentConfig` that :meth:`_run_job`
+            constructs. Each job run gets a brand-new session/AgentRuntime
+            with its own in-memory ``CostTracker``, so without this a
+            scheduled job would run with an unlimited budget regardless of
+            what the operator configured -- silently bypassing the one
+            documented spend-cap knob that every other entry point
+            (``missy ask``/``missy run``/``missy recover``/the gateway's
+            interactive and Discord runtimes/``missy api start``) honors.
+            ``0.0`` (the default) means unlimited, matching
+            ``AgentConfig.max_spend_usd``'s own default.
+        default_tool_policy_kwargs: Additional :class:`~missy.agent.runtime.AgentConfig`
+            keyword arguments carrying the operator's config-based tool
+            policy layers (``tool_policy``/``agent_tool_policy``/
+            ``sandbox_tool_policy``/``subagent_tool_policy``/
+            ``tool_intelligence``/``agent_id`` -- the same dict
+            ``missy.cli.main._agent_tool_policy_kwargs()`` builds and every
+            other ``AgentConfig`` construction site passes). Without this,
+            a scheduled job's per-run ``AgentConfig`` gets none of these
+            layers, so e.g. an operator's global ``tools.deny: [...]``
+            config would silently not apply to a ``capability_mode="full"``
+            job -- the exact same "config value applied to some
+            AgentConfig sites but not others" gap ``default_max_spend_usd``
+            closed for the spend cap. ``None``/omitted means no extra
+            kwargs are added, matching ``AgentConfig``'s own defaults.
     """
 
-    def __init__(self, jobs_file: str = "~/.missy/jobs.json") -> None:
+    def __init__(
+        self,
+        jobs_file: str = "~/.missy/jobs.json",
+        default_max_spend_usd: float = 0.0,
+        default_tool_policy_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
+        self._default_max_spend_usd = default_max_spend_usd
+        self._default_tool_policy_kwargs = default_tool_policy_kwargs or {}
         self._scheduler: BackgroundScheduler = BackgroundScheduler()
         self._jobs: dict[str, ScheduledJob] = {}
 
@@ -62,20 +96,53 @@ class SchedulerManager:
             SchedulerError: When the scheduler fails to start.
         """
         self._load_jobs()
+        # Availability hardening: _load_jobs() already isolates malformed
+        # *dict records* (skips them individually, logs a warning). But a
+        # record that parses into a well-formed ScheduledJob can still have
+        # a schedule string that only fails later, at APScheduler
+        # registration time (invalid cron, unparseable interval, etc.) --
+        # _schedule_job() correctly raises SchedulerError for that one job,
+        # but without per-job isolation here, that single exception would
+        # propagate out of this loop and abort every other job's
+        # registration too, and the self._scheduler.start() call below
+        # would never even run -- one malformed job's schedule would take
+        # down the entire scheduler, not just itself. Live-reproduced: a
+        # jobs.json with one valid and one invalid-schedule job caused
+        # start() to raise before scheduling either.
+        skipped: list[str] = []
         for job in self._jobs.values():
-            if job.enabled:
+            if not job.enabled:
+                continue
+            try:
                 self._schedule_job(job)
+            except Exception as exc:
+                skipped.append(job.id)
+                logger.error(
+                    "Skipping job %r (%r) -- failed to register with the scheduler: %s",
+                    job.id,
+                    job.name,
+                    exc,
+                )
+                self._emit_event(
+                    event_type="scheduler.job_registration_failed",
+                    result="error",
+                    detail={"job_id": job.id, "job_name": job.name, "error": str(exc)},
+                )
 
         try:
             self._scheduler.start()
         except Exception as exc:
             raise SchedulerError(f"Failed to start background scheduler: {exc}") from exc
 
-        logger.info("SchedulerManager started with %d job(s).", len(self._jobs))
+        logger.info(
+            "SchedulerManager started with %d job(s)%s.",
+            len(self._jobs) - len(skipped),
+            f" ({len(skipped)} skipped due to registration failure)" if skipped else "",
+        )
         self._emit_event(
             event_type="scheduler.start",
             result="allow",
-            detail={"job_count": len(self._jobs)},
+            detail={"job_count": len(self._jobs) - len(skipped), "skipped_job_ids": skipped},
         )
 
     def stop(self) -> None:
@@ -113,6 +180,7 @@ class SchedulerManager:
         delete_after_run: bool = False,
         active_hours: str = "",
         timezone: str = "",
+        capability_mode: str = "safe-chat",
     ) -> ScheduledJob:
         """Create a new job, persist it, and register it with APScheduler.
 
@@ -129,12 +197,19 @@ class SchedulerManager:
             delete_after_run: Remove the job after one successful execution.
             active_hours: ``"HH:MM-HH:MM"`` window; job is skipped outside it.
             timezone: IANA timezone string for cron/date triggers.
+            capability_mode: Tool-access mode for the job's agent run
+                (SR-2.1). One of ``"full"``, ``"safe-chat"``, or
+                ``"no-tools"``. Defaults to ``"safe-chat"`` (read-only
+                tools) rather than ``"full"`` -- an unattended job should
+                not have interactive-session-level tool access unless
+                explicitly opted in.
 
         Returns:
             The newly created :class:`ScheduledJob`.
 
         Raises:
-            ValueError: When *schedule* cannot be parsed.
+            ValueError: When *schedule* cannot be parsed, or
+                *capability_mode* is not a recognized value.
             SchedulerError: When APScheduler fails to register the job.
         """
         # --- Input validation ---
@@ -144,6 +219,10 @@ class SchedulerManager:
             raise ValueError("Job task must not be empty.")
         if max_attempts < 1:
             raise ValueError(f"max_attempts must be >= 1, got {max_attempts}.")
+        if capability_mode not in VALID_CAPABILITY_MODES:
+            raise ValueError(
+                f"capability_mode must be one of {VALID_CAPABILITY_MODES}, got {capability_mode!r}."
+            )
 
         # Validate task length to prevent excessive token usage / cost.
         _MAX_TASK_LENGTH = 50_000
@@ -176,6 +255,7 @@ class SchedulerManager:
             delete_after_run=delete_after_run,
             active_hours=active_hours,
             timezone=timezone,
+            capability_mode=capability_mode,
         )
         self._jobs[job.id] = job
 
@@ -191,9 +271,35 @@ class SchedulerManager:
         self._emit_event(
             event_type="scheduler.job.add",
             result="allow",
-            detail={"job_id": job.id, "name": name, "schedule": schedule, "provider": provider},
+            detail={
+                "job_id": job.id,
+                "name": name,
+                "schedule": schedule,
+                "provider": provider,
+                "capability_mode": capability_mode,
+            },
         )
         return job
+
+    def _remove_pending_retries(self, job_id: str) -> None:
+        """Remove any pending retry job(s) for *job_id* (id f"{job_id}_retry_{n}"),
+        scheduled independently by :meth:`_run_job` on a prior failure.
+
+        A scheduled retry is a *separate* one-shot APScheduler job that fires
+        independently of the main trigger id, so pausing/removing the main
+        job alone leaves it dangling. The ``job.enabled``/``self._jobs``
+        checks in :meth:`_run_job` would also prevent a dangling retry from
+        actually doing anything once it fires, but removing the entry
+        outright avoids relying on that as the only line of defense and
+        keeps the scheduler's job list accurate.
+        """
+        for ap_job in self._scheduler.get_jobs():
+            if ap_job.id.startswith(f"{job_id}_retry_"):
+                try:
+                    self._scheduler.remove_job(ap_job.id)
+                    logger.info("Removed pending retry %s for job %s.", ap_job.id, job_id)
+                except Exception:
+                    logger.debug("Could not remove pending retry %s", ap_job.id, exc_info=True)
 
     def remove_job(self, job_id: str) -> None:
         """Remove a job from the scheduler and the persistence store.
@@ -214,6 +320,14 @@ class SchedulerManager:
                 self._scheduler.remove_job(job_id)
         except Exception as exc:
             raise SchedulerError(f"Failed to remove APScheduler job {job_id!r}: {exc}") from exc
+
+        # SR: removing a job is a more permanent action than pausing one, so
+        # it must clean up at least as thoroughly -- pause_job() already
+        # removes dangling pending-retry entries for exactly this reason;
+        # remove_job() previously didn't, leaving a stale scheduled callback
+        # referencing a deleted job lingering in the scheduler's internal
+        # state for up to the full retry backoff window.
+        self._remove_pending_retries(job_id)
 
         del self._jobs[job_id]
         self._save_jobs()
@@ -245,6 +359,8 @@ class SchedulerManager:
 
         job.enabled = False
         self._save_jobs()
+        self._remove_pending_retries(job_id)
+
         logger.info("Paused job id=%s name=%r.", job_id, job.name)
         self._emit_event(
             event_type="scheduler.job.pause",
@@ -288,6 +404,26 @@ class SchedulerManager:
         """
         return list(self._jobs.values())
 
+    def load_jobs(self) -> list[ScheduledJob]:
+        """Read persisted jobs from disk and return them, without starting APScheduler.
+
+        ``list_jobs()`` only reflects whatever is already in :attr:`_jobs`,
+        which stays empty until :meth:`start` calls the private
+        :meth:`_load_jobs`. Read-only diagnostics (``missy schedule list``,
+        ``missy doctor``) need the persisted job list but must not pay
+        :meth:`start`'s side effects: it registers every job with a live
+        APScheduler ``BackgroundScheduler`` and starts its thread, so a job
+        due to fire in the read/stop window could actually run before
+        :meth:`stop` shuts it down. This method calls the same
+        :meth:`_load_jobs` file-read :meth:`start` uses, without touching
+        APScheduler at all.
+
+        Returns:
+            A new list of :class:`ScheduledJob` instances.
+        """
+        self._load_jobs()
+        return self.list_jobs()
+
     def list_jobs_with_details(self) -> list[ScheduledJob]:
         """Return full :class:`ScheduledJob` objects for all registered jobs.
 
@@ -302,25 +438,27 @@ class SchedulerManager:
     def cleanup_memory(self, older_than_days: int = 30) -> int:
         """Delete conversation history older than *older_than_days* days.
 
-        Delegates to :class:`~missy.memory.store.MemoryStore` when it exposes
-        a ``cleanup`` method.  Errors are logged as warnings and the method
-        always returns without raising.
+        Delegates to :class:`~missy.memory.sqlite_store.SQLiteMemoryStore`
+        (the production memory backend). Errors are logged as warnings and
+        the method always returns without raising.
 
         Args:
             older_than_days: Threshold in days.  Records older than this are
                 removed.
 
         Returns:
-            The number of records removed, or ``0`` if the store does not
-            support cleanup or an error occurs.
+            The number of records removed, or ``0`` if an error occurs.
         """
         try:
-            from missy.memory.store import MemoryStore
+            # SR-3.1/3.5: this previously constructed the legacy JSON
+            # MemoryStore, which has no cleanup() method at all -- the
+            # hasattr guard below always evaluated False, so this method
+            # silently no-op'd and returned 0 regardless of what older_than_days
+            # requested, on every call, in every configuration.
+            from missy.memory.sqlite_store import SQLiteMemoryStore
 
-            store = MemoryStore()
-            if hasattr(store, "cleanup"):
-                return store.cleanup(older_than_days=older_than_days)
-            return 0
+            store = SQLiteMemoryStore()
+            return store.cleanup(older_than_days=older_than_days)
         except Exception as exc:
             logger.warning("Memory cleanup failed: %s", exc)
             return 0
@@ -347,6 +485,17 @@ class SchedulerManager:
             logger.warning("Scheduled job %r no longer exists; skipping.", job_id)
             return
 
+        # A retry scheduled by an earlier failed run is a separate APScheduler
+        # job (id f"{job_id}_retry_{n}") that fires independently of the
+        # original trigger. pause_job() only pauses/removes the original
+        # trigger id, so without this check a job paused while a retry is
+        # in flight would still execute -- defeating pause's emergency-stop
+        # semantics and any capability_mode restriction the operator was
+        # trying to enforce by pausing it.
+        if not job.enabled:
+            logger.info("Job %s is paused/disabled; skipping this run (including retries).", job_id)
+            return
+
         # ------------------------------------------------------------------
         # Active-hours gate
         # ------------------------------------------------------------------
@@ -371,6 +520,7 @@ class SchedulerManager:
                 "name": job.name,
                 "provider": job.provider,
                 "run_count": job.run_count,
+                "capability_mode": job.capability_mode,
             },
             session_id=session_id,
             task_id=task_id,
@@ -396,7 +546,14 @@ class SchedulerManager:
             except Exception:
                 logger.debug("Could not run InputSanitizer on job task", exc_info=True)
 
-            agent = AgentRuntime(AgentConfig(provider=job.provider))
+            agent = AgentRuntime(
+                AgentConfig(
+                    provider=job.provider,
+                    capability_mode=job.capability_mode,
+                    max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
+                    **(getattr(self, "_default_tool_policy_kwargs", None) or {}),
+                )
+            )
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)
@@ -728,13 +885,44 @@ class SchedulerManager:
 
         try:
             if trigger_type == "cron" and "_cron_expression" in schedule_config:
-                # Raw cron expression — use CronTrigger.from_crontab.
+                # Raw cron expression. Built manually via CronTrigger's own
+                # constructor rather than CronTrigger.from_crontab(), which
+                # (a) hard-rejects the 6-field-with-seconds format this
+                # module's own docstring advertises (it only accepts
+                # exactly 5 fields), and (b) applies no conversion to the
+                # day-of-week field, silently misinterpreting standard
+                # crontab's Sunday=0..Saturday=6 numbering as APScheduler's
+                # own Monday=0..Sunday=6 convention -- e.g. crontab's
+                # "1-5" ("weekdays") would actually fire Tuesday-Saturday.
                 from apscheduler.triggers.cron import CronTrigger
+
+                from missy.scheduler.parser import convert_crontab_dow_to_apscheduler
 
                 cron_expr = schedule_config.pop("_cron_expression")
                 # Any remaining key after popping _cron_expression is "timezone".
                 cron_tz = schedule_config.pop("timezone", None) or tz
-                trigger = CronTrigger.from_crontab(cron_expr, timezone=cron_tz)
+
+                fields = cron_expr.split()
+                if len(fields) == 6:
+                    second, minute, hour, day, month, dow = fields
+                elif len(fields) == 5:
+                    minute, hour, day, month, dow = fields
+                    second = "0"
+                else:
+                    raise ValueError(
+                        f"Raw cron expression must have 5 or 6 fields, got {len(fields)}: "
+                        f"{cron_expr!r}"
+                    )
+                dow = convert_crontab_dow_to_apscheduler(dow)
+                trigger = CronTrigger(
+                    second=second,
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=dow,
+                    timezone=cron_tz,
+                )
                 self._scheduler.add_job(
                     func=self._run_job,
                     trigger=trigger,

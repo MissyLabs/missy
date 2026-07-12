@@ -361,10 +361,49 @@ class SleeptimeWorker:
             sid = session.get("session_id", "")
             if not sid:
                 continue
+            # is_idle() only reflects *this* SleeptimeWorker instance's own
+            # activity timer -- a multi-channel deployment (e.g. `missy run`
+            # constructing a separate AgentRuntime, and therefore a separate
+            # SleeptimeWorker, per channel) commonly has several workers
+            # sharing one SQLiteMemoryStore. A session actively being
+            # written to by a DIFFERENT runtime's in-flight run() call still
+            # shows up here (list_sessions() has no per-worker ownership
+            # concept), and this worker's own idle timer has nothing to do
+            # with whether *that* session is actually idle -- summarizing it
+            # anyway races the concurrent turn-append and can miss a
+            # just-written turn from the summary's source_turn_ids boundary.
+            # Guard directly against the session's own last-activity
+            # timestamp rather than relying solely on this instance's timer.
+            if self._session_recently_active(session.get("updated_at")):
+                continue
             turns = self._get_unsummarised_turns(sid)
             if len(turns) >= self._config.min_unprocessed_turns:
                 result.append(sid)
         return result
+
+    def _session_recently_active(self, updated_at: str | None) -> bool:
+        """Return ``True`` if *updated_at* is within the idle threshold.
+
+        Args:
+            updated_at: ISO-8601 timestamp string from ``list_sessions()``,
+                or ``None``/empty when unavailable.
+
+        Returns:
+            ``True`` when the session was updated too recently to be
+            considered idle (or when the timestamp can't be parsed, to
+            fail closed rather than summarise a session we can't confirm
+            is actually idle).
+        """
+        if not updated_at:
+            return False
+        try:
+            last_active = datetime.fromisoformat(updated_at)
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=UTC)
+            elapsed = (datetime.now(UTC) - last_active).total_seconds()
+        except (ValueError, TypeError):
+            return True
+        return elapsed < self._config.idle_threshold_seconds
 
     def _get_unsummarised_turns(self, session_id: str) -> list:
         """Return turns for *session_id* that are not yet covered by a summary.

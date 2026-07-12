@@ -2,8 +2,12 @@
 
 Public API
 ----------
-- :class:`MemoryStore` — JSON-backed store (default, zero-dependency).
-- :class:`SQLiteMemoryStore` — SQLite-backed store with FTS5 search.
+- :class:`SQLiteMemoryStore` — SQLite-backed store with FTS5 search. The
+  production memory backend; all built-in call sites use this.
+- :class:`MemoryStore` — legacy JSON-backed store, zero-dependency but
+  not used by any production code path as of SR-3.1/3.5 (non-atomic
+  full-file rewrites on every write). Retained for embedders who want a
+  dependency-free store; new code should use ``SQLiteMemoryStore``.
 - :class:`ResilientMemoryStore` — Wraps any store with in-memory fallback.
 - :class:`ConversationTurn` — Single turn dataclass (JSON store variant).
 - :class:`MemorySynthesizer` — Unified memory synthesis across subsystems.

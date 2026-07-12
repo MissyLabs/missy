@@ -30,6 +30,14 @@ from missy.agent.runtime import (
     AgentRuntime,
     _rewrite_heredoc_command,
 )
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.policy.engine import init_policy_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,6 +68,22 @@ def _make_mock_registry(provider: MagicMock) -> MagicMock:
     return reg
 
 
+def _init_shell_policy(allowed_commands: list[str]) -> None:
+    """Install a real PolicyEngine so _rewrite_heredoc_command's SR-2.4
+    pre-write interpreter check has something to consult."""
+    init_policy_engine(
+        MissyConfig(
+            network=NetworkPolicy(),
+            filesystem=FilesystemPolicy(),
+            shell=ShellPolicy(enabled=True, allowed_commands=allowed_commands),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp/runtime-heredoc-test-ws",
+            audit_log_path="/tmp/runtime-heredoc-test-audit.jsonl",
+        )
+    )
+
+
 def _make_runtime(provider: MagicMock | None = None, **config_kwargs) -> AgentRuntime:
     """Build an AgentRuntime with all subsystems mocked out for speed."""
     if provider is None:
@@ -77,7 +101,7 @@ def _make_runtime(provider: MagicMock | None = None, **config_kwargs) -> AgentRu
     # Disable subsystems that require filesystem / network for these unit tests
     runtime._rate_limiter = None
     runtime._memory_store = None
-    runtime._cost_tracker = None
+    runtime._cost_tracking_enabled = False
     runtime._context_manager = None
     runtime._drift_detector = None
     return runtime
@@ -193,37 +217,90 @@ class TestAgentConfigCustomValues:
 class TestRewriteHeredocCommandPassthrough:
     def test_no_heredoc_passthrough(self):
         args = {"command": "echo hello"}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is args
+        assert tmppath is None
 
     def test_no_command_key_passthrough(self):
         args = {"other": "value"}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is args
+        assert tmppath is None
 
     def test_empty_command_passthrough(self):
         args = {"command": ""}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is args
+        assert tmppath is None
 
     def test_unrelated_double_lt_in_filename_passthrough(self):
         # If "<<" not in command, returns unchanged — this tests the guard
         args = {"command": "cat file.txt | grep pattern"}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is args
+        assert tmppath is None
+
+
+class TestRewriteHeredocCommandPolicyGate:
+    """SR-2.4: nothing may be written to disk before the interpreter is
+    confirmed permitted by shell policy."""
+
+    def test_no_policy_engine_initialised_fails_closed_no_write(self, tmp_path, monkeypatch):
+        """With no policy engine installed at all, the rewrite must not
+        write anything -- passthrough, letting the original heredoc-laden
+        command reach registry.execute() and be denied there normally."""
+        from missy.policy import engine as engine_module
+
+        monkeypatch.setattr(engine_module, "_engine", None)
+        command = "python3 - <<'EOF'\nimport os\nprint(os.environ)\nEOF"
+        args = {"command": command}
+        result, tmppath = _rewrite_heredoc_command(args)
+        assert result is args
+        assert tmppath is None
+        assert not list(tmp_path.glob("missy_heredoc_*"))
+
+    def test_interpreter_not_allowlisted_fails_closed_no_write(self):
+        """The core SR-2.4 reproduction: an interpreter that isn't
+        permitted by shell policy must never have its heredoc body
+        written to disk at all."""
+        import glob
+
+        _init_shell_policy(allowed_commands=["git"])  # python3 NOT allowed
+        before = set(glob.glob("/tmp/missy_heredoc_*"))
+        command = "python3 - <<'EOF'\nimport os\nprint(os.environ.get('SECRET'))\nEOF"
+        args = {"command": command}
+        result, tmppath = _rewrite_heredoc_command(args)
+        after = set(glob.glob("/tmp/missy_heredoc_*"))
+        assert result is args
+        assert tmppath is None
+        assert after == before, "no new temp file should have been written to disk"
+
+    def test_interpreter_allowlisted_proceeds_with_write(self):
+        _init_shell_policy(allowed_commands=["python3"])
+        command = "python3 - <<'EOF'\nprint('hi')\nEOF"
+        args = {"command": command}
+        result, tmppath = _rewrite_heredoc_command(args)
+        assert result is not args
+        assert tmppath is not None
+        assert os.path.exists(tmppath)
+        os.unlink(tmppath)
 
 
 class TestRewriteHeredocCommandPatterns:
+    @pytest.fixture(autouse=True)
+    def _allow_interpreters(self):
+        _init_shell_policy(allowed_commands=["python3", "bash", "ruby"])
+
     def test_python3_heredoc_single_quote_delimiter(self):
         command = "python3 - <<'EOF'\nprint('hello')\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is not args
         new_cmd = result["command"]
         assert new_cmd.startswith("python3 ")
         assert "<<" not in new_cmd
         # Verify temp file contains the body
-        tmppath = new_cmd.split(" ", 1)[1]
+        assert tmppath == new_cmd.split(" ", 1)[1]
         assert os.path.exists(tmppath)
         content = Path(tmppath).read_text()
         assert "print('hello')" in content
@@ -232,11 +309,10 @@ class TestRewriteHeredocCommandPatterns:
     def test_bash_heredoc(self):
         command = "bash - <<'SCRIPT'\necho hi\nSCRIPT"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert new_cmd.startswith("bash ")
         assert "<<" not in new_cmd
-        tmppath = new_cmd.split(" ", 1)[1]
         assert tmppath.endswith(".sh")
         content = Path(tmppath).read_text()
         assert "echo hi" in content
@@ -245,20 +321,18 @@ class TestRewriteHeredocCommandPatterns:
     def test_ruby_heredoc(self):
         command = "ruby - <<'RUBY'\nputs 'world'\nRUBY"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert new_cmd.startswith("ruby ")
-        tmppath = new_cmd.split(" ", 1)[1]
         assert tmppath.endswith(".rb")
         os.unlink(tmppath)
 
     def test_heredoc_double_quote_delimiter(self):
         command = 'python3 - <<"EOF"\nprint(42)\nEOF'
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert "<<" not in new_cmd
-        tmppath = new_cmd.split(" ", 1)[1]
         content = Path(tmppath).read_text()
         assert "print(42)" in content
         os.unlink(tmppath)
@@ -266,10 +340,9 @@ class TestRewriteHeredocCommandPatterns:
     def test_heredoc_unquoted_delimiter(self):
         command = "python3 - <<EOF\nprint('unquoted')\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert "<<" not in new_cmd
-        tmppath = new_cmd.split(" ", 1)[1]
         content = Path(tmppath).read_text()
         assert "print('unquoted')" in content
         os.unlink(tmppath)
@@ -278,40 +351,35 @@ class TestRewriteHeredocCommandPatterns:
         # Some models omit the "-" marker: python3 <<'EOF'
         command = "python3 <<'EOF'\nprint('no dash')\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert "<<" not in new_cmd
-        tmppath = new_cmd.split(" ", 1)[1]
         content = Path(tmppath).read_text()
         assert "print('no dash')" in content
         os.unlink(tmppath)
 
     def test_temp_file_has_correct_python_extension(self):
         command = "python3 - <<'PY'\nx = 1\nPY"
-        result = _rewrite_heredoc_command({"command": command})
-        tmppath = result["command"].split(" ", 1)[1]
+        result, tmppath = _rewrite_heredoc_command({"command": command})
         assert tmppath.endswith(".py")
         os.unlink(tmppath)
 
     def test_heredoc_with_empty_body(self):
         command = "python3 - <<'EOF'\n\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         # Pattern requires (.*?) which can match empty — either rewrites or passes through
         # Just verify no exception is raised and result is a dict
         assert isinstance(result, dict)
-        if "<<" not in result.get("command", ""):
-            tmppath = result["command"].split(" ", 1)[1]
-            if os.path.exists(tmppath):
-                os.unlink(tmppath)
+        if tmppath and os.path.exists(tmppath):
+            os.unlink(tmppath)
 
     def test_heredoc_with_unicode_content(self):
         command = "python3 - <<'EOF'\nprint('héllo wörld')\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         new_cmd = result["command"]
         assert "<<" not in new_cmd
-        tmppath = new_cmd.split(" ", 1)[1]
         content = Path(tmppath).read_text(encoding="utf-8")
         assert "héllo" in content
         os.unlink(tmppath)
@@ -319,9 +387,7 @@ class TestRewriteHeredocCommandPatterns:
     def test_heredoc_with_special_chars_in_body(self):
         command = "python3 - <<'EOF'\nprint('$HOME and {braces}')\nEOF"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
-        new_cmd = result["command"]
-        tmppath = new_cmd.split(" ", 1)[1]
+        result, tmppath = _rewrite_heredoc_command(args)
         content = Path(tmppath).read_text()
         assert "$HOME" in content
         assert "{braces}" in content
@@ -330,20 +396,18 @@ class TestRewriteHeredocCommandPatterns:
     def test_rewrite_preserves_other_args(self):
         command = "python3 - <<'EOF'\nprint('x')\nEOF"
         args = {"command": command, "timeout": 30, "env": {"KEY": "val"}}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result["timeout"] == 30
         assert result["env"] == {"KEY": "val"}
-        tmppath = result["command"].split(" ", 1)[1]
         os.unlink(tmppath)
 
     def test_rewrite_does_not_mutate_original_args(self):
         command = "python3 - <<'EOF'\nprint('x')\nEOF"
         original_command = command
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         # original dict command should be unchanged
         assert args["command"] == original_command
-        tmppath = result["command"].split(" ", 1)[1]
         os.unlink(tmppath)
 
 
@@ -352,28 +416,29 @@ class TestRewriteHeredocCommandMalformed:
         # Has "<<" but no closing delimiter — pattern won't match
         command = "python3 - << NODCLOSE\nsome code\n"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         # Should return original (pattern didn't match)
         assert result is args
+        assert tmppath is None
 
     def test_heredoc_mismatched_delimiters_passthrough(self):
         # Opening delimiter is OPEN, closing is CLOSE — mismatch
         command = "python3 - <<'OPEN'\ncode here\nCLOSE"
         args = {"command": command}
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert result is args
+        assert tmppath is None
 
     def test_nested_heredoc_like_content(self):
         # Body itself contains << but pattern should still work for outer
+        _init_shell_policy(allowed_commands=["python3"])
         command = "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['cat', '<<'])\nEOF"
         args = {"command": command}
         # Should not raise — either rewrites or passes through
-        result = _rewrite_heredoc_command(args)
+        result, tmppath = _rewrite_heredoc_command(args)
         assert isinstance(result, dict)
-        if result is not args:
-            tmppath = result["command"].split(" ", 1)[1]
-            if os.path.exists(tmppath):
-                os.unlink(tmppath)
+        if tmppath and os.path.exists(tmppath):
+            os.unlink(tmppath)
 
 
 # ---------------------------------------------------------------------------
@@ -801,22 +866,109 @@ class TestNoOpCircuitBreaker:
 
 
 # ---------------------------------------------------------------------------
-# 11. _make_circuit_breaker static method
+# 11. _make_circuit_breaker
+#
+# SR-4.8 residual: this became an instance method (not a staticmethod) so
+# it can look up the named provider's own circuit_breaker_threshold/
+# circuit_breaker_cooldown_seconds via the ProviderRegistry, rather than
+# every provider getting the same hardcoded threshold/cooldown.
 # ---------------------------------------------------------------------------
 
 
 class TestMakeCircuitBreaker:
     def test_make_circuit_breaker_returns_object_with_call(self):
-        cb = AgentRuntime._make_circuit_breaker("test_provider")
+        rt = AgentRuntime(AgentConfig(provider="test_provider"))
+        cb = rt._make_circuit_breaker("test_provider")
         assert hasattr(cb, "call")
 
     def test_make_circuit_breaker_different_names(self):
-        cb1 = AgentRuntime._make_circuit_breaker("anthropic")
-        cb2 = AgentRuntime._make_circuit_breaker("openai")
+        rt = AgentRuntime(AgentConfig(provider="anthropic"))
+        cb1 = rt._make_circuit_breaker("anthropic")
+        cb2 = rt._make_circuit_breaker("openai")
         # Both should have a call method; they are separate instances
         assert hasattr(cb1, "call")
         assert hasattr(cb2, "call")
         assert cb1 is not cb2
+
+    def test_uses_registered_provider_config_tunables(self):
+        """SR-4.8 residual: a provider registered with a non-default
+        circuit_breaker_threshold/circuit_breaker_cooldown_seconds must
+        get a breaker actually using those values, not the hardcoded
+        CircuitBreaker defaults every provider previously shared."""
+        from missy.config.settings import ProviderConfig
+        from missy.providers import registry as registry_module
+        from missy.providers.registry import ProviderRegistry
+
+        original = registry_module._registry
+        try:
+            fresh = ProviderRegistry()
+            fresh.register(
+                "flaky",
+                MagicMock(),
+                config=ProviderConfig(
+                    name="flaky",
+                    model="m",
+                    circuit_breaker_threshold=2,
+                    circuit_breaker_cooldown_seconds=5.0,
+                ),
+            )
+            registry_module._registry = fresh
+
+            rt = AgentRuntime(AgentConfig(provider="flaky"))
+            cb = rt._make_circuit_breaker("flaky")
+
+            assert cb._threshold == 2
+            assert cb._base_timeout == 5.0
+        finally:
+            registry_module._registry = original
+
+    def test_falls_back_to_breaker_defaults_when_provider_not_registered(self):
+        """A provider name with no registered ProviderConfig (or one
+        registered without circuit_breaker_* fields set) must fall back
+        to CircuitBreaker's own defaults, not silently degrade to the
+        no-op stub."""
+        from missy.agent.circuit_breaker import CircuitBreaker
+        from missy.providers import registry as registry_module
+        from missy.providers.registry import ProviderRegistry
+
+        original = registry_module._registry
+        try:
+            registry_module._registry = ProviderRegistry()  # empty, but initialised
+
+            rt = AgentRuntime(AgentConfig(provider="unregistered-provider"))
+            cb = rt._make_circuit_breaker("unregistered-provider")
+
+            assert isinstance(cb, CircuitBreaker)
+            assert cb._threshold == 5
+            assert cb._base_timeout == 60.0
+        finally:
+            registry_module._registry = original
+
+    def test_falls_back_to_breaker_defaults_when_registry_uninitialised(self):
+        """Regression: an AgentRuntime constructed before init_registry()
+        has ever run (a normal, expected ordering -- tests routinely do
+        this, and some startup orderings might too) must still get a
+        real, functional CircuitBreaker with default tunables. An
+        earlier version of this per-provider lookup let
+        ProviderRegistry's "not initialised" RuntimeError propagate
+        through a single broad except-and-return-NoOp, silently
+        disabling circuit-breaking entirely rather than just skipping
+        the per-provider tunable lookup."""
+        from missy.agent.circuit_breaker import CircuitBreaker
+        from missy.providers import registry as registry_module
+
+        original = registry_module._registry
+        try:
+            registry_module._registry = None  # uninitialised
+
+            rt = AgentRuntime(AgentConfig(provider="whatever"))
+            cb = rt._make_circuit_breaker("whatever")
+
+            assert isinstance(cb, CircuitBreaker)
+            assert cb._threshold == 5
+            assert cb._base_timeout == 60.0
+        finally:
+            registry_module._registry = original
 
 
 # ---------------------------------------------------------------------------

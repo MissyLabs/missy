@@ -11,7 +11,8 @@ Access-control pipeline (evaluated in order):
    ``allow_bots_if_mention_only`` before deciding whether to drop.
 3. For DMs (``guild_id`` absent): apply :class:`~.config.DiscordDMPolicy`.
 4. For guild messages: look up :class:`~.config.DiscordGuildPolicy` and
-   apply channel allowlist, user allowlist, and mention requirement.
+   apply channel allowlist, user allowlist, role allowlist, and mention
+   requirement.
 
 Audit events are emitted for every allow/deny decision.
 
@@ -34,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any
 
 from missy.channels.base import BaseChannel, ChannelMessage
@@ -43,6 +45,10 @@ from missy.channels.discord.rest import DiscordRestClient
 from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
+
+#: How long a guild's resolved role-ID-to-name map stays cached before
+#: being re-fetched from Discord's REST API (allowed_roles enforcement).
+_GUILD_ROLES_CACHE_TTL_SECONDS = 300.0
 
 
 class DiscordSendError(Exception):
@@ -97,6 +103,21 @@ class DiscordChannel(BaseChannel):
         # Enables conversation continuity within Discord threads.
         self._thread_sessions: dict[str, str] = {}
 
+        # Thread-to-parent-channel mapping: thread_id -> parent_channel_id.
+        # A Gateway MESSAGE_CREATE for a message posted inside a thread
+        # carries channel_id = the thread's own snowflake, never the
+        # parent's -- but guild_policy.allowed_channels is naturally
+        # configured with parent-channel IDs/names (operators can't know a
+        # dynamically-created thread's ID ahead of time). Without this,
+        # any message inside a thread this bot created (via
+        # auto_thread_threshold) is silently denied by the channel
+        # allowlist forever, even though its parent channel is allowed.
+        # Populated only for threads this bot itself creates (see
+        # create_thread() below); a thread created by a Discord user
+        # directly is not covered without also handling the Gateway
+        # THREAD_CREATE event, which is a larger, separate effort.
+        self._thread_parents: dict[str, str] = {}
+
         # Message count per channel for auto-thread creation.
         self._channel_message_counts: dict[str, int] = {}
 
@@ -105,6 +126,11 @@ class DiscordChannel(BaseChannel):
 
         # Pending evolution reactions: message_id -> proposal_id
         self._pending_evolutions: dict[str, str] = {}
+
+        # allowed_roles enforcement: cache of guild_id -> (fetched_at,
+        # {role_id: role_name}), refreshed via the REST API on a TTL so
+        # every message doesn't need its own round trip to Discord.
+        self._guild_roles_cache: dict[str, tuple[float, dict[str, str]]] = {}
 
         # Optional voice manager (lazy import so text-only deployments don't need voice deps)
         self._voice = None
@@ -115,6 +141,17 @@ class DiscordChannel(BaseChannel):
         # Agent runtime reference — set via set_agent_runtime() from main.py
         # so voice can call the agent for conversational responses.
         self._agent_runtime: Any = None
+
+        # DISC-CMD-008: per-user command rate limiting. Checked before any
+        # command-producing dispatch (slash interaction or natural-language
+        # message) so a single user can't spam paid LLM calls unbounded --
+        # previously only the overall session CostTracker budget backstopped
+        # this, with no per-user throttle at all.
+        from missy.channels.discord.rate_limit import DiscordUserRateLimiter
+
+        self._rate_limiter = DiscordUserRateLimiter(
+            requests_per_minute=getattr(account_config, "rate_limit_per_minute", 10)
+        )
 
         token = account_config.resolve_token() or ""
         if not token:
@@ -522,37 +559,12 @@ class DiscordChannel(BaseChannel):
             logger.debug("Discord: ignoring own message (bot_id=%s)", self._bot_user_id)
             return
 
-        # 0. Voice and image commands (MESSAGE_CREATE) — handled before policy gates.
-        if guild_id and content:
-            handled = await self._maybe_handle_voice_command(
-                guild_id=str(guild_id),
-                channel_id=channel_id,
-                author_id=author_id,
-                content=content,
-            )
-            if handled:
-                return
-
-        # 0b. Image commands (!analyze, !screenshot).
-        if content:
-            handled = await self._maybe_handle_image_command(
-                channel_id=channel_id,
-                content=content,
-            )
-            if handled:
-                return
-
-        # 0c. Screencast commands (!screen share/list/stop/analyze/status).
-        if content:
-            handled = await self._maybe_handle_screen_command(
-                channel_id=channel_id,
-                author_id=author_id,
-                content=content,
-            )
-            if handled:
-                return
-
         # 1b. Credential / secrets detection — delete message and warn if secrets found.
+        #
+        # Runs before authorization so credentials are always scrubbed
+        # regardless of channel/DM policy, but produces no side effect
+        # beyond deleting the offending message and warning -- it does not
+        # dispatch to voice/image/screencast handling.
         if content:
             try:
                 from missy.security.secrets import SecretsDetector
@@ -607,6 +619,78 @@ class DiscordChannel(BaseChannel):
                 {"author_id": author_id, "is_bot": True},
             )
             return
+
+        # SR-1.13: DM/guild access control must run before ANY command
+        # dispatch that can produce a side effect (voice, image,
+        # screencast, or the eventual agent enqueue). This used to run
+        # last (as step "4"), with voice/image/screencast handled first
+        # under a comment literally reading "handled before policy gates"
+        # -- meaning any message in any guild channel (ignoring
+        # allowed_channels/allowed_roles/allowed_users/require_mention)
+        # or any DM (ignoring dm_policy DISABLED/ALLOWLIST/PAIRING) could
+        # join a voice channel, capture/analyze a screenshot, or start a
+        # screen share before authorization was ever checked. No pre-gate
+        # command may produce side effects.
+        if guild_id is None:
+            allowed = self._check_dm_policy(author_id, content)
+        else:
+            allowed = self._check_guild_policy(guild_id, channel_id, author_id, content, data)
+
+        if not allowed:
+            return
+
+        # 2a2. Per-user rate limit (DISC-CMD-008) — after authorization
+        # (so it never leaks whether an unauthorized user exists) but
+        # before any command dispatch that could produce a side effect
+        # or an LLM call.
+        rate_result = self._rate_limiter.check(author_id)
+        if not rate_result.allowed:
+            self._emit_audit(
+                "discord.channel.rate_limited",
+                "deny",
+                {
+                    "author_id": author_id,
+                    "channel_id": channel_id,
+                    "retry_after_seconds": round(rate_result.retry_after_seconds, 1),
+                },
+            )
+            with contextlib.suppress(Exception):
+                self._rest.send_message(
+                    channel_id,
+                    f"⏳ <@{author_id}> You're sending commands too quickly. "
+                    f"Please wait {rate_result.retry_after_seconds:.0f}s and try again.",
+                )
+            return
+
+        # 2b. Voice commands (MESSAGE_CREATE) — only after authorization.
+        if guild_id and content:
+            handled = await self._maybe_handle_voice_command(
+                guild_id=str(guild_id),
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
+
+        # 2c. Image commands (!analyze, !screenshot) — only after authorization.
+        if content:
+            handled = await self._maybe_handle_image_command(
+                channel_id=channel_id,
+                content=content,
+            )
+            if handled:
+                return
+
+        # 2d. Screencast commands (!screen ...) — only after authorization.
+        if content:
+            handled = await self._maybe_handle_screen_command(
+                channel_id=channel_id,
+                author_id=author_id,
+                content=content,
+            )
+            if handled:
+                return
 
         # 3. Attachment policy gate.
         attachments: list[dict] = data.get("attachments") or []
@@ -686,15 +770,6 @@ class DiscordChannel(BaseChannel):
                     author_id,
                 )
 
-        # 4. Route to DM or guild access control.
-        if guild_id is None:
-            allowed = self._check_dm_policy(author_id, content)
-        else:
-            allowed = self._check_guild_policy(guild_id, channel_id, author_id, content, data)
-
-        if not allowed:
-            return
-
         # 5. Resolve thread-scoped session if applicable.
         effective_thread_id = thread_id
         # Discord thread channels have type 11 (PUBLIC_THREAD) or 12 (PRIVATE_THREAD).
@@ -707,10 +782,24 @@ class DiscordChannel(BaseChannel):
         if effective_thread_id:
             thread_session_id = self._thread_sessions.get(effective_thread_id, "")
 
-        # Track message counts for auto-thread threshold.
+        # Track message counts for auto-thread threshold. The counter was
+        # previously written but never read anywhere -- an operator setting
+        # auto_thread_threshold: N got a counter that silently incremented
+        # forever and a feature that never actually fired.
         if guild_id and not effective_thread_id and self._auto_thread_threshold > 0:
             count = self._channel_message_counts.get(channel_id, 0) + 1
-            self._channel_message_counts[channel_id] = count
+            if count >= self._auto_thread_threshold:
+                self._channel_message_counts[channel_id] = 0
+                thread_name = content[:80] if content else f"Thread ({count} messages)"
+                new_thread_id = await self.create_thread(
+                    channel_id=channel_id,
+                    name=thread_name,
+                    message_id=str(data.get("id", "")) or None,
+                )
+                if new_thread_id:
+                    effective_thread_id = new_thread_id
+            else:
+                self._channel_message_counts[channel_id] = count
 
         # 6. Enqueue.
         self._current_channel_id = channel_id
@@ -790,6 +879,38 @@ class DiscordChannel(BaseChannel):
                     _rt = self._agent_runtime
 
                     async def _voice_agent_cb(prompt: str, session_id: str) -> str:
+                        # Regular typed-text messages run through
+                        # SecretsDetector before ever reaching the agent
+                        # ("1b. Credential / secrets detection" above),
+                        # deleting the message and blocking it entirely.
+                        # AgentRuntime.run() itself only applies
+                        # InputSanitizer (prompt-injection detection), never
+                        # SecretsDetector -- so a voice transcript feeding
+                        # straight into _rt.run() with no check of its own
+                        # bypassed secrets screening completely (e.g.
+                        # dictating an API key to "read it back to me"
+                        # reached the LLM provider, session history, and
+                        # TTS reply unscrubbed). There's no Discord message
+                        # to delete for a live voice utterance, so the
+                        # equivalent action is refusing to forward the
+                        # transcript and returning a spoken warning instead.
+                        try:
+                            from missy.security.secrets import SecretsDetector
+
+                            if SecretsDetector().has_secrets(prompt):
+                                self._emit_audit(
+                                    "discord.channel.credential_detected",
+                                    "deny",
+                                    {"session_id": session_id, "source": "voice_transcript"},
+                                )
+                                return (
+                                    "Your message appeared to contain credentials or"
+                                    " secrets, so I didn't process it. Please rotate"
+                                    " any exposed keys immediately."
+                                )
+                        except Exception:
+                            logger.debug("Secrets detection error in voice callback", exc_info=True)
+
                         loop = asyncio.get_running_loop()
                         return await loop.run_in_executor(
                             None,
@@ -958,7 +1079,69 @@ class DiscordChannel(BaseChannel):
         interaction_id: str = str(data.get("id", ""))
         interaction_token: str = str(data.get("token", ""))
         channel_id: str = str(data.get("channel_id", ""))
+        guild_id: str | None = data.get("guild_id") or None
         self._current_channel_id = channel_id
+
+        # SR-1.13: slash-command interactions arrive over a completely
+        # separate Gateway event (INTERACTION_CREATE) from regular
+        # messages and previously had NO authorization check at all --
+        # /ask dispatched straight to the full agent for any Discord
+        # user in any guild/channel/DM, ignoring allowed_channels/
+        # allowed_users/dm_policy entirely. Guild interactions carry the
+        # invoking user under member.user; DM interactions carry it
+        # under user directly.
+        member = data.get("member") or {}
+        interaction_user = member.get("user") or data.get("user") or {}
+        author_id: str = str(interaction_user.get("id", ""))
+
+        if guild_id is None:
+            allowed = self._check_dm_policy(author_id, "")
+        else:
+            allowed = self._check_guild_policy(
+                guild_id, channel_id, author_id, "", data, skip_mention_check=True
+            )
+
+        if not allowed:
+            try:
+                self._rest.send_interaction_response(
+                    interaction_id,
+                    interaction_token,
+                    response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                    data={"content": "You're not authorized to use Missy commands here."},
+                )
+            except Exception as exc:
+                logger.error("Discord: interaction denial response failed: %s", exc)
+            return
+
+        # DISC-CMD-008: per-user rate limit, checked after authorization
+        # (never leaks whether an unauthorized user exists) but before
+        # dispatching to the potentially LLM-calling command handler.
+        rate_result = self._rate_limiter.check(author_id)
+        if not rate_result.allowed:
+            self._emit_audit(
+                "discord.channel.rate_limited",
+                "deny",
+                {
+                    "author_id": author_id,
+                    "channel_id": channel_id,
+                    "retry_after_seconds": round(rate_result.retry_after_seconds, 1),
+                },
+            )
+            try:
+                self._rest.send_interaction_response(
+                    interaction_id,
+                    interaction_token,
+                    response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                    data={
+                        "content": (
+                            f"⏳ You're sending commands too quickly. "
+                            f"Please wait {rate_result.retry_after_seconds:.0f}s and try again."
+                        )
+                    },
+                )
+            except Exception as exc:
+                logger.error("Discord: rate-limit response failed: %s", exc)
+            return
 
         # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
         try:
@@ -1061,18 +1244,33 @@ class DiscordChannel(BaseChannel):
             logger.info("Discord: pairing requested by %s", author_id)
             return False  # Don't forward the pairing command itself.
 
-        # Commands to accept/deny pending pair requests (admin only — simplified).
-        if content.strip().lower().startswith("!pair accept "):
-            target_id = content.strip().split()[-1]
-            self._pending_pairs.discard(target_id)
-            self.account_config.dm_allowlist.append(target_id)
-            logger.info("Discord: pairing accepted for %s", target_id)
-            return False
-
-        if content.strip().lower().startswith("!pair deny "):
-            target_id = content.strip().split()[-1]
-            self._pending_pairs.discard(target_id)
-            logger.info("Discord: pairing denied for %s", target_id)
+        # SR-1.12: pairing approval/denial must NEVER be reachable from an
+        # in-band DM message. There is no way to authenticate the sender of
+        # a Discord DM as an authorized operator from within this handler --
+        # any unpaired stranger could otherwise DM `!pair` followed by
+        # `!pair accept <their own id>` and grant themselves access with no
+        # authentication at all. accept_pair()/deny_pair() remain the only
+        # way to resolve a pending request, and must only ever be invoked
+        # from an authenticated operator surface (the Web console/API,
+        # which shares this process under `missy gateway start`) -- never
+        # from message content. Treat these as unrecognised commands and
+        # audit the attempt.
+        lowered = content.strip().lower()
+        if lowered.startswith(("!pair accept ", "!pair deny ")):
+            self._emit_audit(
+                "discord.channel.pairing_decision_denied",
+                "deny",
+                {
+                    "reason": "pairing_decisions_not_available_via_dm",
+                    "author_id": author_id,
+                },
+            )
+            logger.warning(
+                "Discord: rejected in-band pairing decision command from %s "
+                "-- pairing must be approved via an authenticated operator "
+                "surface, not DM content.",
+                author_id,
+            )
             return False
 
         # Regular message: allowed only if already in the allowlist.
@@ -1093,8 +1291,20 @@ class DiscordChannel(BaseChannel):
         author_id: str,
         content: str,
         data: dict[str, Any],
+        *,
+        skip_mention_check: bool = False,
     ) -> bool:
-        """Evaluate the guild-level access policy."""
+        """Evaluate the guild-level access policy.
+
+        Args:
+            skip_mention_check: When ``True``, the ``require_mention``
+                rule is not evaluated. Slash-command interactions are
+                inherently addressed to this bot by Discord's own
+                command routing -- there is no message text to contain
+                an ``@mention``, and requiring one would incorrectly
+                block every slash command in guilds configured with
+                ``require_mention: true``.
+        """
         guild_policy = self.account_config.guild_policies.get(guild_id)
         if guild_policy is None:
             # No policy defined for this guild — default deny.
@@ -1118,9 +1328,18 @@ class DiscordChannel(BaseChannel):
             channel_name = str(
                 (data.get("channel") or {}).get("name", "") or data.get("channel_name", "")
             )
+            # A message posted inside a thread carries channel_id = the
+            # thread's own snowflake, never its parent's -- but the
+            # allowlist is naturally configured with parent-channel
+            # IDs/names. Check the thread's known parent (if this bot
+            # created the thread) in addition to the raw channel_id, so a
+            # thread under an allowed channel isn't silently denied.
+            parent_channel_id = self._thread_parents.get(channel_id)
             # A message always has channel_id; name may be absent from Gateway events.
-            in_allowlist = channel_id in guild_policy.allowed_channels or (
-                channel_name and channel_name in guild_policy.allowed_channels
+            in_allowlist = (
+                channel_id in guild_policy.allowed_channels
+                or (channel_name and channel_name in guild_policy.allowed_channels)
+                or (parent_channel_id and parent_channel_id in guild_policy.allowed_channels)
             )
             logger.debug(
                 "Discord: channel check guild=%s channel_id=%s channel_name=%r allowlist=%s match=%s",
@@ -1153,8 +1372,28 @@ class DiscordChannel(BaseChannel):
             )
             return False
 
+        # Role allowlist check. The Gateway's message `member` object
+        # carries the author's role IDs (snowflakes); allowed_roles is
+        # documented and configured as role *names*, so the IDs are
+        # resolved via a cached guild role lookup before comparing.
+        if guild_policy.allowed_roles:
+            member = data.get("member") or {}
+            member_role_ids = member.get("roles") or []
+            member_role_names = self._resolve_role_names(guild_id, member_role_ids)
+            if not member_role_names & set(guild_policy.allowed_roles):
+                self._emit_audit(
+                    "discord.channel.allowlist_denied",
+                    "deny",
+                    {
+                        "reason": "role_not_in_allowlist",
+                        "guild_id": guild_id,
+                        "author_id": author_id,
+                    },
+                )
+                return False
+
         # Mention requirement check.
-        if guild_policy.require_mention:
+        if guild_policy.require_mention and not skip_mention_check:
             own_id = self.bot_user_id or self.account_config.account_id
             if own_id:
                 mentioned = f"<@{own_id}>" in content or f"<@!{own_id}>" in content
@@ -1172,6 +1411,50 @@ class DiscordChannel(BaseChannel):
                 return False
 
         return True
+
+    def _resolve_role_names(self, guild_id: str, role_ids: list[str]) -> set[str]:
+        """Resolve role ID snowflakes to role names for ``guild_id``.
+
+        Discord's Gateway ``message.member.roles`` field only carries
+        role ID snowflakes, but ``DiscordGuildPolicy.allowed_roles`` is
+        documented and configured as human-readable role *names* — this
+        bridges the two via a cached (TTL
+        ``_GUILD_ROLES_CACHE_TTL_SECONDS``) call to
+        ``GET /guilds/{id}/roles``, so a normal message doesn't need its
+        own REST round trip.
+
+        Args:
+            guild_id: The guild the message was sent in.
+            role_ids: Role ID snowflakes from the message's ``member``
+                object.
+
+        Returns:
+            The set of role names corresponding to ``role_ids``.  On a
+            REST failure, returns an empty set (fail closed — an
+            unresolvable role can never satisfy an allowlist).
+        """
+        if not role_ids:
+            return set()
+
+        now = time.monotonic()
+        cached = self._guild_roles_cache.get(guild_id)
+        if cached is None or (now - cached[0]) >= _GUILD_ROLES_CACHE_TTL_SECONDS:
+            try:
+                roles = self._rest.get_guild_roles(guild_id)
+                role_map = {str(r["id"]): str(r["name"]) for r in roles}
+            except Exception:
+                logger.warning(
+                    "Discord: failed to fetch guild roles for %s -- "
+                    "allowed_roles check fails closed for this message.",
+                    guild_id,
+                    exc_info=True,
+                )
+                return set()
+            self._guild_roles_cache[guild_id] = (now, role_map)
+            cached = self._guild_roles_cache[guild_id]
+
+        role_map = cached[1]
+        return {role_map[rid] for rid in role_ids if rid in role_map}
 
     # ------------------------------------------------------------------
     # Pairing management
@@ -1228,6 +1511,8 @@ class DiscordChannel(BaseChannel):
                 message_id=message_id,
             )
             thread_id = str(result.get("id", ""))
+            if thread_id:
+                self._thread_parents[thread_id] = channel_id
             if thread_id and session_id:
                 self._thread_sessions[thread_id] = session_id
             self._emit_audit(
@@ -1324,28 +1609,30 @@ class DiscordChannel(BaseChannel):
             mgr = CodeEvolutionManager()
 
             if action == "approve":
-                if mgr.approve(proposal_id):
-                    self._rest.send_message(
-                        channel_id,
-                        f"\u2705 Evolution **{proposal_id}** approved by <@{user_id}>.\n"
-                        f"Use `code_evolve(action='apply', proposal_id='{proposal_id}')` "
-                        f"to apply the change.",
-                    )
-                    self._emit_audit(
-                        "discord.evolution.approved",
-                        "allow",
-                        {
-                            "proposal_id": proposal_id,
-                            "user_id": user_id,
-                            "channel_id": channel_id,
-                        },
-                    )
-                else:
-                    self._rest.send_message(
-                        channel_id,
-                        f"Could not approve evolution **{proposal_id}** — "
-                        f"it may already be approved or in an invalid state.",
-                    )
+                # SR-1.2/1.3: a Discord user reacting with an emoji is not an
+                # authenticated human operator -- Discord identity is soft,
+                # and any user able to see and react to this message could
+                # otherwise approve a change to Missy's own source code with
+                # no authentication at all. Approval is only available via
+                # `missy evolve approve <id>` run from a terminal session on
+                # the host. Do not call mgr.approve() here.
+                self._rest.send_message(
+                    channel_id,
+                    f"\u26a0\ufe0f Evolution **{proposal_id}** cannot be approved from "
+                    "Discord. An operator must run "
+                    f"`missy evolve approve {proposal_id}` from a terminal on "
+                    f"the host, then `missy evolve apply {proposal_id}` to apply it.",
+                )
+                self._emit_audit(
+                    "discord.evolution.approve_denied",
+                    "deny",
+                    {
+                        "proposal_id": proposal_id,
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                        "reason": "discord_reaction_cannot_approve_code_evolution",
+                    },
+                )
             else:
                 if mgr.reject(proposal_id):
                     self._rest.send_message(

@@ -176,9 +176,9 @@ class TestApplyGeneralExceptionHandler:
 
         original_revert = mgr._revert_diffs
 
-        def tracking_revert(diffs):
+        def tracking_revert(diffs, original_contents=None):
             revert_called.append(True)
-            original_revert(diffs)
+            original_revert(diffs, original_contents)
 
         with (
             patch.object(mgr, "_stash_if_dirty", return_value=False),
@@ -360,27 +360,37 @@ class TestRevertDiffsExceptionSwallowed:
             mgr._revert_diffs(diffs)
 
     def test_revert_diffs_processes_all_diffs_despite_exception(self, mgr, tmp_repo):
-        """All diffs are attempted even if earlier ones raise."""
+        """All diffs are attempted even if an earlier one's git call raises.
+
+        _revert_diffs() now makes a `git ls-files --error-unmatch` call per
+        diff first (to decide whether `git checkout` can restore it, or
+        whether to fall back to a captured original-content write for an
+        untracked file) before its (possible) `git checkout` call -- so the
+        total _git call count is no longer 1-per-diff. What must still hold
+        is that diff #1's git call raising doesn't stop diff #2 from being
+        reached at all.
+        """
         (tmp_repo / "missy" / "second.py").write_text("x = 1\n")
         diffs = [
             FileDiff("missy/example.py", "return 'hello'", "return 'hi'"),
             FileDiff("missy/second.py", "x = 1", "x = 2"),
         ]
 
-        call_count = [0]
+        file_paths_seen = []
 
         def git_side_effect(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise RuntimeError("first checkout failed")
-            # Second call succeeds
+            file_path = args[-1] if args else None
+            file_paths_seen.append(file_path)
+            if file_path == "missy/example.py":
+                raise RuntimeError("git call failed for the first diff")
             return MagicMock(returncode=0, stdout="", stderr="")
 
         with patch.object(mgr, "_git", side_effect=git_side_effect):
             mgr._revert_diffs(diffs)
 
-        # Both diffs were attempted
-        assert call_count[0] == 2
+        # Both diffs were attempted -- the second diff's file path shows up
+        # despite the first diff's git call raising.
+        assert "missy/second.py" in file_paths_seen
 
 
 # ---------------------------------------------------------------------------

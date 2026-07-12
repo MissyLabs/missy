@@ -211,7 +211,7 @@ def _find_element(
     app,
     name: str | None,
     role: str | None,
-    max_depth: int = 10,
+    max_depth: int = 20,
 ):
     """Search an application's accessibility tree for a matching element.
 
@@ -222,7 +222,17 @@ def _find_element(
         app: AT-SPI application accessible.
         name: Accessible name to search for, or ``None``.
         role: Role name to search for, or ``None``.
-        max_depth: Maximum tree depth to search.
+        max_depth: Maximum tree depth to search. Real GTK4 applications
+            nest interactive elements much deeper than the container
+            structure a quick manual inspection suggests -- live
+            verification against a real, running gnome-calculator found
+            its push buttons at depth 11, one level beyond the previous
+            default of 10, which made every button invisible to
+            ``atspi_click``/``atspi_set_value`` ("Element not found")
+            despite being present, named, and exposed correctly in the
+            real accessibility tree. 20 gives comfortable real-world
+            headroom without meaningfully changing search cost (bounded
+            by actual child counts, not exponential in depth).
 
     Returns:
         The first matching accessible, or ``None``.

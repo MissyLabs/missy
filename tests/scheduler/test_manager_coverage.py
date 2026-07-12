@@ -46,6 +46,141 @@ class TestStartRaisesSchedulerError:
 
 
 # ---------------------------------------------------------------------------
+# Availability hardening: one job with a bad schedule must not abort every
+# other job's registration, or the scheduler's own startup.
+# ---------------------------------------------------------------------------
+
+
+class TestStartIsolatesPerJobSchedulingFailures:
+    """Live-reproduced before this fix: a jobs.json with one valid and one
+    invalid-schedule job caused start() to raise SchedulerError before
+    scheduling *either* job, and self._scheduler.start() never even ran --
+    a single malformed job took down the entire scheduler subsystem."""
+
+    def _write_jobs(self, path: str, jobs: list[dict]) -> None:
+        Path(path).write_text(json.dumps(jobs))
+        Path(path).chmod(0o600)
+
+    def test_good_job_still_starts_when_a_sibling_job_has_a_bad_schedule(self, tmp_jobs_file: str):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "good-job",
+                    "name": "good",
+                    "schedule": "every 5 minutes",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+                {
+                    "id": "bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()  # must not raise
+            scheduled_ids = {j.id for j in mgr._scheduler.get_jobs()}
+            assert scheduled_ids == {"good-job"}
+            # The scheduler itself must have actually started -- not just
+            # the loop silently continuing past the failed job.
+            assert mgr._scheduler.running is True
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_malformed_job_remains_in_memory_for_inspection(self, tmp_jobs_file: str):
+        """The bad job isn't silently dropped from state entirely -- an
+        operator can still see it (e.g. via `missy schedule list`) and fix
+        or remove it -- only its APScheduler *registration* is skipped."""
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                }
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()
+            assert "bad-job" in mgr._jobs
+            assert mgr._scheduler.get_job("bad-job") is None
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_disabled_bad_job_does_not_even_attempt_registration(self, tmp_jobs_file: str):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "disabled-bad-job",
+                    "name": "bad",
+                    "schedule": "not a real schedule !!!",
+                    "task": "say hi",
+                    "enabled": False,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                }
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()  # must not raise -- disabled jobs are never scheduled
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+    def test_all_jobs_bad_still_starts_the_scheduler_with_zero_jobs(self, tmp_jobs_file: str):
+        self._write_jobs(
+            tmp_jobs_file,
+            [
+                {
+                    "id": "bad-1",
+                    "name": "bad1",
+                    "schedule": "garbage",
+                    "task": "x",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+                {
+                    "id": "bad-2",
+                    "name": "bad2",
+                    "schedule": "also garbage",
+                    "task": "x",
+                    "enabled": True,
+                    "provider": None,
+                    "capability_mode": "safe-chat",
+                },
+            ],
+        )
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        try:
+            mgr.start()
+            assert mgr._scheduler.running is True
+            assert mgr._scheduler.get_jobs() == []
+        finally:
+            with contextlib.suppress(Exception):
+                mgr.stop()
+
+
+# ---------------------------------------------------------------------------
 # Lines 167-170: add_job rolls back when _schedule_job raises SchedulerError
 # ---------------------------------------------------------------------------
 
@@ -110,7 +245,11 @@ class TestResumeJobSchedulerError:
 
 
 # ---------------------------------------------------------------------------
-# Lines 303-306: cleanup_memory delegates to MemoryStore.cleanup when present
+# SR-3.5: cleanup_memory delegates to SQLiteMemoryStore.cleanup (the
+# production memory backend since FX-B). Previously delegated to the
+# legacy JSON MemoryStore, which has no cleanup() method at all -- the
+# removed hasattr() guard always evaluated False, so this always
+# returned 0 regardless of what was requested.
 # ---------------------------------------------------------------------------
 
 
@@ -124,32 +263,40 @@ class TestCleanupMemoryWithStore:
             result = started_manager.cleanup_memory(older_than_days=14)
         assert result == 7
 
-    def test_cleanup_memory_store_without_cleanup_returns_zero(
-        self, started_manager: SchedulerManager
-    ):
-        """Store that lacks a cleanup() attribute returns 0."""
-        mock_store = MagicMock(spec=[])  # no attributes
-
-        fake_store_module = MagicMock()
-        fake_store_module.MemoryStore.return_value = mock_store
-
-        with patch.dict("sys.modules", {"missy.memory.store": fake_store_module}):
-            result = started_manager.cleanup_memory()
-        assert result == 0
-
     def test_cleanup_memory_store_with_cleanup_returns_count(
         self, started_manager: SchedulerManager
     ):
-        """Store that has cleanup() returns whatever cleanup returns."""
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 42
 
-        fake_store_module = MagicMock()
-        fake_store_module.MemoryStore.return_value = mock_store
-
-        with patch.dict("sys.modules", {"missy.memory.store": fake_store_module}):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = started_manager.cleanup_memory(older_than_days=30)
         assert result == 42
+
+    def test_cleanup_memory_actually_deletes_from_real_store(
+        self, started_manager: SchedulerManager, tmp_path
+    ):
+        """SR-3.5 regression: cleanup_memory previously always no-op'd
+        against the legacy JSON MemoryStore (no cleanup() method, silently
+        skipped by a hasattr() guard). Uses a real SQLiteMemoryStore
+        against a real temp DB to confirm actual deletion.
+        """
+        from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+
+        db_path = str(tmp_path / "memory.db")
+        store = SQLiteMemoryStore(db_path)
+        old_turn = ConversationTurn.new("sess1", "user", "old message")
+        old_turn.timestamp = "2020-01-01T00:00:00"
+        store.add_turn(old_turn)
+        store.add_turn(ConversationTurn.new("sess1", "user", "recent message"))
+
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store):
+            removed = started_manager.cleanup_memory(older_than_days=30)
+
+        assert removed == 1
+        remaining = store.get_session_turns("sess1", limit=10)
+        assert len(remaining) == 1
+        assert remaining[0].content == "recent message"
 
 
 # ---------------------------------------------------------------------------

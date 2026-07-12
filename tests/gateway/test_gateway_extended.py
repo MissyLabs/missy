@@ -297,6 +297,33 @@ class TestRESTLPolicyEnforcementConfigDriven:
             client.post("https://api.github.com/admin/secret")
         mock_post.assert_not_called()
 
+    def test_dot_segment_path_cannot_bypass_narrow_deny_rule(self) -> None:
+        """Regression: RestPolicy.check() matches the raw, unnormalized URL
+        path via fnmatch (pure literal string matching, no dot-segment
+        resolution) -- but httpx normalizes "/a/../b" -> "/b" (RFC 3986)
+        before actually sending the request. Without matching that
+        normalization in _validate_and_pin(), a request to
+        ".../repos/foo/../secret/token" would fail to match a narrow deny
+        rule for "/repos/secret/**" (literal string mismatch) and fall
+        through to a broader "/repos/**" allow rule, while the actual
+        bytes sent on the wire target exactly the denied resource.
+        """
+        self._use_restrictive_with_rest(
+            [
+                {
+                    "host": "api.github.com",
+                    "method": "*",
+                    "path": "/repos/secret/**",
+                    "action": "deny",
+                },
+                {"host": "api.github.com", "method": "*", "path": "/repos/**", "action": "allow"},
+            ]
+        )
+        client = PolicyHTTPClient()
+        with patch.object(httpx.Client, "get") as mock_get, pytest.raises(PolicyViolationError):
+            client.get("https://api.github.com/repos/foo/../secret/token")
+        mock_get.assert_not_called()
+
     def test_rest_policy_none_result_passes_through(self) -> None:
         """When no REST rule matches, the request proceeds (None = pass-through)."""
         self._use_restrictive_with_rest(
@@ -471,7 +498,7 @@ class TestInteractiveApprovalEdgeCases:
         with patch.object(httpx.Client, "get", return_value=mock_resp):
             client.get("https://anything.example.com/path")
         approval.prompt_user.assert_called_once_with(
-            "network_request", "https://anything.example.com/path"
+            "network_request", "https://anything.example.com/path", session_id=""
         )
 
     def test_approval_called_with_full_url(self) -> None:
@@ -484,7 +511,7 @@ class TestInteractiveApprovalEdgeCases:
         mock_resp = _mock_response(200)
         with patch.object(httpx.Client, "get", return_value=mock_resp):
             client.get(url)
-        approval.prompt_user.assert_called_once_with("network_request", url)
+        approval.prompt_user.assert_called_once_with("network_request", url, session_id="")
 
     def test_approval_granted_request_is_executed(self) -> None:
         """After operator approval, the underlying httpx call is made."""
@@ -926,15 +953,15 @@ class TestThreadSafetyHTTPClient:
 
 class TestRateLimitingIntegration:
     """The gateway delegates to the policy engine; rate limiting can be expressed
-    as a PolicyViolationError from check_network.  Verify that PolicyHTTPClient
-    handles this correctly."""
+    as a PolicyViolationError from check_network_resolved.  Verify that
+    PolicyHTTPClient handles this correctly."""
 
     def test_rate_limited_host_raises_policy_violation(self) -> None:
-        """When check_network raises (simulating rate-limit enforcement), the
-        request is blocked and no httpx call is made."""
+        """When check_network_resolved raises (simulating rate-limit
+        enforcement), the request is blocked and no httpx call is made."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
-            mock_engine.check_network.side_effect = PolicyViolationError(
+            mock_engine.check_network_resolved.side_effect = PolicyViolationError(
                 "Rate limit exceeded for api.example.com",
                 category="network",
                 detail="Too many requests per minute",
@@ -954,7 +981,7 @@ class TestRateLimitingIntegration:
         network_request audit event."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
-            mock_engine.check_network.side_effect = PolicyViolationError(
+            mock_engine.check_network_resolved.side_effect = PolicyViolationError(
                 "Rate limited", category="network", detail="quota exceeded"
             )
             mock_get_engine.return_value = mock_engine
@@ -966,9 +993,11 @@ class TestRateLimitingIntegration:
         assert event_bus.get_events(event_type="network_request") == []
 
     def test_policy_engine_check_network_called_once_per_request(self) -> None:
-        """check_network is called exactly once per HTTP method invocation."""
+        """check_network_resolved is called exactly once per HTTP method
+        invocation."""
         with patch("missy.gateway.client.get_policy_engine") as mock_get_engine:
             mock_engine = MagicMock()
+            mock_engine.check_network_resolved.return_value = (True, "93.184.216.34")
             mock_get_engine.return_value = mock_engine
             mock_resp = _mock_response(200)
             with patch.object(httpx.Client, "get", return_value=mock_resp):
@@ -976,7 +1005,7 @@ class TestRateLimitingIntegration:
             with patch.object(httpx.Client, "get", return_value=mock_resp):
                 PolicyHTTPClient().get("https://api.example.com/two")
 
-        assert mock_engine.check_network.call_count == 2
+        assert mock_engine.check_network_resolved.call_count == 2
 
 
 # ===========================================================================

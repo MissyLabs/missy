@@ -183,6 +183,20 @@ class FasterWhisperSTT(STTEngine):
 
         # Mix down multi-channel audio to mono.
         if channels > 1:
+            remainder = audio_array.size % channels
+            if remainder:
+                # A buffer that isn't an exact multiple of the channel count
+                # (e.g. a network frame split mid-sample) would otherwise
+                # raise an unhandled ValueError from reshape(). Drop the
+                # trailing incomplete frame rather than crash.
+                logger.warning(
+                    "Audio buffer size %d is not a multiple of channels=%d; "
+                    "dropping %d trailing sample(s).",
+                    audio_array.size,
+                    channels,
+                    remainder,
+                )
+                audio_array = audio_array[: audio_array.size - remainder]
             audio_array = audio_array.reshape(-1, channels).mean(axis=1)
 
         t_start = time.perf_counter()

@@ -130,3 +130,52 @@ class TestSessionManager:
 
         # Results are still accessible after disconnect.
         assert sm.get_latest_result("s1") is not None
+
+    def test_tracked_result_sessions_bounded_across_process_lifetime(self) -> None:
+        """unregister_connection() intentionally leaves a disconnected
+        session's results in place, so without eviction every distinct
+        session that ever streamed at least one frame would leave a
+        permanent dict entry forever. The number of tracked
+        (disconnected) sessions must stay capped, evicting the oldest
+        first, mirroring ScreencastTokenRegistry's revoked-session
+        eviction in auth.py.
+        """
+        from missy.channels.screencast.session_manager import (
+            _MAX_TRACKED_RESULT_SESSIONS,
+        )
+
+        sm = SessionManager(max_sessions=10_000)
+        for i in range(_MAX_TRACKED_RESULT_SESSIONS + 50):
+            sid = f"session-{i}"
+            sm.register_connection(sid)
+            sm.store_result(AnalysisResult(session_id=sid, frame_number=1, analysis_text="x"))
+            sm.unregister_connection(sid)
+
+        assert len(sm._results) <= _MAX_TRACKED_RESULT_SESSIONS
+        # Most recently added session's results survive...
+        assert sm.get_latest_result(f"session-{_MAX_TRACKED_RESULT_SESSIONS + 49}") is not None
+        # ...while the oldest was evicted.
+        assert sm.get_latest_result("session-0") is None
+
+    def test_active_session_results_never_evicted(self) -> None:
+        """An active (not yet disconnected) session's results must never
+        be evicted, even once the tracked-session cap is exceeded by many
+        other disconnected sessions.
+        """
+        from missy.channels.screencast.session_manager import (
+            _MAX_TRACKED_RESULT_SESSIONS,
+        )
+
+        sm = SessionManager(max_sessions=10_000)
+        sm.register_connection("still-active")
+        sm.store_result(
+            AnalysisResult(session_id="still-active", frame_number=1, analysis_text="x")
+        )
+
+        for i in range(_MAX_TRACKED_RESULT_SESSIONS + 50):
+            sid = f"session-{i}"
+            sm.register_connection(sid)
+            sm.store_result(AnalysisResult(session_id=sid, frame_number=1, analysis_text="x"))
+            sm.unregister_connection(sid)
+
+        assert sm.get_latest_result("still-active") is not None

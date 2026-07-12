@@ -32,6 +32,7 @@ from missy.tools.builtin.browser_tools import (
 )
 from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.builtin.code_evolve import CodeEvolveTool
+from missy.tools.builtin.delegate_task import DelegateTaskTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.discord_voice import (
     DiscordVoiceJoinTool,
@@ -102,6 +103,7 @@ __all__ = [
     "BrowserWaitTool",
     "CalculatorTool",
     "CodeEvolveTool",
+    "DelegateTaskTool",
     "DiscordUploadTool",
     "DiscordVoiceJoinTool",
     "DiscordVoiceLeaveTool",
@@ -166,6 +168,7 @@ _ALL_TOOL_CLASSES = [
     BrowserWaitTool,
     CalculatorTool,
     CodeEvolveTool,
+    DelegateTaskTool,
     DiscordUploadTool,
     DiscordVoiceJoinTool,
     DiscordVoiceLeaveTool,

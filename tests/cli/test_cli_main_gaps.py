@@ -71,6 +71,11 @@ def _make_mock_config(**overrides) -> MagicMock:
     cfg.plugins.allowed_plugins = []
     cfg.discord = None
     cfg.vault = None
+    # See test_cli_coverage_gaps.py's _make_mock_config for why this must
+    # default off: `gateway start` now constructs a real SchedulerManager
+    # (touching ~/.missy/jobs.json) whenever cfg.scheduling.enabled is
+    # truthy, which a bare MagicMock attribute is by default.
+    cfg.scheduling.enabled = False
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
@@ -161,6 +166,472 @@ class TestGatewayStartSignalHandler:
             # Exit code 0: graceful shutdown via signal
             assert result.exit_code == 0
             assert "Shutting down" in result.output or "stopped" in result.output.lower()
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartConfigWatcher:
+    """Regression: ConfigWatcher (missy/config/hotreload.py) was fully
+    built and tested, including its own symlink/ownership/permission
+    safety checks before reload, but had zero production callers anywhere.
+    Editing config.yaml while gateway_start() ran had no effect whatsoever
+    despite README.md/docs/architecture.md/CLAUDE.md all describing
+    hot-reload as an active running control. gateway_start() must actually
+    construct and start it (using the ready-made _apply_config() reload
+    callback), and stop it cleanly on shutdown.
+    """
+
+    def test_config_watcher_started_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.config.hotreload.ConfigWatcher") as mock_watcher_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_watcher_cls.assert_called_once()
+            assert mock_watcher_cls.call_args.args[0] == cfg_path
+            mock_watcher_cls.return_value.start.assert_called_once()
+            mock_watcher_cls.return_value.stop.assert_called_once()
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartWatchdog:
+    """Regression: Watchdog (missy/agent/watchdog.py) was fully built and
+    tested but had zero production callers anywhere -- no CLI command or
+    bootstrap path ever called .register()/.start() on it. gateway_start()
+    (the long-lived service-mode entry point) must construct and start it,
+    and stop it cleanly on shutdown.
+    """
+
+    def test_watchdog_started_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_watchdog_cls.return_value.start.assert_called_once()
+            mock_watchdog_cls.return_value.stop.assert_called_once()
+            registered_names = {
+                call.args[0] for call in mock_watchdog_cls.return_value.register.call_args_list
+            }
+            assert "provider_registry" in registered_names
+            assert "memory_store" in registered_names
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartScheduler:
+    """Regression: SchedulerManager (missy/scheduler/manager.py) was fully
+    built and tested but had zero production callers inside gateway_start()
+    -- the persistent daemon process the systemd unit runs never constructed
+    one, so a job persisted via `missy schedule add` (a separate CLI
+    invocation that opens its own private SchedulerManager, mutates
+    jobs.json, and immediately stops it again) would never actually fire:
+    nothing in the long-running gateway process ever loaded jobs.json into
+    a live, running APScheduler instance. The Web TUI's scheduler pages and
+    operator controls were also silently non-functional, since they all
+    resolve their SchedulerManager via getattr(runtime, "_scheduler", None)
+    and nothing ever set that attribute on the AgentRuntime passed to
+    ApiServer as runtime=_agent. gateway_start() must construct a
+    SchedulerManager, start it, attach it to the agent runtime as
+    `_scheduler`, and stop it cleanly on shutdown.
+    """
+
+    def test_scheduler_started_wired_and_stopped(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            mock_agent_instance = MagicMock()
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime", return_value=mock_agent_instance),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.return_value.start.assert_called_once()
+            mock_sched_cls.return_value.stop.assert_called_once()
+            # The scheduler instance must be reachable from the same
+            # AgentRuntime object passed to ApiServer as runtime=_agent, so
+            # the Web TUI's getattr(runtime, "_scheduler", None) lookups
+            # find a live SchedulerManager instead of always seeing None.
+            assert mock_agent_instance._scheduler is mock_sched_cls.return_value
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_scheduler_receives_configured_max_spend_usd(self, runner: CliRunner):
+        """Regression: SchedulerManager must receive the operator's
+        configured max_spend_usd cap so per-job AgentRuntime instances
+        (_run_job() constructs a fresh one per run) don't silently run
+        with an unlimited budget regardless of config.yaml.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+            mock_config.max_spend_usd = 3.5
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_called_once()
+            call_kwargs = mock_sched_cls.call_args.kwargs
+            assert call_kwargs.get("default_max_spend_usd") == 3.5
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_scheduler_receives_configured_tool_policy_kwargs(self, runner: CliRunner):
+        """Regression: SchedulerManager must also receive the operator's
+        config-based tool-policy layers (tool_policy/agent_tool_policy/
+        sandbox_tool_policy/subagent_tool_policy/tool_intelligence), the
+        same _agent_tool_policy_kwargs(cfg) dict every other AgentConfig
+        construction site passes. Without this, a scheduled job's per-run
+        AgentConfig gets none of these layers -- an operator's global
+        tools.deny: [...] config would silently not apply to a
+        capability_mode="full" scheduled job.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = True
+            mock_config.tools = {"deny": ["shell_exec"]}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                mock_sched_cls.return_value.list_jobs.return_value = []
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_called_once()
+            call_kwargs = mock_sched_cls.call_args.kwargs
+            policy_kwargs = call_kwargs.get("default_tool_policy_kwargs")
+            assert policy_kwargs is not None
+            assert policy_kwargs.get("tool_policy") == {"deny": ["shell_exec"]}
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_scheduler_disabled_via_config_is_not_started(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.scheduling.enabled = False
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.scheduler.manager.SchedulerManager") as mock_sched_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            mock_sched_cls.assert_not_called()
+            assert "scheduler disabled" in result.output.lower()
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartMcpHealthCheck:
+    """Regression: McpManager.health_check() (restarts any dead MCP server
+    via the same digest-verification/approval-annotation path as an
+    initial add_server() call) was fully built and tested but had zero
+    production callers anywhere -- grep confirms no CLI command,
+    scheduler, or background thread ever called it. Once an MCP server
+    subprocess died, it stayed dead for the rest of the process's life:
+    its tools kept being listed/dispatched, simply failing against the
+    dead subprocess forever, with no auto-recovery ever attempted.
+    gateway_start() must register a periodic Watchdog check that calls
+    it.
+    """
+
+    def test_mcp_servers_check_registered(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            registered = {
+                call.args[0]: call.args[1]
+                for call in mock_watchdog_cls.return_value.register.call_args_list
+            }
+            assert "mcp_servers" in registered
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_mcp_servers_check_restarts_dead_servers_and_reports_status(self, runner: CliRunner):
+        """Extracts the real check-function closure registered under
+        "mcp_servers" (Watchdog itself is mocked, but the closure passed to
+        .register() is the genuine production function) and verifies it
+        actually calls health_check() and reflects post-restart status,
+        rather than just checking it was registered under the right name.
+        """
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                mock_mcp_manager = MagicMock()
+                mock_mcp_manager.list_servers.return_value = [{"name": "s1", "alive": True}]
+                mock_agent_runtime_cls.return_value._mcp_manager = mock_mcp_manager
+
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+                assert result.exit_code == 0
+                registered = {
+                    call.args[0]: call.args[1]
+                    for call in mock_watchdog_cls.return_value.register.call_args_list
+                }
+                check_fn = registered["mcp_servers"]
+
+                assert check_fn() is True
+                mock_mcp_manager.health_check.assert_called()
+
+                # Now simulate a server that's still dead after the
+                # restart attempt.
+                mock_mcp_manager.list_servers.return_value = [{"name": "s1", "alive": False}]
+                assert check_fn() is False
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartAgentRuntimeShutdown:
+    """Regression: AgentRuntime.shutdown() (which stops the SleeptimeWorker
+    background daemon thread cleanly) had zero call sites anywhere in the
+    codebase -- gateway_start() is the one long-running-process case
+    AgentRuntime.shutdown()'s own docstring names by name as needing this,
+    but its shutdown finally: block stopped voice/screencast/api/proactive/
+    watchdog/config_watcher without ever calling _agent.shutdown() or
+    _discord_agent.shutdown(). In the real long-running gateway process,
+    this left the sleeptime thread to be killed outright (possibly
+    mid-LLM-summarization-call, mid summary/learning write) instead of
+    stopped cleanly.
+    """
+
+    def test_agent_runtimes_shutdown_called_on_exit(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            # _agent and _discord_agent are both constructed from the same
+            # patched AgentRuntime class, so both shutdown() calls land on
+            # the same .return_value -- once per runtime instance.
+            assert mock_agent_runtime_cls.return_value.shutdown.call_count == 2
         finally:
             import os as _os
 
@@ -317,6 +788,314 @@ class TestGatewayStartVoiceStopException:
 # ---------------------------------------------------------------------------
 # gateway_start — proactive manager stop exception (lines 1458-1461)
 # ---------------------------------------------------------------------------
+
+
+class TestGatewayStartProactiveApprovalGateWiring:
+    def test_proactive_manager_receives_real_approval_gate(self, runner: CliRunner):
+        """SR-2.2 regression: `missy gateway start` must construct a real
+        ApprovalGate and pass it to ProactiveManager, not leave
+        approval_gate unset (None) -- a trigger with
+        requires_confirmation=True (the new default) would otherwise
+        always be denied with "no_approval_gate" rather than actually
+        offering an operator the chance to approve it.
+        """
+        import os
+
+        from missy.agent.approval import ApprovalGate
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            proactive_cfg = MagicMock()
+            proactive_cfg.enabled = True
+            proactive_cfg.triggers = [MagicMock()]
+            mock_config.proactive = proactive_cfg
+
+            captured_kwargs = {}
+
+            def _capture_proactive_manager(**kwargs):
+                captured_kwargs.update(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch(
+                    "missy.agent.proactive.ProactiveManager",
+                    side_effect=_capture_proactive_manager,
+                ),
+                patch("missy.agent.proactive.ProactiveTrigger"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert "approval_gate" in captured_kwargs
+            assert isinstance(captured_kwargs["approval_gate"], ApprovalGate)
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartAgentBudgetWiring:
+    """Regression: gateway_start()'s main agent, Discord agent, and
+    proactive-trigger runtime all built AgentConfig without max_spend_usd,
+    unlike `missy ask`/`missy run`/`missy recover` which all pass
+    max_spend_usd=getattr(cfg, "max_spend_usd", 0.0). Every session run
+    through the gateway daemon (the primary long-running way Missy
+    operates) silently ignored the operator's configured spend cap.
+    """
+
+    def test_main_and_discord_agent_configs_receive_configured_budget(
+        self, runner: CliRunner
+    ) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 2.5
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert len(captured_calls) >= 2
+            for call_kwargs in captured_calls:
+                assert call_kwargs.get("max_spend_usd") == 2.5
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_proactive_runtime_config_receives_configured_budget(self, runner: CliRunner) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 1.25
+
+            proactive_cfg = MagicMock()
+            proactive_cfg.enabled = True
+            proactive_cfg.triggers = [MagicMock()]
+            mock_config.proactive = proactive_cfg
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("missy.agent.proactive.ProactiveManager"),
+                patch("missy.agent.proactive.ProactiveTrigger"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            # The proactive runtime's AgentConfig call is the first one made
+            # (constructed before the main/Discord agents in gateway_start()).
+            assert captured_calls
+            assert captured_calls[0].get("max_spend_usd") == 1.25
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestGatewayStartHotReloadRefreshesRunningRuntimeBudget:
+    """Regression: _apply_config() (the ConfigWatcher hot-reload callback)
+    reinitializes PolicyEngine/ProviderRegistry/OtelExporter/AuditLogger,
+    but none of those touch the already-constructed, long-lived
+    AgentRuntime instances gateway_start() builds once at startup
+    (_agent/_discord_agent/the proactive-trigger runtime) or
+    SchedulerManager's _default_max_spend_usd. AgentRuntime reads
+    self.config.max_spend_usd fresh only when a session's CostTracker is
+    first created -- since self.config is the same AgentConfig object for
+    the runtime's entire lifetime, editing max_spend_usd in config.yaml
+    while the gateway keeps running had zero effect on any session
+    (existing or brand-new) until a full restart.
+    """
+
+    def test_hot_reload_updates_max_spend_usd_on_running_agents_and_scheduler(
+        self, runner: CliRunner
+    ) -> None:
+        import os
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.max_spend_usd = 5.0
+            mock_config.scheduling.enabled = True
+
+            constructed_agents: list[MagicMock] = []
+
+            def _capture_agent_runtime(cfg):
+                agent = MagicMock()
+                agent.config = cfg
+                constructed_agents.append(agent)
+                return agent
+
+            constructed_schedulers: list[MagicMock] = []
+
+            def _capture_scheduler(**kwargs):
+                sched = MagicMock()
+                sched._default_max_spend_usd = kwargs.get("default_max_spend_usd", 0.0)
+                sched.list_jobs.return_value = []
+                constructed_schedulers.append(sched)
+                return sched
+
+            reload_fn_holder: dict = {}
+
+            def _capture_watcher(path, reload_fn, **kwargs):
+                reload_fn_holder["fn"] = reload_fn
+                return MagicMock()
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] >= 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime", side_effect=_capture_agent_runtime),
+                patch("missy.scheduler.manager.SchedulerManager", side_effect=_capture_scheduler),
+                patch("missy.config.hotreload.ConfigWatcher", side_effect=_capture_watcher),
+                patch("missy.config.hotreload._apply_config"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert len(constructed_agents) >= 2
+            assert len(constructed_schedulers) == 1
+            assert all(a.config.max_spend_usd == 5.0 for a in constructed_agents)
+            assert constructed_schedulers[0]._default_max_spend_usd == 5.0
+
+            # Simulate the operator editing config.yaml's max_spend_usd
+            # while the gateway keeps running, then invoke the real
+            # captured reload callback directly (this is exactly what
+            # ConfigWatcher._do_reload() does on a real file change).
+            new_config = MagicMock()
+            new_config.max_spend_usd = 1.0
+            reload_fn_holder["fn"](new_config)
+
+            assert all(a.config.max_spend_usd == 1.0 for a in constructed_agents)
+            assert constructed_schedulers[0]._default_max_spend_usd == 1.0
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
+class TestApiStartAgentBudgetWiring:
+    """Regression: `missy api start`'s standalone AgentConfig construction
+    (like gateway_start()'s) never passed max_spend_usd, unlike
+    `missy ask`/`missy run`/`missy recover`. No test previously exercised
+    `missy api start` at all.
+    """
+
+    def test_api_start_agent_config_receives_configured_budget(self, runner: CliRunner) -> None:
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.max_spend_usd = 4.0
+
+            captured_calls = []
+
+            def _capture_agent_config(**kwargs):
+                captured_calls.append(kwargs)
+                return MagicMock()
+
+            def fake_sleep(t):
+                raise KeyboardInterrupt()
+
+            mock_server = MagicMock()
+            mock_server.url = "http://127.0.0.1:8080"
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime"),
+                patch("missy.agent.runtime.AgentConfig", side_effect=_capture_agent_config),
+                patch("missy.api.server.ApiServer", return_value=mock_server),
+                patch("missy.providers.registry.get_registry", return_value=MagicMock()),
+                patch("missy.tools.registry.get_tool_registry", return_value=MagicMock()),
+                patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=MagicMock()),
+                patch("time.sleep", side_effect=fake_sleep),
+            ):
+                result = runner.invoke(
+                    cli,
+                    [
+                        "--config",
+                        cfg_path,
+                        "api",
+                        "start",
+                        "--api-key",
+                        "test-key",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            assert len(captured_calls) == 1
+            assert captured_calls[0].get("max_spend_usd") == 4.0
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
 
 
 class TestGatewayStartProactiveStopException:

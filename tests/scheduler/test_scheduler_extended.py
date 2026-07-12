@@ -546,6 +546,93 @@ class TestManagerRunJobRetryScheduling:
         assert retry_job is None, "No retry must be scheduled when max_attempts is exhausted"
 
 
+class TestPauseJobStopsInFlightRetries:
+    """Regression: pausing a job must actually stop a retry already in flight.
+
+    A retry scheduled by a prior failed run is a separate APScheduler job
+    (id f"{job_id}_retry_{n}") that fires independently of the original
+    trigger. pause_job() previously only paused/removed the original trigger
+    id and set job.enabled = False, but _run_job() never checked
+    job.enabled -- so a job paused while a retry was in flight would still
+    execute with full tool access, defeating pause's emergency-stop
+    semantics.
+    """
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_paused_job_run_job_is_a_noop_even_with_pending_retry(
+        self, mock_uuid, mgr: SchedulerManager
+    ) -> None:
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job("flaky", "every 5 minutes", "t", max_attempts=3)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            mgr._run_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
+
+        mgr.pause_job(job.id)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.return_value = "should never run"
+            mgr._run_job(job.id)  # simulates the pending retry firing
+            MockRuntime.return_value.run.assert_not_called()
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_pause_removes_pending_retry_from_scheduler(
+        self, mock_uuid, mgr: SchedulerManager
+    ) -> None:
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job("flaky2", "every 5 minutes", "t", max_attempts=3)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            mgr._run_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
+
+        mgr.pause_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is None
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_remove_removes_pending_retry_from_scheduler(
+        self, mock_uuid, mgr: SchedulerManager
+    ) -> None:
+        """Regression: remove_job() is a more permanent action than
+        pause_job(), which already cleans up dangling pending-retry
+        APScheduler entries (scheduled independently by _run_job() on a
+        prior failure) for exactly this reason -- remove_job() previously
+        had no equivalent cleanup, leaving a stale scheduled callback
+        referencing a deleted job lingering in the scheduler's internal
+        state for up to the full retry backoff window.
+        """
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job("flaky3", "every 5 minutes", "t", max_attempts=3)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            mgr._run_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
+
+        mgr.remove_job(job.id)
+
+        assert mgr._scheduler.get_job(f"{job.id}_retry_1") is None
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_resumed_job_can_run_again(self, mock_uuid, mgr: SchedulerManager) -> None:
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job("resumable", "every 5 minutes", "t")
+        mgr.pause_job(job.id)
+        mgr.resume_job(job.id)
+
+        with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
+            MockRuntime.return_value.run.return_value = "ran fine"
+            mgr._run_job(job.id)
+            MockRuntime.return_value.run.assert_called_once()
+
+
 class TestManagerRunJobDeleteAfterRun:
     """delete_after_run removes the job on first success."""
 
@@ -644,27 +731,20 @@ class TestManagerErrorHandling:
 
 
 class TestManagerCleanupMemory:
-    """cleanup_memory delegates correctly and handles errors gracefully."""
-
-    def test_returns_zero_when_store_has_no_cleanup(self, mgr: SchedulerManager) -> None:
-        mock_store = MagicMock(spec=[])  # no attributes
-        fake_module = MagicMock()
-        fake_module.MemoryStore.return_value = mock_store
-        with patch.dict("sys.modules", {"missy.memory.store": fake_module}):
-            result = mgr.cleanup_memory()
-        assert result == 0
+    """cleanup_memory delegates to SQLiteMemoryStore (the production memory
+    backend since FX-B) and handles errors gracefully. Previously delegated
+    to the legacy JSON MemoryStore, which has no cleanup() method at all.
+    """
 
     def test_returns_count_from_store_cleanup(self, mgr: SchedulerManager) -> None:
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 17
-        fake_module = MagicMock()
-        fake_module.MemoryStore.return_value = mock_store
-        with patch.dict("sys.modules", {"missy.memory.store": fake_module}):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = mgr.cleanup_memory(older_than_days=7)
         assert result == 17
 
     def test_returns_zero_on_import_exception(self, mgr: SchedulerManager) -> None:
-        with patch.dict("sys.modules", {"missy.memory.store": None}):
+        with patch.dict("sys.modules", {"missy.memory.sqlite_store": None}):
             result = mgr.cleanup_memory()
         assert result == 0
 

@@ -86,9 +86,20 @@ _EXPLICIT_LOOK_PATTERNS: list[tuple[re.Pattern[str], VisionIntent, float]] = [
         0.95,
     ),
     (
+        # Regression: "can you see"/"do you see"/"what do you see" are
+        # extremely common idiomatic English used rhetorically in ordinary
+        # conversation ("can you see why this code keeps crashing?", "do
+        # you see what I mean?") far more often than as a literal request
+        # to look through the camera. At the old 0.90 confidence (above
+        # auto_threshold's default 0.80), these phrases auto-activated the
+        # camera with NO human confirmation on completely unrelated text --
+        # contradicting the module's own stated design goal ("Auto-
+        # activation requires strong confidence"). Lowered into the ASK
+        # band so the phrase still counts as a real signal (prompts for
+        # confirmation) without silently turning on the camera unasked.
         re.compile(r"\b(can\s+you\s+see|do\s+you\s+see|what\s+do\s+you\s+see)\b", re.I),
         VisionIntent.LOOK,
-        0.90,
+        0.65,
     ),
     (
         re.compile(r"\bcheck\s+(what('s|\s+is)\s+(on|at)|this|that)\b", re.I),
@@ -96,9 +107,19 @@ _EXPLICIT_LOOK_PATTERNS: list[tuple[re.Pattern[str], VisionIntent, float]] = [
         0.85,
     ),
     (
-        re.compile(r"\b(take\s+a\s+(photo|picture|snapshot)|capture|snap)\b", re.I),
+        re.compile(r"\btake\s+a\s+(photo|picture|snapshot)\b", re.I),
         VisionIntent.LOOK,
         0.90,
+    ),
+    (
+        # Regression: bare "capture"/"snap" are ordinary words used far
+        # more often outside any photography context ("capture the key
+        # idea", "snap out of it") than as a request to take a picture --
+        # same false-activation risk as the "can you see" pattern above,
+        # lowered into the ASK band for the same reason.
+        re.compile(r"\b(capture|snap)\b", re.I),
+        VisionIntent.LOOK,
+        0.65,
     ),
     (re.compile(r"\bscreenshot\b", re.I), VisionIntent.SCREENSHOT, 0.95),
 ]

@@ -164,6 +164,57 @@ class TestExtractJson:
         result = self.schema._extract_json("[1, 2, 3]")
         assert result == "[1, 2, 3]"
 
+    def test_raw_json_with_trailing_prose_is_trimmed(self):
+        """Regression: when a response starts directly with { or [, the old
+        code returned the *entire remaining string* verbatim with no
+        trimming -- unlike the "embedded in prose" branch a few lines
+        below, which already handles trailing content via rfind(closer).
+        A model that appends even a short trailing remark after otherwise-
+        valid JSON (very plausible for weaker/local models despite
+        instructions not to) made json.loads() raise "Extra data",
+        wasting a retry attempt on a response that was actually valid.
+        """
+        text = '{"name": "Alice", "value": 1} - let me know if you need anything else!'
+        result = self.schema._extract_json(text)
+        assert result == '{"name": "Alice", "value": 1}'
+
+    def test_raw_json_array_with_trailing_prose_is_trimmed(self):
+        text = "[1, 2, 3] - hope that helps!"
+        result = self.schema._extract_json(text)
+        assert result == "[1, 2, 3]"
+
+    def test_raw_json_with_trailing_prose_containing_closer_char(self):
+        """Regression: rfind(closer) finds the LAST occurrence of the
+        closer character anywhere in the string, not the one that
+        actually balances the JSON's own nesting. If the trailing remark
+        itself contains a literal "}" (e.g. the model discusses JSON
+        syntax or quotes the character), the old rfind-based trim cut
+        past the real JSON close, producing an invalid, unparseable
+        snippet -- json.loads() raised "Extra data" on a response whose
+        JSON payload was actually perfectly valid.
+        """
+        text = '{"name": "Alice", "value": 1} Do not include the character "}" in output.'
+        result = self.schema._extract_json(text)
+        assert result == '{"name": "Alice", "value": 1}'
+
+    def test_raw_json_nested_object_with_brace_in_string_value(self):
+        """A '}' inside a JSON string value (not trailing prose) must not
+        be mistaken for the structure's own close -- the balanced scan
+        must track string literals, not just bracket characters.
+        """
+        text = '{"name": "a {curly} example", "value": 1}'
+        result = self.schema._extract_json(text)
+        assert result == text
+
+    def test_json_embedded_in_prose_with_trailing_closer_char(self):
+        """Same rfind flaw, but in the "embedded in prose" branch: trailing
+        text after the embedded JSON containing a literal closer character
+        must not truncate the extraction at the wrong position.
+        """
+        text = 'Answer: {"name": "Bob", "value": 2} (don\'t format as {curly braces})'
+        result = self.schema._extract_json(text)
+        assert result == '{"name": "Bob", "value": 2}'
+
     def test_json_code_block(self):
         text = '```json\n{"name": "Bob", "value": 2}\n```'
         result = self.schema._extract_json(text)

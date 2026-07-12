@@ -12,6 +12,7 @@ import pytest
 
 from missy.channels.discord.voice_commands import (
     maybe_handle_voice_command,
+    parse_voice_intent,
 )
 
 # ---------------------------------------------------------------------------
@@ -289,3 +290,74 @@ class TestCaseSensitivity:
         result = await maybe_handle_voice_command(**base_kwargs)
         assert result.handled is True
         mock_voice.say.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Trailing clause / punctuation regression coverage
+#
+# Regression tests for the unbounded trailing-clause capture and missing
+# sentence-ending punctuation tolerance fixed in join/leave/say parsing.
+# ---------------------------------------------------------------------------
+
+
+class TestTrailingClauseAndPunctuation:
+    def test_join_with_trailing_full_stop(self):
+        intent = parse_voice_intent("join the General voice channel.")
+        assert intent is not None
+        assert intent.action == "join"
+        assert intent.channel_name == "General"
+
+    def test_join_with_trailing_conversational_clause(self):
+        intent = parse_voice_intent("join the General voice channel and report your voice status")
+        assert intent is not None
+        assert intent.action == "join"
+        # The trailing "and report your voice status" clause must not leak
+        # into the parsed channel name.
+        assert intent.channel_name == "General"
+
+    def test_join_with_trailing_clause_and_punctuation(self):
+        intent = parse_voice_intent("join the General voice channel, then say hello in voice.")
+        assert intent is not None
+        assert intent.action == "join"
+        assert intent.channel_name == "General"
+
+    def test_leave_with_trailing_full_stop(self):
+        intent = parse_voice_intent("leave the voice channel.")
+        assert intent is not None
+        assert intent.action == "leave"
+
+    def test_leave_with_multiple_trailing_punctuation(self):
+        intent = parse_voice_intent("leave the voice channel!?")
+        assert intent is not None
+        assert intent.action == "leave"
+
+    def test_say_exact_phrase_not_polluted_by_punctuation(self):
+        intent = parse_voice_intent("say hello world in voice.")
+        assert intent is not None
+        assert intent.action == "say"
+        assert intent.speech == "hello world"
+
+    def test_say_does_not_capture_unrelated_trailing_instruction(self):
+        # "say X in voice" must match the whole message; a trailing
+        # instruction fragment after the required "in voice" suffix must
+        # not be silently folded into the spoken text or another action.
+        intent = parse_voice_intent("say hello world in voice and then leave")
+        assert intent is None
+
+    def test_say_does_not_capture_trailing_status_request(self):
+        intent = parse_voice_intent("say hello world in the voice channel, then tell me the status")
+        assert intent is None
+
+    def test_combined_status_say_leave_phrasing_not_misparsed(self):
+        # A single message chaining status/say/leave requests must not be
+        # collapsed into one action with the extra clauses captured as data.
+        intent = parse_voice_intent(
+            "check your voice status, say hello in voice, then leave the voice channel"
+        )
+        assert intent is None
+
+    def test_join_target_normalisation_strips_only_trailing_clause(self):
+        intent = parse_voice_intent("join Ops voice channel and then say hi in voice")
+        assert intent is not None
+        assert intent.action == "join"
+        assert intent.channel_name == "Ops"

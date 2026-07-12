@@ -123,3 +123,38 @@ class ApprovalGate:
             return [
                 {"id": k, "action": v.action, "reason": v.reason} for k, v in self._pending.items()
             ]
+
+    def approve_by_id(self, approval_id: str) -> bool:
+        """Approve the pending request identified by *approval_id*.
+
+        Args:
+            approval_id: The ID returned by :meth:`list_pending`.
+
+        Returns:
+            ``True`` if a matching pending request was found and
+            approved, ``False`` if no request with that ID is pending
+            (already resolved, timed out, or never existed).
+        """
+        with self._lock:
+            pending = self._pending.get(approval_id)
+            if pending is None:
+                return False
+            pending.approve()
+            return True
+
+    def deny_by_id(self, approval_id: str) -> bool:
+        """Deny the pending request identified by *approval_id*.
+
+        Args:
+            approval_id: The ID returned by :meth:`list_pending`.
+
+        Returns:
+            ``True`` if a matching pending request was found and
+            denied, ``False`` if no request with that ID is pending.
+        """
+        with self._lock:
+            pending = self._pending.get(approval_id)
+            if pending is None:
+                return False
+            pending.deny()
+            return True

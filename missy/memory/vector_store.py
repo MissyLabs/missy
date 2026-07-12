@@ -179,6 +179,48 @@ class VectorMemoryStore:
             )
         return results
 
+    def delete_by_metadata(self, filters: dict) -> int:
+        """Remove all entries whose metadata matches every key/value in *filters*.
+
+        FAISS's ``IndexFlatL2`` has no row-level delete, so this rebuilds
+        the index from the surviving entries (the same recovery approach
+        :meth:`load` already uses for a dimension mismatch).
+
+        Args:
+            filters: Metadata key/value pairs an entry must match (all of
+                them) to be removed.
+
+        Returns:
+            The number of entries removed.
+        """
+        if not _FAISS_AVAILABLE or self._index is None or not self._entries:
+            return 0
+
+        def _matches(meta: dict) -> bool:
+            return all(meta.get(k) == v for k, v in filters.items())
+
+        keep = [e for e in self._entries if not _matches(e.get("metadata") or {})]
+        removed = len(self._entries) - len(keep)
+        if removed == 0:
+            return 0
+
+        self._entries = keep
+        self._rebuild_index_from_entries()
+        return removed
+
+    def _rebuild_index_from_entries(self) -> None:
+        """Rebuild ``self._index`` from ``self._entries`` at the configured dimension."""
+        import numpy as np
+
+        rebuilt = faiss.IndexFlatL2(self.dimension)
+        if self._entries:
+            vectors = np.array(
+                [self._vectorizer.encode(e["text"]) for e in self._entries],
+                dtype=np.float32,
+            )
+            rebuilt.add(vectors)
+        self._index = rebuilt
+
     def save(self) -> None:
         """Persist the FAISS index and metadata to disk."""
         if not _FAISS_AVAILABLE or self._index is None:
@@ -211,6 +253,23 @@ class VectorMemoryStore:
 
         with open(self._metadata_path, encoding="utf-8") as f:
             self._entries = json.load(f)
+
+        if self._index.d != self.dimension:
+            # A dimension mismatch (e.g. the configured default changed
+            # across an upgrade while an old index remained on disk) would
+            # otherwise surface as an unhandled AssertionError deep inside
+            # FAISS on the next add()/search() call. Rebuild a fresh index
+            # at the configured dimension and re-embed the already-loaded
+            # entries' text rather than crashing or silently discarding them.
+            logger.warning(
+                "Vector index dimension mismatch (index=%d, configured=%d) "
+                "-- rebuilding index from %d persisted entries at the "
+                "configured dimension.",
+                self._index.d,
+                self.dimension,
+                len(self._entries),
+            )
+            self._rebuild_index_from_entries()
 
         logger.info("Vector index loaded: %d entries", len(self._entries))
 

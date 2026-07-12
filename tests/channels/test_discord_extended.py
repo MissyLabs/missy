@@ -30,9 +30,11 @@ All WebSocket and HTTP I/O is mocked.  No real network connections are made.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -652,6 +654,75 @@ class TestGatewayStartHeartbeat:
         assert old_task.cancelled()
 
 
+class TestGatewayHeartbeatAckEnforcement:
+    """Regression: Discord's Gateway protocol requires closing the
+    connection and reconnecting when an ACK for the previous heartbeat
+    hasn't arrived by the time the next one is due -- previously
+    _heartbeat_loop sent heartbeats forever regardless of whether any
+    ACK ever came back, so a half-open TCP connection (sends succeed
+    locally, nothing ever arrives) left the client in a zombie session
+    indefinitely. get_diagnostics()'s heartbeat_ack_overdue already
+    computed this condition; nothing acted on it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_missed_ack_closes_connection_and_stops_loop(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+
+        # No ACK is ever recorded -- every heartbeat after the first goes
+        # unacknowledged. Bounded by wait_for: pre-fix, _heartbeat_loop
+        # never returns at all (infinite `while True` with no exit
+        # condition), so this would hang forever without the timeout
+        # rather than merely assert something wrong.
+        await asyncio.wait_for(gw._heartbeat_loop(0.01), timeout=2.0)
+
+        mock_ws.close.assert_called_once()
+        assert gw._reconnect_count == 1
+        assert gw._last_disconnect_error == "heartbeat ACK timeout"
+        # Sent exactly one heartbeat (the first), then detected the
+        # still-missing ACK before a second send and closed instead.
+        assert mock_ws.send.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_acked_heartbeat_keeps_looping_without_closing(self):
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+
+        async def _fake_send() -> None:
+            gw._last_heartbeat_sent_at = time.time()
+            gw._last_heartbeat_ack_at = time.time()  # ACK "arrives" immediately
+            await mock_ws.send("{}")
+
+        gw._send_heartbeat = _fake_send  # type: ignore[method-assign]
+
+        task = asyncio.create_task(gw._heartbeat_loop(0.01))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        mock_ws.close.assert_not_called()
+        assert gw._reconnect_count == 0
+        assert mock_ws.send.call_count > 1
+
+    @pytest.mark.asyncio
+    async def test_first_iteration_sends_even_with_no_prior_heartbeat(self):
+        """_last_heartbeat_sent_at is None before the very first send --
+        must not be misread as a missed ACK and close immediately."""
+        gw = _make_gateway()
+        mock_ws = AsyncMock()
+        gw._ws = mock_ws
+        assert gw._last_heartbeat_sent_at is None
+
+        await asyncio.wait_for(gw._heartbeat_loop(0.01), timeout=2.0)
+
+        mock_ws.send.assert_called_once()
+        assert mock_ws.close.called  # still closes after the unacked send
+
+
 class TestGatewaySendHeartbeat:
     @pytest.mark.asyncio
     async def test_send_heartbeat_sends_correct_payload(self):
@@ -970,6 +1041,30 @@ class TestRestSendMessageRetry:
         with patch("time.sleep"), pytest.raises(Exception, match="429"):
             client.send_message("100000000000000001", "hello")
 
+    def test_exhausted_retries_on_persistent_429_with_retry_after_header_raises(self):
+        """Regression: when every 429 response carries a valid Retry-After
+        header, `delay` is set from it (not None) -- the exhaustion check
+        was previously nested inside `if delay is None:`, so it never ran.
+        The loop just slept and looped one more time on the final attempt;
+        the for-loop then ended and execution fell through to a bare,
+        uninformative "failed without exception" RuntimeError instead of
+        the real, logged httpx.HTTPStatusError every other exhaustion path
+        produces.
+        """
+        client, mock_http = _make_rest()
+
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.headers = {"Retry-After": "0.01"}
+        rate_limit_resp.raise_for_status.side_effect = Exception("429 Too Many Requests")
+
+        mock_http.post.return_value = rate_limit_resp
+
+        with patch("time.sleep"), pytest.raises(Exception, match="429"):
+            client.send_message("100000000000000001", "hello")
+
+        rate_limit_resp.raise_for_status.assert_called_once()
+
     def test_exception_in_send_retries_then_reraises(self):
         client, mock_http = _make_rest()
 
@@ -1026,6 +1121,106 @@ class TestRestSendMessageRetry:
         # parse list should be empty to suppress mention parsing
         assert call_kwargs["json"]["allowed_mentions"]["parse"] == []
         assert call_kwargs["json"]["allowed_mentions"]["users"] == []
+
+
+class TestRequestWithRetryAppliedToOtherEndpoints:
+    """Regression: previously only send_message retried on 429/502/503/504.
+    Every other REST method called response.raise_for_status() directly
+    with no retry, so a single transient rate-limit hiccup on e.g.
+    get_guild_roles (used for role-based access control) or add_reaction
+    failed the whole operation immediately. All GET/POST/PUT/PATCH/DELETE
+    call sites (except send_message, which has its own bespoke
+    exception-retry logic, upload_file, whose streaming file body can't
+    be safely re-sent without re-opening it, and trigger_typing, which is
+    deliberately best-effort/fire-and-forget) now share the same
+    Retry-After-aware backoff via _request_with_retry().
+    """
+
+    def test_get_guild_roles_retries_on_429_then_succeeds(self):
+        client, mock_http = _make_rest()
+
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.headers = {"Retry-After": "0.01"}
+
+        success_resp = MagicMock()
+        success_resp.status_code = 200
+        success_resp.json.return_value = [{"id": "role-1", "name": "Admin"}]
+        success_resp.raise_for_status.return_value = None
+
+        mock_http.get.side_effect = [rate_limit_resp, success_resp]
+
+        with patch("time.sleep"):
+            result = client.get_guild_roles("200000000000000002")
+
+        assert result == [{"id": "role-1", "name": "Admin"}]
+        assert mock_http.get.call_count == 2
+
+    def test_get_guild_roles_exhausted_retries_raises(self):
+        client, mock_http = _make_rest()
+
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.headers = {}
+        rate_limit_resp.raise_for_status.side_effect = Exception("429 Too Many Requests")
+        mock_http.get.return_value = rate_limit_resp
+
+        with patch("time.sleep"), pytest.raises(Exception, match="429"):
+            client.get_guild_roles("200000000000000002")
+
+        assert mock_http.get.call_count == 4  # 1 + len(backoffs)
+
+    def test_add_reaction_retries_on_503_then_succeeds(self):
+        client, mock_http = _make_rest()
+
+        bad_resp = MagicMock()
+        bad_resp.status_code = 503
+        bad_resp.headers = {}
+
+        good_resp = MagicMock()
+        good_resp.status_code = 204
+        good_resp.raise_for_status.return_value = None
+
+        mock_http.put.side_effect = [bad_resp, good_resp]
+
+        with patch("time.sleep"):
+            client.add_reaction("100000000000000001", "300000000000000003", "✅")
+
+        assert mock_http.put.call_count == 2
+
+    def test_create_thread_retries_on_502_then_succeeds(self):
+        client, mock_http = _make_rest()
+
+        bad_resp = MagicMock()
+        bad_resp.status_code = 502
+        bad_resp.headers = {}
+
+        good_resp = MagicMock()
+        good_resp.status_code = 200
+        good_resp.json.return_value = {"id": "thread-1"}
+        good_resp.raise_for_status.return_value = None
+
+        mock_http.post.side_effect = [bad_resp, good_resp]
+
+        with patch("time.sleep"):
+            result = client.create_thread("100000000000000001", "my-thread")
+
+        assert result["id"] == "thread-1"
+        assert mock_http.post.call_count == 2
+
+    def test_non_retryable_status_returns_immediately_without_sleeping(self):
+        client, mock_http = _make_rest()
+
+        forbidden_resp = MagicMock()
+        forbidden_resp.status_code = 403
+        forbidden_resp.raise_for_status.side_effect = Exception("403 Forbidden")
+        mock_http.get.return_value = forbidden_resp
+
+        with patch("time.sleep") as mock_sleep, pytest.raises(Exception, match="403"):
+            client.get_channel("100000000000000001")
+
+        mock_sleep.assert_not_called()
+        assert mock_http.get.call_count == 1
 
 
 class TestRestUploadFile:

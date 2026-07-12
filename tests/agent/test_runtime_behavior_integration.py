@@ -123,6 +123,29 @@ class TestBehaviorInRun:
         _run_with_mocks(rt, "Hey there!", provider)
         mock_interpreter.classify_intent.assert_called()
 
+    def test_topic_is_populated_from_attention_query(self):
+        """Regression: behavior_context["topic"] was hardcoded to "" at
+        this call site, so get_response_guidelines()'s "Technical topic
+        detected" branch (code/script/function/class/api keyword
+        matching) could never fire in production despite being fully
+        implemented and unit-tested in isolation. attention_query (the
+        AttentionSystem's extracted topics, falling back to user_input)
+        is already computed for memory relevance scoring -- it must now
+        also be threaded into behavior_context.
+        """
+        provider = _mock_provider("Hello!")
+        rt = AgentRuntime(_make_config())
+        mock_behavior = MagicMock()
+        mock_behavior.shape_system_prompt.side_effect = lambda base, ctx: base
+        mock_behavior.analyze_user_tone.return_value = "neutral"
+        rt._behavior = mock_behavior
+
+        _run_with_mocks(rt, "please write a python function for me", provider)
+
+        mock_behavior.shape_system_prompt.assert_called()
+        _, ctx = mock_behavior.shape_system_prompt.call_args[0]
+        assert ctx["topic"] != ""
+
     def test_none_subsystems_handled(self):
         provider = _mock_provider("Hello!")
         rt = AgentRuntime(_make_config())

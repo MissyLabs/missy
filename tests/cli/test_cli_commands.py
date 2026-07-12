@@ -22,12 +22,15 @@ tests do not require a real config file or running services.
 
 from __future__ import annotations
 
+import json
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
+from missy.channels.voice.registry import EdgeNode
 from missy.cli.main import cli
 from tests.cli.conftest import _make_cli_runner
 
@@ -170,6 +173,7 @@ class TestDoctor:
             mock_registry.list_providers.return_value = []
             mock_mgr = MagicMock()
             mock_mgr.list_jobs.return_value = [job, job]
+            mock_mgr.load_jobs.return_value = [job, job]
             with (
                 patch("missy.providers.registry.get_registry", return_value=mock_registry),
                 patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
@@ -356,6 +360,7 @@ class TestScheduleAdd:
         job.name = "Test Job"
         job.schedule = "every 5 minutes"
         job.provider = "anthropic"
+        job.capability_mode = "safe-chat"
         return job
 
     def test_schedule_add_exits_zero(self, runner: CliRunner):
@@ -407,6 +412,101 @@ class TestScheduleAdd:
                 ],
             )
         assert "Test Job" in result.output or "Job added" in result.output
+
+    def test_schedule_add_defaults_capability_mode_to_safe_chat(self, runner: CliRunner):
+        """SR-2.1 regression: `missy schedule add` without --capability-mode
+        must forward "safe-chat" to add_job(), not leave the caller to
+        pick up whatever SchedulerManager.add_job()'s own default is
+        implicitly -- the CLI's advertised default and the manager's
+        actual default must agree.
+        """
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        mock_mgr.add_job.return_value = self._make_job()
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                ],
+            )
+        mock_mgr.add_job.assert_called_once_with(
+            name="Test Job",
+            schedule="every 5 minutes",
+            task="Check the news",
+            provider="anthropic",
+            capability_mode="safe-chat",
+        )
+
+    def test_schedule_add_explicit_full_capability_mode(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        mock_mgr = MagicMock()
+        job = self._make_job()
+        job.capability_mode = "full"
+        mock_mgr.add_job.return_value = job
+        with (
+            _SubsystemsPatch(),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                    "--capability-mode",
+                    "full",
+                ],
+            )
+        assert result.exit_code == 0
+        mock_mgr.add_job.assert_called_once_with(
+            name="Test Job",
+            schedule="every 5 minutes",
+            task="Check the news",
+            provider="anthropic",
+            capability_mode="full",
+        )
+
+    def test_schedule_add_rejects_invalid_capability_mode(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        with _SubsystemsPatch():
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    cfg_path,
+                    "schedule",
+                    "add",
+                    "--name",
+                    "Test Job",
+                    "--schedule",
+                    "every 5 minutes",
+                    "--task",
+                    "Check the news",
+                    "--capability-mode",
+                    "root-access",
+                ],
+            )
+        assert result.exit_code != 0
 
     def test_schedule_add_invalid_schedule_exits_one(self, runner: CliRunner):
         cfg_path = _write_temp_config()
@@ -690,6 +790,151 @@ class TestAuditRecent:
 
 
 # ===========================================================================
+# missy audit verify (SR-1.1)
+# ===========================================================================
+
+
+class TestAuditVerify:
+    """Real AgentIdentity + real AuditLogger writes, not mocked -- this
+    command's entire purpose is cryptographic verification, so mocking
+    verify_audit_log() would defeat the point of testing it."""
+
+    def _write_signed_log(self, tmp_path, key_path, log_path, events):
+
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+        from missy.security.identity import AgentIdentity
+
+        identity = AgentIdentity.load_or_generate(str(key_path))
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=identity)
+        for event_type, category, result, detail in events:
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type=event_type,
+                    category=category,
+                    result=result,
+                    detail=detail,
+                )
+            )
+        return identity
+
+    def test_verify_clean_log_reports_valid(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [("network.request", "network", "allow", {"host": "example.com"})],
+        )
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 0
+        assert "valid: 1" in result.output
+        assert "No tampering detected" in result.output
+
+    def test_verify_tampered_log_exits_nonzero_and_reports_tampered(
+        self, runner: CliRunner, tmp_path, monkeypatch
+    ):
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [("shell.exec", "shell", "deny", {"command": "rm -rf /"})],
+        )
+        # Reproduce the review's exact tamper PoC via the CLI path too.
+        record = _json.loads(log_path.read_text().splitlines()[0])
+        record["result"] = "allow"
+        log_path.write_text(_json.dumps(record) + "\n")
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 1
+        assert "tampered: 1" in result.output
+        assert "shell.exec" in result.output
+
+    def test_verify_reordered_log_exits_nonzero_and_reports_chain_break(
+        self, runner: CliRunner, tmp_path, monkeypatch
+    ):
+        """Regression: per-line signatures alone catch content tampering
+        but not reordering -- two validly-signed lines swapped in
+        position must still be caught and surfaced, via the hash chain,
+        not silently reported as fully valid.
+        """
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            tmp_path,
+            key_path,
+            log_path,
+            [
+                ("event.a", "test", "allow", {}),
+                ("event.b", "test", "allow", {}),
+                ("event.c", "test", "allow", {}),
+            ],
+        )
+        lines = log_path.read_text().splitlines()
+        lines[1], lines[2] = lines[2], lines[1]
+        log_path.write_text("\n".join(lines) + "\n")
+        # Every individual line still parses and its own signature still
+        # verifies -- the point of this test is that reordering alone
+        # (no content edits) must still be caught.
+        for ln in lines:
+            _json.loads(ln)
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 1
+        assert "valid: 3" in result.output
+        assert "out of sequence" in result.output.lower()
+
+    def test_verify_empty_log_message(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "does_not_exist.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "audit", "verify"])
+
+        assert result.exit_code == 0
+        assert "empty or does not exist" in result.output
+
+    def test_verify_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["audit", "verify", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
 # missy logs
 # ===========================================================================
 
@@ -739,11 +984,47 @@ class TestLogs:
 
 
 class TestSessionsCleanup:
+    def test_sessions_cleanup_actually_deletes_from_real_store(self, runner: CliRunner, tmp_path):
+        """SR-3.5 regression: `missy sessions cleanup` previously always
+        no-op'd (it constructed the legacy JSON MemoryStore, which has no
+        cleanup() method, so a hasattr() guard silently skipped deletion
+        on every invocation). This test uses a real SQLiteMemoryStore
+        against a real temp DB and confirms an old turn is actually
+        removed and a recent turn is preserved -- not just that a mock's
+        .cleanup() was called.
+        """
+        from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+
+        db_path = str(tmp_path / "memory.db")
+        store = SQLiteMemoryStore(db_path)
+        old_turn = ConversationTurn.new("sess1", "user", "old message")
+        old_turn.timestamp = "2020-01-01T00:00:00"
+        store.add_turn(old_turn)
+        store.add_turn(ConversationTurn.new("sess1", "user", "recent message"))
+
+        cfg_path = _write_temp_config()
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store),
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "sessions", "cleanup", "--older-than", "30"]
+            )
+
+        assert result.exit_code == 0
+        assert "1" in result.output
+        remaining = store.get_session_turns("sess1", limit=10)
+        assert len(remaining) == 1
+        assert remaining[0].content == "recent message"
+
     def test_sessions_cleanup_exits_zero(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert result.exit_code == 0
 
@@ -751,14 +1032,20 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 42
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(cli, ["--config", cfg_path, "sessions", "cleanup"])
         assert "42" in result.output
 
     def test_sessions_cleanup_dry_run_does_not_delete(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             result = runner.invoke(
                 cli,
                 ["--config", cfg_path, "sessions", "cleanup", "--dry-run"],
@@ -771,7 +1058,10 @@ class TestSessionsCleanup:
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
         mock_store.cleanup.return_value = 0
-        with _SubsystemsPatch(), patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with (
+            _SubsystemsPatch(),
+            patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
+        ):
             runner.invoke(
                 cli,
                 [
@@ -814,6 +1104,45 @@ class TestApprovalsList:
 
     def test_approvals_list_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["approvals", "list", "--help"])
+        assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy discord pairing list / approve / deny (task #12)
+# ===========================================================================
+
+
+class TestDiscordPairingCli:
+    def test_pairing_list_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list"])
+        assert result.exit_code == 0
+
+    def test_pairing_list_no_gateway_message(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list"])
+        assert "gateway" in result.output.lower() or "No active" in result.output
+
+    def test_pairing_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_list_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "list", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_approve_no_gateway_exits_nonzero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "approve", "12345"])
+        assert result.exit_code != 0
+
+    def test_pairing_deny_no_gateway_exits_nonzero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "deny", "12345"])
+        assert result.exit_code != 0
+
+    def test_pairing_approve_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "approve", "--help"])
+        assert result.exit_code == 0
+
+    def test_pairing_deny_help_exits_zero(self, runner: CliRunner):
+        result = runner.invoke(cli, ["discord", "pairing", "deny", "--help"])
         assert result.exit_code == 0
 
 
@@ -1051,15 +1380,141 @@ class TestMcpRemove:
         assert result.exit_code == 0
 
 
+class TestMcpRealManagerEndToEnd:
+    """The tests above all mock McpManager itself by hand, setting
+    mock_mgr.list_servers.return_value/mock_mgr.add_server.return_value
+    directly -- this passes regardless of whether connect_all() was ever
+    called, so it cannot catch the real bug: McpManager() starts with an
+    empty in-memory self._clients dict, populated only by connect_all()
+    loading ~/.missy/mcp.json. Without calling connect_all() first,
+    `mcp list` always reported "No MCP servers configured" even with a
+    populated mcp.json, `mcp remove NAME` was a silent no-op (never
+    touched mcp.json), and worst of all `mcp add NEW` silently destroyed
+    every previously-configured server, since add_server()'s
+    _save_config() rewrites mcp.json from scratch using only the
+    currently in-memory clients. These tests exercise the real,
+    unmocked McpManager against a real mcp.json file (only McpClient
+    itself is mocked, since it would otherwise need a live MCP server
+    subprocess) -- the only way to catch a bug like this.
+    """
+
+    def _mock_client_factory(self, name, command=None, url=None):
+        client = MagicMock()
+        client.name = name
+        client._command = command
+        client._url = url
+        client.tools = []
+        client.alive = True
+        return client
+
+    def _set_up(self, monkeypatch: pytest.MonkeyPatch, tmp_path, mcp_entries: list[dict]) -> str:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        missy_dir = tmp_path / ".missy"
+        missy_dir.mkdir(parents=True, exist_ok=True)
+        mcp_json = missy_dir / "mcp.json"
+        mcp_json.write_text(json.dumps(mcp_entries))
+        mcp_json.chmod(0o600)
+        return str(mcp_json)
+
+    def test_mcp_list_shows_existing_servers(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        self._set_up(monkeypatch, tmp_path, [{"name": "real-server", "command": "cat"}])
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "list"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "real-server" in result.output
+
+    def test_mcp_add_preserves_existing_servers(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        mcp_json = self._set_up(
+            monkeypatch, tmp_path, [{"name": "existing-server", "command": "cat"}]
+        )
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(
+                cli, ["--config", cfg_path, "mcp", "add", "newserver", "--command", "echo hi"]
+            )
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        saved = json.loads(Path(mcp_json).read_text())
+        names = {entry["name"] for entry in saved}
+        assert names == {"existing-server", "newserver"}
+
+    def test_mcp_remove_actually_modifies_config(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        cfg_path = _write_temp_config()
+        mcp_json = self._set_up(
+            monkeypatch,
+            tmp_path,
+            [
+                {"name": "keep-me", "command": "cat"},
+                {"name": "remove-me", "command": "cat"},
+            ],
+        )
+
+        with (
+            _SubsystemsPatch(),
+            patch("missy.mcp.manager.McpClient", side_effect=self._mock_client_factory),
+        ):
+            result = runner.invoke(cli, ["--config", cfg_path, "mcp", "remove", "remove-me"])
+
+        assert result.exit_code == 0
+        assert result.exception is None
+        saved = json.loads(Path(mcp_json).read_text())
+        names = {entry["name"] for entry in saved}
+        assert names == {"keep-me"}
+
+
 # ===========================================================================
 # missy devices list / pair / unpair / status / policy
 # ===========================================================================
 
 
+def _edge_node(spec: dict) -> EdgeNode:
+    """Build a real EdgeNode from the shorthand dict shape used by these tests."""
+    return EdgeNode(
+        node_id=spec.get("node_id", ""),
+        friendly_name=spec.get("name", spec.get("friendly_name", "")),
+        room=spec.get("room", ""),
+        ip_address=spec.get("ip_address", ""),
+        paired=spec.get("paired", False),
+        policy_mode=spec.get("policy", spec.get("policy_mode", "full")),
+        last_seen=spec.get("last_seen") or 0.0,
+        status="online" if spec.get("online") else "offline",
+        sensor_data={
+            "occupancy": spec.get("occupancy"),
+            "noise_level": spec.get("noise_level"),
+            "updated_at": 0.0,
+        },
+    )
+
+
 def _make_mock_registry(nodes: list[dict] | None = None) -> MagicMock:
-    """Return a mock DeviceRegistry that returns the given node dicts."""
+    """Return a mock DeviceRegistry backed by real EdgeNode instances,
+    matching DeviceRegistry's real list_nodes()/list_paired()/
+    list_pending()/get_node() API.
+    """
+    edge_nodes = [_edge_node(n) for n in (nodes or [])]
     reg = MagicMock()
-    reg.all.return_value = nodes or []
+    reg.list_nodes.return_value = edge_nodes
+    reg.list_paired.return_value = [n for n in edge_nodes if n.paired]
+    reg.list_pending.return_value = [n for n in edge_nodes if not n.paired]
+    reg.get_node.side_effect = lambda nid: next((n for n in edge_nodes if n.node_id == nid), None)
     return reg
 
 
@@ -1135,7 +1590,7 @@ class TestDevicesPair:
     def test_devices_pair_with_node_id(self, runner: CliRunner):
         reg = _make_mock_registry([])
         mock_pairing = MagicMock()
-        mock_pairing.approve.return_value = "tok123"
+        mock_pairing.approve_pairing.return_value = "tok123"
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg),
             patch("missy.channels.voice.pairing.PairingManager", return_value=mock_pairing),
@@ -1148,7 +1603,7 @@ class TestDevicesPair:
     def test_devices_pair_approval_failure_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
         mock_pairing = MagicMock()
-        mock_pairing.approve.side_effect = RuntimeError("node not found")
+        mock_pairing.approve_pairing.side_effect = RuntimeError("node not found")
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg),
             patch("missy.channels.voice.pairing.PairingManager", return_value=mock_pairing),
@@ -1163,14 +1618,14 @@ class TestDevicesPair:
 
 class TestDevicesUnpair:
     def test_devices_unpair_exits_zero(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "unpair", "--yes", "mynode"])
         assert result.exit_code == 0
+        reg.remove_node.assert_called_once_with("mynode")
 
     def test_devices_unpair_node_not_found_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
-        reg.remove.side_effect = KeyError("mynode")
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "unpair", "--yes", "mynode"])
         assert result.exit_code == 1
@@ -1217,21 +1672,21 @@ class TestDevicesStatus:
 
 class TestDevicesPolicy:
     def test_devices_policy_full_mode(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "full"])
         assert result.exit_code == 0
-        reg.set_policy.assert_called_once_with("mynode", "full")
+        reg.update_node.assert_called_once_with("mynode", policy_mode="full")
 
     def test_devices_policy_muted_mode(self, runner: CliRunner):
-        reg = _make_mock_registry([])
+        reg = _make_mock_registry([{"node_id": "mynode", "name": "X"}])
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "muted"])
         assert result.exit_code == 0
 
     def test_devices_policy_node_not_found_exits_one(self, runner: CliRunner):
         reg = _make_mock_registry([])
-        reg.set_policy.side_effect = KeyError("mynode")
+        reg.update_node.side_effect = KeyError("mynode")
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["devices", "policy", "mynode", "--mode", "muted"])
         assert result.exit_code == 1
@@ -1264,7 +1719,10 @@ class TestVoiceStatus:
 
     def test_voice_status_shows_paired_count(self, runner: CliRunner):
         cfg_path = _write_temp_config()
-        nodes = [{"paired": True}, {"paired": False}]
+        nodes = [
+            {"node_id": "n1", "name": "A", "paired": True},
+            {"node_id": "n2", "name": "B", "paired": False},
+        ]
         reg = _make_mock_registry(nodes)
         with patch("missy.channels.voice.registry.DeviceRegistry", return_value=reg):
             result = runner.invoke(cli, ["--config", cfg_path, "voice", "status"])
@@ -1316,6 +1774,119 @@ class TestVoiceTest:
     def test_voice_test_help_exits_zero(self, runner: CliRunner):
         result = runner.invoke(cli, ["voice", "test", "--help"])
         assert result.exit_code == 0
+
+
+class TestDevicesAndVoiceRealRegistryEndToEnd:
+    """Every devices/voice test above mocks DeviceRegistry/PairingManager by
+    hand, which previously encoded the CLI's own bug into the mock's
+    interface (`.all()`, `.remove()`, `.set_policy()`, `.approve()` --
+    none of which exist on the real classes, which use `list_nodes()`,
+    `remove_node()`, `update_node()`, `approve_pairing()` and return
+    `EdgeNode` dataclass instances, not dicts) -- so every mocked test
+    passed while every real invocation crashed with `AttributeError`.
+    These tests exercise the real, unmocked `DeviceRegistry`/
+    `PairingManager` against a temp-file-backed registry, the only way to
+    actually catch a CLI/class interface mismatch like that one.
+    """
+
+    def _set_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / ".missy").mkdir(parents=True, exist_ok=True)
+
+    def test_devices_list_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-1234",
+                friendly_name="Real Living Room",
+                room="Living Room",
+                ip_address="192.168.1.50",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "list"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        # Rich may wrap the name across table cell lines in a narrow terminal.
+        assert "Real" in result.output
+        assert "Living" in result.output
+
+    def test_devices_pair_and_unpair_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-5678",
+                friendly_name="Real Kitchen",
+                room="Kitchen",
+                ip_address="192.168.1.51",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "pair", "--node-id", "real-node-5678"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "approved" in result.output.lower()
+
+        result = runner.invoke(cli, ["devices", "unpair", "--yes", "real-node-5678"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "removed" in result.output.lower()
+
+        result = runner.invoke(cli, ["devices", "unpair", "--yes", "real-node-5678"])
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_devices_status_and_policy_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        from missy.channels.voice.registry import DeviceRegistry, EdgeNode
+
+        reg = DeviceRegistry(registry_path=str(tmp_path / ".missy" / "devices.json"))
+        reg.load()
+        reg.add_node(
+            EdgeNode(
+                node_id="real-node-9999",
+                friendly_name="Real Office",
+                room="Office",
+                ip_address="192.168.1.52",
+            )
+        )
+        reg.save()
+
+        result = runner.invoke(cli, ["devices", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        # Rich may wrap the name across table cell lines in a narrow terminal.
+        assert "Real" in result.output
+        assert "Office" in result.output
+
+        result = runner.invoke(cli, ["devices", "policy", "real-node-9999", "--mode", "safe-chat"])
+        assert result.exit_code == 0
+        assert result.exception is None
+        assert "safe-chat" in result.output
+
+    def test_voice_status_against_real_registry(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._set_home(monkeypatch, tmp_path)
+        result = runner.invoke(cli, ["voice", "status"])
+        assert result.exit_code == 0
+        assert result.exception is None
 
 
 # ===========================================================================
@@ -2119,3 +2690,184 @@ class TestDoctorBranches:
             ):
                 result = runner.invoke(cli, ["--config", cfg_path, "doctor"])
         assert result.exit_code == 0
+
+
+# ===========================================================================
+# missy doctor — audit signing status (SR-1.1/SR-4.6 residual)
+#
+# Previously `missy doctor` only checked whether the audit log *file*
+# existed, saying nothing about whether it's actually tamper-evident.
+# `missy audit verify` already existed for this, but an operator had to
+# know to run it separately -- `doctor` (the "am I healthy" command) gave
+# no hint anything needed checking. These tests exercise the real
+# AuditLogger write path and real AgentIdentity Ed25519 signing/
+# verification, not mocks -- mocking verify_audit_log() would defeat the
+# point of testing this row.
+# ===========================================================================
+
+
+class TestDoctorAuditSigning:
+    def _write_signed_log(self, key_path, log_path, events):
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+        from missy.security.identity import AgentIdentity
+
+        identity = AgentIdentity.load_or_generate(str(key_path))
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=identity)
+        for event_type, category, result, detail in events:
+            bus.publish(
+                AuditEvent.now(
+                    session_id="s1",
+                    task_id="t1",
+                    event_type=event_type,
+                    category=category,
+                    result=result,
+                    detail=detail,
+                )
+            )
+        return identity
+
+    def _invoke_doctor(self, runner, cfg_path, cfg):
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = []
+        mock_mgr = MagicMock()
+        mock_mgr.list_jobs.return_value = []
+        with (
+            _SubsystemsPatch(cfg),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+            patch("missy.scheduler.manager.SchedulerManager", return_value=mock_mgr),
+        ):
+            return runner.invoke(cli, ["--config", cfg_path, "doctor"])
+
+    def test_all_lines_signed_and_valid_shows_ok(self, runner: CliRunner, tmp_path, monkeypatch):
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [("network.request", "network", "allow", {"host": "example.com"})],
+        )
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "valid=1" in result.output
+
+    def test_tampered_line_shows_fail(self, runner: CliRunner, tmp_path, monkeypatch):
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [("shell.exec", "shell", "deny", {"command": "rm -rf /"})],
+        )
+        # Tamper: flip the recorded result from deny to allow after signing,
+        # reproducing the exact attack the security review demonstrated.
+        lines = log_path.read_text().splitlines()
+        record = _json.loads(lines[0])
+        record["result"] = "allow"
+        log_path.write_text(_json.dumps(record) + "\n")
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0  # doctor reports, never crashes/exits nonzero
+        assert "audit signing" in result.output.lower()
+        assert "tampered=1" in result.output
+        assert "FAIL" in result.output
+
+    def test_reordered_lines_show_fail(self, runner: CliRunner, tmp_path, monkeypatch):
+        """Regression: reordering two validly-signed lines (no content
+        edits) must still be surfaced as a FAIL, via the hash chain --
+        per-line signature checks alone would report this log fully
+        valid.
+        """
+        import json as _json
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+        self._write_signed_log(
+            key_path,
+            log_path,
+            [
+                ("event.a", "test", "allow", {}),
+                ("event.b", "test", "allow", {}),
+                ("event.c", "test", "allow", {}),
+            ],
+        )
+        lines = log_path.read_text().splitlines()
+        lines[1], lines[2] = lines[2], lines[1]
+        log_path.write_text("\n".join(lines) + "\n")
+        for ln in lines:
+            _json.loads(ln)  # still individually well-formed/parseable
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0  # doctor reports, never crashes/exits nonzero
+        assert "audit signing" in result.output.lower()
+        assert "valid=3" in result.output
+        assert "out of sequence" in result.output.lower()
+        assert "FAIL" in result.output
+
+    def test_unsigned_lines_show_warn(self, runner: CliRunner, tmp_path, monkeypatch):
+        """A log written before signing was enabled (or with no identity
+        configured) must not be silently reported as healthy -- it
+        provides no tamper evidence at all."""
+        from missy.core.events import AuditEvent, EventBus
+        from missy.observability.audit_logger import AuditLogger
+
+        key_path = tmp_path / "identity.pem"
+        log_path = tmp_path / "audit.jsonl"
+        monkeypatch.setattr("missy.security.identity.DEFAULT_KEY_PATH", str(key_path))
+
+        bus = EventBus()
+        AuditLogger(log_path=str(log_path), bus=bus, identity=None)  # no identity => unsigned
+        bus.publish(
+            AuditEvent.now(
+                session_id="s1",
+                task_id="t1",
+                event_type="network.request",
+                category="network",
+                result="allow",
+                detail={},
+            )
+        )
+
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = str(log_path)
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "unsigned=1" in result.output
+        assert "WARN" in result.output
+
+    def test_missing_audit_log_shows_warn_not_fail(self, runner: CliRunner):
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        cfg.audit_log_path = "/nonexistent/audit.jsonl"
+
+        result = self._invoke_doctor(runner, cfg_path, cfg)
+
+        assert result.exit_code == 0
+        assert "audit signing" in result.output.lower()
+        assert "WARN" in result.output

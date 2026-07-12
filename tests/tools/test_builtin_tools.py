@@ -138,6 +138,40 @@ class TestFileReadTool:
         assert result.success is True
         assert "Truncated" not in result.output
 
+    def test_read_multibyte_content_truncation_matches_byte_budget(self, tmp_path: Path) -> None:
+        """max_bytes is documented as a byte limit. Pre-fix, the tool read
+        up to max_bytes *characters* via a text-mode fh.read(), so for
+        multi-byte UTF-8 content the whole (smaller-in-chars) file could be
+        read in full while the byte-size-based truncation check still
+        falsely reported "Truncated" -- and conversely, the tool could
+        silently return far more than max_bytes bytes worth of content.
+        Genuine truncation must now happen at the real byte boundary.
+        """
+        content = "\U0001f600" * 30_000  # 4 bytes/char -> 120,000 bytes total
+        target = tmp_path / "emoji.txt"
+        target.write_text(content, encoding="utf-8")
+
+        result = FileReadTool().execute(path=str(target), max_bytes=65_536)
+
+        assert result.success is True
+        assert "Truncated" in result.output
+        body = result.output.split("\n[Truncated")[0]
+        # The returned body must reflect a genuine byte-bounded read, not
+        # the entire (smaller-in-characters) file content.
+        assert body != content
+        assert len(body.encode("utf-8")) <= 65_536
+
+    def test_read_multibyte_content_within_byte_limit_not_truncated(self, tmp_path: Path) -> None:
+        content = "\U0001f600" * 100  # 400 bytes total, well under max_bytes
+        target = tmp_path / "emoji_small.txt"
+        target.write_text(content, encoding="utf-8")
+
+        result = FileReadTool().execute(path=str(target), max_bytes=65_536)
+
+        assert result.success is True
+        assert "Truncated" not in result.output
+        assert result.output == content
+
     # ------------------------------------------------------------------
     # Error paths
     # ------------------------------------------------------------------
@@ -1137,7 +1171,7 @@ class TestSelfCreateTool:
             result = mod.SelfCreateTool().execute(action="list")
 
         assert result.success is True
-        assert "no custom tools" in result.output.lower()
+        assert "no custom tool proposals" in result.output.lower()
 
     def test_list_tools_action_shows_existing(self, tmp_path: Path) -> None:
         import missy.tools.builtin.self_create_tool as mod

@@ -97,6 +97,9 @@ class DiscordAccountConfig:
         allow_bots_if_mention_only: When ``True`` and ``ignore_bots`` is
             ``True``, bot messages that explicitly @-mention this bot are
             not ignored.
+        rate_limit_per_minute: Maximum commands (slash or
+            natural-language) a single Discord user may trigger per
+            minute. ``0`` disables per-user rate limiting entirely.
     """
 
     token_env_var: str = "DISCORD_BOT_TOKEN"
@@ -110,6 +113,8 @@ class DiscordAccountConfig:
     ignore_bots: bool = True
     allow_bots_if_mention_only: bool = False
     auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
+    rate_limit_per_minute: int = 10  # 0 = disabled
+    vault_dir: str = "~/.missy/secrets"  # must match the config's vault.vault_dir
 
     def resolve_token(self) -> str | None:
         """Return the bot token — checks direct token, env var, and vault in order.
@@ -124,7 +129,7 @@ class DiscordAccountConfig:
                     from missy.security.vault import Vault
 
                     key = self.token[len("vault://") :]
-                    return Vault().get(key)
+                    return Vault(self.vault_dir).get(key)
                 except Exception:
                     import logging
 
@@ -157,9 +162,11 @@ class DiscordConfig:
 
 def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     """Construct a :class:`DiscordGuildPolicy` from a raw YAML dict."""
+    from missy.config.settings import _coerce_bool
+
     return DiscordGuildPolicy(
-        enabled=bool(data.get("enabled", True)),
-        require_mention=bool(data.get("require_mention", False)),
+        enabled=_coerce_bool(data.get("enabled"), True),
+        require_mention=_coerce_bool(data.get("require_mention"), False),
         allowed_channels=list(data.get("allowed_channels", [])),
         allowed_roles=list(data.get("allowed_roles", [])),
         allowed_users=list(data.get("allowed_users", [])),
@@ -167,8 +174,12 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     )
 
 
-def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
+def _parse_account(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> DiscordAccountConfig:
     """Construct a :class:`DiscordAccountConfig` from a raw YAML dict."""
+    from missy.config.settings import _coerce_bool
+
     raw_dm_policy = data.get("dm_policy", "disabled")
     try:
         dm_policy = DiscordDMPolicy(raw_dm_policy)
@@ -190,28 +201,39 @@ def _parse_account(data: dict[str, Any]) -> DiscordAccountConfig:
         dm_policy=dm_policy,
         dm_allowlist=list(data.get("dm_allowlist", [])),
         ack_reaction=str(data.get("ack_reaction", "")),
-        ignore_bots=bool(data.get("ignore_bots", True)),
-        allow_bots_if_mention_only=bool(data.get("allow_bots_if_mention_only", False)),
+        ignore_bots=_coerce_bool(data.get("ignore_bots"), True),
+        allow_bots_if_mention_only=_coerce_bool(data.get("allow_bots_if_mention_only"), False),
         auto_thread_threshold=int(data.get("auto_thread_threshold", 0)),
+        rate_limit_per_minute=int(data.get("rate_limit_per_minute", 10)),
+        vault_dir=vault_dir,
     )
 
 
-def parse_discord_config(data: dict[str, Any]) -> DiscordConfig:
+def parse_discord_config(
+    data: dict[str, Any], vault_dir: str = "~/.missy/secrets"
+) -> DiscordConfig:
     """Parse a ``discord:`` YAML section into a :class:`DiscordConfig`.
 
     Args:
         data: The raw dict from the YAML ``discord:`` key.
+        vault_dir: The vault directory from the same config file's
+            ``vault.vault_dir`` setting, threaded through so each
+            account's ``resolve_token()`` opens the same vault the user
+            actually configured rather than always defaulting to
+            ``~/.missy/secrets``.
 
     Returns:
         A populated :class:`DiscordConfig`.
     """
+    from missy.config.settings import _coerce_bool
+
     if not isinstance(data, dict):
         return DiscordConfig()
 
     raw_accounts = data.get("accounts") or []
-    accounts = [_parse_account(a) for a in raw_accounts if isinstance(a, dict)]
+    accounts = [_parse_account(a, vault_dir=vault_dir) for a in raw_accounts if isinstance(a, dict)]
 
     return DiscordConfig(
         accounts=accounts,
-        enabled=bool(data.get("enabled", False)),
+        enabled=_coerce_bool(data.get("enabled"), False),
     )

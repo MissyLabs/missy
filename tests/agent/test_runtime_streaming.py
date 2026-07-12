@@ -42,6 +42,81 @@ class TestRunStream:
             assert len(chunks) == 3
             assert "".join(chunks) == "Hello!"
 
+    def test_run_stream_enforces_budget_before_streaming(self, mock_registry):
+        """Regression: _single_turn()/_tool_loop() both check budget before
+        every paid provider call, but run_stream()'s streaming path called
+        provider.stream() directly with no pre-flight budget check at all --
+        a session already over max_spend_usd could still stream indefinitely
+        through this path. Seed the session's tracker with cost already at
+        the configured cap, then confirm run_stream() raises
+        BudgetExceededError before ever calling provider.stream().
+        """
+        from missy.agent.cost_tracker import BudgetExceededError
+
+        registry, provider = mock_registry
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test", max_spend_usd=0.01))
+
+        # _resolve_session() derives a stable UUID5 from the caller-supplied
+        # session_id string (create_session_with_id) -- the actual tracker
+        # key run_stream() will use is that derived session.id, not the raw
+        # string passed in.
+        real_sid = str(agent._session_mgr.create_session_with_id("budget-test-session").id)
+        tracker = agent._get_cost_tracker(real_sid)
+        # Directly seed the accumulated total rather than depending on the
+        # pricing table recognizing a specific model name -- what matters
+        # here is only that the session is already at/over its cap.
+        tracker._total_cost = 0.02
+        assert tracker._total_cost >= 0.01  # already at/over the cap
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+            pytest.raises(BudgetExceededError),
+        ):
+            list(agent.run_stream("Hello", session_id="budget-test-session"))
+
+        provider.stream.assert_not_called()
+
+    def test_run_stream_does_not_duplicate_content_on_mid_stream_failure(self, mock_registry):
+        """Regression: the except-block fallback previously re-generated
+        and yielded the ENTIRE response via _single_turn() regardless of
+        whether some chunks had already been streamed to the caller. A
+        connection drop mid-response (after partial output was already
+        yielded) produced the already-streamed partial text followed by a
+        full duplicate/overlapping re-generation. Once any chunk has been
+        yielded, a later stream failure must not trigger the full-response
+        fallback.
+        """
+        registry, provider = mock_registry
+
+        def _stream(messages, system=""):
+            yield "Hello "
+            raise RuntimeError("connection dropped")
+
+        provider.stream = MagicMock(side_effect=_stream)
+        provider.complete.return_value = CompletionResponse(
+            content="FULL DUPLICATE RESPONSE",
+            model="test-model",
+            provider="test",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            raw={},
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test"))
+            chunks = list(agent.run_stream("Hello"))
+
+        assert chunks == ["Hello "]
+        assert "FULL DUPLICATE RESPONSE" not in chunks
+        provider.complete.assert_not_called()
+
     def test_run_stream_falls_back_on_error(self, mock_registry):
         registry, provider = mock_registry
         provider.stream.side_effect = Exception("Stream failed")
@@ -162,5 +237,5 @@ class TestCostPersistence:
                 raw={},
             )
             agent._record_cost(response, session_id="sess-123")
-            # Cost tracker should have recorded
-            assert agent._cost_tracker.call_count == 1
+            # This session's cost tracker should have recorded
+            assert agent._get_cost_tracker("sess-123").call_count == 1

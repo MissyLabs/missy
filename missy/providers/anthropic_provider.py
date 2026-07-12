@@ -65,6 +65,30 @@ class AnthropicProvider(BaseProvider):
         self._timeout: int = config.timeout
         self._client: Any | None = None
 
+    @property
+    def api_key(self) -> str | None:
+        """Return the active API key, if one is configured directly."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        """Update the API key and force the SDK client to be rebuilt.
+
+        ``ProviderRegistry.rotate_key()`` prefers this property (via
+        ``hasattr(provider, "api_key")``) over setting ``_api_key``
+        directly. Without it, rotation silently mutated ``_api_key`` while
+        ``_make_client()``'s ``if self._client is None`` cache kept serving
+        the already-built client constructed with the *old* key -- the
+        Anthropic SDK reads its API key off the cached client at request
+        time, not off this provider object, so a rotation-then-retry (the
+        real path in ``AgentRuntime._call_provider_with_fallback()`` on an
+        auth failure) resent the request with the same failed key and the
+        rotation had no real effect despite emitting a
+        ``agent.provider.key_rotated`` audit event claiming success.
+        """
+        self._api_key = value
+        self._client = None
+
     # ------------------------------------------------------------------
     # BaseProvider interface
     # ------------------------------------------------------------------
@@ -153,9 +177,8 @@ class AnthropicProvider(BaseProvider):
         # Forward any remaining provider-specific kwargs
         call_kwargs.update(kwargs)
 
-        self._acquire_rate_limit(
-            estimated_tokens=self._estimate_tokens(messages, system_content or "")
-        )
+        estimated_tokens = self._estimate_tokens(messages, system_content or "")
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -201,7 +224,7 @@ class AnthropicProvider(BaseProvider):
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def get_tool_schema(self, tools: list) -> list:
@@ -298,9 +321,8 @@ class AnthropicProvider(BaseProvider):
         if system_content:
             call_kwargs["system"] = system_content
 
-        self._acquire_rate_limit(
-            estimated_tokens=self._estimate_tokens(messages, system_content or "")
-        )
+        estimated_tokens = self._estimate_tokens(messages, system_content or "")
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
         try:
             client = self._make_client()
@@ -358,7 +380,7 @@ class AnthropicProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
-        self._record_rate_limit_usage(response)
+        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
         return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
@@ -394,6 +416,8 @@ class AnthropicProvider(BaseProvider):
         }
         if system_content:
             call_kwargs["system"] = system_content
+
+        self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
 
         try:
             client = self._make_client()

@@ -246,6 +246,31 @@ class TestFindElement:
         result = _find_element(bad_app, name="x", role=None)
         assert result is None
 
+    def test_default_max_depth_reaches_real_world_gtk4_button_depth(self):
+        """Regression for a real bug found live during task #10 validation:
+        _find_element's previous default max_depth=10 was one level too
+        shallow for a genuine, currently-installed GTK4 application
+        (gnome-calculator) -- live AT-SPI tree inspection found its push
+        buttons nested at depth 11 (application -> frame -> 9 levels of
+        container panels -> push button), so atspi_click/atspi_set_value
+        silently reported "Element not found" for real, present, correctly
+        named/exposed buttons. This builds an 11-level-deep chain (matching
+        the real depth measured) and asserts the target is still found
+        under the tool's *default* max_depth, not a caller-supplied override."""
+        from missy.tools.builtin.atspi_tools import _find_element
+
+        target = _make_accessible("5", role_name="push button", child_count=0)
+        node = target
+        # Wrap the target in 10 nesting container levels (depth 0..10),
+        # so the target itself sits at depth 11.
+        for _ in range(10):
+            parent = _make_accessible("", role_name="panel", child_count=1)
+            parent.getChildAtIndex.return_value = node
+            node = parent
+
+        result = _find_element(node, name="5", role=None)
+        assert result is target
+
 
 # ---------------------------------------------------------------------------
 # AtSpiGetTreeTool — lines 349-350 (outer exception in execute)

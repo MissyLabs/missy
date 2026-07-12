@@ -12,17 +12,62 @@ Targets uncovered lines:
 
 from __future__ import annotations
 
+# Single persistent worker thread for every live-Playwright call in this
+# file, including the availability probe just below -- see
+# _run_in_thread's docstring for why a fresh/different thread per call
+# doesn't work with Playwright's sync API.
+import concurrent.futures as _concurrent_futures  # noqa: E402
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.config.settings import (
+    FilesystemPolicy,
+    MissyConfig,
+    NetworkPolicy,
+    PluginPolicy,
+    ShellPolicy,
+)
+from missy.core.exceptions import PolicyViolationError
+from missy.policy.engine import init_policy_engine
 from missy.tools.builtin.browser_tools import (
+    _FIREFOX_PREFS,
+    BrowserNavigateTool,
     BrowserSession,
+    _classify_browser_error,
+    _err,
     _page,
     _registry,
+    _route_through_network_policy,
     _SessionRegistry,
+)
+from missy.tools.registry import ToolRegistry
+
+_BROWSER_TEST_THREAD_POOL = _concurrent_futures.ThreadPoolExecutor(max_workers=1)
+
+
+def _probe_playwright_firefox_available() -> bool:
+    """Check availability without ever starting a throwaway sync_playwright()
+    session -- Playwright's sync API can't survive a second, independent
+    session in the same process after an earlier one has fully stopped
+    (a known upstream limitation: the greenlet dispatcher doesn't reset
+    cleanly), so a real probe session here would poison the actual test's
+    later session with "Cannot switch to a different thread"."""
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        return False
+    cache_dir = Path("~/.cache/ms-playwright").expanduser()
+    return any(cache_dir.glob("firefox-*/firefox/firefox"))
+
+
+_PLAYWRIGHT_FIREFOX_AVAILABLE = _probe_playwright_firefox_available()
+
+_requires_playwright_firefox = pytest.mark.skipif(
+    not _PLAYWRIGHT_FIREFOX_AVAILABLE,
+    reason="playwright/firefox not installed in this environment",
 )
 
 # ---------------------------------------------------------------------------
@@ -149,6 +194,34 @@ class TestBrowserSessionStart:
         mock_pw.firefox.launch_persistent_context.assert_called_once()
         assert session._pw is mock_pw
         assert session._context is mock_context
+
+    def test_start_registers_network_policy_route_handler(self, monkeypatch):
+        """SR-1.6: every context must have the policy route handler wired
+        up so navigation, redirects, subresources, and JS-triggered
+        fetches are all gated -- not just the initial page.goto() call."""
+        session = _make_session(headless=True)
+
+        mock_context = MagicMock()
+        mock_pw = MagicMock()
+        mock_pw.firefox.launch_persistent_context.return_value = mock_context
+        mock_sync_pw_ctx = MagicMock()
+        mock_sync_pw_ctx.start.return_value = mock_pw
+        mock_sync_playwright = MagicMock(return_value=mock_sync_pw_ctx)
+
+        fake_sync_api = MagicMock()
+        fake_sync_api.sync_playwright = mock_sync_playwright
+        fake_playwright = MagicMock()
+
+        with (
+            patch.object(session, "_ensure_display"),
+            patch.dict(
+                "sys.modules",
+                {"playwright": fake_playwright, "playwright.sync_api": fake_sync_api},
+            ),
+        ):
+            session._start()
+
+        mock_context.route.assert_called_once_with("**/*", _route_through_network_policy)
 
 
 # ---------------------------------------------------------------------------
@@ -383,3 +456,398 @@ class TestSessionRegistry:
     def test_close_nonexistent_session_is_safe(self):
         reg = _SessionRegistry()
         reg.close("no-such-session")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# FX-F: browser diagnostics must distinguish tool absence, browser
+# installation failure, and sandbox/kernel launch failure from a generic
+# response, and must never suggest disabling sandboxing as a fix.
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyBrowserError:
+    def test_missing_playwright_package_passed_through_unmodified(self):
+        # _start() already raises a specific, actionable RuntimeError for
+        # this case; classification must not double-wrap it.
+        exc = RuntimeError(
+            "playwright not installed — run: pip install playwright && playwright install firefox"
+        )
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+
+    def test_browser_binary_not_installed_gets_install_remediation(self):
+        exc = RuntimeError(
+            "Executable doesn't exist at /home/user/.cache/ms-playwright/firefox-1234/firefox"
+        )
+        result = _classify_browser_error(exc)
+        assert "Browser installation error" in result
+        assert "playwright install firefox" in result
+        # The real underlying error text must still be present.
+        assert "Executable doesn't exist" in result
+
+    def test_sandbox_namespace_failure_gets_environment_remediation(self):
+        # The exact failure mode reported by the validation harness.
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM (Operation not permitted)")
+        result = _classify_browser_error(exc)
+        assert "sandbox/kernel launch failure" in result
+        assert "unshare(CLONE_NEWPID): EPERM" in result
+        assert "disposable test environment" in result
+
+    def test_sandbox_error_never_suggests_disabling_sandboxing(self):
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM (Operation not permitted)")
+        result = _classify_browser_error(exc)
+        assert "--no-sandbox" not in result
+        assert "Do not disable sandboxing" in result
+        assert "SYS_ADMIN" in result  # named explicitly as what NOT to do
+
+    def test_protocol_error_browser_enable_classified_as_sandbox_failure(self):
+        # The second exact failure mode reported by the validation harness.
+        exc = RuntimeError("BrowserType.launch_persistent_context: Protocol error (Browser.enable)")
+        result = _classify_browser_error(exc)
+        assert "sandbox/kernel launch failure" in result
+
+    def test_unrelated_navigation_error_passed_through_unmodified(self):
+        # A real interaction/navigation error (timeout, DNS failure,
+        # selector not found) must not be relabeled as a launch failure --
+        # that would be misleading about what actually went wrong.
+        exc = RuntimeError('Timeout 30000ms exceeded while waiting for selector "#submit"')
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+        assert "sandbox" not in result.lower()
+        assert "installation" not in result.lower()
+
+    def test_dns_failure_passed_through_unmodified(self):
+        exc = RuntimeError("net::ERR_NAME_NOT_RESOLVED at https://nonexistent.invalid/")
+        result = _classify_browser_error(exc)
+        assert result == str(exc)
+
+    def test_err_helper_uses_classification(self):
+        exc = RuntimeError("unshare(CLONE_NEWPID): EPERM")
+        result = _err(exc)
+        assert result.success is False
+        assert "sandbox/kernel launch failure" in result.error
+
+    def test_network_policy_blocked_request_classified_clearly(self):
+        exc = RuntimeError('page.goto: NS_BINDING_ABORTED at "http://blocked.invalid/"')
+        result = _classify_browser_error(exc)
+        assert "Blocked by Missy's network policy" in result
+        assert "network.allowed_hosts" in result
+
+
+# ---------------------------------------------------------------------------
+# SR-1.6: Playwright browser navigation must be gated by the network policy
+# engine, not bypass it entirely by calling page.goto()/routing directly.
+# ---------------------------------------------------------------------------
+def _init_policy(allowed_hosts=None, allowed_domains=None, allowed_cidrs=None):
+    init_policy_engine(
+        MissyConfig(
+            network=NetworkPolicy(
+                allowed_hosts=allowed_hosts or [],
+                allowed_domains=allowed_domains or [],
+                allowed_cidrs=allowed_cidrs or [],
+            ),
+            filesystem=FilesystemPolicy(),
+            shell=ShellPolicy(enabled=False, allowed_commands=[]),
+            plugins=PluginPolicy(),
+            providers={},
+            workspace_path="/tmp/browser-test-ws",
+            audit_log_path="/tmp/browser-test-audit.jsonl",
+        )
+    )
+
+
+class TestBrowserNavigateResolveNetworkHosts:
+    def test_extracts_hostname_from_url(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({"url": "https://example.com/path"}) == ["example.com"]
+
+    def test_no_url_kwarg_returns_empty(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({}) == []
+
+    def test_malformed_url_with_no_host_returns_empty(self):
+        tool = BrowserNavigateTool()
+        assert tool.resolve_network_hosts({"url": "not-a-url"}) == []
+
+
+class TestSR16RegistryGatesBrowserNavigate:
+    """Before the fix, ToolPermissions(network=True) with no static
+    allowed_hosts meant the registry performed ZERO host checks for
+    browser_navigate -- page.goto(url) ran completely ungated."""
+
+    def test_navigate_denied_to_unallowlisted_host(self):
+        _init_policy()  # nothing allowlisted
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        result = registry.execute(
+            "browser_navigate",
+            url="http://169.254.169.254/latest/meta-data/",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+        assert "Network access denied" in result.error
+
+    def test_navigate_denied_to_private_lan_host(self):
+        _init_policy()
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        result = registry.execute(
+            "browser_navigate",
+            url="http://192.168.1.1/admin",
+            session_id="s",
+            task_id="t",
+        )
+        assert result.success is False
+
+    def test_navigate_passes_policy_when_domain_allowlisted(self):
+        """Deliberately mocks _page rather than launching a real browser:
+        this test's job is only to prove the registry's policy check runs
+        first and doesn't itself deny -- not to prove a browser can
+        launch (that's covered separately by TestFirefoxPrefsLiveLaunch).
+        A real session here would also leave a live Playwright process
+        dangling in the module-level _registry singleton across tests,
+        which corrupts Playwright's sync API for any real-browser test
+        that runs later in the same process."""
+        _init_policy(allowed_domains=["example.com"])
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        mock_page = MagicMock()
+        mock_page.url = "https://example.com/"
+        mock_page.title.return_value = "Example"
+        with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):
+            result = registry.execute(
+                "browser_navigate",
+                url="https://example.com/",
+                session_id="s",
+                task_id="t",
+            )
+        assert "Network access denied" not in (result.error or "")
+        assert "not in the allowed" not in (result.error or "")
+        assert result.success is True
+
+
+class TestRouteThroughNetworkPolicy:
+    """Direct tests of the Playwright context.route() handler that gates
+    every subresource/redirect/JS-triggered fetch, not just the initial
+    navigation the registry checks separately."""
+
+    def _mock_route(self, url: str) -> MagicMock:
+        route = MagicMock()
+        route.request.url = url
+        return route
+
+    def test_denied_host_is_aborted(self):
+        _init_policy()  # nothing allowlisted
+        route = self._mock_route("http://169.254.169.254/secret")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+        route.continue_.assert_not_called()
+
+    def test_allowed_host_continues(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("https://example.com/script.js")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+        route.abort.assert_not_called()
+
+    def test_policy_engine_not_initialised_fails_closed(self):
+        with patch(
+            "missy.policy.engine.get_policy_engine",
+            side_effect=RuntimeError("not initialised"),
+        ):
+            route = self._mock_route("https://example.com/")
+            _route_through_network_policy(route)
+            route.abort.assert_called_once_with("blockedbyclient")
+            route.continue_.assert_not_called()
+
+    def test_policy_violation_error_from_check_network_aborts(self):
+        mock_engine = MagicMock()
+        mock_engine.check_network.side_effect = PolicyViolationError(
+            "denied", category="network", detail="denied.example.com"
+        )
+        with patch("missy.policy.engine.get_policy_engine", return_value=mock_engine):
+            route = self._mock_route("https://denied.example.com/")
+            _route_through_network_policy(route)
+            route.abort.assert_called_once_with("blockedbyclient")
+            route.continue_.assert_not_called()
+
+    def test_data_uri_always_allowed_without_policy_check(self):
+        _init_policy()  # nothing allowlisted -- data: must still pass
+        route = self._mock_route("data:image/png;base64,iVBORw0KGgo=")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+        route.abort.assert_not_called()
+
+    def test_blob_uri_always_allowed(self):
+        _init_policy()
+        route = self._mock_route("blob:https://example.com/uuid-here")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+
+    def test_about_blank_always_allowed(self):
+        _init_policy()
+        route = self._mock_route("about:blank")
+        _route_through_network_policy(route)
+        route.continue_.assert_called_once()
+
+    def test_file_scheme_is_blocked_even_with_no_policy_restriction(self):
+        """file:// grants arbitrary local filesystem access via the
+        browser -- a distinct capability from network access that no
+        browser tool declares or needs. Always blocked regardless of
+        network policy configuration."""
+        _init_policy(allowed_domains=["example.com"])  # unrelated to file://
+        route = self._mock_route("file:///etc/passwd")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+        route.continue_.assert_not_called()
+
+    def test_unrecognized_scheme_fails_closed(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("ftp://example.com/file")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+
+    def test_url_with_no_host_is_aborted(self):
+        _init_policy(allowed_domains=["example.com"])
+        route = self._mock_route("https:///path-with-no-host")
+        _route_through_network_policy(route)
+        route.abort.assert_called_once_with("blockedbyclient")
+
+
+# ---------------------------------------------------------------------------
+# _FIREFOX_PREFS type correctness -- a wrong-typed value here breaks every
+# browser launch. Discovered live: browser.sessionstore.resume_from_crash
+# was set to the Python int 0 instead of the bool False. Playwright writes
+# whatever type is given verbatim into the profile's user.js, which locks
+# that pref's type in Firefox's preference service. Juggler's own
+# Browser.enable handshake (run on every launch_persistent_context() call)
+# then calls setBoolPref on that same pref name and Firefox raises
+# NS_ERROR_UNEXPECTED because the pref is already registered as an Int --
+# the launch fails immediately with a "Protocol error (Browser.enable)"
+# before any page ever loads. This surfaced as an apparent kernel/sandbox
+# limitation (a benign "unshare(CLONE_NEWPID): EPERM" sandbox warning
+# appears in both successful and failing launches) but was actually this
+# type mismatch in Missy's own hardcoded prefs dict.
+# ---------------------------------------------------------------------------
+
+
+class TestFirefoxPrefsTypes:
+    _KNOWN_BOOL_PREFS = frozenset(
+        {
+            "browser.sessionstore.resume_from_crash",
+            "browser.sessionstore.enabled",
+            "browser.tabs.warnOnClose",
+        }
+    )
+    _KNOWN_INT_PREFS = frozenset(
+        {
+            "browser.startup.page",
+            "toolkit.startup.max_resumed_crashes",
+        }
+    )
+
+    def test_all_prefs_are_accounted_for(self):
+        """Guards against a new pref being added to _FIREFOX_PREFS without
+        also being added to one of the type-expectation sets below."""
+        known = self._KNOWN_BOOL_PREFS | self._KNOWN_INT_PREFS
+        assert set(_FIREFOX_PREFS) == known
+
+    def test_known_bool_prefs_are_real_bools_not_ints(self):
+        """isinstance(0, bool) is False and isinstance(False, int) is True
+        in Python -- bool is a subclass of int, so a naive `isinstance(v,
+        int)` check would NOT catch `0` masquerading as a bool pref. This
+        must check the exact type to catch the regression."""
+        for name in self._KNOWN_BOOL_PREFS:
+            value = _FIREFOX_PREFS[name]
+            assert type(value) is bool, (
+                f"{name} must be a real bool (got {value!r}, type "
+                f"{type(value).__name__}) -- Firefox registers this pref's "
+                "type from whatever Playwright writes into user.js, and "
+                "Juggler's Browser.enable handshake calls setBoolPref on "
+                "it during every launch, which raises NS_ERROR_UNEXPECTED "
+                "if the pref was ever declared as an Int."
+            )
+
+    def test_known_int_prefs_are_real_ints_not_bools(self):
+        for name in self._KNOWN_INT_PREFS:
+            value = _FIREFOX_PREFS[name]
+            assert type(value) is int, (
+                f"{name} must be a real int (got {value!r}, type {type(value).__name__})"
+            )
+
+
+def _run_in_thread(fn):
+    """Run fn() in a plain thread with no asyncio event loop of its own.
+
+    The project runs its whole test suite under pytest-asyncio's
+    ``asyncio_mode = "auto"``, which gives every test function a running
+    event loop in the main thread -- and Playwright's *sync* API refuses
+    to start if a loop is already running in the calling thread. Missy's
+    real production dispatch path (BrowserSession._start(), called from
+    ToolRegistry.execute()) has no such loop and works fine; a bare
+    thread reproduces that same no-loop condition for the test.
+
+    Reuses one persistent worker thread (module-level pool, never shut
+    down mid-suite) rather than spinning up a fresh thread per call --
+    Playwright's sync API pins its internal greenlet dispatcher to
+    whichever thread first used it, so handing work to a *second* thread
+    later in the same process raises "Cannot switch to a different
+    thread", even for an entirely separate sync_playwright() session.
+    """
+    return _BROWSER_TEST_THREAD_POOL.submit(fn).result()
+
+
+@_requires_playwright_firefox
+class TestFirefoxPrefsLiveLaunch:
+    """Live, unmocked reproduction through the real production code path
+    (BrowserSession._start(), with the actual _FIREFOX_PREFS dict applied)
+    -- the test that would have caught the resume_from_crash type-mismatch
+    bug. Mocked tests can't: the failure only happens inside Firefox's
+    real preference service during a genuine Juggler handshake.
+
+    Deliberately a single test, not two: Playwright's sync API pins its
+    greenlet-based dispatcher for the life of the process once a
+    sync_playwright() session has fully started and stopped once already,
+    and a second independent session (even in the same worker thread)
+    then fails with "Cannot switch to a different thread". One full,
+    real, end-to-end run through the actual tool dispatch path is a
+    stronger test than a redundant bare-Playwright smoke test anyway.
+    """
+
+    def test_navigate_tool_end_to_end_through_real_registry(self, tmp_path, monkeypatch):
+        """Full WB-002-style reproduction through the real production
+        ToolRegistry dispatch path -- not a mock of BrowserSession."""
+        import missy.tools.builtin.browser_tools as browser_tools_mod
+        from missy.tools.builtin.browser_tools import BrowserCloseTool, BrowserGetUrlTool
+
+        monkeypatch.setattr(browser_tools_mod, "_SESSIONS_DIR", tmp_path)
+        _init_policy()
+
+        registry = ToolRegistry()
+        registry.register(BrowserNavigateTool())
+        registry.register(BrowserGetUrlTool())
+        registry.register(BrowserCloseTool())
+
+        fixture = tmp_path / "page.html"
+        fixture.write_text("<html><head><title>Fixture</title></head><body>hi</body></html>")
+
+        session_id = "live-e2e"
+
+        def _do():
+            try:
+                nav = registry.execute(
+                    "browser_navigate",
+                    url=fixture.as_uri(),
+                    session_id=session_id,
+                    task_id="t",
+                    headless=True,
+                )
+                assert nav.success is True, nav.error
+                geturl = registry.execute("browser_get_url", session_id=session_id, task_id="t")
+                assert geturl.success is True, geturl.error
+                assert "Fixture" in geturl.output
+            finally:
+                registry.execute("browser_close", session_id=session_id, task_id="t")
+
+        _run_in_thread(_do)

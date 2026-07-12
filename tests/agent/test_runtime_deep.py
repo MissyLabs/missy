@@ -323,8 +323,13 @@ class TestRuntimeToolCallLoop:
         tool_reg = _make_tool_registry([bad_tool])
         tool_reg.execute.side_effect = Exception("tool boom")
 
+        # SR-4.4: the tool error means the "recovered" claim is rejected
+        # and retried up to _MAX_DONE_VERIFICATION_RETRIES times before
+        # being accepted -- supply enough repeated stop responses.
         provider.complete_with_tools.side_effect = [
             _make_tool_call_response("bad_tool"),
+            _make_stop_response("recovered"),
+            _make_stop_response("recovered"),
             _make_stop_response("recovered"),
         ]
 
@@ -334,7 +339,7 @@ class TestRuntimeToolCallLoop:
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
             result = rt.run("try bad tool")
 
         # Error is swallowed by the loop; we get the final response
@@ -696,6 +701,128 @@ class TestRuntimeDoneCriteria:
 
         assert result == "instant answer"
         assert provider.complete_with_tools.call_count == 1
+
+
+class TestDoneCriteriaEnforcement:
+    """SR-4.4: task completion must depend on tool-observed evidence, not
+    just the model's own "done" claim. Before this fix, DoneCriteria's
+    verification prompt (TestRuntimeDoneCriteria above) was purely a
+    static text nudge the model could freely ignore -- a model could
+    declare success immediately after a tool call errored, and the
+    runtime would return that claim completely unverified.
+    """
+
+    def test_stop_claim_after_tool_error_is_rejected_and_retried(self):
+        """Core SR-4.4 reproduction: a "done" claim following an errored
+        tool call in the immediately preceding round must not be trusted
+        on the first attempt."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=False, output=None, error="division by zero"
+        )
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("Done! I successfully computed the result."),
+            _make_stop_response("Done! I successfully computed the result."),
+            _make_stop_response("Done! I successfully computed the result."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("compute something")
+
+        # Rejected twice (the retry cap), then accepted with an audit
+        # warning on the third attempt -- never trusted on the first.
+        rejected = [e for e in events if e["event_type"] == "agent.done_criteria.rejected"]
+        unverified = [e for e in events if e["event_type"] == "agent.done_criteria.unverified"]
+        assert len(rejected) == 2
+        assert len(unverified) == 1
+        assert provider.complete_with_tools.call_count == 4
+        assert result == "Done! I successfully computed the result."
+
+    def test_successful_tool_call_never_triggers_rejection(self):
+        """Happy path: a tool call that succeeds must not trigger any
+        done-criteria rejection or extra provider calls."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])  # succeeds by default
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        done_criteria_events = [e for e in events if "done_criteria" in e["event_type"]]
+        assert done_criteria_events == []
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "The answer is 4."
+
+    def test_error_followed_by_later_success_is_accepted_immediately(self):
+        """A tool call that errors, followed by a *later* round that
+        succeeds, must be accepted on the first "done" claim -- the gate
+        only looks at the most recent round, not all history, so a
+        corrected retry with different arguments isn't penalized forever."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        call_count = [0]
+
+        def _execute(name: str, **kwargs):
+            call_count[0] += 1
+            result = MagicMock()
+            if call_count[0] == 1:
+                result.success = False
+                result.output = None
+                result.error = "bad expression"
+            else:
+                result.success = True
+                result.output = "4"
+                result.error = None
+            return result
+
+        tool_reg.execute.side_effect = _execute
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator", tool_id="tc-1"),
+            _make_tool_call_response("calculator", tool_id="tc-2"),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        done_criteria_events = [e for e in events if "done_criteria" in e["event_type"]]
+        assert done_criteria_events == []
+        assert provider.complete_with_tools.call_count == 3
+        assert result == "The answer is 4."
 
 
 # ---------------------------------------------------------------------------
@@ -1569,3 +1696,502 @@ class TestAttentionSystemIntegration:
         attn = AttentionSystem()
         state = attn.process("hello there")
         assert 0.0 <= state.urgency <= 1.0
+
+
+class TestResumeCheckpoint:
+    """SR-4.3: a checkpoint's persisted loop state must actually be usable
+    to continue an interrupted task, not just listed by `missy recover`.
+    Uses a real CheckpointManager against an isolated HOME so these tests
+    exercise the same SQLite read/write path production code goes through.
+    """
+
+    def test_resume_continues_from_saved_history_and_completes(self, monkeypatch, tmp_path):
+        """Core reproduction: a checkpoint left behind mid-task (a completed
+        tool round with no final answer yet) must be resumable to a real
+        final answer, using the saved history rather than starting over."""
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="The answer is 4.")
+        provider.complete_with_tools.return_value = _make_stop_response("The answer is 4.")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        saved_messages = [
+            {"role": "user", "content": "add 2 and 2"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc-1", "name": "calculator", "arguments": {"expression": "2+2"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tc-1",
+                "name": "calculator",
+                "content": "4",
+                "is_error": False,
+            },
+        ]
+        cid = cm.create("sess-1", "task-1", "add 2 and 2")
+        cm.update(cid, saved_messages, ["calculator"], iteration=1)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            result = rt.resume_checkpoint(cid)
+
+        assert result == "The answer is 4."
+        # The saved history was actually fed to the provider, not discarded
+        # (the +1 is the system prompt _dicts_to_messages() prepends).
+        sent_messages = provider.complete_with_tools.call_args[0][0]
+        assert len(sent_messages) == len(saved_messages) + 1
+        assert any("4" in (m.content or "") for m in sent_messages)
+        # The old checkpoint is consumed (never offered for resume again).
+        assert cm.get(cid)["state"] == "COMPLETE"
+
+    def test_concurrent_resume_of_same_checkpoint_only_runs_once(self, monkeypatch, tmp_path):
+        """Regression: resume_checkpoint() used to read+check state=='RUNNING'
+        and only mark the checkpoint COMPLETE at the very end, after
+        building a fresh system prompt and re-resolving tools -- a real
+        window of work. Two concurrent resume_checkpoint() calls against
+        the same checkpoint id (e.g. two `missy recover --resume <id>`
+        invocations) could both pass the RUNNING check and both proceed
+        to execute the resumed tool loop, duplicating every subsequent
+        tool call for the same task. cm.claim() now atomically transitions
+        RUNNING -> COMPLETE up front, so only one of two concurrent calls
+        may proceed; the other must fail closed with ValueError instead of
+        re-running the task.
+        """
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            # Simulate a second, concurrent `missy recover --resume <id>`
+            # invocation racing in between: it also sees the checkpoint
+            # (still RUNNING at this exact moment) and attempts to claim
+            # it first.
+            second_cm = CheckpointManager()
+            assert second_cm.claim(cid) is True
+
+            with pytest.raises(ValueError, match="not resumable"):
+                rt.resume_checkpoint(cid)
+
+        # The tool loop must never have executed for the loser of the race.
+        provider.complete_with_tools.assert_not_called()
+
+    def test_resume_emits_expected_audit_events(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        events = []
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.resume_checkpoint(cid)
+
+        types = [e["event_type"] for e in events]
+        assert "agent.checkpoint.resumed" in types
+        assert "agent.run.complete" in types
+
+    def test_resume_nonexistent_checkpoint_raises_value_error(self, monkeypatch, tmp_path):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(ValueError, match="No checkpoint found"):
+                rt.resume_checkpoint("does-not-exist")
+
+    def test_resume_non_running_checkpoint_raises_value_error(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        cm.complete(cid)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(ValueError, match="not resumable"):
+                rt.resume_checkpoint(cid)
+        # complete_with_tools must never be called for a rejected resume.
+        provider.complete_with_tools.assert_not_called()
+
+    def test_resume_corrupted_checkpoint_marks_failed_and_raises(self, monkeypatch, tmp_path):
+        """A checkpoint with structurally invalid loop_messages must be
+        rejected fail-closed, not fed into the provider/tool loop."""
+        from missy.agent.checkpoint import CheckpointCorruptedError, CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        conn = cm._connect()
+        conn.execute(
+            "UPDATE checkpoints SET loop_messages = ? WHERE id = ?",
+            ('["just", "a", "list", "of", "strings"]', cid),
+        )
+        conn.commit()
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            with pytest.raises(CheckpointCorruptedError):
+                rt.resume_checkpoint(cid)
+
+        assert cm.get(cid)["state"] == "FAILED"
+        provider.complete_with_tools.assert_not_called()
+
+    def test_resume_revalidates_policy_via_current_tool_set(self, monkeypatch, tmp_path):
+        """Resuming must re-resolve tools under the CURRENT config, not
+        silently trust whatever was authorized when the checkpoint was
+        created -- if capability_mode has tightened since, the resumed run
+        only sees the narrower tool set, same as any fresh run would."""
+        from missy.agent.checkpoint import CheckpointManager
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="ok")
+        provider.complete_with_tools.return_value = _make_stop_response("ok")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake", capability_mode="no-tools"))
+            rt.resume_checkpoint(cid)
+
+        # no-tools means _get_tools() returns [] -- verify the resumed call
+        # actually used the current, empty tool set.
+        _tools_arg = provider.complete_with_tools.call_args[0][1]
+        assert _tools_arg == []
+
+
+class TestDelegateTaskDispatch:
+    """SR-4.2: _execute_tool() must inject _runtime/_session_id/_depth for
+    delegate_task -- none of these are model-suppliable, and without this
+    injection the tool always refuses with "requires runtime context"."""
+
+    def test_execute_tool_injects_runtime_session_and_depth(self):
+        from missy.providers.base import ToolCall
+
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        real_tool = MagicMock()
+        real_tool.name = "delegate_task"
+        captured_kwargs = {}
+
+        def _fake_execute(**kwargs):
+            captured_kwargs.update(kwargs)
+            result = MagicMock()
+            result.success = True
+            result.output = "ok"
+            result.error = None
+            return result
+
+        tool_reg = MagicMock()
+        tool_reg.get.return_value = real_tool
+        tool_reg.execute.side_effect = lambda name, **kw: _fake_execute(**kw)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="tc1", name="delegate_task", arguments={"prompt": "1. a"})
+            rt._execute_tool(tc, session_id="sess-1", task_id="task-1", _delegation_depth=1)
+
+        assert captured_kwargs["_runtime"] is rt
+        assert captured_kwargs["_session_id"] == "sess-1"
+        assert captured_kwargs["_depth"] == 1
+
+    def test_execute_tool_defaults_depth_to_zero(self):
+        """A top-level call (not itself a resumed/nested delegation) must
+        inject depth=0, matching _tool_loop()'s own default."""
+        from missy.providers.base import ToolCall
+
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+
+        real_tool = MagicMock()
+        real_tool.name = "delegate_task"
+        captured_kwargs = {}
+
+        def _fake_execute(**kwargs):
+            captured_kwargs.update(kwargs)
+            result = MagicMock()
+            result.success = True
+            result.output = "ok"
+            result.error = None
+            return result
+
+        tool_reg = MagicMock()
+        tool_reg.get.return_value = real_tool
+        tool_reg.execute.side_effect = lambda name, **kw: _fake_execute(**kw)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="tc1", name="delegate_task", arguments={"prompt": "1. a"})
+            rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert captured_kwargs["_depth"] == 0
+
+
+class TestMcpToolDispatch:
+    """SR-4.7: MCP tools must be registered into the real ToolRegistry
+    (the reference monitor) and dispatched through the exact same
+    _execute_tool() -> registry.execute() -> tool.execute() path as any
+    built-in tool -- not a bypass/special case."""
+
+    def _connected_manager(self, tmp_path, tools, annotations=None):
+        from missy.mcp.client import McpClient
+        from missy.mcp.manager import McpManager
+
+        mgr = McpManager(config_path=str(tmp_path / "mcp.json"))
+        client = McpClient(name="srv", command="true")
+        client._tools = tools
+        client.call_tool = MagicMock(return_value="mcp result")
+        mgr._clients["srv"] = client
+        for tool_name, ann in (annotations or {}).items():
+            mgr._annotation_registry.register(f"srv__{tool_name}", ann)
+        return mgr, client
+
+    def test_mcp_tool_appears_in_get_tools(self, tmp_path):
+        from missy.tools.registry import init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, _client = self._connected_manager(
+            tmp_path, [{"name": "echo", "description": "Echo", "inputSchema": {}}]
+        )
+
+        tools = rt._get_tools()
+
+        assert any(t.name == "srv__echo" for t in tools)
+
+    def test_mcp_tool_registered_into_real_tool_registry(self, tmp_path):
+        from missy.tools.registry import get_tool_registry, init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, _client = self._connected_manager(
+            tmp_path, [{"name": "echo", "description": "Echo", "inputSchema": {}}]
+        )
+
+        rt._get_tools()
+        treg = get_tool_registry()
+
+        assert treg.get("srv__echo") is not None
+
+    def test_execute_tool_dispatches_mcp_tool_through_real_registry(self, tmp_path):
+        from missy.providers.base import ToolCall
+        from missy.tools.registry import init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        rt._mcp_manager, client = self._connected_manager(
+            tmp_path,
+            [{"name": "echo", "description": "Echo", "inputSchema": {}}],
+        )
+        rt._get_tools()  # syncs srv__echo into the real registry
+
+        tc = ToolCall(id="tc1", name="srv__echo", arguments={"text": "hi"})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert not result.is_error
+        assert result.content == "mcp result"
+        client.call_tool.assert_called_once_with("echo", {"text": "hi"})
+
+    def test_mcp_tool_requiring_approval_denied_without_gate(self, tmp_path):
+        """A destructive MCP tool dispatched with no approval_gate wired
+        into the runtime must fail closed, end-to-end through the real
+        registry dispatch path."""
+        from missy.mcp.annotations import ToolAnnotation
+        from missy.providers.base import ToolCall
+        from missy.tools.registry import init_tool_registry
+
+        init_tool_registry()
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))  # mcp_approval_gate defaults to None
+        rt._mcp_manager, client = self._connected_manager(
+            tmp_path,
+            [{"name": "delete_all", "description": "Delete", "inputSchema": {}}],
+            {"delete_all": ToolAnnotation(mutating=True, requires_approval=True)},
+        )
+        rt._get_tools()
+
+        tc = ToolCall(id="tc1", name="srv__delete_all", arguments={})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert result.is_error
+        assert "DENIED" in result.content
+        client.call_tool.assert_not_called()
+
+
+class TestSleeptimeWiring:
+    """SR-4.1: SleeptimeWorker is constructed+started at __init__ time
+    exactly as its own module docstring documents (operator-confirmed:
+    enabled by default, matching SleeptimeConfig.enabled=True), with
+    record_activity() called on every real entry point and a real
+    shutdown() path to stop the daemon thread."""
+
+    def _make_runtime(self):
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+        return rt, provider
+
+    def _registry_patch(self, provider):
+        registry = _make_registry({"fake": provider})
+        return patch("missy.agent.runtime.get_registry", return_value=registry)
+
+    def test_sleeptime_worker_constructed_and_started(self):
+        rt, _ = self._make_runtime()
+        try:
+            assert rt._sleeptime is not None
+            assert rt._sleeptime._thread is not None
+            assert rt._sleeptime._thread.is_alive()
+        finally:
+            rt.shutdown()
+
+    def test_shutdown_stops_the_worker_thread(self):
+        rt, _ = self._make_runtime()
+        thread = rt._sleeptime._thread
+        rt.shutdown()
+        assert not thread.is_alive()
+
+    def test_shutdown_is_idempotent(self):
+        rt, _ = self._make_runtime()
+        rt.shutdown()
+        rt.shutdown()  # must not raise
+
+    def test_shutdown_with_no_sleeptime_worker_does_not_raise(self):
+        rt, _ = self._make_runtime()
+        rt._sleeptime = None
+        rt.shutdown()  # must not raise
+
+    def test_run_records_activity_on_the_worker(self):
+        rt, provider = self._make_runtime()
+        try:
+            rt._sleeptime = MagicMock()
+            with self._registry_patch(provider):
+                rt.run("hello")
+            rt._sleeptime.record_activity.assert_called_once()
+        finally:
+            rt.shutdown()
+
+    def test_run_with_no_sleeptime_worker_does_not_raise(self):
+        rt, provider = self._make_runtime()
+        try:
+            rt._sleeptime = None
+            with self._registry_patch(provider):
+                result = rt.run("hello")
+            assert result  # ran normally without a sleeptime worker
+        finally:
+            rt.shutdown()
+
+    def test_resume_checkpoint_records_activity_on_the_worker(self, monkeypatch, tmp_path):
+        from missy.agent.checkpoint import CheckpointManager
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        provider = _make_provider(reply="done")
+        provider.complete_with_tools.return_value = _make_stop_response("done")
+        registry = _make_registry({"fake": provider})
+
+        cm = CheckpointManager()
+        cid = cm.create("sess-1", "task-1", "prompt")
+        cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+            try:
+                rt._sleeptime = MagicMock()
+                rt.resume_checkpoint(cid)
+                rt._sleeptime.record_activity.assert_called_once()
+            finally:
+                rt.shutdown()
+
+    def test_sleeptime_worker_wired_to_the_real_memory_store(self):
+        """The worker must share the runtime's actual memory_store, not a
+        separate/disconnected one -- otherwise it would summarise/extract
+        against the wrong (or no) data."""
+        rt, _ = self._make_runtime()
+        try:
+            assert rt._sleeptime._memory_store is rt._memory_store
+        finally:
+            rt.shutdown()
+
+    def test_conftest_fixture_prevents_thread_accumulation_across_tests(self):
+        """Regression guard for the real thread-leak this checkpoint's
+        wiring caused across the full suite (96+ live `missy-sleeptime`
+        threads piled up and tripped pytest's per-test faulthandler
+        timeout, confirmed via a real full-suite run). The root
+        conftest.py's autouse `_stop_sleeptime_workers_after_test`
+        fixture is what stops each worker once its owning test ends --
+        this test constructs several runtimes *without* calling
+        shutdown() itself (simulating the common case of a test author
+        forgetting to), relying entirely on the fixture, then a
+        follow-up assertion (in the next test below) confirms no thread
+        survived into a new test."""
+        for _ in range(10):
+            rt, _ = self._make_runtime()
+            # Deliberately no rt.shutdown() here -- the conftest fixture
+            # must clean this up, not this test.
+
+    def test_no_sleeptime_threads_leaked_from_previous_test(self):
+        """Must run after the un-shutdown-ed construction above (pytest
+        preserves declaration order within a class by default) --
+        confirms the conftest fixture actually stopped every thread that
+        test started, not just the ones this file explicitly shuts down."""
+        import threading
+
+        leaked = [t for t in threading.enumerate() if t.name == "missy-sleeptime"]
+        assert leaked == [], f"{len(leaked)} sleeptime thread(s) leaked across tests"

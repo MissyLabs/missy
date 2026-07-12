@@ -39,6 +39,7 @@ def _schedule_trigger(name: str = "t1", interval: int = 1, cooldown: int = 0) ->
         interval_seconds=interval,
         cooldown_seconds=cooldown,
         prompt_template="ping {trigger_name}",
+        requires_confirmation=False,
     )
 
 
@@ -55,6 +56,7 @@ def _disk_trigger(
         disk_threshold_pct=threshold_pct,
         interval_seconds=interval,
         cooldown_seconds=cooldown,
+        requires_confirmation=False,
     )
 
 
@@ -70,6 +72,7 @@ def _load_trigger(
         load_threshold=threshold,
         interval_seconds=interval,
         cooldown_seconds=cooldown,
+        requires_confirmation=False,
     )
 
 

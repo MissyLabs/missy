@@ -10,9 +10,13 @@ Example::
 
     attn = AttentionSystem()
     state = attn.process("The server is down! Fix it immediately!")
-    print(state.urgency)       # high
+    print(state.urgency)       # ~0.29 -- 2 of 7 words are urgency keywords
     print(state.topics)        # ["server"]
-    print(state.priority_tools)  # ["shell_exec", "file_read"]
+    print(state.priority_tools)  # [] -- urgency score is length-normalized
+                                  # (matched keywords / total words), so it
+                                  # stays below the 0.5 escalation threshold
+                                  # unless urgency keywords are a large
+                                  # fraction of a short message
 """
 
 from __future__ import annotations

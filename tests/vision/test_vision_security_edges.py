@@ -127,8 +127,8 @@ class TestVisionMemoryMetadataProtection:
             observation="test",
             metadata={"observation_id": "INJECTED_ID"},
         )
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["observation_id"] != "INJECTED_ID"
 
     def test_cannot_override_timestamp(self) -> None:
@@ -142,8 +142,8 @@ class TestVisionMemoryMetadataProtection:
             observation="test",
             metadata={"timestamp": "1970-01-01T00:00:00"},
         )
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["timestamp"] != "1970-01-01T00:00:00"
 
     def test_cannot_override_task_type(self) -> None:
@@ -157,8 +157,8 @@ class TestVisionMemoryMetadataProtection:
             observation="test",
             metadata={"task_type": "MALICIOUS"},
         )
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["task_type"] == "puzzle"
 
     def test_custom_metadata_passes_through(self) -> None:
@@ -172,8 +172,8 @@ class TestVisionMemoryMetadataProtection:
             observation="test",
             metadata={"camera_model": "C922x", "scene": "tabletop"},
         )
-        call_args = mock_mem.add_turn.call_args
-        meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata")
+        (turn,) = mock_mem.add_turn.call_args.args
+        meta = turn.metadata
         assert meta["camera_model"] == "C922x"
         assert meta["scene"] == "tabletop"
 

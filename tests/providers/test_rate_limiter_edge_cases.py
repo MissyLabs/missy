@@ -361,13 +361,62 @@ class TestRecordUsageBehaviour:
     rate limiter tracks real usage accurately.
     """
 
-    def test_record_usage_deducts_actual_tokens(self) -> None:
-        """record_usage after an acquire should deduct the actual token count."""
+    def test_record_usage_reconciles_against_the_original_estimate(self) -> None:
+        """record_usage must credit back the estimate acquire() already
+        deducted before subtracting the real total -- not deduct the real
+        total on top of the untouched estimate deduction (that would
+        double-charge the bucket for every single call, exhausting the
+        configured tokens_per_minute budget at roughly half the intended
+        rate). Here the estimate exactly matches actual usage, so the net
+        effect should be zero further change from what acquire() already did.
+        """
         rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
         rl.acquire(tokens=100)  # _tok_tokens now 900
+        rl.record_usage(prompt_tokens=80, completion_tokens=20, estimated_tokens=100)
+        # Credit back the 100 estimate, then deduct the real 100 total: net 0.
+        assert rl._tok_tokens == 900.0
+
+    def test_record_usage_double_deduction_regression(self) -> None:
+        """Regression: without crediting the estimate back, this exact
+        scenario used to leave the bucket at 800 (900 - 100) instead of the
+        correct 900 (100 credited back, then 100 real usage deducted) --
+        i.e. the previous bug deducted the same ~100 tokens twice.
+        """
+        rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
+        rl.acquire(tokens=100)
+        rl.record_usage(prompt_tokens=80, completion_tokens=20, estimated_tokens=100)
+        assert rl._tok_tokens != 800.0
+        assert rl._tok_tokens == 900.0
+
+    def test_record_usage_actual_higher_than_estimate_deducts_the_difference(self) -> None:
+        """When real usage exceeds the estimate, the bucket should reflect
+        exactly the excess -- not the full real total on top of the
+        already-deducted estimate."""
+        rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
+        rl.acquire(tokens=100)  # _tok_tokens now 900
+        rl.record_usage(prompt_tokens=120, completion_tokens=30, estimated_tokens=100)
+        # Credit back 100 (-> 1000, clamped to tpm), then deduct real 150 -> 850.
+        assert rl._tok_tokens == 850.0
+
+    def test_record_usage_actual_lower_than_estimate_credits_the_difference(self) -> None:
+        """When real usage is lower than the estimate (the common case --
+        a cheap 4-chars-per-token heuristic usually over-estimates), the
+        bucket should recover the difference rather than staying
+        needlessly drained."""
+        rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
+        rl.acquire(tokens=100)  # _tok_tokens now 900
+        rl.record_usage(prompt_tokens=30, completion_tokens=10, estimated_tokens=100)
+        # Credit back 100 (-> 1000), then deduct real 40 -> 960.
+        assert rl._tok_tokens == 960.0
+
+    def test_record_usage_without_estimated_tokens_defaults_to_pure_deduction(self) -> None:
+        """Omitting estimated_tokens (e.g. a caller that never reserved
+        anything against the token bucket for this call) must behave
+        exactly like a plain deduction, preserving the pre-existing
+        contract for that case."""
+        rl = RateLimiter(requests_per_minute=1000, tokens_per_minute=1000, max_wait_seconds=0.0)
         rl.record_usage(prompt_tokens=80, completion_tokens=20)
-        # 900 - 100 = 800
-        assert rl._tok_tokens == 800.0
+        assert rl._tok_tokens == 900.0
 
     def test_record_usage_is_no_op_when_tpm_zero(self) -> None:
         """record_usage must return immediately and leave state unchanged when tpm=0."""

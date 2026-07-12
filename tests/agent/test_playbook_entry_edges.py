@@ -561,7 +561,12 @@ class TestMarkPromoted:
         entry = pb.record("shell", "task", ["shell_exec"], "hint")
         assert entry.promoted is False
         pb.mark_promoted(entry.pattern_id)
-        assert entry.promoted is True
+        # mark_promoted() re-reads from disk before mutating (the same
+        # cross-process-safety fix record() has), so it replaces
+        # self._entries with freshly-parsed PlaybookEntry objects rather
+        # than mutating the object `entry` still references in place --
+        # check the playbook's current state, not the stale reference.
+        assert pb.get_relevant("shell")[0].promoted is True
 
     def test_reflected_in_get_relevant(self, tmp_path):
         pb = _make_pb(tmp_path)
@@ -831,3 +836,33 @@ class TestThreadSafety:
         assert not errors
         # No remaining promotable entries
         assert pb.get_promotable() == []
+
+    def test_separate_instances_same_path_do_not_lose_updates(self, tmp_path):
+        """Every production caller (AgentRuntime) constructs a fresh
+        Playbook() per call rather than sharing one long-lived instance.
+        self._lock alone only serializes calls on the SAME object -- it
+        provides no protection when two separate Playbook instances each
+        load, mutate, and save around the same time. Pre-fix, whichever
+        instance's save() landed last silently clobbered the other's
+        just-recorded pattern, since its in-memory snapshot never saw the
+        other's write.
+        """
+        path = str(tmp_path / "playbook.json")
+        errors: list[Exception] = []
+
+        def worker(i: int) -> None:
+            try:
+                # A fresh Playbook() per call, exactly like runtime.py does.
+                Playbook(store_path=path).record(f"type_{i}", f"task{i}", [f"tool_{i}"], f"hint{i}")
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        final = Playbook(store_path=path)
+        assert len(final._entries) == 20

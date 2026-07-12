@@ -15,10 +15,22 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
+
+#: SR-1.6: schemes that carry a real network destination -- every request
+#: using one of these is gated against the network policy engine.
+_ROUTED_NETWORK_SCHEMES = frozenset({"http", "https", "ws", "wss"})
+
+#: SR-1.6: schemes with no real network destination that pages legitimately
+#: need for normal rendering (inline data/blob URIs, internal browser
+#: pages, extension resources) -- always allowed through unchecked.
+_ROUTED_ALWAYS_ALLOWED_SCHEMES = frozenset(
+    {"data", "blob", "about", "chrome", "moz-extension", "chrome-extension"}
+)
 
 #: Environment variables safe to pass to browser subprocesses.
 #: Prevents API key leakage to Firefox/Playwright.
@@ -52,12 +64,56 @@ _SAFE_BROWSER_ENV_VARS = frozenset(
 
 _SESSIONS_DIR = Path("~/.missy/browser_sessions").expanduser()
 _FIREFOX_PREFS = {
-    "browser.sessionstore.resume_from_crash": 0,
+    "browser.sessionstore.resume_from_crash": False,
     "browser.sessionstore.enabled": False,
     "browser.startup.page": 0,
     "browser.tabs.warnOnClose": False,
     "toolkit.startup.max_resumed_crashes": -1,
 }
+
+
+def _route_through_network_policy(route: Any) -> None:
+    """Gate a single Playwright request against the network policy engine.
+
+    SR-1.6: registered on every :class:`BrowserSession`'s context via
+    ``context.route("**/*", ...)`` so navigation, redirects, subresources,
+    and JS-triggered fetch/XHR calls (e.g. via ``browser_evaluate``) are
+    all checked -- not just the initial ``page.goto()`` call, which the
+    registry checks separately (and more cleanly) via
+    :meth:`BrowserNavigateTool.resolve_network_hosts`.
+
+    Fails closed on anything unexpected: an unrecognized scheme, a missing
+    host, a policy denial, or the policy engine not being initialised all
+    abort the request rather than letting it through.
+    """
+    request_url = route.request.url
+    scheme = urlparse(request_url).scheme.lower()
+
+    if scheme in _ROUTED_ALWAYS_ALLOWED_SCHEMES:
+        route.continue_()
+        return
+
+    if scheme not in _ROUTED_NETWORK_SCHEMES:
+        # Includes file:// (arbitrary local filesystem access via the
+        # browser is a distinct, unneeded capability for agent browsing
+        # tasks) and any other scheme this allowlist doesn't recognise.
+        route.abort("blockedbyclient")
+        return
+
+    host = urlparse(request_url).hostname
+    if not host:
+        route.abort("blockedbyclient")
+        return
+
+    try:
+        from missy.policy.engine import get_policy_engine
+
+        get_policy_engine().check_network(host, category="tool")
+    except Exception:
+        route.abort("blockedbyclient")
+        return
+
+    route.continue_()
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +169,14 @@ class BrowserSession:
             firefox_user_prefs=_FIREFOX_PREFS,
             env={k: v for k, v in os.environ.items() if k in _SAFE_BROWSER_ENV_VARS},
         )
+        # SR-1.6: gate EVERY network request this browser context makes --
+        # not just the top-level page.goto() call the registry checks
+        # before a tool even runs, but every subresource, redirect, and
+        # JS-triggered fetch/XHR/navigation (e.g. via browser_evaluate) too.
+        # Without this, the network policy engine ("no outbound traffic
+        # unless whitelisted") is entirely bypassed once Firefox itself is
+        # driving requests, which is most of the time.
+        self._context.route("**/*", _route_through_network_policy)
 
     def get_page(self) -> Any:
         """Return the most recent open page in the context.
@@ -195,8 +259,109 @@ def _page(session_id: str = "default", headless: bool = False) -> Any:
     return _registry.get_or_create(session_id, headless=headless).get_page()
 
 
+# FX-F: browser diagnostics must distinguish tool absence, browser
+# installation failure, and sandbox/kernel launch failure from a generic
+# or fabricated "no browser" response, and must never suggest disabling
+# sandboxing (--no-sandbox, SYS_ADMIN, privileged containers) as a fix --
+# only a properly configured disposable test environment.
+_SANDBOX_LAUNCH_ERROR_MARKERS: tuple[str, ...] = (
+    "unshare(",
+    "clone_newpid",
+    "clone_newns",
+    "clone_newuser",
+    "namespace",
+    "seccomp",
+    "protocol error (browser.enable)",
+    "failed to launch",
+    "target closed",
+    "browser closed",
+)
+
+_INSTALLATION_ERROR_MARKERS: tuple[str, ...] = (
+    "executable doesn't exist",
+    "playwright install",
+)
+
+# SR-1.6: markers Playwright/Firefox raises when a request is aborted via
+# route.abort("blockedbyclient") -- distinguishes a policy denial from a
+# genuine network/interaction failure.
+_NETWORK_POLICY_BLOCKED_MARKERS: tuple[str, ...] = (
+    "blockedbyclient",
+    "err_blocked_by_client",
+    "ns_binding_aborted",
+)
+
+
+def _classify_browser_error(exc: Exception) -> str:
+    """Return a categorized, actionable error message for a browser failure.
+
+    Distinguishes the failure modes named in FX-F rather than passing a
+    possibly-cryptic raw exception through unlabeled:
+
+    * Missing playwright package (raised explicitly as ``RuntimeError``
+      by :meth:`BrowserSession._start`).
+    * Browser binary not installed (``playwright install firefox`` never
+      run).
+    * Sandbox/kernel/namespace launch failure -- the browser process
+      itself could not start under this environment's kernel
+      restrictions (e.g. ``unshare(CLONE_NEWPID): EPERM``, a Protocol
+      error on ``Browser.enable``). This is an environment limitation,
+      not a Missy bug, and must never be silently "fixed" by relaxing
+      sandboxing; remediation points to a disposable test environment
+      instead.
+    * Everything else (navigation timeouts, DNS failures, selector not
+      found, etc.) is returned as-is -- those are real interaction
+      errors, not launch failures, and relabeling them would be
+      misleading.
+
+    Args:
+        exc: The exception raised by a Playwright call.
+
+    Returns:
+        A message combining the real error text with a category label
+        and remediation guidance where applicable.
+    """
+    text = str(exc)
+    lowered = text.lower()
+
+    if "playwright not installed" in lowered:
+        return text  # Already specific; _start() sets its own guidance.
+
+    if any(marker in lowered for marker in _NETWORK_POLICY_BLOCKED_MARKERS):
+        return (
+            f"Blocked by Missy's network policy: {text}\n"
+            "This request's destination host is not on the configured "
+            "network allowlist. Add it to network.allowed_hosts/"
+            "allowed_domains/presets if this destination should be "
+            "reachable — do not disable this check as a workaround."
+        )
+
+    if any(marker in lowered for marker in _INSTALLATION_ERROR_MARKERS):
+        return (
+            f"Browser installation error: {text}\n"
+            "Remediation: run `playwright install firefox` to download the "
+            "browser binary Playwright expects."
+        )
+
+    if any(marker in lowered for marker in _SANDBOX_LAUNCH_ERROR_MARKERS):
+        return (
+            f"Browser sandbox/kernel launch failure: {text}\n"
+            "This environment's kernel or container restrictions "
+            "(namespaces, seccomp) prevented the browser process itself "
+            "from starting -- it is not a missing tool, a policy denial, "
+            "or a Missy bug. Remediation: run browser tools in a "
+            "disposable test environment whose kernel/seccomp/namespace "
+            "configuration supports the browser (see FX-F). Do not "
+            "disable sandboxing, add SYS_ADMIN, or run privileged "
+            "containers as a fix -- that weakens production security for "
+            "every workload, not just browser tools."
+        )
+
+    return text
+
+
 def _err(exc: Exception) -> ToolResult:
-    return ToolResult(success=False, output=None, error=str(exc))
+    return ToolResult(success=False, output=None, error=_classify_browser_error(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +386,23 @@ class BrowserNavigateTool(BaseTool):
         },
         "session_id": {"type": "string", "description": "Session name (default 'default')."},
     }
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        """SR-1.6: gate the target host before ever touching Playwright.
+
+        The registry previously performed zero host checks for this tool
+        (``allowed_hosts`` was declared empty, and there was no dynamic
+        heuristic for network targets at all), so ``page.goto(url)`` ran
+        with no policy check whatsoever. This gives a clean, immediate
+        denial for the common case; :func:`_route_through_network_policy`
+        additionally covers redirects/subresources/JS-driven navigation
+        that happen after this initial check.
+        """
+        url = kwargs.get("url")
+        if not url:
+            return []
+        host = urlparse(url).hostname
+        return [host] if host else []
 
     def execute(
         self,
@@ -338,7 +520,16 @@ class BrowserFillTool(BaseTool):
 class BrowserScreenshotTool(BaseTool):
     name = "browser_screenshot"
     description = "Take a screenshot of the current browser page."
-    permissions = ToolPermissions(network=True)
+    # filesystem_write=True is required, not just network=True: execute()
+    # writes an agent-controlled `path` kwarg to disk via Playwright.
+    # Without this flag, ToolRegistry._check_permissions() never enters
+    # its filesystem_write branch at all, so engine.check_write() is
+    # never called for this tool -- every other write-capable tool in
+    # this codebase (file_write.py, x11_tools.py's screenshot tool, the
+    # vision capture tools) correctly declares this; it was missed here.
+    # No resolve_filesystem_targets() override is needed since the
+    # registry's generic heuristic already checks a `path` kwarg.
+    permissions = ToolPermissions(network=True, filesystem_write=True)
     parameters = {
         "path": {
             "type": "string",

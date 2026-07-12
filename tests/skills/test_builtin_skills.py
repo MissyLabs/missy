@@ -701,13 +701,19 @@ class TestHealthCheckSkill:
 class TestFormatTurns:
     @pytest.fixture()
     def _make_turn(self):
-        """Factory for fake ConversationTurn-like objects."""
+        """Factory for fake ConversationTurn-like objects.
+
+        timestamp is an ISO-8601 string, matching
+        SQLiteMemoryStore.ConversationTurn (the production backend since
+        FX-B) -- not a datetime object, which is what the legacy JSON
+        store's ConversationTurn used.
+        """
 
         def factory(role: str, content: str, ts=None):
             turn = MagicMock()
             turn.role = role
             turn.content = content
-            turn.timestamp = ts or datetime.datetime(2025, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+            turn.timestamp = ts if ts is not None else "2025-01-01T12:00:00+00:00"
             return turn
 
         return factory
@@ -753,8 +759,7 @@ class TestFormatTurns:
     def test_timestamp_in_output(self, _make_turn):
         from missy.skills.builtin.summarize_session import _format_turns
 
-        ts = datetime.datetime(2025, 6, 15, 10, 30, 0, tzinfo=datetime.UTC)
-        turn = _make_turn("user", "test", ts=ts)
+        turn = _make_turn("user", "test", ts="2025-06-15T10:30:00+00:00")
         result = _format_turns([turn])
         assert "2025-06-15" in result
 
@@ -798,7 +803,9 @@ class TestSummarizeSessionSkill:
         turn = MagicMock()
         turn.role = "user"
         turn.content = "What is the weather?"
-        turn.timestamp = datetime.datetime(2025, 3, 1, 9, 0, 0, tzinfo=datetime.UTC)
+        # ISO-8601 string, matching SQLiteMemoryStore.ConversationTurn (the
+        # production backend since FX-B), not a datetime object.
+        turn.timestamp = "2025-03-01T09:00:00+00:00"
         return turn
 
     def test_missing_session_id_returns_failure(self, skill):
@@ -814,19 +821,42 @@ class TestSummarizeSessionSkill:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = [mock_turn]
 
-        # MemoryStore is imported locally inside execute(), so patch at the
-        # source module rather than at the skill module's namespace.
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        # SQLiteMemoryStore is imported locally inside execute(), so patch at
+        # the source module rather than at the skill module's namespace.
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="session-abc")
 
         _assert_result(result, success=True)
         assert "session-abc" in result.output
 
+    def test_reads_real_turns_from_sqlite_backend(self, skill, tmp_path):
+        """SR-3.1/3.5 regression: this skill previously constructed the
+        legacy JSON MemoryStore, which no longer receives any writes since
+        FX-B moved production onto SQLiteMemoryStore -- so this always
+        returned "no turns recorded" regardless of real session history.
+        Uses a real SQLiteMemoryStore against a real temp DB to confirm
+        genuinely-stored turns are retrieved.
+        """
+        from missy.memory.sqlite_store import ConversationTurn, SQLiteMemoryStore
+
+        db_path = str(tmp_path / "memory.db")
+        store = SQLiteMemoryStore(db_path)
+        store.add_turn(ConversationTurn.new("sess1", "user", "What's the deploy process?"))
+        store.add_turn(ConversationTurn.new("sess1", "assistant", "Run missy gateway start."))
+
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=store):
+            result = skill.execute(session_id="sess1")
+
+        _assert_result(result, success=True)
+        assert "Turns shown: 2" in result.output
+        assert "deploy process" in result.output
+        assert "missy gateway start" in result.output
+
     def test_valid_session_with_no_turns_returns_success(self, skill):
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = []
 
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="empty-session")
 
         _assert_result(result, success=True)
@@ -836,7 +866,7 @@ class TestSummarizeSessionSkill:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = [mock_turn, mock_turn]
 
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="my-session")
 
         assert "Turns shown: 2" in result.output
@@ -845,7 +875,7 @@ class TestSummarizeSessionSkill:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = []
 
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="any-session")
 
         assert "-" * 60 in result.output
@@ -856,7 +886,7 @@ class TestSummarizeSessionSkill:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = []
 
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             skill.execute(session_id="s1")
 
         mock_store.get_session_turns.assert_called_once_with("s1", limit=_TURN_LIMIT)
@@ -865,7 +895,7 @@ class TestSummarizeSessionSkill:
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = []
 
-        with patch("missy.memory.store.MemoryStore", return_value=mock_store):
+        with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="s1", unknown_param="ignored")
 
         _assert_result(result, success=True)

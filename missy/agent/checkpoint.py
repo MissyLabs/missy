@@ -40,6 +40,15 @@ from missy.core.events import AuditEvent, event_bus
 
 logger = logging.getLogger(__name__)
 
+
+class CheckpointCorruptedError(Exception):
+    """Raised when a checkpoint's persisted loop state fails schema validation.
+
+    The offending checkpoint is marked ``FAILED`` before this is raised, so
+    it will not be offered for resume again.
+    """
+
+
 _DEFAULT_DB_PATH = "~/.missy/checkpoints.db"
 
 #: Age thresholds (in seconds) for checkpoint recovery classification.
@@ -213,6 +222,40 @@ class CheckpointManager:
         )
         conn.commit()
 
+    def claim(self, checkpoint_id: str) -> bool:
+        """Atomically transition a RUNNING checkpoint to COMPLETE.
+
+        Used by :meth:`~missy.agent.runtime.AgentRuntime.resume_checkpoint`
+        to close a TOCTOU race: a plain read-then-later-write (check
+        ``state == "RUNNING"``, do a lot of work, only *then* call
+        :meth:`complete`) lets two concurrent resume attempts against the
+        same checkpoint id (e.g. two ``missy recover --resume <id>``
+        invocations) both pass the check and both proceed to execute the
+        resumed tool loop -- duplicating every subsequent tool call
+        (duplicate shell commands, file writes, sent messages, etc.) for
+        the same task. This performs the state transition immediately, in
+        a single atomic ``UPDATE ... WHERE state = 'RUNNING'``, so only
+        the caller whose update actually changed a row wins the race;
+        every other concurrent caller gets ``False`` and must not proceed.
+
+        Args:
+            checkpoint_id: The checkpoint to claim.
+
+        Returns:
+            ``True`` if this call performed the RUNNING -> COMPLETE
+            transition (i.e. this caller won the race), ``False`` if the
+            checkpoint was not in the ``RUNNING`` state (already resumed
+            by another caller, or never running).
+        """
+        conn = self._connect()
+        cursor = conn.execute(
+            "UPDATE checkpoints SET state = 'COMPLETE', updated_at = ? "
+            "WHERE id = ? AND state = 'RUNNING'",
+            (time.time(), checkpoint_id),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
     def complete(self, checkpoint_id: str) -> None:
         """Mark a checkpoint as COMPLETE.
 
@@ -242,6 +285,21 @@ class CheckpointManager:
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
+
+    def get(self, checkpoint_id: str) -> dict | None:
+        """Fetch a single checkpoint by ID, in any state.
+
+        Args:
+            checkpoint_id: Primary key to look up.
+
+        Returns:
+            A dict with keys matching the ``checkpoints`` table columns
+            (``loop_messages``/``tool_names_used`` deserialised from JSON),
+            or ``None`` if no row exists with that ID.
+        """
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
+        return self._row_to_dict(row) if row is not None else None
 
     def get_incomplete(self) -> list[dict]:
         """Return all checkpoints with state ``RUNNING``.
@@ -280,12 +338,29 @@ class CheckpointManager:
     # ------------------------------------------------------------------
 
     def abandon_old(self, max_age_seconds: int = _RESTART_THRESHOLD_SECS) -> int:
-        """Set state=ABANDONED for RUNNING checkpoints older than *max_age_seconds*.
+        """Set state=ABANDONED for RUNNING checkpoints inactive for *max_age_seconds*.
+
+        This runs on every :class:`~missy.agent.runtime.AgentRuntime`
+        construction (via :func:`scan_for_recovery`), across a single
+        shared ``checkpoints.db`` -- so a genuinely still-running,
+        long-lived task (plausible under ``gateway start``, which can run
+        for days) must not be abandoned out from under it just because an
+        unrelated, concurrent CLI invocation (``missy ask``, another
+        ``missy recover``, a proactive-trigger runtime) happens to
+        construct a new ``AgentRuntime`` while it's in progress. Filtering
+        on ``created_at`` (the original start time) rather than
+        ``updated_at`` (the last write, refreshed by every call to
+        :meth:`update`) previously did exactly that: a task that had been
+        running and actively checkpointing for >24h had its checkpoint
+        silently flipped to ABANDONED anyway, so if that process later
+        crashed, ``missy recover`` would never offer it for resume even
+        though it was genuinely still in flight at abandon-time.
 
         Args:
-            max_age_seconds: Age cutoff in seconds.  Checkpoints whose
-                ``created_at`` timestamp is older than this are abandoned.
-                Defaults to 86400 (24 hours).
+            max_age_seconds: Inactivity cutoff in seconds. Checkpoints
+                whose ``updated_at`` timestamp (last write, not creation
+                time) is older than this are abandoned. Defaults to 86400
+                (24 hours).
 
         Returns:
             The number of rows updated.
@@ -298,7 +373,7 @@ class CheckpointManager:
                SET state      = 'ABANDONED',
                    updated_at = ?
              WHERE state = 'RUNNING'
-               AND created_at < ?
+               AND updated_at < ?
             """,
             (time.time(), cutoff),
         )
@@ -362,6 +437,70 @@ class CheckpointManager:
             except (json.JSONDecodeError, TypeError):
                 d[key] = []
         return d
+
+
+#: Roles a persisted loop message may carry. Matches the dict shapes
+#: AgentRuntime._tool_loop() appends to loop_messages.
+_VALID_ROLES = frozenset({"user", "assistant", "tool", "system"})
+
+
+def validate_loop_messages(loop_messages: object) -> bool:
+    """Validate that *loop_messages* has the shape AgentRuntime expects.
+
+    Used before resuming a checkpoint (SR-4.3): a corrupted or
+    hand-edited ``loop_messages`` column must never be fed straight into
+    the provider/tool-call loop. Deliberately conservative -- rejects
+    anything that doesn't look exactly like what
+    ``AgentRuntime._tool_loop()`` itself writes, rather than trying to
+    sanitise or coerce malformed data into something usable.
+
+    Args:
+        loop_messages: The deserialised value read back from the
+            checkpoints table (expected: ``list[dict]``).
+
+    Returns:
+        ``True`` if every entry has a recognised ``role`` and the
+        role-appropriate required keys; ``False`` otherwise (including
+        when *loop_messages* itself isn't a list).
+    """
+    if not isinstance(loop_messages, list) or not loop_messages:
+        return False
+    for msg in loop_messages:
+        if not isinstance(msg, dict):
+            return False
+        role = msg.get("role")
+        if role not in _VALID_ROLES:
+            return False
+        # AgentRuntime._tool_loop() always writes tool_call_id alongside
+        # name/content (runtime.py's loop_messages.append for role=="tool").
+        # Without this check, a checkpoint missing tool_call_id passed
+        # validation, and OpenAIProvider._message_to_chat_payload()
+        # silently drops that tool message (no repair event logged,
+        # unlike its sibling orphan-tool-result path) while leaving the
+        # preceding assistant message's tool_calls entry in the payload
+        # -- producing exactly the shape the real OpenAI API rejects
+        # with "the following tool_call_ids did not have response
+        # messages," on the very next round after a checkpoint resume.
+        if role == "tool" and (
+            not isinstance(msg.get("name"), str)
+            or "content" not in msg
+            or not isinstance(msg.get("tool_call_id"), str)
+            or not msg["tool_call_id"]
+        ):
+            return False
+        if role == "assistant" and "tool_calls" in msg:
+            tool_calls = msg["tool_calls"]
+            if not isinstance(tool_calls, list):
+                return False
+            for tc in tool_calls:
+                if (
+                    not isinstance(tc, dict)
+                    or not isinstance(tc.get("name"), str)
+                    or not isinstance(tc.get("id"), str)
+                    or not tc["id"]
+                ):
+                    return False
+    return True
 
 
 # ---------------------------------------------------------------------------

@@ -861,12 +861,22 @@ class GraphMemoryStore:
                 all_rels[r.id] = r
             all_paths.extend(sub.paths)
 
-        # Sort entities by mention_count descending, truncate to limit
-        sorted_entities = sorted(
-            all_entities.values(),
+        # Always keep the directly name-matched seed entities -- the actual
+        # subject of the query -- ahead of their BFS-discovered neighbors.
+        # Sorting the combined pool by mention_count alone let a handful of
+        # popular, merely co-occurring neighbor entities (e.g. frequently
+        # used tools) crowd the queried entity itself out of the truncated
+        # result entirely, defeating the purpose of a query-relevance
+        # lookup. Neighbors still fill any remaining slots, ranked by
+        # mention_count as before.
+        seed_id_set = set(seed_ids[:5])
+        seed_entities = [all_entities[sid] for sid in seed_ids[:5] if sid in all_entities]
+        neighbor_entities = sorted(
+            (e for e in all_entities.values() if e.id not in seed_id_set),
             key=lambda e: e.mention_count,
             reverse=True,
-        )[:limit]
+        )
+        sorted_entities = (seed_entities + neighbor_entities)[:limit]
         kept_ids = {e.id for e in sorted_entities}
         filtered_rels = [
             r for r in all_rels.values() if r.source_id in kept_ids and r.target_id in kept_ids
@@ -1046,7 +1056,41 @@ class GraphMemoryStore:
         if not keep or not going:
             return
 
-        # Reassign relationships
+        # Reassign relationships. If the keeper already has an equivalent
+        # relationship (same target/relation_type, or same source/relation_type)
+        # -- exactly the documented use case of merging two spellings of the
+        # same entity that were both independently observed relating to the
+        # same third entity -- a plain UPDATE would collide with
+        # relationships' UNIQUE(source_id, target_id, relation_type)
+        # constraint and raise sqlite3.IntegrityError. Drop the now-redundant
+        # merge_id-side row first so the UPDATE is collision-free; the
+        # keeper's existing equivalent row is preserved.
+        conn.execute(
+            """
+            DELETE FROM relationships
+            WHERE source_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM relationships AS r2
+                  WHERE r2.source_id = ?
+                    AND r2.target_id = relationships.target_id
+                    AND r2.relation_type = relationships.relation_type
+              )
+            """,
+            (merge_id, keep_id),
+        )
+        conn.execute(
+            """
+            DELETE FROM relationships
+            WHERE target_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM relationships AS r2
+                  WHERE r2.target_id = ?
+                    AND r2.source_id = relationships.source_id
+                    AND r2.relation_type = relationships.relation_type
+              )
+            """,
+            (merge_id, keep_id),
+        )
         conn.execute(
             "UPDATE relationships SET source_id = ? WHERE source_id = ?",
             (keep_id, merge_id),
