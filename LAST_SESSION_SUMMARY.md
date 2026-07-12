@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (107 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-eight consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (108 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-nine consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4478,15 +4478,59 @@ passed`. `pytest tests/agent/ -q`: `4299 passed, 4 skipped`.
 `test_streaming_failure_logged`, confirmed passing again after the
 `getattr` correction).
 
+### Post-backlog (one-hundred-first checkpoint): round 44 research pass — budget-enforcement gap in run_stream()'s streaming path; two further residuals documented
+
+Round 44 re-hunted the round 42-43 "enforcement wired into only one of
+several call paths" pattern across `TrustScorer`, `_check_budget()`/
+cost tracking, and rate limiting — `_acquire_rate_limit()` and
+`_score_tool_trust()` are both already correctly invoked everywhere
+(clean). `agent/checkpoint.py`'s `CheckpointManager` and
+`agent/done_criteria.py`'s verification logic are clean.
+
+**Found and fixed a real budget-enforcement gap: `run_stream()`'s
+streaming path never checked budget before calling
+`provider.stream()`.** `_single_turn()`/`_tool_loop()` both check
+budget before every paid provider call, but `run_stream()`'s
+single-turn streaming branch — the common no-tools/"chat-only" path —
+called `provider.stream(...)` directly with zero pre-flight check. A
+session already over `max_spend_usd` could stream indefinitely
+through this path. Live-reproduced: seeded a session's `CostTracker`
+already over its cap, confirmed `run_stream()` proceeded anyway
+pre-fix. Fixed by adding the same `_check_budget()` pre-flight call
+`_single_turn()` already makes. Note: `provider.stream()` has no
+usage/cost data to record afterward (unlike `CompletionResponse`) —
+documented as a residual, not fixed, since that requires a broader
+streaming-interface redesign. 1 new test, confirmed via `git stash` to
+genuinely fail pre-fix.
+
+**Two further residuals documented, not fixed:** `PromptPatchManager`
+is never wired into `AgentRuntime` at all — `build_patch_prompt()`
+has zero production callers, so an approved patch has zero effect on
+agent behavior indefinitely; left undone since correctly wiring it
+requires a genuine design decision (where in `_build_messages()`'s
+existing injection order patch guidance belongs, and what "success"
+means for `record_outcome()`), the same category as the round-32
+`SleeptimeWorker` residual. `resume_checkpoint()` grants a resumed
+task a full fresh `max_iterations` budget rather than the remainder —
+plausibly an intentional "resume = a fresh attempt budget"
+simplification rather than a bug, left as-is pending an explicit
+product decision.
+
+Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `9
+passed`. `pytest tests/agent/ -q`: `4300 passed, 4 skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21437 passed, 14 skipped in 747.68s (0:12:27)
+21438 passed, 14 skipped in 546.64s (0:09:06)
 ```
 
-**Zero failures**, the fifty-eighth consecutive fully green
-full-suite run. Passed count is up from 21435 to 21437 (the round 43
+**Zero failures**, the fifty-ninth consecutive fully green full-suite
+run. Passed count is up from 21437 to 21438 (the round 44 checkpoint's
+1 new test, `test_run_stream_enforces_budget_before_streaming`; all
+of the sixty-first through one-hundredth checkpoints' fixes are
+confirmed still holding). Passed count is up from 21435 to 21437 (the round 43
 checkpoint's 2 new tests in `TestDriftDetectorTamperWarning`; all of
 the sixty-first through ninety-ninth checkpoints' fixes are confirmed
 still holding). Passed count is up from 21432 to 21435 (the round 42

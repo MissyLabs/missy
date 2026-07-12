@@ -896,6 +896,19 @@ class AgentRuntime:
                 detail={"prompt_id": "system_prompt"},
             )
 
+        # SR-3.4-class gap: _single_turn()/_tool_loop() both check budget
+        # before every paid provider call, but this streaming path called
+        # provider.stream() directly with no pre-flight check at all --
+        # a session already over max_spend_usd could still stream
+        # indefinitely through this path. provider.stream() only yields
+        # text deltas with no usage/cost info (unlike CompletionResponse),
+        # so _record_cost() genuinely cannot be called afterward without
+        # a broader redesign of the streaming interface to also surface
+        # token usage -- that part is a documented residual, not fixed
+        # here. The pre-flight check itself, which only reads already-
+        # accumulated cost from *prior* calls, is fully fixable now.
+        self._check_budget(session_id=sid, task_id="")
+
         self._acquire_rate_limit()
 
         full_text = ""

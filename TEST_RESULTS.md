@@ -1,5 +1,36 @@
 # TEST_RESULTS
 
+## Run: 2026-07-14 00:25 UTC — round 44 research pass: budget-enforcement gap in run_stream()'s streaming path
+
+- Context: round 44 re-hunted the round 42-43 "enforcement wired into
+  only one of several call paths" pattern across TrustScorer,
+  _check_budget()/cost tracking, and rate limiting -- both
+  _acquire_rate_limit() and _score_tool_trust() are already correctly
+  invoked everywhere (clean). agent/checkpoint.py's CheckpointManager
+  and agent/done_criteria.py's verification logic are clean. Two
+  further residuals documented (not fixed): PromptPatchManager is
+  never wired into AgentRuntime at all (approved patches have zero
+  effect on agent behavior), and resume_checkpoint() grants a resumed
+  task a full fresh max_iterations budget rather than the remainder --
+  both left pending an explicit design/product decision rather than a
+  rushed fix.
+- **Budget-enforcement gap in run_stream()**: the streaming path's
+  single-turn branch called provider.stream() directly with zero
+  pre-flight budget check, unlike _single_turn()/_tool_loop() which
+  both check budget before every paid call. A session already over
+  max_spend_usd could stream indefinitely through this path. Live-
+  reproduced: seeded a session's CostTracker already over its cap,
+  confirmed run_stream() proceeded to call provider.stream() anyway
+  pre-fix. Fixed by adding the same _check_budget() pre-flight call
+  right before the streaming call. Note: provider.stream() has no
+  usage/cost data to record afterward (unlike CompletionResponse) --
+  documented as a residual, not fixed, since that requires a broader
+  streaming-interface redesign.
+- Command: `pytest tests/agent/test_runtime_streaming.py -k test_run_stream_enforces_budget_before_streaming -v`
+- Result: `1 passed`. Confirmed via `git stash` to genuinely fail pre-fix.
+- Broader sweep: `pytest tests/agent/test_runtime_streaming.py -q`: `9 passed`.
+  `pytest tests/agent/ -q`: `4300 passed, 4 skipped`.
+
 ## Run: 2026-07-13 23:50 UTC — round 43 research pass: PromptDriftDetector coverage gap on non-tool-loop and streaming completion paths
 
 - Context: round 43 checked core/message_bus.py (clean), security/

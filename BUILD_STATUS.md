@@ -7703,6 +7703,76 @@ tests/unit/ -q`: `2248 passed` (includes
 `21437 passed, 14 skipped in 747.68s (0:12:27)` — 0 failed, up from
 21435. Fifty-eighth consecutive fully green full-suite run.
 
+### Post-backlog (one-hundred-first checkpoint): round 44 research pass fixes a budget-enforcement gap in run_stream()'s streaming path; documents two further residuals
+
+Round 44 explicitly re-hunted the round 42-43 "enforcement wired into
+only one of several call paths" pattern across `TrustScorer` scoring,
+`_check_budget()`/cost tracking, and rate limiting — `_acquire_rate_limit()`
+and `_score_tool_trust()` are both already correctly invoked on every
+relevant path (clean). `agent/checkpoint.py`'s `CheckpointManager`/WAL
+mechanics and `claim()` TOCTOU handling are clean, already hardened.
+`agent/done_criteria.py`'s verification-rejection logic correctly
+covers `delegate_task` sub-agent failures via the generic
+`ToolResult.is_error` flag (clean).
+
+**Found and fixed a real budget-enforcement gap: `run_stream()`'s
+streaming path never checked budget before calling
+`provider.stream()`.** `_single_turn()` and `_tool_loop()` both check
+budget before every paid provider call (the `_single_turn()` docstring
+even calls this out: "previously never checked budget at all... used
+both directly... and as `_tool_loop`'s fallback"), but `run_stream()`'s
+single-turn streaming branch — the common no-tools/"chat-only" path —
+called `self._acquire_rate_limit()` then `provider.stream(...)`
+directly with zero pre-flight budget check. A session already over
+`max_spend_usd` could stream indefinitely through this path with the
+cap never enforced. Live-reproduced: seeded a session's `CostTracker`
+already over its configured cap, confirmed `run_stream()` proceeded to
+call `provider.stream()` anyway pre-fix. Fixed by adding the same
+`_check_budget()` pre-flight call `_single_turn()` already makes,
+right before the streaming call. Note: `provider.stream()` only yields
+raw text deltas with no usage/cost data (unlike `CompletionResponse`),
+so `_record_cost()` genuinely cannot be called afterward for this path
+without a broader redesign of the streaming interface to also surface
+token usage — documented as a residual rather than force-fixed; the
+pre-flight budget *check* itself (which only reads already-accumulated
+cost from prior calls, not this call's own cost) is fully fixable and
+now fixed. 1 new test, confirmed via `git stash` to genuinely fail
+pre-fix.
+
+**Documented residual: `PromptPatchManager` is never wired into
+`AgentRuntime` at all.** `build_patch_prompt()`/`get_active_patches()`
+have zero production callers anywhere in the codebase outside the
+module's own docstring example — `missy patches approve/reject`
+(`cli/main.py`) only flips `PatchStatus` in the JSON store; nothing
+ever injects the resulting "## Active Prompt Guidance" text into a
+system prompt sent to a provider, and nothing ever calls
+`record_outcome()` to track a patch's real-world success rate. An
+approved patch has zero effect on agent behavior, indefinitely. Not
+force-fixed this round: correctly wiring it requires a genuine design
+decision (exactly where in `_build_messages()`'s existing
+playbook/synthesized-memory injection order patch guidance should be
+inserted, and what "success" means for `record_outcome()`'s per-run
+tracking) rather than a single obviously-correct line — the same
+category of gap as the round-32 `SleeptimeWorker` residual, left for a
+dedicated future round rather than a rushed wiring change.
+
+**Documented residual: `resume_checkpoint()` grants a resumed task a
+full fresh `max_iterations` budget rather than the remainder.** A task
+that crashes at iteration 9 of a 10-iteration cap can, after
+`missy recover --resume`, run up to 19 rounds total before hitting the
+cap again, since `resume_checkpoint()` never threads the checkpoint's
+recorded `iteration` count into the fresh `_tool_loop()` call it makes.
+Plausibly an intentional simplification ("resume = a fresh attempt
+budget") rather than a bug — checked but left as-is pending an
+explicit product decision on the intended resume semantics.
+
+Verified: `pytest tests/agent/test_runtime_streaming.py -q`: `9
+passed`. `pytest tests/agent/ -q`: `4300 passed, 4 skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21438 passed, 14 skipped in 546.64s (0:09:06)` — 0 failed, up from
+21437. Fifty-ninth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security
