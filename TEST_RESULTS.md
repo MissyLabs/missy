@@ -1,5 +1,57 @@
 # TEST_RESULTS
 
+## Run: 2026-07-12 UTC — round 73 research pass: InteractiveApproval had no serialization across concurrent operator prompts, racing on shared stdin
+
+- Context: round 72 was research-only (no fix) — `AttentionSystem`'s
+  `SelectiveAttention`/`context_filter` is fully implemented and
+  unit-tested but never wired into memory-fragment retrieval in
+  production (documented as a residual in BUILD_STATUS.md alongside
+  `GraphMemoryStore`/`ModelRouter`; no code changed, no separate
+  commit). Round 73 re-checked `operator_controls.py`/`web_console.py`,
+  `hatching.py`, and `behavior.py` (all clean, prior fixes holding),
+  then found and fixed a genuine concurrency bug in
+  `InteractiveApproval`.
+- **Fixed: `InteractiveApproval.prompt_user()` had no lock
+  serializing concurrent calls to `_do_prompt()`, which prints a Rich
+  panel and blocks on `console.input()` reading stdin.** The module-
+  level `_interactive_approval` singleton (`gateway/client.py`) is
+  shared process-wide, and `SubAgentRunner.run_all()` genuinely runs
+  independent subtasks concurrently via `ThreadPoolExecutor`
+  (`MAX_CONCURRENT=3`), each reusing the same `AgentRuntime`/session.
+  A compound prompt with two independently-blocked hosts could
+  produce two threads hitting `_check_url()` and calling
+  `prompt_user()` at nearly the same moment: both pass
+  `check_remembered() is None` and both reach `_do_prompt()`
+  concurrently -- two Rich panels interleave on stderr and two
+  blocking `console.input()` calls race for the same stdin, so the
+  operator's single typed response could resolve the *wrong* prompt
+  or get attributed to the wrong action/detail. No lock, timeout, or
+  prompt-identification token distinguished which panel a given
+  keystroke answered. Fixed by adding a dedicated `_prompt_lock`
+  (deliberately separate from the existing `_lock`, which only
+  guards the `_remembered` dict -- holding the same lock across the
+  blocking I/O in `_do_prompt()` while its own "allow always" branch
+  also acquires it would deadlock) serializing the entire
+  `_do_prompt()` call. Also added a re-check of `check_remembered()`
+  immediately after acquiring the lock, so a second caller that was
+  blocked waiting while a first caller resolved (and possibly
+  recorded an "allow always" for) the *exact same*
+  action/detail/session reuses that answer instead of showing the
+  operator a redundant, confusing duplicate prompt.
+- Command: `pytest tests/agent/test_interactive_approval.py -v`
+- Result: `12 passed` (2 new:
+  `test_concurrent_prompts_never_overlap`,
+  `test_second_caller_reuses_decision_made_while_waiting_for_the_lock`),
+  both confirmed via `git stash` to genuinely fail pre-fix (max
+  concurrent `_do_prompt()` entries > 1; second caller's prompt
+  called twice instead of reusing the first caller's remembered
+  decision).
+- Broader sweep: `pytest tests/agent/ tests/gateway/ -q`: `4705
+  passed, 4 skipped`.
+- Full suite: `python3 -m pytest tests/ -q` → `21523 passed, 18
+  skipped in 784.24s (0:13:04)` — 0 failed, up from 21521.
+  Eighty-sixth consecutive fully green full-suite run.
+
 ## Run: 2026-07-12 UTC — round 71 research pass: RateLimiter.record_usage() double-deducted every completion; SkillDiscovery's YAML block-list parser dropped the standard unindented form
 
 - Context: round 71's research agent surveyed `missy/skills/discovery.py`,

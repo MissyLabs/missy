@@ -9864,6 +9864,145 @@ also confirms the self-caught negative-total regression fix above
 holds under real full-suite conditions, and that the sanitizer
 test-order artifact noted above does not reproduce here.)
 
+### Round 72 (research-only, no findings requiring a fix): AttentionSystem's SelectiveAttention/context_filter fully implemented and unit-tested but never wired into memory-fragment retrieval; operator_controls.py, hatching.py, behavior.py re-checked clean
+
+Round 72 checked `missy/api/operator_controls.py` (clean — the
+falsy-zero truthiness bug this file previously had in
+`_execute_candidate_import_benchmarks` is already fixed and
+commented; scheduler pause/resume/remove confirmation-token and
+state-guard logic all correct and consistent between success/failure
+paths), `missy/agent/hatching.py` (clean — the memory-seeding dedup
+guard and other idempotency gaps this file previously had are already
+fixed), and `missy/agent/behavior.py` (clean — the tone-analysis/
+robotic-phrase-stripping/greeting-classification bugs this file
+previously had are already fixed; remaining intent/urgency pattern
+ordering is internally consistent).
+
+One candidate finding surfaced in `missy/agent/attention.py`, but it
+does not have a bounded, unambiguous fix the way rounds 69-71's
+findings did — documented as a residual rather than force-fixed.
+`SelectiveAttention.filter()` (a static method that narrows a list of
+memory fragments down to those containing a topic word) and
+`AttentionState.context_filter` (populated every call in
+`AttentionSystem.process()`) are both fully implemented and
+thoroughly unit-tested in isolation
+(`tests/agent/test_attention.py`, `tests/agent/test_attention_state_edges.py`)
+— but neither is ever consumed anywhere outside `attention.py` itself
+and its own tests (confirmed via grep: zero call sites for
+`SelectiveAttention` or `context_filter` anywhere else in `missy/`).
+The class's own docstring for `context_filter` explicitly claims it's
+meant to "filter memory fragments for selective retrieval," but
+`AgentRuntime.run()` (the sole caller of `AttentionSystem.process()`)
+only reads `attn_state.topics` and `attn_state.priority_tools`;
+memory-fragment relevance filtering is instead handled entirely by
+`MemorySynthesizer`'s independent keyword-overlap scoring, which
+never calls into `SelectiveAttention.filter()` at all. Unlike rounds
+69-71's fixes, this isn't a case of "the wiring already exists but
+skips a step" — there currently is no single, unambiguous call site
+where raw memory fragments are gathered and could be filtered before
+`MemorySynthesizer` scores them (an existing code comment elsewhere
+in `runtime.py` already documents that "no production caller ever
+passes memory_results/learnings into build_messages() itself").
+Wiring `SelectiveAttention` in would mean either redirecting
+`MemorySynthesizer` to pre-filter through it (a design question about
+whether a simple keyword-membership filter should gate a more
+sophisticated relevance-scored system, and whether that's even
+additive rather than redundant) or inventing a new fragment-retrieval
+call site that doesn't exist today — a genuine architectural decision,
+not a mechanical bug, matching this session's established precedent
+for `ModelRouter`/`GraphMemoryStore`/`VisionMemoryBridge` (whole
+subsystem confirmed unwired, documented rather than wired into an
+unmotivated call site). A related, lower-confidence observation:
+`SustainedAttention`'s `focus_duration` is computed every turn but
+only ever reaches a `logger.debug()` call in `runtime.py` — never
+consulted by `ExecutiveAttention.prioritise()` or anything else
+despite the subsystem's stated role in guiding tool prioritization;
+plausibly an intentional "reserved for future use" signal rather than
+a bug (the same class of judgment call as round 67's
+`resume_job()`/`consecutive_failures` residual), noted for awareness.
+
+No code changed this round; folded into the next checkpoint that
+contains an actual fix rather than committed/pushed standalone.
+
+### Post-backlog (one-hundred-twenty-eighth checkpoint): round 73 research pass fixes `InteractiveApproval` having no serialization across concurrent operator prompts, racing on shared stdin
+
+Round 73 re-checked `operator_controls.py`/`web_console.py`
+(clean — the falsy-zero truthiness bug this file previously had is
+already fixed and commented; scheduler pause/resume/remove
+confirmation-token and state-guard logic all correct), `hatching.py`
+(clean — prior idempotency fixes holding), and `behavior.py` (clean —
+prior tone-analysis/phrase-stripping fixes holding). One genuine,
+fresh concurrency bug surfaced in `missy/agent/interactive_approval.py`.
+
+**Fixed: `InteractiveApproval.prompt_user()` had no lock serializing
+concurrent calls to `_do_prompt()`, which prints a Rich panel and
+blocks on `console.input()` reading stdin — nothing prevented two
+threads from doing this at the same moment.** The module-level
+`_interactive_approval` singleton (`missy/gateway/client.py`) is
+shared process-wide, and `SubAgentRunner.run_all()`
+(`missy/agent/sub_agent.py`) genuinely runs independent subtasks
+concurrently via a `ThreadPoolExecutor` (`MAX_CONCURRENT=3`), each
+reusing the same `AgentRuntime`/session. Concretely: a compound
+prompt like "1. Fetch https://blocked-a.example  2. Fetch
+https://blocked-b.example" produces two independent `SubTask`s
+(numbered list items get no `depends_on` by design) that run in two
+threads at once; if both hosts are policy-denied, both threads reach
+`gateway/client.py`'s `_check_url()` and both call the same shared
+`_interactive_approval.prompt_user(...)` at essentially the same
+moment. Both pass `check_remembered() is None` and both reach
+`_do_prompt()` concurrently: two Rich panels interleave on stderr,
+and two blocking `console.input()` calls race for the same stdin —
+whichever thread's `input()` wins consumes the operator's typed line,
+potentially resolving the *wrong* prompt (operator types "n" meaning
+to deny host B, but thread A's `input()` consumes it and treats host
+A as denied while host B silently hangs unanswered), or an "allow
+always" intended for one host gets recorded under a completely
+different action/detail's remembered-key. There was no lock, timeout,
+or prompt-identification token distinguishing which panel a given
+keystroke actually answered. The existing concurrency test
+(`TestThreadSafe::test_thread_safe`) only hammered
+`check_remembered()`/direct `_remembered` dict writes under the
+existing dict-guarding lock — it never exercised two concurrent
+`_do_prompt()`/`console.input()` calls, so this race was untested.
+Fixed by adding a dedicated `_prompt_lock` (deliberately *separate*
+from the existing `_lock`, which only guards the `_remembered` dict —
+holding the same lock across the blocking I/O in `_do_prompt()` while
+its own "allow always" branch also acquires that lock internally
+would deadlock if they were the same lock) that serializes the
+entire `_do_prompt()` call end to end. Also added a re-check of
+`check_remembered()` immediately after acquiring `_prompt_lock`, so a
+second caller that was blocked waiting while a first caller resolved
+(and possibly recorded an "allow always" for) the *exact same*
+action/detail/session reuses that answer instead of showing the
+operator a redundant, confusing duplicate prompt for an identical
+request. A related, lower-confidence, not-currently-exploitable
+observation was also surfaced: `_make_key()`'s plain colon-joining
+(`f"{session_id}:{action}:{detail}"`) could theoretically collide if
+`session_id` or `detail` itself contained a colon, but every current
+production caller passes a colon-free `session_id`
+(`f"voice-{user_id}"`, `f"proactive-{trigger.name}"`, UUIDs) and a
+fixed literal `"network_request"` action — flagged as a latent
+code-quality risk for if these sources ever become richer/user-
+influenced, not fixed here since it has no current reachable path.
+
+Live-verified with real threads (no mocking of the locking itself):
+a fake, tracked `_do_prompt()` proves concurrent calls never overlap
+(`max_active == 1` across 5 simultaneous callers), and a second
+scenario proves a caller blocked on the lock while another resolves
+the identical request reuses the remembered decision rather than
+re-prompting (`call_count == 1` across 2 threads requesting the exact
+same action/detail). 2 new tests in
+`TestConcurrentPromptsSerialized`, both confirmed via `git stash` to
+genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_interactive_approval.py -v`: `12
+passed`. `pytest tests/agent/ tests/gateway/ -q`: `4705 passed, 4
+skipped`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21523 passed, 18 skipped in 784.24s (0:13:04)` — 0 failed, up from
+21521. Eighty-sixth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

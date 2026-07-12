@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (133 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-five consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (134 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for eighty-six consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -5589,15 +5589,46 @@ test by removing its guard. Caught by running the full suite, fixed
 by restoring an explicit `if total < 0: return` guard ahead of the
 new net-adjustment math.
 
+### Post-backlog (one-hundred-twenty-eighth checkpoint): round 73 research pass — `InteractiveApproval` had no serialization across concurrent operator prompts, racing on shared stdin
+
+Round 73 re-checked `operator_controls.py`, `hatching.py`, and
+`behavior.py` (all clean, prior fixes holding).
+
+**Fixed: `InteractiveApproval.prompt_user()` had no lock serializing
+concurrent calls to `_do_prompt()`**, which prints a Rich panel and
+blocks on `console.input()` reading stdin. The module-level
+`_interactive_approval` singleton is shared process-wide, and
+`SubAgentRunner.run_all()` genuinely runs independent subtasks
+concurrently via a `ThreadPoolExecutor`, each reusing the same
+`AgentRuntime`/session. Two threads hitting a policy denial at once
+could both reach `_do_prompt()` simultaneously: two Rich panels
+interleave on stderr and two blocking `console.input()` calls race
+for the same stdin, so the operator's single typed response could
+resolve the wrong prompt. Fixed by adding a dedicated `_prompt_lock`
+(kept separate from the existing dict-guarding `_lock` to avoid
+deadlock) serializing `_do_prompt()` end to end, plus a re-check of
+`check_remembered()` after acquiring the lock so a blocked caller
+reuses another caller's just-recorded decision instead of re-
+prompting for the identical request. 2 new tests, both confirmed via
+`git stash` to genuinely fail pre-fix.
+
+Verified: `pytest tests/agent/test_interactive_approval.py -v`: `12
+passed`. `pytest tests/agent/ tests/gateway/ -q`: `4705 passed, 4
+skipped`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21521 passed, 18 skipped in 1983.51s (0:33:03)
+21523 passed, 18 skipped in 784.24s (0:13:04)
 ```
 
-**Zero failures**, the eighty-fifth consecutive fully green
-full-suite run. Passed count is up from 21516 to 21521 (the round 71
+**Zero failures**, the eighty-sixth consecutive fully green
+full-suite run. Passed count is up from 21521 to 21523 (the round 73
+checkpoint's 2 new tests in `TestConcurrentPromptsSerialized` — full
+detail above; all of the sixty-first through one-hundred-twenty-
+seventh checkpoints' fixes are confirmed still holding). Passed count
+is up from 21516 to 21521 (the round 71
 checkpoint's 5 net new tests: 1 SkillDiscovery block-list test, 1
 rate-limiter test rewritten plus 4 new — full detail above; all of
 the sixty-first through one-hundred-twenty-sixth checkpoints' fixes

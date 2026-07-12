@@ -47,6 +47,19 @@ class InteractiveApproval:
     def __init__(self) -> None:
         self._remembered: dict[str, bool] = {}
         self._lock = threading.Lock()
+        # Serializes _do_prompt() calls across concurrent callers (e.g.
+        # SubAgentRunner's ThreadPoolExecutor running independent subtasks
+        # concurrently against the same shared AgentRuntime/session). Without
+        # this, two threads hitting a policy denial at once could both reach
+        # _do_prompt() at the same moment: their Rich panels interleave on
+        # stderr and both block on console.input() reading the same stdin,
+        # so the operator's single typed response races between the two
+        # prompts and can resolve the wrong one. Deliberately a *different*
+        # lock than self._lock (which only guards the _remembered dict) --
+        # holding this one across the blocking I/O in _do_prompt() while
+        # self._lock is also acquired inside it (the "allow always" branch)
+        # would deadlock if they were the same lock.
+        self._prompt_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -107,7 +120,16 @@ class InteractiveApproval:
             )
             return False
 
-        return self._do_prompt(action, detail, session_id)
+        with self._prompt_lock:
+            # Re-check: another thread may have already prompted for this
+            # exact action/detail/session (and possibly recorded an "allow
+            # always" decision) while this call was waiting for the lock --
+            # in which case reuse that answer instead of showing the
+            # operator a redundant, confusing duplicate prompt.
+            remembered = self.check_remembered(action, detail, session_id)
+            if remembered is not None:
+                return remembered
+            return self._do_prompt(action, detail, session_id)
 
     # ------------------------------------------------------------------
     # Private helpers
