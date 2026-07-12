@@ -31,11 +31,26 @@ _TIMEOUT_MARKERS = ("timed out", "timeout")
 def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
     """Classify *exc* (typically a :class:`ProviderError`) by root cause.
 
-    Every built-in provider (Anthropic, OpenAI, Ollama, Codex, acpx) wraps
-    SDK-level errors into ``ProviderError`` messages that consistently
-    mention "authentication failed", "rate limit(ed)", or "timed out" for
-    those specific cases -- this reuses that existing message vocabulary
+    Anthropic, OpenAI, Ollama, and Codex each catch their own SDK's
+    *structured* exception types (e.g. ``anthropic.AuthenticationError``)
+    and deliberately construct their ``ProviderError`` message to mention
+    "authentication failed", "rate limit(ed)", or "timed out" for exactly
+    those cases -- this function reuses that existing message vocabulary
     rather than requiring providers to expose a structured error code.
+
+    ``acpx_provider.py`` is a structural exception to this: it wraps an
+    external CLI subprocess, not an SDK with typed exceptions, so it has
+    no equivalent structured signal to classify from -- its generic
+    failure/nonzero-exit paths relay the wrapped CLI's own raw stderr
+    text verbatim (e.g. ``f"acpx exited with code {code}: {stderr}"``)
+    with no attempt to detect auth/rate-limit conditions first. Unless
+    that raw external-CLI text happens to contain one of this module's
+    marker words, an acpx auth or rate-limit failure classifies as
+    ``UNKNOWN`` -- silently skipping the ``rotate_key()``/fallback
+    response an equivalent Anthropic/OpenAI/Codex failure would trigger.
+    Only its subprocess-timeout path is exempt, since that one is raised
+    by Missy's own code (not relayed CLI text) and explicitly says
+    "timed out".
 
     Args:
         exc: The exception raised by a provider call.

@@ -7311,6 +7311,89 @@ test_discord_protocol_deep.py -q`: `248 passed`. `pytest tests/channels/
 `21420 passed, 14 skipped in 679.94s (0:11:19)` — 0 failed, up from
 21415. Fifty-third consecutive fully green full-suite run.
 
+### Post-backlog (ninety-sixth checkpoint): round 38 research pass documents an architectural residual (tool_call/tool_result pairing in context/compaction/condensers) and fixes a misleading health.py docstring
+
+Round 38 targeted `agent/summarizer.py`/`agent/condensers.py` handoffs,
+`agent/compaction.py`'s leaf/condensation split, `providers/health.py`'s
+`classify_provider_error()` against each real provider's actual error
+shapes, and `agent/cost_tracker.py`/`agent/failure_tracker.py`
+concurrency under sub-agent parallelism. `CostTracker` is clean (every
+mutation is under `self._lock`, and `AgentRuntime._get_cost_tracker`
+locks the per-session dict too, so concurrent sub-agent threads
+aggregate correctly). `FailureTracker` has no internal lock, but each
+`AgentRuntime.run()` call — and thus each parallel sub-agent thread via
+`SubAgentRunner`'s `ThreadPoolExecutor` — constructs its own fresh
+`FailureTracker` instance rather than sharing one, so the missing lock
+is not currently reachable concurrently in practice.
+
+**Confirmed a real code-level gap in `context.py`/`compaction.py`/
+`condensers.py`'s eviction logic, but verified it is not currently
+reachable in production** — documented as an architectural residual
+rather than force-fixed, matching the round-32 `SleeptimeWorker`
+precedent. None of these modules' truncation/eviction logic is aware
+that a `role="assistant"` message with `tool_calls` must stay adjacent
+to its matching `role="tool"` result message(s) — `context.py`'s
+`fresh_tail`/`kept_evictable` split cuts strictly by position/token
+budget (lines 146-151, 172-177), `compaction.py`'s leaf-pass cut
+(lines 86-88) does the same over raw DB turns, and all three
+`condensers.py` stages (`AmortizedForgettingCondenser`,
+`WindowCondenser`, `SummarizingCondenser`) drop/split messages
+individually with no pairing check. However, tracing every real
+persistence path confirms this can't actually bite today:
+`AgentRuntime._save_turn()` is only ever called with `role="user"`/
+`"assistant"` and plain string content (`runtime.py:676,775,909,910,
+3107`) — never `role="tool"`, never a `tool_calls` field — so
+`_load_history()`'s reloaded dicts, `compaction.py`'s persisted
+`turns`, and `sleeptime.py`'s `_keyword_summarize()` (which feeds
+`MemoryConsolidator.extract_key_facts()`) never actually contain a
+tool_calls-bearing or tool-role message for this eviction logic to
+split. `MemoryConsolidator.consolidate()` (the actual method that
+invokes the condenser pipeline) additionally has zero production
+callers of its own. The live, actually-tool_calls-bearing conversation
+(`AgentRuntime._tool_loop()`'s in-memory `loop_messages`) never routes
+through any of this eviction machinery — it's bounded by
+`max_iterations` directly. Left undone rather than force-fixed:
+adding pairing-awareness for a data shape no live path currently
+produces would be speculative engineering for a hypothetical future
+feature (persisting tool-call turns), not a fix for an observable
+behavior — the same reasoning documented for the round-32 residual.
+
+**Fixed a misleading docstring in `providers/health.py`.**
+`classify_provider_error()`'s docstring claimed all five providers
+(Anthropic, OpenAI, Ollama, Codex, acpx) "consistently mention
+'authentication failed', 'rate limit(ed)', or 'timed out'" in their
+`ProviderError` messages. Reading `acpx_provider.py`'s actual code
+shows this is false for acpx specifically: Anthropic/OpenAI/Codex each
+catch their SDK's own *structured* exception types (e.g.
+`anthropic.AuthenticationError`) and deliberately construct a message
+using this module's exact vocabulary; `acpx_provider.py` wraps an
+external CLI subprocess with no equivalent structured signal, so its
+generic nonzero-exit path (line 1437) just relays the wrapped CLI's
+raw stderr text verbatim with no auth/rate-limit detection attempted
+at all — an acpx auth or rate-limit failure classifies as `UNKNOWN`
+unless the external, unowned CLI's own wording happens to contain one
+of this module's marker words, silently skipping the
+`rotate_key()`/fallback response an equivalent Anthropic/OpenAI/Codex
+failure would trigger. Corrected the docstring to state this
+precisely, and added a regression test that live-triggers
+`AcpxProvider`'s real nonzero-exit path with a realistic
+(deliberately non-matching) auth-failure-shaped stderr string,
+captures the actual `ProviderError` the real code raises, and confirms
+`classify_provider_error()` returns `UNKNOWN` for it — proving the gap
+against real code rather than a hypothetical. Not force-fixed with
+guessed marker words for the same reason as the residual above: the
+actual real-world acpx/wrapped-CLI auth-failure wording is external
+and unowned, and fabricating markers without evidence risks
+introducing unverified string-matching that could just as easily
+misclassify unrelated errors.
+
+Verified: `pytest tests/providers/test_provider_health.py -v`: `14
+passed`. `pytest tests/providers/ -q`: `944 passed`.
+
+**Full-suite confirmation:** `python3 -m pytest tests/ -q` →
+`21421 passed, 14 skipped in 725.96s (0:12:05)` — 0 failed, up from
+21420. Fifty-fourth consecutive fully green full-suite run.
+
 ### Remaining Work (priority order per prompt.md)
 
 FX-A through FX-G are all complete (see task list). **The security

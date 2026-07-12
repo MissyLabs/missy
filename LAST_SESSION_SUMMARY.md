@@ -5,7 +5,7 @@ Date: 2026-07-10
 Branch: `overhaul/missy-validation-20260710-031406`
 Draft PR: https://github.com/MissyLabs/missy/pull/31
 
-## Changed (102 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-three consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
+## Changed (103 checkpoints this session, full suite green after every one — the full suite itself has now been fully clean, zero failures, for fifty-four consecutive full-suite runs; the 89-case tool-specific validation backlog is now 100% complete with a formal scored harness record)
 
 ### FX-A through FX-G (validation-harness root causes) — condensed, full detail in BUILD_STATUS.md
 
@@ -4245,15 +4245,71 @@ Verified: `pytest tests/channels/test_discord_extended.py tests/
 channels/test_discord_protocol_deep.py -q`: `248 passed`. `pytest
 tests/channels/ -q -k discord`: `916 passed, 1067 deselected`.
 
+### Post-backlog (ninety-sixth checkpoint): round 38 research pass — architectural residual documented (tool_call/tool_result pairing) and a misleading health.py docstring fixed
+
+Round 38 targeted `agent/summarizer.py`/`agent/condensers.py`
+handoffs, `agent/compaction.py`'s leaf/condensation split,
+`providers/health.py`'s `classify_provider_error()` against each real
+provider's actual error shapes, and `agent/cost_tracker.py`/
+`agent/failure_tracker.py` concurrency under sub-agent parallelism.
+`CostTracker` is clean (locked mutations, locked per-session dict).
+`FailureTracker` has no internal lock, but each `AgentRuntime.run()`
+call (and each parallel sub-agent thread) constructs its own fresh
+instance rather than sharing one, so the missing lock isn't currently
+reachable concurrently.
+
+**A real code-level gap confirmed not reachable in production —
+documented as a residual, matching the round-32 `SleeptimeWorker`
+precedent.** None of `context.py`'s `fresh_tail`/`kept_evictable`
+split, `compaction.py`'s leaf-pass cut, or `condensers.py`'s three
+stages are aware that a `tool_calls`-bearing assistant message must
+stay adjacent to its tool-role result — all cut/drop by position/token
+budget alone. But tracing every real persistence path confirms this
+can't bite today: `AgentRuntime._save_turn()` is only ever called with
+`role="user"`/`"assistant"` and plain string content, never
+`role="tool"`, never a `tool_calls` field — so none of the
+reloaded/persisted turns this eviction logic actually operates on ever
+have that shape, and `MemoryConsolidator.consolidate()` (which invokes
+the condenser pipeline) has zero production callers of its own. The
+real tool-calling loop's in-memory messages never route through this
+eviction machinery at all — bounded by `max_iterations` directly. Left
+undone for the same reason as round 32's residual: fixing
+pairing-awareness for a data shape no live path produces would be
+speculative engineering, not a fix for observable behavior.
+
+**Fixed a misleading `providers/health.py` docstring.**
+`classify_provider_error()` claimed all five providers "consistently
+mention 'authentication failed'..." — false for acpx, which wraps an
+external CLI subprocess with no structured exception types and just
+relays the CLI's raw stderr verbatim with zero auth/rate-limit
+detection, unlike Anthropic/OpenAI/Codex, which each catch their SDK's
+own typed exceptions and deliberately construct this module's
+vocabulary. Corrected the docstring and added a regression test that
+live-triggers `AcpxProvider`'s real nonzero-exit path with a realistic
+(deliberately non-matching) auth-failure stderr string, captures the
+real `ProviderError` raised, and confirms `classify_provider_error()`
+returns `UNKNOWN` for it — proving the gap against real code. Not
+force-fixed with guessed marker words: the real external CLI's wording
+is unowned and unverifiable here, and fabricating markers risks
+introducing unverified string-matching that could just as easily
+misclassify unrelated errors.
+
+Verified: `pytest tests/providers/test_provider_health.py -v`: `14
+passed`. `pytest tests/providers/ -q`: `944 passed`.
+
 ## Verification
 
 ```text
 python3 -m pytest tests/ -q
-21420 passed, 14 skipped in 679.94s (0:11:19)
+21421 passed, 14 skipped in 725.96s (0:12:05)
 ```
 
-**Zero failures**, the fifty-third consecutive fully green
-full-suite run. Passed count is up from 21415 to 21420 (the round 37
+**Zero failures**, the fifty-fourth consecutive fully green
+full-suite run. Passed count is up from 21420 to 21421 (the round 38
+checkpoint's 1 new test,
+`TestClassifyProviderErrorAcpxBlindSpot`; all of the sixty-first
+through ninety-fifth checkpoints' fixes are confirmed still holding).
+Passed count is up from 21415 to 21420 (the round 37
 checkpoint's 5 new tests in `TestRequestWithRetryAppliedToOtherEndpoints`;
 round 36 was research-only with no findings, so it added nothing; all
 of the sixty-first through ninety-fourth checkpoints' fixes are

@@ -64,3 +64,47 @@ class TestClassifyProviderError:
     def test_provider_failure_class_is_str_enum(self):
         assert ProviderFailureClass.AUTH == "auth"
         assert str(ProviderFailureClass.RATE_LIMIT) == "rate_limit"
+
+
+class TestClassifyProviderErrorAcpxBlindSpot:
+    """Documents a real, verified gap: unlike Anthropic/OpenAI/Codex (which
+    catch their SDK's own structured exception types and deliberately
+    construct a ProviderError mentioning "authentication failed"/"rate
+    limit(ed)"), AcpxProvider wraps an external CLI subprocess and has no
+    equivalent structured signal -- its generic nonzero-exit path just
+    relays the wrapped CLI's raw stderr text verbatim. Unless that
+    external, unowned CLI's own wording happens to contain one of this
+    module's marker words, a real acpx auth or rate-limit failure
+    classifies as UNKNOWN, silently skipping the rotate_key()/fallback
+    response an equivalent Anthropic/OpenAI/Codex failure would trigger.
+    """
+
+    def test_real_acpx_nonzero_exit_with_auth_like_stderr_is_not_classified_as_auth(self):
+        from unittest.mock import MagicMock, patch
+
+        from missy.providers.acpx_provider import AcpxProvider
+        from missy.providers.base import Message
+
+        from tests.providers.test_acpx_provider import _make_config
+
+        with patch("missy.providers.acpx_provider._run_subprocess_with_group_kill") as mock_run:
+            # Realistic wording a wrapped CLI might plausibly use for an
+            # expired/invalid credential -- deliberately NOT the exact
+            # literal "authentication failed"/"unauthorized" markers this
+            # module's classifier looks for, since acpx never constructs
+            # that vocabulary itself; it only relays whatever the external
+            # CLI's stderr actually says.
+            mock_run.return_value = MagicMock(
+                returncode=1, stdout="", stderr="Error: not logged in. Run `claude login` first."
+            )
+            provider = AcpxProvider(_make_config())
+            try:
+                provider.complete([Message(role="user", content="hi")])
+                pytest.fail("expected ProviderError")
+            except ProviderError as exc:
+                real_exc = exc
+
+        # The real, unmodified exception acpx_provider.py actually raises --
+        # confirms this is a genuine classification gap, not a hypothetical.
+        assert "not logged in" in str(real_exc)
+        assert classify_provider_error(real_exc) == ProviderFailureClass.UNKNOWN

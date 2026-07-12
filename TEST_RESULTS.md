@@ -1,5 +1,50 @@
 # TEST_RESULTS
 
+## Run: 2026-07-13 21:30 UTC — round 38 research pass: architectural residual documented (tool_call/tool_result pairing) and a misleading health.py docstring fixed
+
+- Context: round 38 targeted agent/summarizer.py/condensers.py
+  handoffs, agent/compaction.py's leaf/condensation split,
+  providers/health.py's classify_provider_error() against each real
+  provider's actual error shapes, and agent/cost_tracker.py/
+  agent/failure_tracker.py concurrency under sub-agent parallelism.
+  CostTracker is clean (locked mutations, locked per-session dict).
+  FailureTracker has no internal lock but each AgentRuntime.run() call
+  (and each parallel sub-agent thread) constructs its own fresh
+  instance rather than sharing one, so the missing lock isn't
+  currently reachable concurrently.
+- **Architectural residual (documented, not fixed)**: context.py's
+  fresh_tail/kept_evictable split, compaction.py's leaf-pass cut, and
+  all three condensers.py stages cut/drop messages by position/token
+  budget with no awareness that a tool_calls-bearing assistant message
+  must stay adjacent to its tool-role result. Verified this cannot
+  bite in production today: AgentRuntime._save_turn() is only ever
+  called with role="user"/"assistant" and plain string content --
+  never role="tool", never a tool_calls field -- so none of the
+  reloaded/persisted turns this eviction logic operates on ever
+  actually have that shape. MemoryConsolidator.consolidate() (which
+  invokes the condenser pipeline) additionally has zero production
+  callers. The real tool-calling loop's in-memory messages never route
+  through this eviction machinery at all. Left undone per the same
+  reasoning as the round-32 SleeptimeWorker residual: fixing
+  pairing-awareness for a data shape no live path produces would be
+  speculative engineering, not a fix for observable behavior.
+- **Misleading health.py docstring fixed**: classify_provider_error()
+  claimed all five providers "consistently mention 'authentication
+  failed'..." -- false for acpx, which wraps an external CLI subprocess
+  with no structured exception types and just relays the CLI's raw
+  stderr verbatim with zero auth/rate-limit detection, unlike
+  Anthropic/OpenAI/Codex which each catch their SDK's own typed
+  exceptions and deliberately construct this module's vocabulary.
+  Corrected the docstring and added a regression test that live-
+  triggers AcpxProvider's real nonzero-exit path with a realistic
+  (deliberately non-matching) auth-failure stderr string, captures the
+  real ProviderError raised, and confirms classify_provider_error()
+  returns UNKNOWN for it. Not force-fixed with guessed marker words --
+  the real external CLI's wording is unowned and unverifiable here.
+- Command: `pytest tests/providers/test_provider_health.py -v`
+- Result: `14 passed` (1 new test).
+- Broader sweep: `pytest tests/providers/ -q`: `944 passed`.
+
 ## Run: 2026-07-13 20:55 UTC — round 37 research pass: Discord REST retry-coverage asymmetry (round 36 was research-only, no findings)
 
 - Context: round 36 targeted ProactiveManager/ApprovalGate wiring,
