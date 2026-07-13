@@ -372,6 +372,98 @@ class TestHandleMessageAttachment:
         await ch._handle_message(data)
         assert ch._queue.empty()
 
+    @pytest.mark.asyncio
+    async def test_message_with_markdown_attachment_is_allowed(self):
+        """FX-inbound-attachments: a .md attachment must pass the policy
+        gate and its metadata must reach the queued ChannelMessage under
+        discord_text_attachments -- the whole point being that downstream
+        (cli/main.py's _process_channel) can now actually download and
+        read it, rather than the message being denied outright."""
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "spec.md",
+                    "content_type": "text/markdown",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/spec.md",
+                    "size": 512,
+                }
+            ]
+        )
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+        msg = ch._queue.get_nowait()
+        text_atts = msg.metadata["discord_text_attachments"]
+        assert len(text_atts) == 1
+        assert text_atts[0]["filename"] == "spec.md"
+        assert msg.metadata["discord_image_attachments"] == []
+
+    @pytest.mark.asyncio
+    async def test_oversized_text_attachment_is_denied(self):
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "huge.txt",
+                    "content_type": "text/plain",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/huge.txt",
+                    "size": 10 * 1024 * 1024,
+                }
+            ]
+        )
+        await ch._handle_message(data)
+        assert ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_mixed_image_and_text_attachments_both_forwarded(self):
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "photo.png",
+                    "content_type": "image/png",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/photo.png",
+                    "size": 1024,
+                },
+                {
+                    "id": "att-2",
+                    "filename": "notes.txt",
+                    "content_type": "text/plain",
+                    "url": "https://cdn.discordapp.com/attachments/1/3/notes.txt",
+                    "size": 256,
+                },
+            ]
+        )
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+        msg = ch._queue.get_nowait()
+        assert len(msg.metadata["discord_image_attachments"]) == 1
+        assert len(msg.metadata["discord_text_attachments"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_one_denied_attachment_blocks_whole_message(self):
+        """All-or-nothing: even a valid image alongside an unsupported
+        attachment still drops the whole message (unchanged behavior from
+        before text-attachment support was added)."""
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "photo.png",
+                    "content_type": "image/png",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/photo.png",
+                    "size": 1024,
+                },
+                {"id": "att-2", "filename": "file.exe"},
+            ]
+        )
+        await ch._handle_message(data)
+        assert ch._queue.empty()
+
 
 # ---------------------------------------------------------------------------
 # _check_dm_policy — PAIRING (line 725)
