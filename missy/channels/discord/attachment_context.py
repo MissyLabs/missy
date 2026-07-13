@@ -76,8 +76,11 @@ async def _describe_image_attachment(
 
     return (
         f"[Attached image: {filename}, saved to {save_path}] "
-        f"Use vision_capture(source='{save_path}') or vision_analyze to look at it "
-        f"before describing what it shows."
+        f"Call vision_analyze(source='{save_path}', mode='general') to actually see "
+        f"what it shows, including reading any text in it -- this performs a real "
+        f"vision-model analysis of the image itself. Do not attempt a shell command "
+        f"or any other workaround to read it; vision_analyze is the correct tool for "
+        f"this and does not need one."
     )
 
 

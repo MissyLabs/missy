@@ -36,6 +36,62 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3.2"
 
+_IMAGE_BLOCK_TYPES = frozenset({"image_url", "input_image"})
+_TEXT_BLOCK_TYPES = frozenset({"text", "input_text"})
+
+
+def _data_uri_to_base64(url: str) -> str:
+    """Extract the raw base64 payload from a ``data:...;base64,...`` URI.
+
+    Ollama's ``images`` field wants a bare base64 string, not a data URI
+    (unlike OpenAI/Anthropic's content-block shapes, which embed it as a
+    URL). Falls back to returning *url* unchanged if it isn't a data URI
+    (e.g. it's already a bare base64 string), rather than raising.
+    """
+    if url.startswith("data:") and ";base64," in url:
+        return url.split(";base64,", 1)[1]
+    return url
+
+
+def _message_to_ollama_payload(msg: Message) -> dict[str, Any]:
+    """Convert a Missy Message into Ollama's ``/api/chat`` message shape.
+
+    ``content`` is normally a plain string, but a caller building a real
+    multimodal vision message (see missy/vision/provider_format.py's
+    ``build_vision_message``) passes a list of text/image content blocks
+    instead. Ollama's own API shape is different from Anthropic/OpenAI's
+    content-block lists -- it wants plain-text ``content`` plus a sibling
+    ``images`` list of base64 strings -- so list content must be split
+    apart rather than forwarded as-is (which previously would have sent
+    Ollama a JSON list where it expects a string).
+    """
+    if not isinstance(msg.content, list):
+        return {"role": msg.role, "content": msg.content}
+
+    text_parts: list[str] = []
+    images: list[str] = []
+    for part in msg.content:
+        if isinstance(part, str):
+            text_parts.append(part)
+            continue
+        if not isinstance(part, dict):
+            continue
+        part_type = str(part.get("type", ""))
+        if part_type in _TEXT_BLOCK_TYPES:
+            text = part.get("text")
+            if text is not None:
+                text_parts.append(str(text))
+        elif part_type in _IMAGE_BLOCK_TYPES:
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if url:
+                images.append(_data_uri_to_base64(str(url)))
+
+    payload: dict[str, Any] = {"role": msg.role, "content": "\n".join(text_parts)}
+    if images:
+        payload["images"] = images
+    return payload
+
 
 class OllamaProvider(BaseProvider):
     """Provider implementation backed by the Ollama local-inference server.
@@ -114,7 +170,7 @@ class OllamaProvider(BaseProvider):
         task_id = kwargs.pop("task_id", "")
         model = kwargs.pop("model", self._model)
 
-        api_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+        api_messages = [_message_to_ollama_payload(msg) for msg in messages]
 
         payload: dict[str, Any] = {
             "model": model,
@@ -268,7 +324,7 @@ class OllamaProvider(BaseProvider):
             api_messages.append({"role": "system", "content": system})
 
         for msg in messages:
-            api_messages.append({"role": msg.role, "content": msg.content})
+            api_messages.append(_message_to_ollama_payload(msg))
 
         payload: dict[str, Any] = {
             "model": self._model,
@@ -375,7 +431,7 @@ class OllamaProvider(BaseProvider):
             api_messages.append({"role": "system", "content": system})
 
         for msg in messages:
-            api_messages.append({"role": msg.role, "content": msg.content})
+            api_messages.append(_message_to_ollama_payload(msg))
 
         payload: dict[str, Any] = {
             "model": self._model,

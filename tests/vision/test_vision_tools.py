@@ -330,42 +330,111 @@ class TestVisionBurstBlankFrameGuidance:
 
 
 class TestVisionAnalyzeTool:
+    """FX-real-vision: vision_analyze previously only returned an unused
+    text prompt template with no image ever attached to any LLM call --
+    the model had no real way to see an image's content (including
+    reading text out of it), which is why it was observed falling back
+    to a raw shell OCR command instead. It now performs a genuine
+    multimodal call via analyze_image_with_provider_fallback()."""
+
+    def _mock_frame(self):
+        frame = MagicMock()
+        frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        return frame
+
     def test_name_and_description(self):
         tool = VisionAnalyzeTool()
         assert tool.name == "vision_analyze"
 
-    def test_general_mode(self):
+    def test_source_required(self):
         tool = VisionAnalyzeTool()
         result = tool.execute(mode="general")
+        assert result.success is False
+        assert "source is required" in result.error
+
+    def test_unavailable_source(self):
+        tool = VisionAnalyzeTool()
+        result = tool.execute(source="/nonexistent/image.xyz", mode="general")
+        assert result.success is False
+
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_general_mode_returns_real_analysis(self, mock_avail, mock_acquire, mock_analyze):
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("A red mug sits on a wooden desk.", "anthropic")
+
+        tool = VisionAnalyzeTool()
+        result = tool.execute(source="/tmp/photo.jpg", mode="general")
+
         assert result.success is True
         data = json.loads(result.output)
         assert data["mode"] == "general"
-        assert "Analyze this image" in data["prompt"]
+        assert data["analysis"] == "A red mug sits on a wooden desk."
+        assert data["provider"] == "anthropic"
+        mock_analyze.assert_called_once()
+        prompt_arg = mock_analyze.call_args[0][0]
+        assert "Analyze this image" in prompt_arg
 
-    def test_puzzle_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_puzzle_mode(self, mock_avail, mock_acquire, mock_analyze):
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Board state: 40% complete.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="puzzle", context="I need help with the sky section")
+        result = tool.execute(
+            source="/tmp/puzzle.jpg", mode="puzzle", context="I need help with the sky section"
+        )
         assert result.success is True
         data = json.loads(result.output)
         assert data["mode"] == "puzzle"
-        assert "jigsaw" in data["prompt"].lower()
+        prompt_arg = mock_analyze.call_args[0][0]
+        assert "jigsaw" in prompt_arg.lower()
 
-    def test_painting_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_painting_mode(self, mock_avail, mock_acquire, mock_analyze):
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Lovely use of color.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="painting")
+        result = tool.execute(source="/tmp/painting.jpg", mode="painting")
         assert result.success is True
-        data = json.loads(result.output)
-        assert "supportive" in data["prompt"].lower()
+        prompt_arg = mock_analyze.call_args[0][0]
+        assert "supportive" in prompt_arg.lower()
 
-    def test_inspection_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_inspection_mode(self, mock_avail, mock_acquire, mock_analyze):
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Overview: a small mechanical part.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="inspection")
+        result = tool.execute(source="/tmp/part.jpg", mode="inspection")
         assert result.success is True
 
     def test_invalid_mode(self):
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="nonexistent")
+        result = tool.execute(source="/tmp/photo.jpg", mode="nonexistent")
         assert result.success is False
+
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_no_available_provider_returns_error(self, mock_avail, mock_acquire, mock_analyze):
+        from missy.core.exceptions import ProviderError
+
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.side_effect = ProviderError("No available provider could analyze the image.")
+
+        tool = VisionAnalyzeTool()
+        result = tool.execute(source="/tmp/photo.jpg", mode="general")
+        assert result.success is False
+        assert "No available provider" in result.error
 
 
 # ---------------------------------------------------------------------------

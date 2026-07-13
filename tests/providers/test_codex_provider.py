@@ -262,6 +262,95 @@ class TestMessagesToInput:
         assert result[2]["role"] == "user"
 
 
+class TestMessagesToInputImageContent:
+    """FX-real-vision: content can be a list of text/image blocks (see
+    missy/vision/provider_format.py's build_vision_message) rather than a
+    plain string -- previously this was blindly wrapped as a single
+    {"type": "input_text", "text": <the list itself>} block, which would
+    have sent the Responses API an invalid payload (text must be a
+    string, not a list) the moment any caller tried a real multimodal
+    vision message through this provider."""
+
+    def test_list_content_with_text_and_image_blocks_converted(self):
+        from missy.providers.codex_provider import _messages_to_input
+
+        msg = Message(
+            role="user",
+            content=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,ZmFrZQ==", "detail": "auto"},
+                },
+                {"type": "text", "text": "What does this image show?"},
+            ],
+        )
+        result = _messages_to_input([msg])
+        assert len(result) == 1
+        blocks = result[0]["content"]
+        assert len(blocks) == 2
+        assert blocks[0] == {
+            "type": "input_image",
+            "image_url": "data:image/jpeg;base64,ZmFrZQ==",
+        }
+        assert blocks[1] == {"type": "input_text", "text": "What does this image show?"}
+
+    def test_input_text_and_input_image_block_types_also_accepted(self):
+        """A caller may already build Responses-shaped blocks directly
+        (input_text/input_image) rather than Chat-Completions-shaped
+        ones (text/image_url) -- both must be recognised."""
+        from missy.providers.codex_provider import _messages_to_input
+
+        msg = Message(
+            role="user",
+            content=[
+                {"type": "input_text", "text": "hello"},
+                {"type": "input_image", "image_url": "data:image/png;base64,YWJj"},
+            ],
+        )
+        result = _messages_to_input([msg])
+        blocks = result[0]["content"]
+        assert {"type": "input_text", "text": "hello"} in blocks
+        assert {"type": "input_image", "image_url": "data:image/png;base64,YWJj"} in blocks
+
+    def test_bare_string_image_url_value_accepted(self):
+        """image_url may be a bare string instead of a nested dict."""
+        from missy.providers.codex_provider import _messages_to_input
+
+        msg = Message(
+            role="user", content=[{"type": "image_url", "image_url": "data:image/png;base64,x"}]
+        )
+        result = _messages_to_input([msg])
+        assert result[0]["content"][0] == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,x",
+        }
+
+    def test_unrecognised_block_shapes_dropped_not_raised(self):
+        from missy.providers.codex_provider import _messages_to_input
+
+        msg = Message(
+            role="user",
+            content=[{"type": "text", "text": "keep me"}, {"type": "audio", "data": "..."}],
+        )
+        result = _messages_to_input([msg])
+        assert result[0]["content"] == [{"type": "input_text", "text": "keep me"}]
+
+    def test_empty_list_content_falls_back_to_empty_text_block(self):
+        from missy.providers.codex_provider import _messages_to_input
+
+        msg = Message(role="user", content=[])
+        result = _messages_to_input([msg])
+        assert result[0]["content"] == [{"type": "input_text", "text": ""}]
+
+    def test_plain_string_content_unaffected(self):
+        """Regression guard: the overwhelmingly common plain-text path
+        must produce byte-identical output to before this change."""
+        from missy.providers.codex_provider import _messages_to_input
+
+        result = _messages_to_input([Message(role="user", content="hello")])
+        assert result[0]["content"] == [{"type": "input_text", "text": "hello"}]
+
+
 class TestExtractSystem:
     """Tests for _extract_system."""
 

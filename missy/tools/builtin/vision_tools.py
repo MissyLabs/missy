@@ -364,24 +364,38 @@ class VisionBurstCaptureTool(BaseTool):
 
 
 class VisionAnalyzeTool(BaseTool):
-    """Analyze a captured image with domain-specific prompts.
+    """Perform real, domain-specific visual analysis of an image.
 
-    Builds analysis prompts for puzzle assistance, painting feedback,
-    or general inspection.  Returns the prompt for the agent to use
-    with the image when calling the LLM.
+    Loads the image, sends it to a vision-capable provider alongside a
+    domain-specific prompt (puzzle assistance, painting feedback,
+    inspection, or general description -- including reading any text or
+    labels visible), and returns the model's genuine analysis text. This
+    is a real multimodal call, not a metadata-only capture -- use this
+    (not vision_capture) whenever the request needs to know what an
+    image actually shows or says, including reading text out of it.
     """
 
     name = "vision_analyze"
     description = (
-        "Build a domain-specific analysis prompt for a captured image. "
-        "Supports modes: general, puzzle, painting, inspection."
+        "Send an image to a vision-capable model for real analysis -- including "
+        "reading any text visible in the image. Requires 'source' (a local file "
+        "path, e.g. the saved_to path from vision_capture/vision_burst, or a "
+        "downloaded Discord attachment's path). Supports modes: general, puzzle, "
+        "painting, inspection. Use this whenever you need to know what an image "
+        "actually shows or to transcribe text from it -- do not fall back to a "
+        "shell OCR command; this tool performs real vision analysis directly."
     )
-    permissions = ToolPermissions()
+    permissions = ToolPermissions(filesystem_read=True)
     parameters = {
+        "source": {
+            "type": "string",
+            "description": "Local file path of the image to analyze.",
+            "required": True,
+        },
         "mode": {
             "type": "string",
             "description": "Analysis mode: 'general', 'puzzle', 'painting', 'inspection'.",
-            "required": True,
+            "required": False,
         },
         "context": {
             "type": "string",
@@ -395,25 +409,57 @@ class VisionAnalyzeTool(BaseTool):
         },
     }
 
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """SR-1.4: ``source`` doesn't match the registry's generic
+        path/file_path/target/destination heuristic, so the declared
+        filesystem_read permission would otherwise enforce nothing."""
+        source = kwargs.get("source") or ""
+        return ([source] if source else [], [])
+
     def execute(
         self,
         *,
+        source: str = "",
         mode: str = "general",
         context: str = "",
         is_followup: bool = False,
         **kwargs: Any,
     ) -> ToolResult:
+        if not source:
+            return ToolResult(
+                success=False,
+                output=None,
+                error="source is required -- pass the local file path of the "
+                "image to analyze (e.g. vision_capture's saved_to value).",
+            )
         try:
-            import numpy as np
+            import base64
+
+            import cv2
 
             from missy.vision.analysis import (
                 AnalysisMode,
                 AnalysisPromptBuilder,
                 AnalysisRequest,
             )
+            from missy.vision.pipeline import ImagePipeline
+            from missy.vision.provider_call import analyze_image_with_provider_fallback
             from missy.vision.scene_memory import get_scene_manager
+            from missy.vision.sources import FileSource
 
             analysis_mode = AnalysisMode(mode)
+
+            img_source = FileSource(source)
+            if not img_source.is_available():
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error=f"Image source not available: {source}",
+                )
+            frame = img_source.acquire()
+
+            pipeline = ImagePipeline()
+            processed = pipeline.process(frame.image)
 
             # Get scene memory context for follow-ups
             previous_observations: list[str] = []
@@ -427,7 +473,7 @@ class VisionAnalyzeTool(BaseTool):
                     previous_state = session.state
 
             request = AnalysisRequest(
-                image=np.zeros((1, 1, 3), dtype=np.uint8),  # placeholder
+                image=processed,
                 mode=analysis_mode,
                 context=context,
                 previous_observations=previous_observations,
@@ -438,18 +484,32 @@ class VisionAnalyzeTool(BaseTool):
             builder = AnalysisPromptBuilder()
             prompt = builder.build_prompt(request)
 
+            _, buf = cv2.imencode(".jpg", processed, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            b64_image = base64.b64encode(buf.tobytes()).decode("ascii")
+
+            analysis_text, provider_used = analyze_image_with_provider_fallback(
+                prompt, b64_image, "image/jpeg"
+            )
+
             return ToolResult(
                 success=True,
                 output=json.dumps(
                     {
                         "mode": mode,
-                        "prompt": prompt,
+                        "analysis": analysis_text,
+                        "provider": provider_used,
                         "is_followup": is_followup,
                         "has_scene_memory": bool(previous_observations),
                     }
                 ),
             )
 
+        except ImportError as exc:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Vision dependencies not installed: {exc}. Install with: pip install -e '.[vision]'",
+            )
         except Exception as exc:
             logger.error("Vision analyze failed: %s", exc, exc_info=True)
             return ToolResult(success=False, output=None, error=str(exc))

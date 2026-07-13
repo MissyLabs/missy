@@ -160,6 +160,60 @@ def _strip_leaked_tool_call_tags(text: str) -> str:
     return _LEAKED_TOOL_CALL_RE.sub("", text).strip()
 
 
+# Content-block type values the Responses API accepts for image input, per
+# missy/vision/provider_format.py's format_image_for_openai() /
+# format_image_for_anthropic() -- both are accepted here since callers may
+# reasonably reuse either shape when targeting this provider.
+_IMAGE_BLOCK_TYPES = frozenset({"image_url", "input_image"})
+_TEXT_BLOCK_TYPES = frozenset({"text", "input_text"})
+
+
+def _content_to_responses_blocks(content: Any, text_type: str) -> list[dict]:
+    """Convert a Message's ``content`` into Responses API input content blocks.
+
+    ``content`` is normally a plain string, but a caller building a real
+    multimodal vision message (see missy/vision/provider_format.py's
+    ``build_vision_message``) passes a list of content blocks instead --
+    previously this was blindly wrapped as a single text block regardless
+    (``[{"type": text_type, "text": content}]`` with ``content`` itself
+    being the list), producing an invalid payload the Responses API would
+    reject. Every recognised block is converted to its Responses-API
+    equivalent; unrecognised block shapes are dropped defensively rather
+    than raised, matching OpenAIProvider's own transcript-repair posture
+    for malformed content.
+
+    Args:
+        content: Either a plain string or a list of content-block dicts.
+        text_type: ``"input_text"`` for user messages, ``"output_text"``
+            for assistant messages (the Responses API uses different type
+            tags depending on which side of the conversation it's on).
+
+    Returns:
+        A list of Responses API content-block dicts.
+    """
+    if not isinstance(content, list):
+        return [{"type": text_type, "text": content}]
+
+    blocks: list[dict] = []
+    for part in content:
+        if isinstance(part, str):
+            blocks.append({"type": text_type, "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        part_type = str(part.get("type", ""))
+        if part_type in _TEXT_BLOCK_TYPES:
+            text = part.get("text")
+            if text is not None:
+                blocks.append({"type": text_type, "text": str(text)})
+        elif part_type in _IMAGE_BLOCK_TYPES:
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if url:
+                blocks.append({"type": "input_image", "image_url": str(url)})
+    return blocks or [{"type": text_type, "text": ""}]
+
+
 def _messages_to_input(messages: list[Message]) -> list[dict]:
     """Convert Missy Message list to Responses API input format."""
     result = []
@@ -167,12 +221,11 @@ def _messages_to_input(messages: list[Message]) -> list[dict]:
         if msg.role == "system":
             continue  # system prompt goes in ``instructions``
         role = "user" if msg.role == "user" else "assistant"
+        text_type = "input_text" if role == "user" else "output_text"
         result.append(
             {
                 "role": role,
-                "content": [{"type": "input_text", "text": msg.content}]
-                if role == "user"
-                else [{"type": "output_text", "text": msg.content}],
+                "content": _content_to_responses_blocks(msg.content, text_type),
             }
         )
     return result

@@ -124,6 +124,87 @@ class TestOllamaComplete:
         assert payload["options"]["temperature"] == 0.7
 
 
+class TestMessageToOllamaPayloadImageContent:
+    """FX-real-vision: content can be a list of text/image blocks (see
+    missy/vision/provider_format.py's build_vision_message) rather than a
+    plain string. Ollama's own /api/chat shape differs from Anthropic/
+    OpenAI's content-block lists -- it wants plain-text content plus a
+    sibling images list of bare base64 strings -- so list content must be
+    split apart rather than forwarded as-is (which previously would have
+    sent Ollama a JSON list where it expects a string)."""
+
+    def test_plain_string_content_unaffected(self):
+        from missy.providers.ollama_provider import _message_to_ollama_payload
+
+        msg = Message(role="user", content="hello")
+        assert _message_to_ollama_payload(msg) == {"role": "user", "content": "hello"}
+
+    def test_list_content_split_into_text_and_images(self):
+        from missy.providers.ollama_provider import _message_to_ollama_payload
+
+        msg = Message(
+            role="user",
+            content=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,ZmFrZQ==", "detail": "auto"},
+                },
+                {"type": "text", "text": "What does this image show?"},
+            ],
+        )
+        result = _message_to_ollama_payload(msg)
+        assert result["role"] == "user"
+        assert result["content"] == "What does this image show?"
+        assert result["images"] == ["ZmFrZQ=="]
+
+    def test_no_images_key_when_no_image_blocks(self):
+        from missy.providers.ollama_provider import _message_to_ollama_payload
+
+        msg = Message(role="user", content=[{"type": "text", "text": "just text"}])
+        result = _message_to_ollama_payload(msg)
+        assert "images" not in result
+
+    def test_bare_base64_image_url_passed_through_unchanged(self):
+        """Not every caller wraps images as a data URI -- a bare base64
+        string must pass through unchanged, not get mangled."""
+        from missy.providers.ollama_provider import _message_to_ollama_payload
+
+        msg = Message(
+            role="user",
+            content=[{"type": "image_url", "image_url": {"url": "already_base64_data"}}],
+        )
+        result = _message_to_ollama_payload(msg)
+        assert result["images"] == ["already_base64_data"]
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_complete_sends_correctly_shaped_image_payload(self, mock_client_cls):
+        """End-to-end: complete() must actually post the split content/
+        images shape, not the raw content-block list."""
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "llava",
+            "message": {"role": "assistant", "content": "I see a red mug."},
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config(model="llava"))
+        msg = Message(
+            role="user",
+            content=[
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,ZmFrZQ=="}},
+                {"type": "text", "text": "Describe this."},
+            ],
+        )
+        result = p.complete([msg])
+
+        assert result.content == "I see a red mug."
+        posted_payload = mock_client_cls.return_value.post.call_args[1]["json"]
+        posted_message = posted_payload["messages"][0]
+        assert posted_message["content"] == "Describe this."
+        assert posted_message["images"] == ["ZmFrZQ=="]
+
+
 class TestOllamaToolSchema:
     def test_schema_format(self):
         p = OllamaProvider(_make_config())
