@@ -1892,9 +1892,13 @@ class AgentRuntime:
             tool_call.name,
             list(tool_call.arguments.keys()),
         )
-        # Strip session_id/task_id from tool args to avoid colliding
-        # with the explicit kwargs we pass to registry.execute().
-        # Also extract 'name' separately since it collides with registry.execute(name=...).
+        # Strip session_id/task_id from tool args to avoid colliding with
+        # the explicit kwargs we pass to registry.execute() below. A tool
+        # argument literally named "tool_name" (e.g. SelfCreateTool's own
+        # "name of the tool being proposed" parameter) does NOT need a
+        # similar strip here -- ToolRegistry.execute()'s own tool_name
+        # parameter is positional-only precisely so it can never collide
+        # with a tool's identically-named argument passed via **tool_args.
         tool_args = {
             k: v for k, v in tool_call.arguments.items() if k not in ("session_id", "task_id")
         }

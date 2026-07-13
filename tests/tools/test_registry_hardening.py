@@ -488,6 +488,69 @@ class TestShellUnrestrictedEndToEnd:
 
 
 # ---------------------------------------------------------------------------
+# tool_name parameter-name collision: a tool whose own schema defines an
+# argument literally named "tool_name" (e.g. self_create_tool) used to make
+# ToolRegistry.execute() completely uncallable for that tool -- reported as
+# "TypeError: ToolRegistry.execute() got multiple values for argument
+# 'tool_name'" raised from AgentRuntime._execute_tool(), which the agent
+# then retried until it hit max_iterations with no successful response.
+# ---------------------------------------------------------------------------
+
+
+class TestToolNameParameterCollision:
+    def test_self_create_tool_own_tool_name_arg_does_not_collide(self, tmp_path):
+        """Reproduces AgentRuntime._execute_tool()'s exact call shape:
+        registry.execute(tool_call.name, session_id=..., task_id=...,
+        **tool_args) where tool_args (the LLM-supplied arguments) contains
+        a key literally named "tool_name" -- self_create_tool's own
+        parameter for the name of the tool being proposed, not to be
+        confused with which tool ToolRegistry is being asked to run."""
+        from missy.tools.builtin.self_create_tool import SelfCreateTool
+
+        reg = ToolRegistry()
+        reg.register(SelfCreateTool())
+        mock_engine = MagicMock()
+
+        tool_args = {
+            "action": "create",
+            "tool_name": "proposed_tool",
+            "language": "python",
+            "script": "print('hi')",
+        }
+        with (
+            patch("missy.tools.registry.get_policy_engine", return_value=mock_engine),
+            patch(
+                "missy.tools.builtin.self_create_tool.CUSTOM_TOOLS_DIR",
+                tmp_path / "custom-tools",
+            ),
+        ):
+            # Must not raise TypeError -- this is the exact call shape
+            # AgentRuntime._execute_tool() uses.
+            result = reg.execute("self_create_tool", session_id="s1", task_id="t1", **tool_args)
+
+        assert result.success is True
+        assert "proposed_tool" in result.output
+
+    def test_positional_only_still_accepts_tool_name_positionally(self):
+        """The one real call site (AgentRuntime._execute_tool()) always
+        passes tool_name positionally -- confirm that's unaffected."""
+        reg = ToolRegistry()
+
+        class EchoTool2(BaseTool):
+            name = "echo2"
+            description = "echo"
+            permissions = ToolPermissions()
+
+            def execute(self, *, text: str = "") -> ToolResult:
+                return ToolResult(success=True, output=text)
+
+        reg.register(EchoTool2())
+        result = reg.execute("echo2", text="hi")
+        assert result.success is True
+        assert result.output == "hi"
+
+
+# ---------------------------------------------------------------------------
 # Audit event emission
 # ---------------------------------------------------------------------------
 
