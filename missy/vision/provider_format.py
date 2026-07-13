@@ -65,7 +65,8 @@ def format_image_for_provider(
     Parameters
     ----------
     provider_name:
-        Provider identifier: ``"anthropic"``, ``"openai"``, or ``"ollama"``.
+        Provider identifier: ``"anthropic"``, ``"openai"``, ``"openai-codex"``,
+        or ``"ollama"``.
     image_base64:
         Base64-encoded image data.
     media_type:
@@ -87,6 +88,17 @@ def format_image_for_provider(
     if name == "anthropic":
         return format_image_for_anthropic(image_base64, media_type)
     elif name in ("openai", "gpt"):
+        return format_image_for_openai(image_base64, media_type)
+    elif name in ("openai-codex", "codex"):
+        # FX-codex-image-format: this provider name is a real, known
+        # Missy provider (missy/providers/codex_provider.py), not an
+        # "unknown" one -- it was previously falling into the generic
+        # else-branch below (Anthropic-shaped block, silently wrong for
+        # the Responses API) which CodexProvider._messages_to_input()'s
+        # block parser doesn't recognise at all, so the image was
+        # dropped from the request entirely rather than merely
+        # misformatted. The OpenAI Chat-Completions shape below is what
+        # that parser's _IMAGE_BLOCK_TYPES actually looks for.
         return format_image_for_openai(image_base64, media_type)
     elif name == "ollama":
         # Ollama uses the same format as OpenAI

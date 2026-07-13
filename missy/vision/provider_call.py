@@ -18,6 +18,11 @@ Provider support:
   ``AcpxProvider._build_prompt()``). Deliberately excluded from the
   candidate list below rather than attempted and left to fail (or worse,
   silently send a garbled Python repr of the content-block list as text).
+
+If the only *enabled* provider fails or can't handle images, a
+configured-but-disabled Ollama instance is tried as a last resort (see
+:func:`_ollama_fallback_candidate`) -- as long as it's genuinely running,
+regardless of its ``enabled`` flag for ordinary chat use.
 """
 
 from __future__ import annotations
@@ -37,8 +42,72 @@ logger = logging.getLogger(__name__)
 _IMAGE_INCOMPATIBLE_PROVIDER_NAMES = frozenset({"acpx"})
 
 
+def _ollama_fallback_candidate(already_present_names: set[str]) -> object | None:
+    """Return a last-resort Ollama vision candidate, or ``None``.
+
+    Constructed directly from ``config.providers["ollama"]`` even when
+    Ollama is *disabled* for general chat use (``enabled: false``) and
+    therefore never registered in the process-level
+    :class:`~missy.providers.registry.ProviderRegistry` at all. An
+    operator may deliberately keep Ollama out of normal provider
+    rotation (e.g. it's slower, or a smaller local model) while still
+    wanting it available as a vision-specific safety net for when the
+    provider(s) actually enabled for chat can't -- or currently don't --
+    handle images. This is a narrow, vision-only exception to the
+    ``enabled`` gate; Ollama still never participates in ordinary chat
+    completions unless the operator enables it there too.
+
+    Only returned when:
+
+    - Ollama isn't already one of the (enabled) candidates, and
+    - an ``ollama`` entry actually exists in config, and
+    - Ollama is genuinely reachable right now (skips a guaranteed-
+      pointless attempt against an Ollama that was never set up or
+      isn't currently running).
+
+    Note this does not verify the configured Ollama *model* is itself
+    vision-capable (e.g. a text-only model like ``qwen3.5:9b`` would
+    still be attempted) -- that's a real, separate operator
+    responsibility this function has no reliable way to check up front;
+    a bad model choice surfaces as an unhelpful analysis rather than an
+    error, not as a crash.
+
+    Args:
+        already_present_names: Names of providers already selected as
+            candidates, so this never duplicates an already-enabled
+            Ollama.
+
+    Returns:
+        An :class:`~missy.providers.ollama_provider.OllamaProvider`
+        instance, or ``None`` when no fallback is available/needed.
+    """
+    if "ollama" in already_present_names:
+        return None
+    try:
+        from missy.config.settings import load_config
+        from missy.providers.ollama_provider import OllamaProvider
+
+        ollama_cfg = load_config().providers.get("ollama")
+        if ollama_cfg is None:
+            return None
+        provider = OllamaProvider(ollama_cfg)
+        if not provider.is_available():
+            return None
+        return provider
+    except Exception:
+        logger.debug("Ollama vision fallback unavailable", exc_info=True)
+        return None
+
+
 def _candidate_providers() -> list:
-    """Return available providers to try, default/primary provider first."""
+    """Return available providers to try, default/primary provider first.
+
+    Appends a last-resort Ollama candidate (see
+    :func:`_ollama_fallback_candidate`) after every normally-enabled
+    candidate, so an operator whose only enabled provider can't -- or
+    currently doesn't -- handle images still gets a real answer instead
+    of an outright failure, as long as Ollama is configured and running.
+    """
     from missy.providers.registry import get_registry
 
     registry = get_registry()
@@ -48,6 +117,11 @@ def _candidate_providers() -> list:
     default_name = registry.get_default_name()
     if default_name:
         available.sort(key=lambda p: p.name != default_name)
+
+    fallback = _ollama_fallback_candidate({p.name for p in available})
+    if fallback is not None:
+        available.append(fallback)
+
     return available
 
 
