@@ -31,16 +31,20 @@ Shell command execution is **disabled by default** (`shell.enabled: false`).
 When enabled, only commands named in `shell.allowed_commands` may run.  An
 empty `allowed_commands` list blocks all commands even when the shell is
 nominally enabled — unless `shell.unrestricted: true` is explicitly set, in
-which case allow-list matching is skipped entirely and any command may run.
-`unrestricted` still requires `enabled: true`, and does not disable the
-constructs blocked below, or the filesystem-policy check applied to any
+which case any non-empty command runs immediately: no allow-list matching,
+and none of the compound-command splitting or blocked-construct checks below
+either (those checks exist only to keep a hidden subcommand from bypassing
+the allow-list match — with no allow-list to protect in this mode, they have
+nothing left to guard). `unrestricted` still requires `enabled: true`, and
+still does not disable the filesystem-policy check applied to any
 redirection targets (`echo x > /some/path` still requires `/some/path` to
-fall under `filesystem.allowed_write_paths`).
+fall under `filesystem.allowed_write_paths`, subshell or not).
 
 Compound commands (using `&&`, `||`, `;`, `|`, `&`) are split and each
 sub-command is individually checked against the allowlist.  The following
 shell constructs are unconditionally blocked to prevent hidden command
-execution:
+execution — **unless `shell.unrestricted: true`, in which case all of them
+are permitted**:
 
 - Process substitution: `<(...)`, `>(...)`, `<<(...)`
 - Command substitution: `$(...)`, backticks
@@ -329,9 +333,13 @@ shell:
 Only for a fully trusted, self-hosted, single-operator instance where the
 allow-list itself is more friction than protection. `unrestricted` bypasses
 program-name allow-listing entirely, including the empty-`allowed_commands`
-deny above — every command the agent decides to run, runs. The filesystem
-policy still applies to any redirection targets, but nothing stops the
-agent from reading/writing/deleting anything the OS user itself can.
+deny above, and the subshell/command-substitution/brace-group blocks —
+`$(...)`, backticks, `<(...)`, and `{ ...; }` all run too, since those
+checks exist only to protect the allow-list match and there's no allow-list
+left to protect. Every command the agent decides to run, runs, in full.
+The filesystem policy still applies to any redirection targets, but nothing
+stops the agent from reading/writing/deleting anything the OS user itself
+can.
 
 ```yaml
 shell:

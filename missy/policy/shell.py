@@ -4,8 +4,12 @@ Shell command execution is evaluated against a :class:`ShellPolicy` instance.
 When ``policy.enabled`` is ``False`` every command is denied regardless of the
 allow-list.  When enabled, the first token of the command (the program name)
 must begin with an entry in ``policy.allowed_commands`` -- unless
-``policy.unrestricted`` is ``True``, in which case allow-list matching is
-skipped entirely (an empty ``allowed_commands`` no longer denies everything).
+``policy.unrestricted`` is ``True``, in which case any non-empty command is
+allowed immediately: no allow-list matching (an empty ``allowed_commands`` no
+longer denies everything), and no subshell/brace-group/malformed-quoting
+rejection either (those checks exist only to protect the allow-list match
+from being bypassed via a hidden subcommand -- with no allow-list to protect
+in this mode, ``$(...)``, backticks, and brace groups are all permitted too).
 ``unrestricted`` still requires ``enabled: True``, and does not affect any
 other, independent policy layer (e.g. redirect targets still route through
 the filesystem policy engine).
@@ -23,7 +27,9 @@ Example::
     engine.check_command("rm -rf /")     # -> raises PolicyViolationError
 
     unrestricted_policy = ShellPolicy(enabled=True, unrestricted=True)
-    ShellPolicyEngine(unrestricted_policy).check_command("rm -rf /tmp/x")  # -> True
+    engine = ShellPolicyEngine(unrestricted_policy)
+    engine.check_command("rm -rf /tmp/x")          # -> True
+    engine.check_command("echo $(whoami)")         # -> True (subshell allowed too)
 """
 
 from __future__ import annotations
@@ -63,10 +69,13 @@ class ShellPolicyEngine:
         Evaluation order:
 
         1. If ``policy.enabled`` is ``False``, deny unconditionally.
-        2. Parse the leading token (program name) from *command* using
+        2. If ``policy.unrestricted`` is ``True``, allow any non-empty
+           command immediately -- no program-name extraction, no
+           subshell/brace-group rejection, no allow-list check.
+        3. Parse the leading token (program name) from *command* using
            POSIX shell splitting rules.  An empty or whitespace-only command
            string is always denied.
-        3. Check whether the program name starts with any entry in
+        4. Check whether the program name starts with any entry in
            ``policy.allowed_commands``.  This permits both bare names
            (``"git"``) and path-qualified names (``"/usr/bin/git"``).
 
@@ -90,7 +99,41 @@ class ShellPolicyEngine:
                 detail="ShellPolicy.enabled is False; no shell commands are permitted.",
             )
 
-        # Step 2 – extract ALL program tokens (handles compound commands).
+        # Step 2 – fully unrestricted mode: allow any non-empty command
+        # immediately, before Step 3's parsing-safety check ever runs.
+        #
+        # Step 3's subshell/brace-group/malformed-quoting rejection exists
+        # ONLY to protect Step 4's allow-list match from being bypassed via
+        # a hidden subcommand simple tokenisation can't see into (e.g.
+        # `echo $(rm -rf /)` with only "echo" allowlisted). With no
+        # allow-list to protect in unrestricted mode (Step 4 never runs
+        # either), that protection has nothing left to guard -- keeping it
+        # active here would leave `unrestricted: true` still rejecting
+        # perfectly ordinary commands that happen to use `$(...)`,
+        # backticks, or a brace group, defeating the point of the setting.
+        # Still gated on enabled=True (Step 1 above), and still doesn't
+        # touch any other, independent policy layer --
+        # PolicyEngine.check_shell()'s SR-1.7 redirect-target-to-
+        # filesystem-policy routing runs regardless of this flag.
+        if self._policy.unrestricted:
+            if not command or not command.strip():
+                self._emit_event(command, "deny", None, session_id, task_id)
+                raise PolicyViolationError(
+                    "Shell command denied: empty command.",
+                    category="shell",
+                    detail="An empty or whitespace-only command has nothing to execute.",
+                )
+            # Best-effort program-name extraction for launcher-command
+            # observability only. Extraction failure (subshell markers,
+            # unparseable quoting, etc.) is expected here and must not
+            # block execution -- unlike the allow-list-matching path
+            # below, nothing downstream depends on these names.
+            for program in self._extract_all_programs(command) or []:
+                self._warn_if_launcher(program)
+            self._emit_event(command, "allow", "unrestricted", session_id, task_id)
+            return True
+
+        # Step 3 – extract ALL program tokens (handles compound commands).
         programs = self._extract_all_programs(command)
         if programs is None:
             self._emit_event(command, "deny", None, session_id, task_id)
@@ -100,23 +143,7 @@ class ShellPolicyEngine:
                 detail=f"Could not determine the program name(s) from command {command!r}.",
             )
 
-        # Step 3 – allow-list check, unless the operator has explicitly
-        # opted into unrestricted mode.
-        #
-        # unrestricted=True skips allow-list matching entirely (including
-        # the empty-list-denies-all rule directly below), so an empty
-        # allowed_commands no longer blocks every command. It does NOT
-        # disable enabled=True (Step 1 above still applies), and does NOT
-        # touch any other, independent policy layer -- PolicyEngine.check_shell()
-        # still routes every redirection target through the filesystem
-        # policy engine (SR-1.7) regardless of this flag, and Step 2's
-        # subshell/brace-group rejection above still ran unconditionally.
-        if self._policy.unrestricted:
-            for program in programs:
-                self._warn_if_launcher(program)
-            self._emit_event(command, "allow", "unrestricted", session_id, task_id)
-            return True
-
+        # Step 4 – allow-list check.
         # SR-1.8: enabled=True with an empty allowed_commands list must deny
         # ALL commands, matching ShellPolicy.allowed_commands's own
         # documented contract ("An empty list means no commands are allowed

@@ -469,6 +469,23 @@ class TestShellUnrestrictedEndToEnd:
         assert result.success is True
         assert result.policy_denied is False
 
+    def test_reproduces_exact_follow_up_reported_error_pre_fix(self):
+        """The user's follow-up report: unrestricted was already true, but
+        a command containing a subshell still got denied with 'empty,
+        unparseable, or contains subshell' -- because that rejection ran
+        before the allow-list bypass, unconditionally. Reproduced here
+        with unrestricted=True already set, matching their exact
+        configuration and the exact command shape (a subshell) that
+        triggered it."""
+        engine = self._make_engine(unrestricted=True)
+        reg = ToolRegistry()
+        reg.register(ShellTool())
+        with patch("missy.tools.registry.get_policy_engine", return_value=engine):
+            result = reg.execute("shell", command="echo $(whoami)")
+
+        assert result.success is True
+        assert result.policy_denied is False
+
 
 # ---------------------------------------------------------------------------
 # Audit event emission

@@ -192,6 +192,23 @@ class TestCheckShellUnrestricted:
         )
         assert pe.check_shell("echo hi > /tmp/ok.txt") is True
 
+    def test_subshell_command_allowed_end_to_end(self):
+        """Follow-up fix: unrestricted must not just skip the allow-list --
+        it must also skip the subshell/brace-group parsing-safety
+        rejection that runs before the allow-list check, or a command
+        this ordinary still gets denied with 'contains subshell'."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_unrestricted=True))
+        assert pe.check_shell("echo $(whoami)") is True
+
+    def test_subshell_command_with_bad_redirect_still_denied(self):
+        """Orthogonality check: a subshell-containing command is now
+        allowed through the shell layer, but a redirect target outside
+        allowed_write_paths must still be caught by the separate
+        filesystem policy layer."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_unrestricted=True))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo $(whoami) > /etc/cron.d/pwn")
+
 
 # ---------------------------------------------------------------------------
 # SR-1.7: check_shell() must route redirection targets through the

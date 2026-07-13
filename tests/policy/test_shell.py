@@ -184,13 +184,41 @@ class TestShellUnrestricted:
             engine.check_command("sudo apt update")
         assert any("sudo" in r.message and "launcher" in r.message for r in caplog.records)
 
-    def test_subshell_marker_still_rejected(self):
-        """unrestricted only skips allow-list matching -- Step 2's
-        subshell/brace-group parsing safety check (independent of the
-        allow-list) still applies."""
+    def test_subshell_marker_allowed_in_unrestricted_mode(self):
+        """unrestricted means genuinely unrestricted: the subshell/brace-
+        group parsing-safety rejection exists only to protect the
+        allow-list match from a hidden subcommand -- with no allow-list to
+        protect in this mode, $(...) and friends are permitted too."""
         engine = make_unrestricted_engine()
-        with pytest.raises(PolicyViolationError):
-            engine.check_command("echo $(rm -rf /)")
+        assert engine.check_command("echo $(rm -rf /tmp/x)") is True
+
+    def test_backtick_subshell_allowed_in_unrestricted_mode(self):
+        engine = make_unrestricted_engine()
+        assert engine.check_command("echo `whoami`") is True
+
+    def test_brace_group_allowed_in_unrestricted_mode(self):
+        engine = make_unrestricted_engine()
+        assert engine.check_command("{ echo hi; echo bye; }") is True
+
+    def test_malformed_quoting_allowed_in_unrestricted_mode(self):
+        """A command that fails shlex parsing (e.g. an unmatched quote) is
+        still passed through in unrestricted mode -- Missy's own tokeniser
+        struggling to parse it says nothing about whether the real shell
+        that will actually execute it can."""
+        engine = make_unrestricted_engine()
+        assert engine.check_command("echo 'unterminated") is True
+
+    def test_empty_command_still_denied_in_unrestricted_mode(self):
+        """The one thing unrestricted mode still denies -- there's nothing
+        to execute, so this isn't a meaningful restriction being lifted."""
+        engine = make_unrestricted_engine()
+        with pytest.raises(PolicyViolationError, match="empty command"):
+            engine.check_command("")
+
+    def test_whitespace_only_command_still_denied_in_unrestricted_mode(self):
+        engine = make_unrestricted_engine()
+        with pytest.raises(PolicyViolationError, match="empty command"):
+            engine.check_command("   ")
 
     def test_default_unrestricted_is_false_preserves_sr_1_8(self):
         """Regression: a ShellPolicy that never sets unrestricted must
