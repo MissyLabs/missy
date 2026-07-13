@@ -2735,6 +2735,34 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     )
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
+                    # DiscordChannel._handle_message() already policy-validated any
+                    # image/text attachments and attached their metadata to
+                    # msg.metadata -- download them now and make the agent
+                    # actually aware of them (a local path + vision_capture
+                    # instruction for images, sanitized inline content for text).
+                    # Previously this metadata was built and forwarded but never
+                    # consumed anywhere, so an attached image or spec file was
+                    # invisible to the agent regardless of the policy gate.
+                    image_atts = msg.metadata.get("discord_image_attachments") or []
+                    text_atts = msg.metadata.get("discord_text_attachments") or []
+                    if image_atts or text_atts:
+                        from missy.channels.discord.attachment_context import (
+                            build_inbound_attachment_context,
+                        )
+
+                        try:
+                            attachment_context = await build_inbound_attachment_context(
+                                ch._rest,  # noqa: SLF001
+                                image_atts,
+                                text_atts,
+                                message_id=msg.metadata.get("discord_message_id", ""),
+                            )
+                        except Exception:
+                            logger.exception("Failed to build inbound attachment context")
+                            attachment_context = ""
+                        if attachment_context:
+                            enriched_prompt = f"{enriched_prompt}\n\n{attachment_context}"
+
                     # Keep "Missy is typing..." visible for the entire agent run.
                     # Discord's typing indicator expires after ~10s, so refresh it.
                     typing_stop = asyncio.Event()

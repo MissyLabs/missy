@@ -693,34 +693,59 @@ class DiscordChannel(BaseChannel):
                 return
 
         # 3. Attachment policy gate.
+        #
+        # Three-way classification: image (for vision analysis), text-like
+        # (for direct reading -- .md/.txt/.json/.yaml/.csv/.log, spliced
+        # into the prompt as content once downloaded), and everything
+        # else, which is still denied outright. A message with even one
+        # denied attachment is dropped entirely (matches the prior
+        # image-only gate's all-or-nothing behavior) rather than silently
+        # processing a partial attachment set.
         attachments: list[dict] = data.get("attachments") or []
+        image_attachments: list[tuple[dict, Any]] = []
+        text_attachments: list[tuple[dict, Any]] = []
         if attachments:
             from missy.channels.discord.image_analyze import (
+                AttachmentValidation,
                 is_image_attachment,
                 validate_image_attachment,
             )
+            from missy.channels.discord.text_attachment import (
+                MAX_TEXT_ATTACHMENT_BYTES,
+                is_text_attachment,
+                validate_text_attachment,
+            )
 
-            attachment_validations = [(a, validate_image_attachment(a)) for a in attachments]
-            image_attachments = [
-                (a, v) for a, v in attachment_validations if is_image_attachment(a) and v.allowed
-            ]
-            denied_attachments = [
-                (a, v)
-                for a, v in attachment_validations
-                if not is_image_attachment(a) or not v.allowed
-            ]
-
-            # Allow image attachments through (for vision analysis).
-            # Non-image attachments are still denied.
-            if denied_attachments:
-                denied_details = []
-                for attachment, validation in denied_attachments:
-                    reasons = (
-                        validation.reasons
-                        if is_image_attachment(attachment)
-                        else ["non_image_attachments_not_permitted"]
+            denied_attachments: list[tuple[dict, Any]] = []
+            for attachment in attachments:
+                if is_image_attachment(attachment):
+                    validation = validate_image_attachment(attachment)
+                    (image_attachments if validation.allowed else denied_attachments).append(
+                        (attachment, validation)
                     )
-                    denied_details.append({**validation.details, "reasons": reasons})
+                elif is_text_attachment(attachment):
+                    validation = validate_text_attachment(attachment)
+                    (text_attachments if validation.allowed else denied_attachments).append(
+                        (attachment, validation)
+                    )
+                else:
+                    filename = attachment.get("filename") or "attachment"
+                    denied_attachments.append(
+                        (
+                            attachment,
+                            AttachmentValidation(
+                                allowed=False,
+                                reasons=["unsupported_attachment_type"],
+                                details={"filename": filename},
+                            ),
+                        )
+                    )
+
+            if denied_attachments:
+                denied_details = [
+                    {**validation.details, "reasons": validation.reasons}
+                    for _attachment, validation in denied_attachments
+                ]
                 self._emit_audit(
                     "discord.channel.attachment_denied",
                     "deny",
@@ -743,9 +768,11 @@ class DiscordChannel(BaseChannel):
                     )
                     self._rest.send_message(
                         channel_id,
-                        f"⚠️ <@{author_id}> I can't accept {names} — only image "
-                        f"attachments are supported right now. Paste the content as text "
-                        f"instead if you'd like me to look at it.",
+                        f"⚠️ <@{author_id}> I can't accept {names} — only image and "
+                        f"text file (.md/.txt/.json/.yaml/.csv/.log, under "
+                        f"{MAX_TEXT_ATTACHMENT_BYTES // 1024}KB) attachments are "
+                        f"supported right now. Paste the content as text instead if "
+                        f"you'd like me to look at it.",
                     )
                 return
 
@@ -767,6 +794,27 @@ class DiscordChannel(BaseChannel):
                 logger.info(
                     "Discord: allowing %d image attachment(s) from %s for analysis",
                     len(image_attachments),
+                    author_id,
+                )
+
+            if text_attachments:
+                allowed_text_details = [
+                    {**validation.details, "reasons": []}
+                    for _attachment, validation in text_attachments
+                ]
+                self._emit_audit(
+                    "discord.channel.text_attachment_allowed",
+                    "allow",
+                    {
+                        "author_id": author_id,
+                        "channel_id": channel_id,
+                        "text_count": len(text_attachments),
+                        "attachments": allowed_text_details,
+                    },
+                )
+                logger.info(
+                    "Discord: allowing %d text attachment(s) from %s for reading",
+                    len(text_attachments),
                     author_id,
                 )
 
@@ -804,25 +852,34 @@ class DiscordChannel(BaseChannel):
         # 6. Enqueue.
         self._current_channel_id = channel_id
 
-        # Include image attachment info in metadata for vision analysis.
-        image_attachment_data: list[dict] = []
-        if attachments:
-            from missy.channels.discord.image_analyze import validate_image_attachment
-
-            for attachment in attachments:
-                validation = validate_image_attachment(attachment)
-                if validation.allowed:
-                    image_attachment_data.append(
-                        {
-                            "url": attachment.get("url", ""),
-                            "proxy_url": attachment.get("proxy_url", ""),
-                            "filename": validation.details["filename"],
-                            "content_type": validation.details["content_type"],
-                            "size": validation.details["size"] or 0,
-                            "width": validation.details["width"] or 0,
-                            "height": validation.details["height"] or 0,
-                        }
-                    )
+        # Include allowed attachment info in metadata for downstream
+        # processing (vision analysis for images, direct reading for
+        # text). Reuses image_attachments/text_attachments computed by
+        # the policy gate above rather than re-validating -- by this
+        # point any denied attachment has already caused an early
+        # `return`, so these are exactly the final, allowed sets.
+        image_attachment_data: list[dict] = [
+            {
+                "url": attachment.get("url", ""),
+                "proxy_url": attachment.get("proxy_url", ""),
+                "filename": validation.details["filename"],
+                "content_type": validation.details["content_type"],
+                "size": validation.details["size"] or 0,
+                "width": validation.details["width"] or 0,
+                "height": validation.details["height"] or 0,
+            }
+            for attachment, validation in image_attachments
+        ]
+        text_attachment_data: list[dict] = [
+            {
+                "url": attachment.get("url", ""),
+                "proxy_url": attachment.get("proxy_url", ""),
+                "filename": validation.details["filename"],
+                "content_type": validation.details["content_type"],
+                "size": validation.details["size"] or 0,
+            }
+            for attachment, validation in text_attachments
+        ]
 
         msg = ChannelMessage(
             content=content,
@@ -837,6 +894,7 @@ class DiscordChannel(BaseChannel):
                 "discord_author": author,
                 "discord_author_is_bot": bool(author.get("bot", False)),
                 "discord_image_attachments": image_attachment_data,
+                "discord_text_attachments": text_attachment_data,
             },
         )
         self._emit_audit(
