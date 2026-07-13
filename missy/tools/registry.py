@@ -150,11 +150,31 @@ class ToolRegistry:
     def execute(
         self,
         tool_name: str,
+        /,
         session_id: str = "",
         task_id: str = "",
         **kwargs,
     ) -> ToolResult:
         """Execute the named tool after verifying permissions.
+
+        ``tool_name`` is positional-only (the ``/`` above) so that a tool
+        whose own parameter schema happens to define an argument literally
+        named ``tool_name`` -- e.g. ``SelfCreateTool``, whose ``tool_name``
+        is the name of the *new* tool being proposed, unrelated to which
+        tool is being invoked here -- can never collide with it. Before
+        this, ``registry.execute(tool_call.name, **tool_args)`` with
+        ``tool_args = {"tool_name": ..., ...}`` raised
+        ``TypeError: execute() got multiple values for argument
+        'tool_name'`` on every single call, since Python's own argument
+        binding conflates the caller's positional ``tool_name`` value with
+        the tool's own keyword-supplied ``tool_name`` before this method
+        body ever runs -- making ``self_create_tool`` completely
+        uncallable for its ``create``/``delete`` actions (which require
+        ``tool_name``) regardless of any policy or permission check.
+        ``session_id``/``task_id`` remain keyword-assignable as before;
+        no current tool defines a parameter with either name, and the one
+        real caller (``AgentRuntime._execute_tool()``) always passes them
+        as explicit keywords.
 
         Policy checks are performed in this order:
 
