@@ -5,7 +5,9 @@ from __future__ import annotations
 from missy.agent.done_criteria import (
     DoneCriteria,
     is_compound_task,
+    is_observation_task,
     make_done_prompt,
+    make_no_fabricated_observation_prompt,
     make_verification_prompt,
 )
 
@@ -99,3 +101,47 @@ class TestPromptGenerators:
         prompt = make_verification_prompt()
         assert "complete" in prompt.lower() or "tool output" in prompt.lower()
         assert len(prompt) > 20
+
+
+class TestIsObservationTask:
+    """FX-round2-F4: detects requests implying a real vision/memory
+    observation, so a zero-tool-call response to one can be caught as a
+    fabrication rather than accepted at face value."""
+
+    def test_vision_capture_request(self):
+        assert is_observation_task("Capture a burst of frames and compare them") is True
+
+    def test_vision_photo_request(self):
+        assert is_observation_task("Take a picture with the webcam") is True
+
+    def test_vision_look_request(self):
+        assert is_observation_task("Look at what's on the desk right now") is True
+
+    def test_memory_search_request(self):
+        assert is_observation_task("Is there a deployment checklist in memory?") is True
+
+    def test_memory_recall_request(self):
+        assert is_observation_task("Do you remember what I told you yesterday?") is True
+
+    def test_unrelated_request_not_observation(self):
+        assert is_observation_task("What is 2 plus 2?") is False
+
+    def test_empty_string(self):
+        assert is_observation_task("") is False
+
+    def test_case_insensitive(self):
+        assert is_observation_task("CAPTURE a PHOTO of the room") is True
+
+
+class TestNoFabricatedObservationPrompt:
+    def test_prompt_not_empty(self):
+        prompt = make_no_fabricated_observation_prompt()
+        assert len(prompt) > 20
+
+    def test_prompt_mentions_tool_call(self):
+        prompt = make_no_fabricated_observation_prompt()
+        assert "tool call" in prompt.lower()
+
+    def test_prompt_instructs_honesty_on_failure(self):
+        prompt = make_no_fabricated_observation_prompt()
+        assert "say so" in prompt.lower()

@@ -505,6 +505,41 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_discord_upload_file(self):
         assert "discord_upload_file" in DISCORD_SYSTEM_PROMPT
 
+    def test_discord_prompt_discloses_web_fetch_js_limitation(self):
+        """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
+        silently substituting for a JS-dependent page instead of
+        disclosing the limitation. This does not expand Discord's tool
+        access (a deliberate security boundary -- see
+        missy/policy/tool_policy_pipeline.py's MISSY_DISCORD_TOOLS) --
+        it only requires disclosing web_fetch's own real limitation."""
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "javascript" in lower
+        assert "web_fetch" in DISCORD_SYSTEM_PROMPT
+
+    def test_discord_tools_still_exclude_desktop_gui(self):
+        """Regression guard for the won't-fix decision: Discord sessions
+        must never be silently granted browser/x11/atspi tool access --
+        that would be a real security-scope expansion, not a bug fix."""
+        from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
+
+        for name in MISSY_DISCORD_TOOLS:
+            assert not name.startswith("browser_"), name
+            assert not name.startswith("x11_"), name
+            assert not name.startswith("atspi_"), name
+
+
+class TestFullPromptToolSurfaceSalience:
+    """FX-round2-F3 (the other safe half): in "full" capability_mode,
+    browser/x11/atspi tools genuinely ARE available (unlike Discord mode),
+    so an explicit "attempt before denying" rule is a legitimate,
+    non-security-conflicting robustness improvement here."""
+
+    def test_default_prompt_instructs_attempting_before_denial(self):
+        prompt = AgentConfig().system_prompt
+        lower = prompt.lower()
+        assert "before telling the user you cannot" in lower
+        assert "call the specific tool for it first" in lower
+
 
 # ---------------------------------------------------------------------------
 # 5. AgentRuntime.__init__ wiring

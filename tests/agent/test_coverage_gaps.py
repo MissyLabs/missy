@@ -1108,6 +1108,50 @@ class TestRuntimeDictsToMessages:
         messages = runtime._dicts_to_messages("sys", dicts)
         assert "Tool error for shell_exec" in messages[1].content
 
+    def test_empty_success_result_gets_unambiguous_sentinel(self):
+        """FX-round2-F2: a genuinely empty (but successful) tool result
+        must never flatten to a bare trailing colon -- that reads
+        identically to a silent failure once flattened into plain text
+        (e.g. by AcpxProvider._build_prompt()), which was observed causing
+        the acpx delegate to disclaim an otherwise-successful call instead
+        of reporting the (correct) empty result and continuing.
+        """
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        for empty_content in ("", [], {}):
+            dicts = [
+                {
+                    "role": "tool",
+                    "name": "incus_device",
+                    "content": empty_content,
+                    "is_error": False,
+                }
+            ]
+            messages = runtime._dicts_to_messages("sys", dicts)
+            assert not messages[1].content.endswith(": ")
+            assert "no output" in messages[1].content
+            assert "succeeded" in messages[1].content
+
+    def test_empty_error_result_gets_distinct_error_sentinel(self):
+        """An empty *error* result must not be dressed up with the
+        success-flavored sentinel -- the two must read distinctly."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [{"role": "tool", "name": "shell_exec", "content": "", "is_error": True}]
+        messages = runtime._dicts_to_messages("sys", dicts)
+        assert "did not succeed" in messages[1].content
+        assert "succeeded" not in messages[1].content.split("did not succeed")[0]
+
+    def test_nonempty_result_unaffected_by_sentinel(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        runtime = AgentRuntime(AgentConfig())
+        dicts = [{"role": "tool", "name": "calculator", "content": "42", "is_error": False}]
+        messages = runtime._dicts_to_messages("sys", dicts)
+        assert messages[1].content == "[Tool result for calculator]: 42"
+
     def test_unknown_role_skipped(self):
         from missy.agent.runtime import AgentConfig, AgentRuntime
 

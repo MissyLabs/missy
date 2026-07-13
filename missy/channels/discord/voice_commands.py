@@ -83,6 +83,11 @@ def _normalise_channel_target(raw_target: str) -> tuple[str | None, int | None] 
     target = _TRAILING_CLAUSE_RE.sub("", target).strip(" .,")
     target = re.sub(r"^(?:the|a|an)\s+", "", target, flags=re.I)
     target = re.sub(r"^(?:my|current|my current|this)\s+", "", target, flags=re.I)
+    # "the current Discord voice channel" etc.: "discord" is a boilerplate
+    # modifier here (like "my"/"current"/"this"), not part of a real
+    # channel name -- without this it was left over as a literal target
+    # ("Discord") and the join failed to find any such channel.
+    target = re.sub(r"^discord\s+", "", target, flags=re.I)
     target = re.sub(r"\s+(?:voice\s+channel|voice\s+room|voice)$", "", target, flags=re.I)
     target = re.sub(r"^(?:voice\s+channel|voice\s+room|voice)\s+", "", target, flags=re.I)
     target = target.strip(" .")
@@ -126,6 +131,22 @@ def parse_voice_intent(content: str | None) -> VoiceIntent | None:
     ):
         return VoiceIntent(action="leave")
 
+    # NOTE (FX-round2-F5, deliberately NOT applying the harness report's
+    # literal suggestion here): applying _TRAILING_CLAUSE_RE trimming to
+    # the patterns below the same way _normalise_channel_target() does
+    # would make "say hello in the voice channel, then leave" fast-path-
+    # match as a lone "say" action -- silently dropping the "then leave"
+    # half of the request with no trace it was ever there.
+    # TestTrailingClauseAndPunctuation already has three regression tests
+    # (test_say_does_not_capture_unrelated_trailing_instruction,
+    # test_say_does_not_capture_trailing_status_request,
+    # test_combined_status_say_leave_phrasing_not_misparsed) codifying the
+    # opposite, intentional behavior: a compound say command must fall
+    # through to the LLM tool loop (which can actually execute both
+    # actions, or ask for clarification) rather than being fast-matched
+    # into doing only the first half unannounced. Silently dropping an
+    # action is worse than not fast-pathing at all, so this finding is a
+    # documented won't-fix, not an oversight.
     say_match = re.fullmatch(
         r"(?:say|speak|read)\s+(?P<speech>.+?)\s+(?:in|to|over|through)\s+"
         r"(?:the\s+)?voice(?:\s+channel|\s+room)?",

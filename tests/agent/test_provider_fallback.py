@@ -484,6 +484,86 @@ class TestCooldownEligibility:
 
 
 # ---------------------------------------------------------------------------
+# FX-round2-F6: an OPEN primary breaker must still trigger fallback
+#
+# CircuitBreaker.call() raises a bare MissyError (not ProviderError) when
+# the breaker is OPEN. Before this fix, _call_provider_with_fallback()
+# only caught ProviderError around the primary attempt, so once a
+# provider's breaker actually opened (e.g. after enough consecutive
+# openai-codex account-moderation-lockout failures crossed the failure
+# threshold), every subsequent call raised straight out of the method with
+# no fallback attempt at all -- the opposite of what a circuit breaker
+# fallback path is for.
+# ---------------------------------------------------------------------------
+
+
+class TestOpenPrimaryBreakerStillFallsBack:
+    def test_open_primary_breaker_falls_back_instead_of_raising_missyerror(self):
+        primary_cfg = ProviderConfig(name="primary", model="m", api_key="k1")
+        primary = _AlwaysFailProvider("primary", primary_cfg, "should never be called")
+        healthy_cfg = ProviderConfig(name="healthy", model="m", api_key="k3")
+        healthy = _HealthyProvider("healthy", healthy_cfg)
+        registry = _install_registry(
+            ("primary", primary, primary_cfg),
+            ("healthy", healthy, healthy_cfg),
+        )
+
+        rt = _bare_runtime("primary")
+        # Pre-open the *primary's own* breaker, exactly as production
+        # would after enough consecutive real failures (e.g. a sustained
+        # provider-side moderation lockout).
+        primary_breaker = CircuitBreaker("primary", threshold=1, base_timeout=3600.0)
+        with pytest.raises(ProviderError):
+            primary_breaker.call(lambda: (_ for _ in ()).throw(ProviderError("boom")))
+        assert primary_breaker.state == CircuitState.OPEN
+        rt._circuit_breaker = primary_breaker
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            # Must not raise MissyError -- must fall back to "healthy".
+            result = rt._single_turn(
+                provider=primary,
+                system_prompt="sys",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s1",
+                task_id="t1",
+            )
+
+        assert result.provider == "healthy"
+        assert primary.calls == 0  # never actually invoked -- breaker was OPEN
+
+    def test_all_candidates_open_breaker_raises_missyerror_not_uncaught(self):
+        """When every candidate (not just the primary) has an OPEN
+        breaker, the method must still fail closed by raising -- the fix
+        is that it *reaches* the fallback loop, not that it silently
+        succeeds when there is truly nothing eligible to try."""
+        from missy.core.exceptions import MissyError
+
+        primary_cfg = ProviderConfig(name="primary", model="m", api_key="k1")
+        primary = _AlwaysFailProvider("primary", primary_cfg, "should never be called")
+        registry = _install_registry(("primary", primary, primary_cfg))
+
+        rt = _bare_runtime("primary")
+        primary_breaker = CircuitBreaker("primary", threshold=1, base_timeout=3600.0)
+        with pytest.raises(ProviderError):
+            primary_breaker.call(lambda: (_ for _ in ()).throw(ProviderError("boom")))
+        assert primary_breaker.state == CircuitState.OPEN
+        rt._circuit_breaker = primary_breaker
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            pytest.raises(MissyError),
+        ):
+            rt._single_turn(
+                provider=primary,
+                system_prompt="sys",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s1",
+                task_id="t1",
+            )
+        assert primary.calls == 0
+
+
+# ---------------------------------------------------------------------------
 # All candidates exhausted -> fail closed
 # ---------------------------------------------------------------------------
 

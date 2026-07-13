@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ from typing import Any
 
 from missy.agent.subscription import AgentSubscription
 from missy.core.events import AuditEvent, event_bus
-from missy.core.exceptions import ProviderError
+from missy.core.exceptions import MissyError, ProviderError
 from missy.core.session import Session, SessionManager
 from missy.policy.tool_policy_pipeline import (
     MISSY_DISCORD_TOOLS,
@@ -72,6 +73,40 @@ logger = logging.getLogger(__name__)
 
 # Maximum size (chars) for a single tool result to prevent memory exhaustion.
 _MAX_TOOL_RESULT_CHARS = 200_000
+
+# FX-round2-F1: exact internal placeholder strings _dicts_to_messages() (see
+# below) substitutes for an assistant history entry with empty content, so
+# a provider re-serializing that history never sends an invalid empty
+# message. These are history-reconstruction artifacts only -- if one of
+# them ever comes back as `response.content` for the CURRENT round (i.e. a
+# provider echoes the placeholder it just saw a line above the prompt
+# boundary, rather than generating a real answer), it must never be
+# forwarded to the user as-is: it is not a real reply, and the underlying
+# tool-loop task is left genuinely incomplete when this happens. See the
+# tool-specific validation harness's SH-003/SELF-004/INCUS-005/INCUS-006
+# findings (both acpx and openai-codex).
+_PLACEHOLDER_ARTIFACT_RE = re.compile(r"^\[(?:Called tool: [^\]]*|Tool call|No response text)\]$")
+
+_MAX_PLACEHOLDER_RETRIES = 1
+
+_PLACEHOLDER_RETRY_NUDGE = (
+    "[System reminder]: Your previous response was not a real reply -- it was "
+    "an internal placeholder artifact, not synthesized text. Produce an "
+    "actual response now: either genuine prose describing what happened "
+    "(including any tool results above), or, if the task is not yet "
+    "complete, the next <tool_call>/tool invocation needed to finish it."
+)
+
+# FX-round2-F2: explicit sentinels substituted for an empty/falsy tool
+# result string before it is flattened into plain text (see
+# AgentRuntime._dicts_to_messages). A bare empty string after "[Tool
+# result for X]: " is ambiguous -- "genuinely nothing to report" and
+# "silent failure" are indistinguishable once flattened -- and was
+# observed causing a text-flattening delegate (acpx) to disclaim an
+# otherwise-successful call rather than report the empty result and keep
+# progressing.
+_EMPTY_TOOL_RESULT_SENTINEL = "(no output — command succeeded with nothing to report)"
+_EMPTY_TOOL_ERROR_SENTINEL = "(no error detail was provided, but the call did not succeed)"
 
 
 def _fingerprint_tc(name: str, arguments: dict) -> str:
@@ -281,6 +316,12 @@ class AgentConfig:
         "x11_click (click at coordinates), x11_type (type text), "
         "x11_key (send keypress), x11_window_list (list open windows). "
         "Use x11_read_screen to verify UI state after actions. "
+        "These browser/GTK/X11 tools are genuinely available to you in this "
+        "session — before telling the user you cannot open a page, click "
+        "something, take a screenshot, or interact with a window, actually "
+        "call the specific tool for it first. A prior tool failure or "
+        "denial is a reason to report that failure, not to assume every "
+        "future attempt in the same category will also fail. "
         "Always use tools to get real information rather than guessing or describing. "
         "SAFETY: If an approval-gated or policy-gated tool or action is "
         "unavailable, denied, or refuses your request, report that limitation "
@@ -332,6 +373,11 @@ DISCORD_SYSTEM_PROMPT = (
     "to share captured images in the channel. "
     "You do NOT have access to a desktop, GUI, browser, or screen — do not "
     "reference X11, browser, or GUI tools. "
+    "web_fetch only retrieves raw HTML — it does not run JavaScript and "
+    "cannot see content that a page renders dynamically (e.g. JS-driven "
+    "search results, single-page apps). If a page needs that and web_fetch's "
+    "result looks incomplete or empty, say so explicitly rather than "
+    "answering as if you had full browser access to the rendered page. "
     "When you need real data (file contents, command output, etc.), use tools "
     "rather than guessing."
 )
@@ -1071,7 +1117,11 @@ class AgentRuntime:
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
-        from missy.agent.done_criteria import make_verification_prompt
+        from missy.agent.done_criteria import (
+            is_observation_task,
+            make_no_fabricated_observation_prompt,
+            make_verification_prompt,
+        )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
         try:
@@ -1131,6 +1181,9 @@ class AgentRuntime:
         _last_round_errors: list[str] = []
         _MAX_DONE_VERIFICATION_RETRIES = 2
         _done_verification_retries = 0
+        _placeholder_retries = 0
+        _MAX_FABRICATION_RETRIES = 1
+        _fabrication_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
@@ -1422,6 +1475,85 @@ class AgentRuntime:
                     iteration + 1,
                     response.finish_reason,
                 )
+
+                # FX-round2-F1: a provider's "final" response is sometimes
+                # a raw internal placeholder artifact (see
+                # _PLACEHOLDER_ARTIFACT_RE) instead of a real answer --
+                # observed for both acpx (flattens history to text, prone
+                # to echoing a distinctive nearby marker) and openai-codex.
+                # This is never a legitimate reply, so it is never
+                # returned to the caller: retry once with an explicit
+                # correction before falling through to the done-criteria
+                # checks below.
+                if _PLACEHOLDER_ARTIFACT_RE.match(final_text.strip()):
+                    if _placeholder_retries < _MAX_PLACEHOLDER_RETRIES:
+                        _placeholder_retries += 1
+                        logger.warning(
+                            "Tool loop final response was a placeholder artifact "
+                            "(%r); retrying once with a correction.",
+                            final_text,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append({"role": "user", "content": _PLACEHOLDER_RETRY_NUDGE})
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.placeholder_retry",
+                                result="warn",
+                                detail={"placeholder_text": final_text},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.placeholder_unresolved",
+                            result="warn",
+                            detail={"placeholder_text": final_text},
+                        )
+
+                # FX-round2-F4: a request implying a vision/memory
+                # observation (see is_observation_task) answered with
+                # ZERO tool calls this entire task cannot be grounded in
+                # anything real -- any specific observation in the
+                # response (what a photo showed, what a memory record
+                # said) was necessarily invented. The existing
+                # make_verification_prompt() nudge above only fires after
+                # a round of tool results, so it structurally never runs
+                # for this case; this check catches it directly instead.
+                if (
+                    not tool_names_used
+                    and is_observation_task(user_input)
+                    and _fabrication_retries < _MAX_FABRICATION_RETRIES
+                ):
+                    _fabrication_retries += 1
+                    logger.warning(
+                        "Tool loop answered an observation-implying request with "
+                        "zero tool calls; retrying once with a no-fabrication correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {"role": "user", "content": make_no_fabricated_observation_prompt()}
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.fabrication_retry",
+                            result="warn",
+                            detail={"user_input_excerpt": user_input[:200]},
+                        )
+                    continue
+                if not tool_names_used and is_observation_task(user_input):
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.fabrication_unresolved",
+                            result="warn",
+                            detail={"user_input_excerpt": user_input[:200]},
+                        )
 
                 # SR-4.4: reject a completion claim when the round of tool
                 # calls immediately preceding it contained an error --
@@ -2533,10 +2665,29 @@ class AgentRuntime:
             content = d.get("content", "")
             if role == "tool":
                 # Represent tool results as user messages for providers that
-                # don't support native tool_result role
-                content_str = f"[Tool result for {d.get('name', 'unknown')}]: {content}"
-                if d.get("is_error"):
-                    content_str = f"[Tool error for {d.get('name', 'unknown')}]: {content}"
+                # don't support native tool_result role.
+                #
+                # FX-round2-F2: an empty/falsy result ("", [], {} rendered
+                # as str) is genuinely ambiguous once flattened into plain
+                # text (e.g. by AcpxProvider._build_prompt()) -- "[Tool
+                # result for X]: " with nothing after the colon reads
+                # identically whether the tool legitimately produced no
+                # output or the call silently failed. Validation harness:
+                # incus_device/incus_copy_move/incus_instance_action calls
+                # with a genuinely empty result caused the acpx delegate to
+                # disclaim the call as something that "didn't execute"
+                # rather than report the (correct) empty result and keep
+                # progressing. An explicit sentinel removes the ambiguity
+                # for every text-flattening provider, not just acpx.
+                is_error = bool(d.get("is_error"))
+                display_content = content
+                if not display_content:
+                    display_content = (
+                        _EMPTY_TOOL_ERROR_SENTINEL if is_error else _EMPTY_TOOL_RESULT_SENTINEL
+                    )
+                content_str = f"[Tool result for {d.get('name', 'unknown')}]: {display_content}"
+                if is_error:
+                    content_str = f"[Tool error for {d.get('name', 'unknown')}]: {display_content}"
                 result.append(Message(role="user", content=content_str))
             elif role in ("user", "assistant"):
                 content_str = str(content)
@@ -3411,6 +3562,9 @@ class AgentRuntime:
         Raises:
             ProviderError: When the primary call and every eligible
                 fallback candidate all fail.
+            MissyError: Possible instead of ``ProviderError`` in the same
+                circumstance, if the last-attempted candidate's own
+                circuit breaker was open (see FX-round2-F6).
         """
         from missy.agent.circuit_breaker import CircuitState
         from missy.providers.base import BaseProvider
@@ -3422,7 +3576,17 @@ class AgentRuntime:
 
         try:
             return _attempt(provider), provider
-        except ProviderError as exc:
+        except (ProviderError, MissyError) as exc:
+            # FX-round2-F6: CircuitBreaker.call() raises a bare MissyError
+            # (not ProviderError) when the breaker is OPEN -- catching
+            # only ProviderError here meant that once a provider's breaker
+            # actually opened (e.g. after enough consecutive openai-codex
+            # moderation-lockout failures cross the failure threshold),
+            # every subsequent call raised straight out of this method
+            # with no fallback attempt at all: the exact opposite of what
+            # a circuit breaker is for. A breaker-open condition is
+            # exactly the case fallback exists to handle.
+            #
             # Registry only needed on the failure path (key rotation /
             # fallback candidate selection) -- resolved lazily so the
             # common success path never requires get_registry() to have
@@ -3458,7 +3622,7 @@ class AgentRuntime:
                 )
                 try:
                     return _attempt(provider), provider
-                except ProviderError as exc2:
+                except (ProviderError, MissyError) as exc2:
                     self._emit_event(
                         session_id=session_id,
                         task_id=task_id,
@@ -3506,7 +3670,7 @@ class AgentRuntime:
                 )
                 try:
                     return _attempt(fallback), fallback
-                except ProviderError as exc3:
+                except (ProviderError, MissyError) as exc3:
                     last_exc = exc3
                     self._emit_event(
                         session_id=session_id,

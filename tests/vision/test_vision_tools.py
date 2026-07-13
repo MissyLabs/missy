@@ -95,6 +95,42 @@ class TestVisionCaptureTool:
         result = tool.execute(source="/nonexistent/image.xyz")
         assert result.success is False
 
+    @patch("missy.vision.discovery.find_preferred_camera")
+    @patch("missy.vision.sources.WebcamSource.acquire")
+    @patch("missy.vision.sources.WebcamSource.is_available", return_value=True)
+    def test_blank_frame_failure_includes_guard_guidance(self, mock_avail, mock_acquire, mock_find):
+        """FX-round2-F7: a blank-frame quality-guard rejection must tell
+        the model to report the verdict, not just fail generically --
+        this is what stops the model from routing around the guard via a
+        raw shell_exec capture instead."""
+        mock_find.return_value = MagicMock(device_path="/dev/video0")
+        mock_acquire.side_effect = RuntimeError(
+            "Capture failed after 3 attempts: Blank frame detected on attempt 3"
+        )
+
+        tool = VisionCaptureTool()
+        result = tool.execute(source="webcam")
+
+        assert result.success is False
+        assert "blank frame detected" in result.error.lower()
+        assert "quality guard" in result.error.lower()
+        assert "shell" in result.error.lower()
+
+    @patch("missy.vision.discovery.find_preferred_camera")
+    @patch("missy.vision.sources.WebcamSource.acquire")
+    @patch("missy.vision.sources.WebcamSource.is_available", return_value=True)
+    def test_non_blank_capture_failure_unchanged(self, mock_avail, mock_acquire, mock_find):
+        """A generic capture error must not get the blank-frame guidance
+        attached -- only the specific guard-rejection case should."""
+        mock_find.return_value = MagicMock(device_path="/dev/video0")
+        mock_acquire.side_effect = RuntimeError("device busy")
+
+        tool = VisionCaptureTool()
+        result = tool.execute(source="webcam")
+
+        assert result.success is False
+        assert result.error == "device busy"
+
 
 # ---------------------------------------------------------------------------
 # SR-1.4: vision_capture/vision_burst filesystem permission resolution.
@@ -258,6 +294,34 @@ class TestVisionBurstResolveFilesystemTargets:
         tool = VisionBurstCaptureTool()
         _reads, writes = tool.resolve_filesystem_targets({"best_only": False})
         assert writes == []
+
+
+class TestVisionBurstBlankFrameGuidance:
+    """FX-round2-F7: capture_best's blank-frame rejection must carry the
+    same don't-work-around-the-guard guidance as VisionCaptureTool's."""
+
+    @patch("missy.vision.discovery.find_preferred_camera")
+    @patch("missy.vision.capture.CameraHandle.close")
+    @patch("missy.vision.capture.CameraHandle.open")
+    @patch("missy.vision.capture.CameraHandle.capture_best")
+    def test_best_only_blank_frame_includes_guard_guidance(
+        self, mock_capture_best, mock_open, mock_close, mock_find
+    ):
+        from missy.tools.builtin.vision_tools import VisionBurstCaptureTool
+
+        mock_find.return_value = MagicMock(device_path="/dev/video0")
+        mock_capture_best.return_value = MagicMock(
+            success=False,
+            error="Capture failed after 3 attempts: Blank frame detected on attempt 3",
+        )
+
+        tool = VisionBurstCaptureTool()
+        result = tool.execute(best_only=True, count=3)
+
+        assert result.success is False
+        assert "blank frame detected" in result.error.lower()
+        assert "quality guard" in result.error.lower()
+        assert "shell" in result.error.lower()
 
 
 # ---------------------------------------------------------------------------
