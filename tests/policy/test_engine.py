@@ -45,6 +45,7 @@ def make_config(
     write_paths: list[str] | None = None,
     shell_enabled: bool = False,
     shell_commands: list[str] | None = None,
+    shell_unrestricted: bool = False,
 ) -> MissyConfig:
     return MissyConfig(
         network=NetworkPolicy(
@@ -57,7 +58,11 @@ def make_config(
             allowed_read_paths=read_paths or [],
             allowed_write_paths=write_paths or [],
         ),
-        shell=ShellPolicy(enabled=shell_enabled, allowed_commands=shell_commands or []),
+        shell=ShellPolicy(
+            enabled=shell_enabled,
+            allowed_commands=shell_commands or [],
+            unrestricted=shell_unrestricted,
+        ),
         plugins=PluginPolicy(enabled=False, allowed_plugins=[]),
         providers={},
         workspace_path="/tmp/workspace",
@@ -157,6 +162,35 @@ class TestCheckShell:
         pe = PolicyEngine(make_config(shell_enabled=False, shell_commands=["ls"]))
         with pytest.raises(PolicyViolationError):
             pe.check_shell("ls")
+
+
+class TestCheckShellUnrestricted:
+    """The user-reported gap: shell.unrestricted: true must actually make
+    `missy` execute shell commands instead of denying with 'allowed_commands
+    is empty', while every other, independent policy layer keeps working."""
+
+    def test_empty_allowed_commands_no_longer_denies(self):
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_unrestricted=True))
+        assert pe.check_shell("curl https://example.com") is True
+
+    def test_still_denied_when_shell_disabled(self):
+        pe = PolicyEngine(make_config(shell_enabled=False, shell_unrestricted=True))
+        with pytest.raises(PolicyViolationError):
+            pe.check_shell("ls")
+
+    def test_filesystem_policy_still_enforced_on_redirect_targets(self):
+        """unrestricted only lifts the shell program-name allow-list -- SR-1.7's
+        redirect-target-to-filesystem-policy check is a separate layer and
+        must still deny writes outside allowed_write_paths."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_unrestricted=True))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo x > /etc/cron.d/pwn")
+
+    def test_filesystem_policy_allows_redirect_within_allowed_write_path(self):
+        pe = PolicyEngine(
+            make_config(shell_enabled=True, shell_unrestricted=True, write_paths=["/tmp"])
+        )
+        assert pe.check_shell("echo hi > /tmp/ok.txt") is True
 
 
 # ---------------------------------------------------------------------------

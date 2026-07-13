@@ -62,6 +62,10 @@ class TestGetDefaultConfig:
         cfg = get_default_config()
         assert cfg.shell.allowed_commands == []
 
+    def test_shell_unrestricted_disabled_by_default(self):
+        cfg = get_default_config()
+        assert cfg.shell.unrestricted is False
+
     def test_plugins_disabled_by_default(self):
         cfg = get_default_config()
         assert cfg.plugins.enabled is False
@@ -463,28 +467,75 @@ class TestLoadConfigFilesystem:
         assert cfg.filesystem.allowed_write_paths == ["/data/out"]
 
 
-# ---------------------------------------------------------------------------
-# Config-hygiene gap: unrecognized keys in a policy section are silently
-# dropped, with no signal to the operator that a typo or a stale/renamed
-# field means the config isn't doing what they think it's doing. Found
-# live during task #10 validation: a real operator config carried
-# `shell.unrestricted: true`, which ShellPolicy never had a field for and
-# which was silently ignored -- SR-1.8's fail-closed rewrite (an empty
-# allowed_commands always denies regardless of "unrestricted") happened
-# to make this safe in practice, but the operator had no way to know
-# their config key was inert.
-# ---------------------------------------------------------------------------
-
-
-class TestUnknownConfigKeyWarnings:
-    def test_shell_unrestricted_dead_key_warns(self, tmp_path: Path, caplog):
+class TestLoadConfigShellUnrestricted:
+    def test_unrestricted_defaults_to_false(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
             shell:
               enabled: true
               allowed_commands: ["ls"]
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.unrestricted is False
+
+    def test_unrestricted_true_loaded_with_empty_allowed_commands(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
               unrestricted: true
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.enabled is True
+        assert cfg.shell.allowed_commands == []
+        assert cfg.shell.unrestricted is True
+
+    def test_quoted_true_unrestricted_is_unrestricted(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              unrestricted: "true"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.unrestricted is True
+
+    def test_quoted_false_unrestricted_stays_restricted(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              unrestricted: "false"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.unrestricted is False
+
+
+# ---------------------------------------------------------------------------
+# Config-hygiene gap: unrecognized keys in a policy section are silently
+# dropped, with no signal to the operator that a typo or a stale/renamed
+# field means the config isn't doing what they think it's doing.
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownConfigKeyWarnings:
+    def test_shell_typo_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_commands: ["ls"]
+              allowd_commands: ["typo"]
             """,
         )
         with caplog.at_level("WARNING", logger="missy.config.settings"):
@@ -492,7 +543,7 @@ class TestUnknownConfigKeyWarnings:
 
         assert cfg.shell.enabled is True
         assert cfg.shell.allowed_commands == ["ls"]
-        assert any("shell" in r.message and "unrestricted" in r.message for r in caplog.records)
+        assert any("shell" in r.message and "allowd_commands" in r.message for r in caplog.records)
 
     def test_network_unknown_key_warns(self, tmp_path: Path, caplog):
         path = _write_yaml(
@@ -970,11 +1021,16 @@ class TestDataclasses:
         policy = ShellPolicy()
         assert policy.enabled is False
         assert policy.allowed_commands == []
+        assert policy.unrestricted is False
 
     def test_shell_policy_custom_values(self):
         policy = ShellPolicy(enabled=True, allowed_commands=["ls", "cat"])
         assert policy.enabled is True
         assert policy.allowed_commands == ["ls", "cat"]
+
+    def test_shell_policy_unrestricted(self):
+        policy = ShellPolicy(enabled=True, unrestricted=True)
+        assert policy.unrestricted is True
 
     def test_plugin_policy_defaults(self):
         policy = PluginPolicy()

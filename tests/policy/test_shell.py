@@ -125,6 +125,83 @@ class TestShellEnabled:
 
 
 # ---------------------------------------------------------------------------
+# Shell enabled + unrestricted=True -- allow-list matching skipped entirely
+# ---------------------------------------------------------------------------
+
+
+def make_unrestricted_engine(enabled: bool = True) -> ShellPolicyEngine:
+    return ShellPolicyEngine(ShellPolicy(enabled=enabled, unrestricted=True))
+
+
+class TestShellUnrestricted:
+    def test_empty_allowlist_no_longer_denies(self):
+        """The exact scenario the user reported: enabled=True,
+        allowed_commands empty, unrestricted=True -- must NOT raise
+        "allowed_commands is empty" anymore."""
+        engine = make_unrestricted_engine()
+        assert engine.check_command("ls -la /tmp") is True
+
+    def test_arbitrary_unlisted_command_allowed(self):
+        engine = make_unrestricted_engine()
+        assert engine.check_command("curl https://example.com") is True
+        assert engine.check_command("rm -rf /tmp/scratch") is True
+
+    def test_compound_command_with_multiple_unlisted_programs_allowed(self):
+        engine = make_unrestricted_engine()
+        assert engine.check_command("git status && curl example.com; ls") is True
+
+    def test_still_denied_when_shell_disabled(self):
+        """unrestricted=True must not bypass ShellPolicy.enabled -- that's
+        a separate gate checked before allow-list matching is even
+        reached."""
+        engine = make_unrestricted_engine(enabled=False)
+        with pytest.raises(PolicyViolationError) as exc_info:
+            engine.check_command("ls")
+        assert exc_info.value.category == "shell"
+        event = event_bus.get_events(result="deny")[0]
+        assert event.policy_rule == "shell_disabled"
+
+    def test_allowed_commands_populated_alongside_unrestricted_still_allows_everything(self):
+        """A populated (but now-irrelevant) allowed_commands list doesn't
+        somehow narrow unrestricted mode back down."""
+        engine = ShellPolicyEngine(
+            ShellPolicy(enabled=True, allowed_commands=["git"], unrestricted=True)
+        )
+        assert engine.check_command("curl https://example.com") is True
+
+    def test_allow_event_carries_unrestricted_rule(self):
+        engine = make_unrestricted_engine()
+        engine.check_command("whoami")
+        event = event_bus.get_events(result="allow")[0]
+        assert event.policy_rule == "unrestricted"
+
+    def test_launcher_command_still_logs_warning(self, caplog):
+        """Launcher-command observability (sudo/bash/python/etc. can run
+        arbitrary subcommands) is a distinct signal from allow-list
+        enforcement and must still fire in unrestricted mode."""
+        engine = make_unrestricted_engine()
+        with caplog.at_level("WARNING", logger="missy.policy.shell"):
+            engine.check_command("sudo apt update")
+        assert any("sudo" in r.message and "launcher" in r.message for r in caplog.records)
+
+    def test_subshell_marker_still_rejected(self):
+        """unrestricted only skips allow-list matching -- Step 2's
+        subshell/brace-group parsing safety check (independent of the
+        allow-list) still applies."""
+        engine = make_unrestricted_engine()
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("echo $(rm -rf /)")
+
+    def test_default_unrestricted_is_false_preserves_sr_1_8(self):
+        """Regression: a ShellPolicy that never sets unrestricted must
+        behave exactly as before this feature existed -- empty
+        allowed_commands still denies everything."""
+        engine = make_engine(enabled=True, commands=[])
+        with pytest.raises(PolicyViolationError):
+            engine.check_command("ls")
+
+
+# ---------------------------------------------------------------------------
 # Path-qualified program names
 # ---------------------------------------------------------------------------
 

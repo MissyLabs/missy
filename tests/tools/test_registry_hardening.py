@@ -415,6 +415,62 @@ class TestPermissionChecking:
 
 
 # ---------------------------------------------------------------------------
+# End-to-end (real PolicyEngine, not mocked): the exact user-reported
+# symptom -- "Policy denied execution of tool 'shell_exec': Shell command
+# denied: allowed_commands is empty." -- and shell.unrestricted: true
+# resolving it.
+# ---------------------------------------------------------------------------
+
+
+class TestShellUnrestrictedEndToEnd:
+    def _make_engine(self, *, unrestricted: bool, allowed_commands: list[str] | None = None):
+        from missy.config.settings import (
+            FilesystemPolicy,
+            MissyConfig,
+            NetworkPolicy,
+            PluginPolicy,
+            ShellPolicy,
+        )
+        from missy.policy.engine import PolicyEngine
+
+        config = MissyConfig(
+            network=NetworkPolicy(default_deny=True),
+            filesystem=FilesystemPolicy(),
+            shell=ShellPolicy(
+                enabled=True,
+                allowed_commands=allowed_commands or [],
+                unrestricted=unrestricted,
+            ),
+            plugins=PluginPolicy(enabled=False, allowed_plugins=[]),
+            providers={},
+            workspace_path="/tmp/workspace",
+            audit_log_path="/tmp/audit.log",
+        )
+        return PolicyEngine(config)
+
+    def test_reproduces_exact_reported_error_without_unrestricted(self):
+        engine = self._make_engine(unrestricted=False)
+        reg = ToolRegistry()
+        reg.register(ShellTool())
+        with patch("missy.tools.registry.get_policy_engine", return_value=engine):
+            result = reg.execute("shell", command="ls -la")
+
+        assert result.success is False
+        assert result.policy_denied is True
+        assert "allowed_commands is empty" in result.error
+
+    def test_unrestricted_true_resolves_the_reported_error(self):
+        engine = self._make_engine(unrestricted=True)
+        reg = ToolRegistry()
+        reg.register(ShellTool())
+        with patch("missy.tools.registry.get_policy_engine", return_value=engine):
+            result = reg.execute("shell", command="ls -la")
+
+        assert result.success is True
+        assert result.policy_denied is False
+
+
+# ---------------------------------------------------------------------------
 # Audit event emission
 # ---------------------------------------------------------------------------
 

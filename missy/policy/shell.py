@@ -3,7 +3,12 @@
 Shell command execution is evaluated against a :class:`ShellPolicy` instance.
 When ``policy.enabled`` is ``False`` every command is denied regardless of the
 allow-list.  When enabled, the first token of the command (the program name)
-must begin with an entry in ``policy.allowed_commands``.
+must begin with an entry in ``policy.allowed_commands`` -- unless
+``policy.unrestricted`` is ``True``, in which case allow-list matching is
+skipped entirely (an empty ``allowed_commands`` no longer denies everything).
+``unrestricted`` still requires ``enabled: True``, and does not affect any
+other, independent policy layer (e.g. redirect targets still route through
+the filesystem policy engine).
 
 Every check emits an :class:`~missy.core.events.AuditEvent`.
 
@@ -16,6 +21,9 @@ Example::
     engine = ShellPolicyEngine(policy)
     engine.check_command("git status")   # -> True
     engine.check_command("rm -rf /")     # -> raises PolicyViolationError
+
+    unrestricted_policy = ShellPolicy(enabled=True, unrestricted=True)
+    ShellPolicyEngine(unrestricted_policy).check_command("rm -rf /tmp/x")  # -> True
 """
 
 from __future__ import annotations
@@ -92,14 +100,32 @@ class ShellPolicyEngine:
                 detail=f"Could not determine the program name(s) from command {command!r}.",
             )
 
-        # Step 3 – allow-list check.
+        # Step 3 – allow-list check, unless the operator has explicitly
+        # opted into unrestricted mode.
+        #
+        # unrestricted=True skips allow-list matching entirely (including
+        # the empty-list-denies-all rule directly below), so an empty
+        # allowed_commands no longer blocks every command. It does NOT
+        # disable enabled=True (Step 1 above still applies), and does NOT
+        # touch any other, independent policy layer -- PolicyEngine.check_shell()
+        # still routes every redirection target through the filesystem
+        # policy engine (SR-1.7) regardless of this flag, and Step 2's
+        # subshell/brace-group rejection above still ran unconditionally.
+        if self._policy.unrestricted:
+            for program in programs:
+                self._warn_if_launcher(program)
+            self._emit_event(command, "allow", "unrestricted", session_id, task_id)
+            return True
+
         # SR-1.8: enabled=True with an empty allowed_commands list must deny
         # ALL commands, matching ShellPolicy.allowed_commands's own
         # documented contract ("An empty list means no commands are allowed
         # even when enabled is True"). Configuration ambiguity must never
         # become allow-all -- a previous version of this engine inverted
         # that contract and treated an empty list as unrestricted shell
-        # access whenever enabled=True, which is exactly backwards.
+        # access whenever enabled=True, which is exactly backwards. (An
+        # operator who actually wants that behavior now has an explicit,
+        # auditable way to ask for it: ShellPolicy.unrestricted=True above.)
         if not self._policy.allowed_commands:
             self._emit_event(command, "deny", "empty_allowlist", session_id, task_id)
             raise PolicyViolationError(
@@ -109,7 +135,8 @@ class ShellPolicyEngine:
                     "ShellPolicy.enabled is True but allowed_commands is empty -- "
                     "per policy, an empty allowlist denies all commands rather than "
                     "permitting them. Configure allowed_commands explicitly to permit "
-                    "specific programs."
+                    "specific programs, or set shell.unrestricted: true to skip "
+                    "allow-list matching entirely."
                 ),
             )
 
@@ -126,20 +153,24 @@ class ShellPolicyEngine:
                         "any allowed_commands entry."
                     ),
                 )
-            # Warn about launcher commands that can execute arbitrary subcommands
-            import os.path
-
-            basename = os.path.basename(program)
-            if basename in self._LAUNCHER_COMMANDS:
-                logger.warning(
-                    "ShellPolicyEngine: %r is a command launcher that can execute "
-                    "arbitrary subcommands — consider removing it from allowed_commands",
-                    basename,
-                )
+            self._warn_if_launcher(program)
 
         # All programs matched — allow.
         self._emit_event(command, "allow", f"cmd:compound({len(programs)})", session_id, task_id)
         return True
+
+    @classmethod
+    def _warn_if_launcher(cls, program: str) -> None:
+        """Log a warning if *program* is a command launcher (see ``_LAUNCHER_COMMANDS``)."""
+        import os.path
+
+        basename = os.path.basename(program)
+        if basename in cls._LAUNCHER_COMMANDS:
+            logger.warning(
+                "ShellPolicyEngine: %r is a command launcher that can execute "
+                "arbitrary subcommands — consider removing it from allowed_commands",
+                basename,
+            )
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -109,11 +109,20 @@ class ShellPolicy:
         enabled: When ``False`` (the default) all shell execution is blocked.
         allowed_commands: Whitelist of command names permitted when the shell
             is enabled.  An empty list means no commands are allowed even
-            when ``enabled`` is ``True``.
+            when ``enabled`` is ``True`` -- unless ``unrestricted`` is set.
+        unrestricted: When ``True``, every program-name check in
+            :meth:`~missy.policy.shell.ShellPolicyEngine.check_command` is
+            skipped -- ``allowed_commands`` is no longer consulted at all,
+            including when it is empty. Still requires ``enabled: True``;
+            still subject to every other, independent policy layer (SR-1.7's
+            redirect-target-to-filesystem-policy check, subshell/brace-group
+            rejection). Defaults to ``False`` so a config that never sets
+            this key behaves identically to before this field existed.
     """
 
     enabled: bool = False
     allowed_commands: list[str] = field(default_factory=list)
+    unrestricted: bool = False
 
 
 @dataclass
@@ -468,16 +477,15 @@ def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None
     """Warn when a YAML config section has keys its dataclass doesn't define.
 
     Config parsing has historically been silently forgiving of typos or
-    stale/renamed keys -- e.g. a real operator config carried
-    ``shell.unrestricted: true`` for a field ``ShellPolicy`` never had,
-    dead since a stricter fail-closed rewrite made an empty
-    ``allowed_commands`` deny everything regardless. The operator had no
-    signal that the key they added did nothing. This never fails config
-    loading (a stricter posture would be a breaking change for anyone
-    with genuinely-extra keys); it only logs a visible warning so a typo
-    or a config written against a different Missy version doesn't
-    silently produce a different security posture than the operator
-    believes they configured.
+    stale/renamed keys -- e.g. a real operator config once carried
+    ``shell.unrestricted: true`` for a field ``ShellPolicy`` didn't yet
+    have (that field now exists -- see ``ShellPolicy.unrestricted``), and
+    the operator had no signal that the key they'd added did nothing.
+    This never fails config loading (a stricter posture would be a
+    breaking change for anyone with genuinely-extra keys); it only logs
+    a visible warning so a typo or a config written against a different
+    Missy version doesn't silently produce a different security posture
+    than the operator believes they configured.
 
     The known-key set is derived directly from *schema*'s own
     dataclass fields rather than a separately maintained list, so it
@@ -607,6 +615,7 @@ def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
     return ShellPolicy(
         enabled=_coerce_bool(data.get("enabled"), False),
         allowed_commands=list(data.get("allowed_commands", [])),
+        unrestricted=_coerce_bool(data.get("unrestricted"), False),
     )
 
 
