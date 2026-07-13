@@ -23,7 +23,9 @@ import json
 import logging
 import os
 import re
+import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -31,6 +33,7 @@ from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
+from .rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,26 @@ except ImportError:  # pragma: no cover
     _OPENAI_AVAILABLE = False
 
 
+@dataclass
+class _OpenAIAccount:
+    """One configured OpenAI credential this provider round-robins across.
+
+    Built once per entry in ``config.api_keys`` when
+    ``key_rotation_strategy == "round_robin"`` and at least 2 keys are
+    configured (e.g. two separate OpenAI accounts/organizations). Each
+    account gets its own lazily-built SDK client and its own
+    :class:`~missy.providers.rate_limiter.RateLimiter` sized from the
+    provider's configured RPM/TPM budget -- this is what makes adding a
+    second account actually double effective throughput rather than both
+    accounts sharing one combined budget the way plain key rotation would.
+    """
+
+    index: int
+    api_key: str
+    rate_limiter: RateLimiter
+    client: Any | None = None
+
+
 class OpenAIProvider(BaseProvider):
     """Provider implementation backed by the OpenAI Chat Completions API.
 
@@ -80,7 +103,11 @@ class OpenAIProvider(BaseProvider):
         config: Provider-level configuration.  ``api_key`` is forwarded to
             the SDK; when ``None`` the SDK reads ``OPENAI_API_KEY`` from the
             environment.  ``base_url`` overrides the default API endpoint,
-            enabling OpenAI-compatible third-party services.
+            enabling OpenAI-compatible third-party services. When
+            ``config.key_rotation_strategy == "round_robin"`` and
+            ``config.api_keys`` has 2+ entries, every call is balanced
+            across those accounts round-robin (see :class:`_OpenAIAccount`)
+            instead of using a single sticky key.
     """
 
     name = "openai"
@@ -97,6 +124,94 @@ class OpenAIProvider(BaseProvider):
         self._client: Any | None = None
         self._resolved_model: str | None = None
         self._last_transcript_repairs: list[dict[str, Any]] = []
+
+        # Multi-account round-robin balancing (opt-in via
+        # key_rotation_strategy: "round_robin"). self._accounts stays empty
+        # -- and every call falls through to the single self._api_key/
+        # self._client pair above, completely unchanged -- unless the
+        # operator both opts in AND configures 2+ keys. self._account_local
+        # is a thread-local "which account is this call using" slot: each
+        # of complete()/complete_with_tools()/stream() sets it once at the
+        # top of the call (see _select_account()), and _make_client()/
+        # _acquire_rate_limit()/_record_rate_limit_usage() all consult it
+        # instead of a shared mutable instance attribute, so concurrent
+        # calls on different threads can never race over which account's
+        # client/rate limiter is "currently active" -- each call is pinned
+        # to its own account slot for its own duration.
+        self._accounts: list[_OpenAIAccount] = []
+        self._account_index = 0
+        self._account_lock = threading.Lock()
+        self._account_local = threading.local()
+        keys = list(config.api_keys or [])
+        if config.key_rotation_strategy == "round_robin" and len(keys) >= 2:
+            self._accounts = [
+                _OpenAIAccount(
+                    index=i,
+                    api_key=key,
+                    rate_limiter=RateLimiter(
+                        requests_per_minute=self._requests_per_minute,
+                        tokens_per_minute=self._tokens_per_minute,
+                        max_wait_seconds=self._max_wait_seconds,
+                    ),
+                )
+                for i, key in enumerate(keys)
+            ]
+
+    @property
+    def is_multi_account(self) -> bool:
+        """Return ``True`` when 2+ accounts are configured for round-robin balancing."""
+        return bool(self._accounts)
+
+    @property
+    def account_count(self) -> int:
+        """Return how many accounts this provider round-robins across (0 if not multi-account)."""
+        return len(self._accounts)
+
+    def _select_account(self) -> _OpenAIAccount | None:
+        """Return the account to use for the call in progress on this thread.
+
+        Returns ``None`` when this provider isn't configured for
+        multi-account balancing, in which case callers fall back to the
+        single ``self._api_key``/``self._client`` pair exactly as before
+        this feature existed. Advances the round-robin index atomically so
+        concurrent callers are assigned accounts round-robin with no lost
+        or duplicated turns.
+        """
+        if not self._accounts:
+            return None
+        with self._account_lock:
+            idx = self._account_index
+            self._account_index = (idx + 1) % len(self._accounts)
+        return self._accounts[idx]
+
+    def _current_rate_limiter(self) -> RateLimiter | None:
+        """Return the rate limiter for the account active on this thread, if any."""
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            return account.rate_limiter
+        return self.rate_limiter
+
+    def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
+        """Block until the active account's (or the shared) rate limiter permits a request."""
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            account.rate_limiter.acquire(tokens=estimated_tokens)
+            return
+        super()._acquire_rate_limit(estimated_tokens=estimated_tokens)
+
+    def _record_rate_limit_usage(
+        self, response: CompletionResponse, estimated_tokens: int = 0
+    ) -> None:
+        """Reconcile usage against the active account's (or the shared) rate limiter."""
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            account.rate_limiter.record_usage(
+                prompt_tokens=response.usage.get("prompt_tokens", 0),
+                completion_tokens=response.usage.get("completion_tokens", 0),
+                estimated_tokens=estimated_tokens,
+            )
+            return
+        super()._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
 
     @property
     def api_key(self) -> str | None:
@@ -284,6 +399,14 @@ class OpenAIProvider(BaseProvider):
                     "embeddings": False,
                 },
             },
+            {
+                "name": "multi_account_balancing",
+                "status": "ok",
+                "summary": {
+                    "enabled": self.is_multi_account,
+                    "account_count": len(self._accounts),
+                },
+            },
         ]
         status = (
             "error"
@@ -296,28 +419,43 @@ class OpenAIProvider(BaseProvider):
             "checks": checks,
         }
 
-    def _make_client(self) -> Any:
-        """Return a cached OpenAI client, creating one on first call.
+    def _build_client(self, api_key: str | None) -> Any:
+        """Construct a new OpenAI SDK client bound to *api_key*.
 
         The SDK is given a policy-aware ``http_client`` so that all provider
         egress transits the network policy check (consistent with the
         gateway), rather than issuing unchecked HTTP directly.
         """
-        if self._client is None:
-            client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
-            if self._api_key:
-                client_kwargs["api_key"] = self._api_key
-            if self._base_url:
-                client_kwargs["base_url"] = self._base_url
-            try:
-                from missy.providers.policy_http import build_policy_http_client
+        client_kwargs: dict[str, Any] = {"timeout": float(self._timeout)}
+        if api_key:
+            client_kwargs["api_key"] = api_key
+        if self._base_url:
+            client_kwargs["base_url"] = self._base_url
+        try:
+            from missy.providers.policy_http import build_policy_http_client
 
-                client_kwargs["http_client"] = build_policy_http_client(
-                    timeout=float(self._timeout)
-                )
-            except Exception:  # pragma: no cover - defensive; never block startup
-                logger.debug("Could not build policy-aware http client", exc_info=True)
-            self._client = _openai_sdk.OpenAI(**client_kwargs)
+            client_kwargs["http_client"] = build_policy_http_client(timeout=float(self._timeout))
+        except Exception:  # pragma: no cover - defensive; never block startup
+            logger.debug("Could not build policy-aware http client", exc_info=True)
+        return _openai_sdk.OpenAI(**client_kwargs)
+
+    def _make_client(self) -> Any:
+        """Return a cached OpenAI client, creating one on first call.
+
+        When this thread's call selected a multi-account entry (see
+        :meth:`_select_account`), returns that account's own lazily-built,
+        independently-cached client instead of the shared
+        ``self._client`` -- each account gets its own client, so rotating
+        api_key on one account can never accidentally invalidate another
+        account's already-built client.
+        """
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            if account.client is None:
+                account.client = self._build_client(account.api_key)
+            return account.client
+        if self._client is None:
+            self._client = self._build_client(self._api_key)
         return self._client
 
     def _resolve_model(self, requested_model: str | None = None) -> str:
@@ -1036,6 +1174,7 @@ class OpenAIProvider(BaseProvider):
         api_messages = self._messages_to_chat_payload(messages, system=system)
         self._emit_transcript_repairs(session_id, task_id)
 
+        self._account_local.current = self._select_account()
         estimated_tokens = self._estimate_tokens(messages)
         self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
@@ -1069,8 +1208,9 @@ class OpenAIProvider(BaseProvider):
                 retry_after = float(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
-                if self.rate_limiter is not None:
-                    self.rate_limiter.on_rate_limit_response(retry_after)
+                limiter = self._current_rate_limiter()
+                if limiter is not None:
+                    limiter.on_rate_limit_response(retry_after)
                 raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
@@ -1171,6 +1311,7 @@ class OpenAIProvider(BaseProvider):
             call_kwargs["tools"] = tool_schemas
             call_kwargs["tool_choice"] = "auto"
 
+        self._account_local.current = self._select_account()
         estimated_tokens = self._estimate_tokens(messages, system)
         self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
@@ -1186,8 +1327,9 @@ class OpenAIProvider(BaseProvider):
                 retry_after = float(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
-                if self.rate_limiter is not None:
-                    self.rate_limiter.on_rate_limit_response(retry_after)
+                limiter = self._current_rate_limiter()
+                if limiter is not None:
+                    limiter.on_rate_limit_response(retry_after)
                 raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
@@ -1255,6 +1397,7 @@ class OpenAIProvider(BaseProvider):
         model = self._resolve_model(self._model)
         api_messages = self._messages_to_chat_payload(messages, system=system)
         self._emit_transcript_repairs()
+        self._account_local.current = self._select_account()
         self._acquire_rate_limit(estimated_tokens=self._estimate_tokens(messages, system))
 
         try:
@@ -1301,17 +1444,31 @@ class OpenAIProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event including the model name."""
+        """Publish a provider audit event including the model name.
+
+        When this call was dispatched through a multi-account round-robin
+        slot, ``account_index`` is included so operators can confirm
+        balancing is actually happening across accounts -- never the api
+        key itself, only its position in the configured list.
+        """
         try:
             from missy.core.events import AuditEvent, event_bus
 
+            detail: dict[str, Any] = {
+                "provider": self.name,
+                "model": self._model,
+                "message": detail_msg,
+            }
+            account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+            if account is not None:
+                detail["account_index"] = account.index
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
                 event_type="provider_invoke",
                 category="provider",
                 result=result,  # type: ignore[arg-type]
-                detail={"provider": self.name, "model": self._model, "message": detail_msg},
+                detail=detail,
             )
             event_bus.publish(event)
         except Exception:

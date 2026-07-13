@@ -709,6 +709,52 @@ class TestLoadConfigProviders:
             for r in caplog.records
         )
 
+    def test_provider_key_rotation_strategy_default(self, tmp_path: Path):
+        """Providers without the field must default to 'failover' -- the
+        original single-sticky-key-with-reactive-rotation behavior."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].key_rotation_strategy == "failover"
+
+    def test_provider_key_rotation_strategy_round_robin(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+                key_rotation_strategy: round_robin
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].key_rotation_strategy == "round_robin"
+
+    def test_provider_key_rotation_strategy_invalid_value_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+                key_rotation_strategy: yolo
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="key_rotation_strategy"):
+            load_config(path)
+
     def test_provider_base_url_optional(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,

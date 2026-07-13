@@ -117,6 +117,18 @@ class ProviderRegistry:
         internal index and updates the provider's active API key.  Has no
         effect when fewer than two keys are configured.
 
+        No-ops (beyond a debug log) when the provider reports
+        ``is_multi_account = True`` (currently only
+        :class:`~missy.providers.openai_provider.OpenAIProvider` with
+        ``key_rotation_strategy: "round_robin"``): that provider already
+        balances every call across all configured accounts internally via
+        its own per-call round-robin selection, each with its own
+        independent rate limiter, so mutating this registry's separate
+        legacy ``_key_indices``/``provider.api_key`` bookkeeping here would
+        be dead state that nothing reads -- confusing at best, since the
+        "rotated to key index N" log would imply an effect this call never
+        actually has for such a provider.
+
         Args:
             provider_name: Registry key of the provider to rotate.
         """
@@ -125,6 +137,13 @@ class ProviderRegistry:
             provider = self._providers.get(provider_name)
             if config is None or provider is None:
                 logger.warning("rotate_key: provider %r not found.", provider_name)
+                return
+            if getattr(provider, "is_multi_account", False):
+                logger.debug(
+                    "rotate_key: provider %r already balances calls across its "
+                    "configured accounts internally; skipping legacy rotation.",
+                    provider_name,
+                )
                 return
             keys = getattr(config, "api_keys", [])
             if len(keys) < 2:

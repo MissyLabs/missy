@@ -402,6 +402,58 @@ class TestProvidersList:
         assert result.exit_code == 0
         assert "anthropic" in result.output
 
+    def test_providers_list_shows_round_robin_balancing(
+        self, runner: CliRunner, mock_config: MagicMock
+    ) -> None:
+        """A real multi-account OpenAIProvider shows its account count."""
+        from missy.config.settings import ProviderConfig
+        from missy.providers.openai_provider import OpenAIProvider
+
+        provider_cfg = ProviderConfig(
+            name="openai",
+            model="gpt-5.5",
+            api_keys=["sk-account-1", "sk-account-2"],
+            key_rotation_strategy="round_robin",
+        )
+        mock_config.providers = {"openai": provider_cfg}
+
+        real_provider = OpenAIProvider(provider_cfg)
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = real_provider
+
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+        ):
+            result = runner.invoke(cli, ["providers", "list"])
+
+        assert result.exit_code == 0
+        assert "round_robin (2 accounts)" in result.output
+        assert "sk-account-1" not in result.output
+        assert "sk-account-2" not in result.output
+
+    def test_providers_list_shows_dash_when_no_balancing_configured(
+        self, runner: CliRunner, mock_config: MagicMock
+    ) -> None:
+        from missy.config.settings import ProviderConfig
+        from missy.providers.openai_provider import OpenAIProvider
+
+        provider_cfg = ProviderConfig(name="openai", model="gpt-5.5", api_key="sk-only-key")
+        mock_config.providers = {"openai": provider_cfg}
+
+        real_provider = OpenAIProvider(provider_cfg)
+        mock_registry = MagicMock()
+        mock_registry.get.return_value = real_provider
+
+        with (
+            patch("missy.cli.main._load_subsystems", return_value=mock_config),
+            patch("missy.providers.registry.get_registry", return_value=mock_registry),
+        ):
+            result = runner.invoke(cli, ["providers", "list"])
+
+        assert result.exit_code == 0
+        assert "round_robin" not in result.output
+
     def test_providers_bare_group_also_lists(
         self, runner: CliRunner, mock_config: MagicMock
     ) -> None:
