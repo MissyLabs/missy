@@ -104,29 +104,56 @@ class TestValidateImageAttachment:
         assert result.allowed is False
         assert "image_too_large" in result.reasons
 
-    def test_rejects_mime_extension_mismatch(self):
+    def test_allows_mismatched_filename_extension_when_content_type_is_a_real_image(self):
+        """Regression: live audit-log evidence showed Discord routinely
+        serving a pasted screenshot as content_type "image/webp" while
+        keeping Discord's own auto-generated filename "image.png" -- a
+        normal client-side transcoding behavior, not a spoofing attempt.
+        A prior stricter check rejected this exact, extremely common
+        real-world case outright ("mime_extension_mismatch"). content_type
+        being a recognised real image MIME type is what actually matters."""
         from missy.channels.discord.image_analyze import validate_image_attachment
 
         result = validate_image_attachment(
             {
-                "content_type": "image/png",
+                "content_type": "image/webp",
+                "filename": "image.png",
+                "url": "https://cdn.discordapp.com/attachments/1/2/image.png",
+                "size": 22194,
+                "width": 613,
+                "height": 349,
+            }
+        )
+
+        assert result.allowed is True
+        assert result.reasons == []
+
+    def test_still_rejects_genuinely_unrecognised_content_type(self):
+        from missy.channels.discord.image_analyze import validate_image_attachment
+
+        result = validate_image_attachment(
+            {
+                "content_type": "application/octet-stream",
                 "filename": "photo.jpg",
                 "url": "https://cdn.discordapp.com/attachments/1/2/photo.jpg",
             }
         )
 
         assert result.allowed is False
-        assert "mime_extension_mismatch" in result.reasons
+        assert "unsupported_content_type" in result.reasons
 
     def test_rejects_bad_dimensions(self):
-        from missy.channels.discord.image_analyze import validate_image_attachment
+        from missy.channels.discord.image_analyze import (
+            MAX_IMAGE_DIMENSION,
+            validate_image_attachment,
+        )
 
         result = validate_image_attachment(
             {
                 "content_type": "image/jpeg",
                 "filename": "photo.jpg",
                 "url": "https://cdn.discordapp.com/attachments/1/2/photo.jpg",
-                "width": 10000,
+                "width": MAX_IMAGE_DIMENSION + 1,
                 "height": 500,
             }
         )
@@ -595,6 +622,12 @@ class TestAttachmentPolicy:
 
     @pytest.mark.asyncio
     async def test_invalid_image_metadata_denied_with_audit_details(self):
+        from missy.channels.discord.image_analyze import (
+            MAX_IMAGE_ATTACHMENT_BYTES,
+            MAX_IMAGE_DIMENSION,
+            MAX_IMAGE_PIXELS,
+        )
+
         ch = self._make_channel()
         ch._emit_audit = MagicMock()
         data = {
@@ -608,7 +641,7 @@ class TestAttachmentPolicy:
                     "content_type": "image/png",
                     "filename": "huge.png",
                     "url": "https://cdn.discordapp.com/attachments/1/2/huge.png",
-                    "size": 9 * 1024 * 1024,
+                    "size": MAX_IMAGE_ATTACHMENT_BYTES + 1,
                 }
             ],
         }
@@ -627,13 +660,13 @@ class TestAttachmentPolicy:
                     {
                         "filename": "huge.png",
                         "content_type": "image/png",
-                        "size": 9 * 1024 * 1024,
+                        "size": MAX_IMAGE_ATTACHMENT_BYTES + 1,
                         "width": None,
                         "height": None,
                         "url_host": "cdn.discordapp.com",
-                        "max_size": 8 * 1024 * 1024,
-                        "max_dimension": 8192,
-                        "max_pixels": 40_000_000,
+                        "max_size": MAX_IMAGE_ATTACHMENT_BYTES,
+                        "max_dimension": MAX_IMAGE_DIMENSION,
+                        "max_pixels": MAX_IMAGE_PIXELS,
                         "reasons": ["image_too_large"],
                     }
                 ],

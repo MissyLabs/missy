@@ -373,6 +373,38 @@ class TestHandleMessageAttachment:
         assert ch._queue.empty()
 
     @pytest.mark.asyncio
+    async def test_real_world_pasted_screenshot_now_allowed_end_to_end(self):
+        """Regression, reproduced end-to-end through _handle_message()
+        rather than just the unit-level validator: live audit-log
+        evidence showed a real user's pasted screenshot -- Discord's
+        auto-generated filename "image.png" served with content_type
+        "image/webp" -- being denied outright with "mime_extension_
+        mismatch", despite webp being a fully-recognised image type. This
+        is the single most common real-world Discord image-sharing
+        pattern (paste a screenshot) and must not be rejected."""
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "image.png",
+                    "content_type": "image/webp",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/image.png",
+                    "size": 22194,
+                    "width": 613,
+                    "height": 349,
+                }
+            ]
+        )
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+        msg = ch._queue.get_nowait()
+        image_atts = msg.metadata["discord_image_attachments"]
+        assert len(image_atts) == 1
+        assert image_atts[0]["filename"] == "image.png"
+        assert image_atts[0]["content_type"] == "image/webp"
+
+    @pytest.mark.asyncio
     async def test_message_with_markdown_attachment_is_allowed(self):
         """FX-inbound-attachments: a .md attachment must pass the policy
         gate and its metadata must reach the queued ChannelMessage under

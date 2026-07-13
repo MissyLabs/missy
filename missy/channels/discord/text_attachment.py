@@ -32,8 +32,12 @@ from missy.channels.discord.image_analyze import (
 # Text attachments are spliced directly into the prompt as plain text, so
 # the cap is far smaller than the image cap (MAX_IMAGE_ATTACHMENT_BYTES) --
 # a large file would otherwise blow the context budget on a single
-# attachment.
-MAX_TEXT_ATTACHMENT_BYTES = 256 * 1024
+# attachment. Raised from the original 256KB, which was too small for a
+# real-world log file or JSON export; 1MB is roughly 250K characters --
+# still bounded well below AgentConfig's default 30K-token context
+# budget's ability to swallow it whole, but large enough for ordinary
+# text attachments rather than only trivial ones.
+MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024
 
 _TEXT_CONTENT_TYPES = frozenset(
     {
