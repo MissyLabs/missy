@@ -16,9 +16,17 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
-MAX_IMAGE_DIMENSION = 8192
-MAX_IMAGE_PIXELS = 40_000_000
+# Raised from the original 8MB/8192px/40MP defaults -- live audit-log
+# evidence (discord.channel.image_attachment_allowed events) showed real
+# user photos landing at 3-5MB and 3400+px wide well within normal use,
+# and modern phone cameras routinely exceed the old caps. These bounds
+# exist to stop a decompression-bomb-style or resource-exhaustion
+# attachment, not to police ordinary photo/screenshot sizes -- the
+# downstream ImagePipeline resizes/normalizes for the vision model
+# regardless of the original dimensions.
+MAX_IMAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024
+MAX_IMAGE_DIMENSION = 16384
+MAX_IMAGE_PIXELS = 150_000_000
 
 _DISCORD_ATTACHMENT_HOSTS = frozenset(
     {
@@ -50,14 +58,6 @@ _IMAGE_EXTENSIONS = frozenset(
         ".tiff",
     }
 )
-
-_CONTENT_TYPE_EXTENSIONS = {
-    "image/png": frozenset({".png"}),
-    "image/jpeg": frozenset({".jpg", ".jpeg"}),
-    "image/jpg": frozenset({".jpg", ".jpeg"}),
-    "image/gif": frozenset({".gif"}),
-    "image/webp": frozenset({".webp"}),
-}
 
 
 @dataclass(frozen=True)
@@ -115,11 +115,20 @@ def validate_image_attachment(attachment: dict[str, Any]) -> AttachmentValidatio
     elif parsed.scheme != "https" or host not in _DISCORD_ATTACHMENT_HOSTS:
         reasons.append("invalid_discord_cdn_url")
 
+    # Deliberately does NOT also require the filename extension to match
+    # content_type's "canonical" extension: live audit-log evidence
+    # (discord.channel.attachment_denied events) showed Discord routinely
+    # serving a pasted screenshot as content_type "image/webp" while
+    # keeping Discord's own auto-generated filename "image.png" -- a
+    # normal, extremely common client-side transcoding behavior, not a
+    # spoofing attempt. content_type being a recognised real image MIME
+    # type is the thing that actually matters (it's what the downstream
+    # vision pipeline decodes against); the filename is cosmetic/display
+    # only, already basename-sanitized above, and never trusted for
+    # anything security-relevant.
     if content_type:
         if content_type not in _IMAGE_CONTENT_TYPES:
             reasons.append("unsupported_content_type")
-        elif ext and ext in _IMAGE_EXTENSIONS and ext not in _CONTENT_TYPE_EXTENSIONS[content_type]:
-            reasons.append("mime_extension_mismatch")
     elif ext not in _IMAGE_EXTENSIONS:
         reasons.append("unsupported_file_extension")
 
