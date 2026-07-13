@@ -120,42 +120,80 @@ class TestVisionDevicesTool:
 class TestVisionAnalyzeTool:
     """Edge cases for VisionAnalyzeTool."""
 
+    @staticmethod
+    def _mock_frame():
+        frame = MagicMock()
+        frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        return frame
+
     def test_tool_metadata(self):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
         tool = VisionAnalyzeTool()
         assert tool.name == "vision_analyze"
         assert "mode" in tool.parameters
+        assert "source" in tool.parameters
 
-    def test_general_mode(self):
+    def test_source_required(self):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
         tool = VisionAnalyzeTool()
         result = tool.execute(mode="general")
-        assert result.success is True
-        assert "Analyze" in result.output or "analyze" in result.output.lower()
+        assert result.success is False
 
-    def test_puzzle_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_general_mode(self, mock_avail, mock_acquire, mock_analyze):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("A detailed analysis of the scene.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="puzzle")
+        result = tool.execute(source="/tmp/photo.jpg", mode="general")
+        assert result.success is True
+        assert "analysis" in result.output.lower()
+
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_puzzle_mode(self, mock_avail, mock_acquire, mock_analyze):
+        from missy.tools.builtin.vision_tools import VisionAnalyzeTool
+
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Puzzle board state notes.", "anthropic")
+
+        tool = VisionAnalyzeTool()
+        result = tool.execute(source="/tmp/puzzle.jpg", mode="puzzle")
         assert result.success is True
         assert "puzzle" in result.output.lower()
 
-    def test_painting_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_painting_mode(self, mock_avail, mock_acquire, mock_analyze):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("A warm painting critique.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="painting")
+        result = tool.execute(source="/tmp/painting.jpg", mode="painting")
         assert result.success is True
         assert "paint" in result.output.lower()
 
-    def test_inspection_mode(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_inspection_mode(self, mock_avail, mock_acquire, mock_analyze):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Inspection overview.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="inspection")
+        result = tool.execute(source="/tmp/part.jpg", mode="inspection")
         assert result.success is True
 
     def test_invalid_mode_raises_or_fails(self):
@@ -163,15 +201,23 @@ class TestVisionAnalyzeTool:
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="unknown")
+        result = tool.execute(source="/tmp/photo.jpg", mode="unknown")
         # Invalid AnalysisMode value → ValueError caught → error result
         assert result.success is False
 
-    def test_with_context(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_with_context(self, mock_avail, mock_acquire, mock_analyze):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool
 
+        mock_acquire.return_value = self._mock_frame()
+        mock_analyze.return_value = ("Notes about the sky section.", "anthropic")
+
         tool = VisionAnalyzeTool()
-        result = tool.execute(mode="puzzle", context="Working on the sky section")
+        result = tool.execute(
+            source="/tmp/puzzle.jpg", mode="puzzle", context="Working on the sky section"
+        )
         assert result.success is True
         assert "sky" in result.output.lower()
 

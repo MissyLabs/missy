@@ -198,7 +198,7 @@ class TestBuildInboundAttachmentContext:
             [],
             message_id="msg-123",
         )
-        assert "vision_capture" in result
+        assert "vision_analyze" in result
         assert "photo.png" in result
         saved_files = list((tmp_path / "inbound").glob("msg-123_0_photo.png"))
         assert len(saved_files) == 1

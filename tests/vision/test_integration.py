@@ -286,8 +286,18 @@ class TestProviderFormatIntegration:
 class TestVisionToolIntegration:
     """Test vision tools with the scene memory system."""
 
-    def test_vision_scene_tool_creates_and_uses_session(self):
+    @patch("missy.vision.provider_call.analyze_image_with_provider_fallback")
+    @patch("missy.vision.sources.FileSource.acquire")
+    @patch("missy.vision.sources.FileSource.is_available", return_value=True)
+    def test_vision_scene_tool_creates_and_uses_session(
+        self, mock_avail, mock_acquire, mock_analyze
+    ):
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool, VisionSceneMemoryTool
+
+        frame = MagicMock()
+        frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        mock_acquire.return_value = frame
+        mock_analyze.return_value = ("Edge pieces are grouped in the top-left.", "anthropic")
 
         scene_tool = VisionSceneMemoryTool()
         analyze_tool = VisionAnalyzeTool()
@@ -310,11 +320,15 @@ class TestVisionToolIntegration:
         )
         assert result.success
 
-        # Build analysis prompt
-        result = analyze_tool.execute(mode="puzzle", context="Help with edges")
+        # Real analysis, including the domain-specific prompt sent to the provider
+        result = analyze_tool.execute(
+            source="/tmp/puzzle.jpg", mode="puzzle", context="Help with edges"
+        )
         assert result.success
         data = json.loads(result.output)
-        assert "jigsaw" in data["prompt"].lower()
+        assert data["analysis"] == "Edge pieces are grouped in the top-left."
+        prompt_sent = mock_analyze.call_args[0][0]
+        assert "jigsaw" in prompt_sent.lower()
 
         # Close session
         result = scene_tool.execute(action="close", task_id="integration-test")
