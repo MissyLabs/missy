@@ -32,6 +32,23 @@ MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
     "atspi_get_text",
 )
 
+# FX-round2-F3 (deliberately NOT "fixed" as the harness report proposed):
+# the report observed Discord-routed requests substituting web_fetch for
+# browser_*, or flatly denying any browser/desktop/GUI capability, and
+# framed this as a tool-schema-salience/prompting bug because a *direct,
+# out-of-Discord* call to BrowserNavigateTool/X11LaunchTool succeeded in
+# the same environment. That direct-call evidence only proves the tools
+# work in the codebase -- it does not mean they should be reachable via
+# Discord specifically. MISSY_DISCORD_TOOLS below is a deliberately
+# curated allowlist that excludes every browser_*/x11_*/atspi_* tool
+# (not even the read-only ones in MISSY_SAFE_CHAT_TOOLS above), and
+# DISCORD_SYSTEM_PROMPT (missy/agent/runtime.py) says so explicitly:
+# remote Discord users do not get host GUI/desktop control. The model's
+# denial in this capability mode is therefore accurate, not false, and
+# "strengthening salience" here would mean either lying to the model
+# about tools it genuinely doesn't have, or silently widening what an
+# arbitrary Discord user can make Missy's host desktop do -- a real
+# security-scope decision this fix pass does not make unilaterally.
 MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "calculator",
     "file_read",

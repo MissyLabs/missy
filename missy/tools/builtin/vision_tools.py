@@ -17,6 +17,33 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
+_BLANK_FRAME_MARKER = "blank frame"
+
+
+def _describe_capture_failure(error: str | None) -> str:
+    """Enrich a blank-frame capture failure so the model reports the
+    guard's verdict rather than working around it.
+
+    FX-round2-F7: with a real but near-dark camera, Missy's own
+    blank-frame quality guard (missy/vision/capture.py's
+    CameraHandle._is_blank) correctly rejects the frame after exhausting
+    retries -- but the agent was sometimes observed routing around it via
+    a raw shell_exec capture (e.g. reading /dev/video* directly) instead
+    of respecting and reporting the guard's verdict. This only changes
+    the guidance attached to an already-failed result, never whether the
+    capture itself succeeded or failed.
+    """
+    text = error or "Capture failed"
+    if _BLANK_FRAME_MARKER not in text.lower():
+        return text
+    return (
+        f"{text} -- this is a quality guard correctly rejecting a "
+        "too-dark/blank frame, not a missing capability or a tool "
+        "failure to work around. Report this verdict to the user (e.g. "
+        "ask for better lighting) rather than attempting a raw shell or "
+        "device-level capture as a substitute."
+    )
+
 
 # ---------------------------------------------------------------------------
 # VisionCaptureTool
@@ -163,7 +190,7 @@ class VisionCaptureTool(BaseTool):
             )
         except Exception as exc:
             logger.error("Vision capture failed: %s", exc, exc_info=True)
-            return ToolResult(success=False, output=None, error=str(exc))
+            return ToolResult(success=False, output=None, error=_describe_capture_failure(str(exc)))
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +282,7 @@ class VisionBurstCaptureTool(BaseTool):
                         return ToolResult(
                             success=False,
                             output=None,
-                            error=result.error or "No frames captured",
+                            error=_describe_capture_failure(result.error or "No frames captured"),
                         )
 
                     processed = pipeline.process(result.image)

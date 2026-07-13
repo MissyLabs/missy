@@ -361,3 +361,27 @@ class TestTrailingClauseAndPunctuation:
         assert intent is not None
         assert intent.action == "join"
         assert intent.channel_name == "Ops"
+
+    def test_join_current_discord_voice_channel_treated_as_current_channel(self):
+        # FX-round2-F5: "discord" used to be left over as a literal
+        # channel name ("Discord") after "the"/"current" were stripped,
+        # so the join looked for a channel literally named "Discord"
+        # instead of falling back to the user's current voice channel.
+        intent = parse_voice_intent("join the current Discord voice channel")
+        assert intent is not None
+        assert intent.action == "join"
+        assert intent.channel_name is None
+        assert intent.channel_id is None
+
+    def test_join_discord_voice_channel_without_current(self):
+        intent = parse_voice_intent("join the Discord voice channel")
+        assert intent is not None
+        assert intent.action == "join"
+        assert intent.channel_name is None
+
+    def test_join_named_channel_containing_discord_word_still_normalised(self):
+        # "discord" is only stripped as a leading boilerplate modifier, so
+        # a genuinely named channel elsewhere in the phrase is unaffected.
+        intent = parse_voice_intent("join the Music voice channel")
+        assert intent is not None
+        assert intent.channel_name == "Music"

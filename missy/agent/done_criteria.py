@@ -4,7 +4,7 @@ Provides utilities for detecting multi-step compound prompts, defining
 verifiable completion conditions, and generating verification prompts that
 guide the model to confirm task outcomes.
 
-Wiring status (SR-4.4): only :func:`make_verification_prompt` is used by
+Wiring status (SR-4.4): :func:`make_verification_prompt` is used by
 :class:`~missy.agent.runtime.AgentRuntime` today -- it's injected as a
 static prompt fragment after every round of tool results. The real,
 code-level completion gate lives in ``AgentRuntime._tool_loop()``: it
@@ -16,6 +16,20 @@ error, up to a bounded number of retries. :func:`is_compound_task`,
 not currently wired into any production code path -- they remain
 available for a future feature that surfaces the model's own declared
 per-condition completion state, but no such feature exists yet.
+
+FX-round2-F4: :func:`is_observation_task` and
+:func:`make_no_fabricated_observation_prompt` ARE wired into
+``AgentRuntime._tool_loop()``. The existing ``make_verification_prompt``
+mechanism only fires *after* a round of tool calls, so it structurally
+cannot catch the harness's actual failure mode: the model answering a
+vision/memory-observation-implying request with a confident, specific,
+fabricated observation on its *very first* response, having made zero
+tool calls at all (e.g. reporting fabricated frame-comparison detail
+with ``tools_used: []``). ``_tool_loop()`` detects this case directly --
+a "stop" response, no tool call ever made this task, and a user request
+:func:`is_observation_task` classifies as observation-implying -- and
+retries once with :func:`make_no_fabricated_observation_prompt` rather
+than accepting the response as final.
 
 Example::
 
@@ -119,4 +133,87 @@ def make_verification_prompt() -> str:
         "fix it — do not describe what went wrong, just retry with corrected "
         "parameters. Only once every relevant step has genuinely succeeded should "
         "you reply with a concise summary for the user."
+    )
+
+
+# FX-round2-F4: keyword markers for requests that imply the model must
+# observe something real -- a captured image/frame, or a stored memory
+# record -- rather than reason from general knowledge. Deliberately
+# keyword-based (not an LLM classification call) so this check is cheap,
+# deterministic, and has no failure mode of its own to fabricate around.
+# False positives (a request that merely mentions "picture" in passing)
+# only cost one extra corrective nudge on a genuine zero-tool-call
+# response -- never a false rejection of a response that actually used a
+# tool, since the runtime-side check below is also gated on
+# `not tool_names_used`.
+_VISION_OBSERVATION_MARKERS = (
+    "capture",
+    "photo",
+    "picture",
+    "camera",
+    "webcam",
+    "screenshot",
+    "frame",
+    "look at",
+    "what do you see",
+    "what does it look like",
+)
+
+_MEMORY_OBSERVATION_MARKERS = (
+    "memory",
+    "recall",
+    "remember",
+    "what did i",
+    "what did you",
+    "search for",
+)
+
+_OBSERVATION_MARKER_RE = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(m) for m in _VISION_OBSERVATION_MARKERS + _MEMORY_OBSERVATION_MARKERS)
+    + r")\b",
+    re.I,
+)
+
+
+def is_observation_task(prompt: str) -> bool:
+    """Return ``True`` if *prompt* implies a vision or memory observation.
+
+    Used to gate :func:`make_no_fabricated_observation_prompt`: a request
+    matching this is expected to be answered from a real ``vision_*`` or
+    ``memory_*`` tool call, not from the model's general knowledge or an
+    assumption about what such a call would likely return.
+
+    Args:
+        prompt: The raw user prompt string.
+
+    Returns:
+        ``True`` when any observation-implying marker matches.
+    """
+    return bool(_OBSERVATION_MARKER_RE.search(prompt))
+
+
+def make_no_fabricated_observation_prompt() -> str:
+    """Return a corrective prompt for a fabricated observation claim.
+
+    Injected when a request classified by :func:`is_observation_task` was
+    answered without a single tool call this task -- the response cannot
+    be grounded in a real capture or memory lookup, so any specific
+    observational claim in it (what a photo showed, what a memory record
+    said) is necessarily invented rather than observed.
+
+    Returns:
+        A string instructing the model to make the actual tool call
+        before reporting any observation.
+    """
+    return (
+        "You answered a request that requires observing something real "
+        "(a captured image/frame, or a stored memory record) without "
+        "making a single tool call. Any specific observation in your "
+        "answer — what something looked like, what a record said, a "
+        "detail you described — was necessarily invented, not observed. "
+        "Call the actual vision_*/memory_* tool this request needs before "
+        "answering. If the tool genuinely isn't available or the call "
+        "fails, say so plainly instead of describing a result you never "
+        "obtained."
     )

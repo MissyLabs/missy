@@ -825,6 +825,209 @@ class TestDoneCriteriaEnforcement:
         assert result == "The answer is 4."
 
 
+class TestPlaceholderArtifactRetry:
+    """FX-round2-F1: a provider's "final" response is sometimes a raw
+    internal placeholder artifact (e.g. "[Called tool: file_write]") that
+    _dicts_to_messages() only ever generates for history reconstruction,
+    never a real answer. Returning one straight to the caller leaves the
+    underlying task silently incomplete (validation harness: SH-003,
+    SELF-004, INCUS-005, INCUS-006). It must be retried once instead of
+    forwarded verbatim.
+    """
+
+    def test_placeholder_response_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("[Called tool: calculator]"),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.placeholder_retry"]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 3
+        assert result == "The answer is 4."
+
+    def test_placeholder_exhausted_retries_returns_placeholder_with_warning(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("[Tool call]"),
+            _make_stop_response("[Tool call]"),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        unresolved = [
+            e for e in events if e["event_type"] == "agent.response.placeholder_unresolved"
+        ]
+        assert len(unresolved) == 1
+        assert provider.complete_with_tools.call_count == 3
+        assert result == "[Tool call]"
+
+    def test_real_response_never_triggers_placeholder_retry(self):
+        """A genuine reply that merely mentions tool-call-like text mid
+        sentence must not be mistaken for the placeholder artifact -- the
+        detector requires an exact, whole-string match."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response("I called tool: calculator and got 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.placeholder_retry"]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "I called tool: calculator and got 4."
+
+
+class TestFabricationRetryOnZeroToolObservation:
+    """FX-round2-F4: a request implying a vision/memory observation
+    answered with zero tool calls this entire task cannot be grounded in
+    anything real -- validation harness VIS-003 (fabricated frame-
+    comparison detail with tools_used: []) and SEC-PI-004 (confident
+    false-negative from browsing the wrong directory instead of calling
+    memory_search). Must retry once with a corrective nudge rather than
+    accepting the response as final.
+    """
+
+    def test_zero_tool_vision_request_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("I see a bright red mug on the desk."),
+            _make_stop_response("I wasn't able to actually capture a frame to check."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Take a picture of the desk and tell me what's on it")
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.fabrication_retry"]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "I wasn't able to actually capture a frame to check."
+
+    def test_zero_tool_non_observation_request_not_retried(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [_make_stop_response("4")]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.fabrication_retry"]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "4"
+
+    def test_real_tool_call_for_vision_request_not_retried(self):
+        provider = _make_provider()
+        vision_tool = _make_mock_tool("vision_capture")
+        tool_reg = _make_tool_registry([vision_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("vision_capture"),
+            _make_stop_response("The photo shows a bright red mug on the desk."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Take a picture of the desk and tell me what's on it")
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.fabrication_retry"]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "The photo shows a bright red mug on the desk."
+
+    def test_fabrication_exhausted_retries_returns_response_with_warning(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("I see a red mug."),
+            _make_stop_response("I still see a red mug."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Take a picture of the desk and tell me what's on it")
+
+        unresolved = [
+            e for e in events if e["event_type"] == "agent.response.fabrication_unresolved"
+        ]
+        assert len(unresolved) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "I still see a red mug."
+
+
 # ---------------------------------------------------------------------------
 # 7. Runtime with persona — persona shapes system prompt
 # ---------------------------------------------------------------------------
