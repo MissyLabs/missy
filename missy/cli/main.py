@@ -1326,6 +1326,7 @@ def providers_list_cmd(ctx: click.Context) -> None:
     table.add_column("Base URL")
     table.add_column("Timeout", justify="right")
     table.add_column("Available", justify="center")
+    table.add_column("Balancing")
 
     for key, provider_cfg in cfg.providers.items():
         provider = registry.get(key)
@@ -1338,12 +1339,20 @@ def providers_list_cmd(ctx: click.Context) -> None:
         else:
             avail_text = Text("not loaded", style="dim")
 
+        if getattr(provider, "is_multi_account", False):
+            balancing_text = Text(f"round_robin ({provider.account_count} accounts)", style="cyan")
+        elif len(provider_cfg.api_keys) > 1:
+            balancing_text = Text(f"failover ({len(provider_cfg.api_keys)} keys)", style="dim")
+        else:
+            balancing_text = Text("—", style="dim")
+
         table.add_row(
             key,
             provider_cfg.model,
             provider_cfg.base_url or "[dim]—[/]",
             f"{provider_cfg.timeout}s",
             avail_text,
+            balancing_text,
         )
 
     console.print(table)

@@ -247,6 +247,14 @@ class ProviderConfig:
         circuit_breaker_cooldown_seconds: Initial recovery timeout in
             seconds before this provider's breaker moves from OPEN to
             HALF_OPEN to probe recovery.
+        key_rotation_strategy: How ``api_keys`` (2+ entries) are used.
+            ``"failover"`` (default) is the original behavior: only the
+            first key is ever used, and a later key is switched to only
+            reactively, after an auth failure. ``"round_robin"`` opts a
+            provider into proactively balancing every call across all
+            configured keys (e.g. multiple OpenAI accounts), each with
+            its own independent rate-limit budget -- currently
+            implemented for :class:`~missy.providers.openai_provider.OpenAIProvider`.
     """
 
     name: str
@@ -256,6 +264,7 @@ class ProviderConfig:
     timeout: int = 30
     enabled: bool = True
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
+    key_rotation_strategy: str = "failover"  # "failover" | "round_robin"
     fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
     premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
     requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
@@ -789,6 +798,12 @@ def _parse_providers(
         # actual secret, not the reference string.
         api_key = _resolve_vault_ref(api_key, vault_dir)
         api_keys = [_resolve_vault_ref(k, vault_dir) or k for k in api_keys]
+        key_rotation_strategy = str(raw.get("key_rotation_strategy", "failover")).strip().lower()
+        if key_rotation_strategy not in ("failover", "round_robin"):
+            raise ConfigurationError(
+                f"Provider '{key}' has invalid key_rotation_strategy "
+                f"{key_rotation_strategy!r}; must be 'failover' or 'round_robin'."
+            )
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
@@ -797,6 +812,7 @@ def _parse_providers(
             timeout=int(raw.get("timeout", 30)),
             enabled=_coerce_bool(raw.get("enabled"), True),
             api_keys=api_keys,
+            key_rotation_strategy=key_rotation_strategy,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
             requests_per_minute=int(raw.get("requests_per_minute", 60)),
