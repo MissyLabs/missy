@@ -108,7 +108,7 @@ VoiceChannel (channels/voice/):
 **Policy Engine (`missy/policy/`)** — Multi-layer enforcement facade:
 - `NetworkPolicyEngine`: CIDR blocks, domain suffix matching, per-category host allowlists (provider, tool, discord)
 - `FilesystemPolicyEngine`: Per-path read/write access control
-- `ShellPolicyEngine`: Command whitelisting
+- `ShellPolicyEngine`: Command whitelisting. `ShellPolicy.enabled=True` with an empty `allowed_commands` denies every command (SR-1.8 fail-closed contract) unless `ShellPolicy.unrestricted=True` is explicitly set, in which case allow-list matching (including that empty-list deny) is skipped entirely — still gated on `enabled: True`, and does not affect any other, independent policy layer (subshell/brace-group rejection in `_extract_all_programs()` still applies; `PolicyEngine.check_shell()`'s SR-1.7 redirect-target-to-filesystem-policy routing still applies). The audit event's `policy_rule` is `"unrestricted"` when this path is taken, and launcher-command warnings (`sudo`/`bash`/`python`/etc.) still fire regardless of mode.
 - `RestPolicy`: L7 HTTP method + path glob rules per host (e.g. allow GET /repos/**, deny DELETE /**)
 - Network presets (`missy/policy/presets.py`): `presets: ["anthropic", "github"]` auto-expands to correct hosts/domains/CIDRs
 
@@ -256,6 +256,7 @@ filesystem:
 shell:
   enabled: false
   allowed_commands: []
+  unrestricted: false          # true = skip allow-list matching entirely (still needs enabled: true)
 
 plugins:
   enabled: false

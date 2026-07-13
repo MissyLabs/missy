@@ -30,7 +30,12 @@ Attempts to access paths outside these trees raise `PolicyViolationError`.
 Shell command execution is **disabled by default** (`shell.enabled: false`).
 When enabled, only commands named in `shell.allowed_commands` may run.  An
 empty `allowed_commands` list blocks all commands even when the shell is
-nominally enabled.
+nominally enabled — unless `shell.unrestricted: true` is explicitly set, in
+which case allow-list matching is skipped entirely and any command may run.
+`unrestricted` still requires `enabled: true`, and does not disable the
+constructs blocked below, or the filesystem-policy check applied to any
+redirection targets (`echo x > /some/path` still requires `/some/path` to
+fall under `filesystem.allowed_write_paths`).
 
 Compound commands (using `&&`, `||`, `;`, `|`, `&`) are split and each
 sub-command is individually checked against the allowlist.  The following
@@ -256,7 +261,7 @@ A freshly initialised Missy installation has the following defaults:
 | Outbound network | **Denied** | `network.allowed_hosts/domains/cidrs` |
 | Filesystem read | **Denied** | `filesystem.allowed_read_paths` |
 | Filesystem write | **Denied** | `filesystem.allowed_write_paths` |
-| Shell execution | **Disabled** | `shell.enabled: true` + `allowed_commands` |
+| Shell execution | **Disabled** | `shell.enabled: true` + `allowed_commands` (or `unrestricted: true`) |
 | Plugins | **Disabled** | `plugins.enabled: true` + `allowed_plugins` |
 | AI providers | **None configured** | `providers.<name>` block in config |
 
@@ -317,6 +322,21 @@ shell:
   allowed_commands:
     - "git"
     - "python3"
+```
+
+### Enabling unrestricted shell access
+
+Only for a fully trusted, self-hosted, single-operator instance where the
+allow-list itself is more friction than protection. `unrestricted` bypasses
+program-name allow-listing entirely, including the empty-`allowed_commands`
+deny above — every command the agent decides to run, runs. The filesystem
+policy still applies to any redirection targets, but nothing stops the
+agent from reading/writing/deleting anything the OS user itself can.
+
+```yaml
+shell:
+  enabled: true
+  unrestricted: true
 ```
 
 ### Enabling a trusted plugin

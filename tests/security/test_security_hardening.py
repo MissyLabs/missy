@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
+from missy.config.settings import ShellPolicy
 from missy.core.exceptions import PolicyViolationError
 from missy.mcp.manager import McpManager
 from missy.policy.shell import ShellPolicyEngine
@@ -16,36 +17,28 @@ class TestShellPolicyProcessSubstitution:
 
     def test_reject_input_process_substitution(self):
         """<(...) should be rejected as a subshell marker."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["diff"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["diff"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("diff <(cat /etc/shadow) <(echo x)")
 
     def test_reject_output_process_substitution(self):
         """>(...) should be rejected as a subshell marker."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["tee"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["tee"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("echo hello | tee >(cat)")
 
     def test_reject_heredoc_process_substitution(self):
         """<<(...) should be rejected."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["cat"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["cat"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("cat <<(echo bad)")
 
     def test_still_allows_normal_commands(self):
         """Normal commands without subshell markers should work."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["ls", "cat"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["ls", "cat"])
         engine = ShellPolicyEngine(policy)
         # Should not raise
         engine.check_command("ls -la")
@@ -178,27 +171,21 @@ class TestShellPolicyExistingFunctionality:
 
     def test_command_substitution_still_blocked(self):
         """$(...) should still be blocked."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["echo"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["echo"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("echo $(whoami)")
 
     def test_backtick_still_blocked(self):
         """Backtick substitution should still be blocked."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["echo"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["echo"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("echo `whoami`")
 
     def test_chain_operators_checked(self):
         """Chained commands must all be in the allowlist."""
-        policy = MagicMock()
-        policy.enabled = True
-        policy.allowed_commands = ["ls"]
+        policy = ShellPolicy(enabled=True, allowed_commands=["ls"])
         engine = ShellPolicyEngine(policy)
         with pytest.raises(PolicyViolationError):
             engine.check_command("ls && rm -rf /")
