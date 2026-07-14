@@ -1661,38 +1661,71 @@ class DiscordChannel(BaseChannel):
             proposal_id,
         )
 
+        # SR-1.2/1.3 + owner allowlist: a Discord user reacting with an
+        # emoji is not, by itself, an authenticated human operator --
+        # Discord identity is soft, and any user able to see and react to
+        # this message could otherwise approve or kill a change to
+        # Missy's own source code with no authentication at all.
+        # DiscordAccountConfig.owner_ids is what makes reaction-based
+        # approval/rejection acceptable: only the specific, operator-
+        # configured Discord user IDs listed there are trusted for this.
+        # Empty owner_ids (the default) means is_owner is always False --
+        # fail closed, matching the original pre-owner-allowlist behavior
+        # for any deployment that hasn't configured owners.
+        is_owner = user_id in self.account_config.owner_ids
+
         try:
             from missy.agent.code_evolution import CodeEvolutionManager
 
             mgr = CodeEvolutionManager()
+            resolved = False
 
-            if action == "approve":
-                # SR-1.2/1.3: a Discord user reacting with an emoji is not an
-                # authenticated human operator -- Discord identity is soft,
-                # and any user able to see and react to this message could
-                # otherwise approve a change to Missy's own source code with
-                # no authentication at all. Approval is only available via
-                # `missy evolve approve <id>` run from a terminal session on
-                # the host. Do not call mgr.approve() here.
+            if not is_owner:
                 self._rest.send_message(
                     channel_id,
-                    f"\u26a0\ufe0f Evolution **{proposal_id}** cannot be approved from "
+                    f"\u26a0\ufe0f <@{user_id}> is not a configured owner for this "
+                    f"bot, so evolution **{proposal_id}** cannot be {action}d from "
                     "Discord. An operator must run "
-                    f"`missy evolve approve {proposal_id}` from a terminal on "
-                    f"the host, then `missy evolve apply {proposal_id}` to apply it.",
+                    f"`missy evolve {action} {proposal_id}` from a terminal on the "
+                    "host instead.",
                 )
                 self._emit_audit(
-                    "discord.evolution.approve_denied",
+                    f"discord.evolution.{action}_denied",
                     "deny",
                     {
                         "proposal_id": proposal_id,
                         "user_id": user_id,
                         "channel_id": channel_id,
-                        "reason": "discord_reaction_cannot_approve_code_evolution",
+                        "reason": "reactor_not_a_configured_owner",
                     },
                 )
+            elif action == "approve":
+                if mgr.approve(proposal_id):
+                    resolved = True
+                    self._rest.send_message(
+                        channel_id,
+                        f"\u2705 Evolution **{proposal_id}** approved by <@{user_id}>. "
+                        f"Run `missy evolve apply {proposal_id}` from a terminal on "
+                        "the host to apply it.",
+                    )
+                    self._emit_audit(
+                        "discord.evolution.approved",
+                        "allow",
+                        {
+                            "proposal_id": proposal_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                        },
+                    )
+                else:
+                    self._rest.send_message(
+                        channel_id,
+                        f"Could not approve evolution **{proposal_id}** — "
+                        f"it may already be resolved.",
+                    )
             else:
                 if mgr.reject(proposal_id):
+                    resolved = True
                     self._rest.send_message(
                         channel_id,
                         f"\u274c Evolution **{proposal_id}** rejected by <@{user_id}>.",
@@ -1713,8 +1746,16 @@ class DiscordChannel(BaseChannel):
                         f"it may already be resolved.",
                     )
 
-            # Remove from pending once acted upon.
-            self._pending_evolutions.pop(message_id, None)
+            # Only stop tracking once the proposal is genuinely resolved.
+            # A denied (non-owner) or failed (already-resolved) reaction
+            # must NOT clear this -- otherwise a non-owner reacting first
+            # (out of curiosity, or to grief) would silently disable the
+            # real owner's ability to act on the same message afterward,
+            # since a later lookup against an already-popped message_id
+            # returns None and _handle_reaction() returns early with no
+            # explanation at all.
+            if resolved:
+                self._pending_evolutions.pop(message_id, None)
 
         except Exception as exc:
             logger.error("Discord: evolution reaction handling failed: %s", exc)
