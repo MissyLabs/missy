@@ -18,6 +18,13 @@ Covers:
 - A denied (non-owner) or failed (already-resolved) reaction must not
   clear the pending-tracking entry, so the real owner can still act on
   the same message afterward.
+- A successful owner approval posts a follow-up confirmation message
+  with its own apply/cancel reactions (_pending_applies, tracked
+  separately from _pending_evolutions so the two stages can never be
+  confused with each other).
+- _handle_evolution_apply_reaction(): owner-gated apply (real
+  CodeEvolutionManager.apply() call, including the failure/auto-revert
+  path) and cancel (reject()) on that follow-up message.
 - send_to() returns the last message ID
 - Gateway intents include reaction bits
 """
@@ -191,6 +198,11 @@ class TestHandleReaction:
         assert "missy evolve apply" in sent_content
         # Resolved -- tracking is cleared.
         assert "msg-1" not in channel._pending_evolutions
+        # A successful approve posts a follow-up confirmation message and
+        # starts tracking apply/cancel reactions on it (sent-msg-123 is
+        # the mock_rest fixture's stubbed new-message id).
+        assert channel._pending_applies.get("sent-msg-123") == "evo-1"
+        assert mock_rest.add_reaction.call_count == 2
 
     def test_reject_reaction_denied_for_non_owner(
         self, channel: DiscordChannel, mock_rest: MagicMock
@@ -264,6 +276,188 @@ class TestHandleReaction:
 
     def test_owner_ids_defaults_to_empty_fail_closed(self, channel: DiscordChannel) -> None:
         assert channel.account_config.owner_ids == []
+
+
+# ---------------------------------------------------------------------------
+# _handle_evolution_apply_reaction -- apply/cancel on the follow-up
+# confirmation message posted after a successful approve.
+# ---------------------------------------------------------------------------
+
+
+class TestHandleEvolutionApplyReaction:
+    def test_apply_succeeds_for_configured_owner(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+        mock_mgr.apply.return_value = {
+            "success": True,
+            "message": "Evolution applied and committed: abc12345",
+            "commit_sha": "abc12345def",
+            "test_output": "",
+        }
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.apply.assert_called_once_with("evo-1")
+        sent_content = mock_rest.send_message.call_args[0][1]
+        assert "applied" in sent_content.lower()
+        assert "abc12345" in sent_content
+        assert "apply-msg-1" not in channel._pending_applies
+
+    def test_apply_failure_reports_message_and_stays_resolved(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        """A failed apply (e.g. tests failed, auto-reverted by
+        CodeEvolutionManager.apply() itself) is still a resolved apply
+        *attempt* -- the confirmation message's buttons shouldn't stay
+        active for a retry, since the proposal is now in a terminal
+        FAILED state."""
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+        mock_mgr.apply.return_value = {
+            "success": False,
+            "message": "Tests failed. Changes reverted.",
+            "commit_sha": "",
+            "test_output": "AssertionError: ...",
+        }
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        sent_content = mock_rest.send_message.call_args[0][1]
+        assert "failed" in sent_content.lower()
+        assert "Tests failed. Changes reverted." in sent_content
+        assert "apply-msg-1" not in channel._pending_applies
+
+    def test_apply_denied_for_non_owner(self, channel: DiscordChannel, mock_rest: MagicMock):
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "random-user",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.apply.assert_not_called()
+        sent_content = mock_rest.send_message.call_args[0][1]
+        assert "not a configured owner" in sent_content
+        # Denial must not consume the pending tracking entry.
+        assert channel._pending_applies.get("apply-msg-1") == "evo-1"
+
+    def test_cancel_succeeds_for_configured_owner(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+        mock_mgr.reject.return_value = True
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "❌"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.reject.assert_called_once_with("evo-1")
+        mock_mgr.apply.assert_not_called()
+        sent_content = mock_rest.send_message.call_args[0][1]
+        assert "cancelled" in sent_content.lower()
+        assert "apply-msg-1" not in channel._pending_applies
+
+    def test_cancel_denied_for_non_owner(self, channel: DiscordChannel, mock_rest: MagicMock):
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "random-user",
+            "channel_id": "ch-1",
+            "emoji": {"name": "❌"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.reject.assert_not_called()
+        assert channel._pending_applies.get("apply-msg-1") == "evo-1"
+
+    def test_apply_and_approval_tracking_dicts_are_independent(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        """A reaction on a proposal message must route through approval
+        handling even while a *different* message is pending apply, and
+        vice versa -- the two dicts must never cross-contaminate."""
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_evolutions["proposal-msg"] = "evo-1"
+        channel._pending_applies["apply-msg"] = "evo-2"
+        mock_mgr = MagicMock()
+        mock_mgr.approve.return_value = True
+
+        data = {
+            "message_id": "proposal-msg",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.approve.assert_called_once_with("evo-1")
+        mock_mgr.apply.assert_not_called()
+        # The unrelated pending apply entry is untouched.
+        assert channel._pending_applies.get("apply-msg") == "evo-2"
+
+    def test_reaction_on_untracked_message_is_ignored(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        data = {
+            "message_id": "totally-unknown",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        _run(channel._handle_reaction(data))
+        mock_rest.send_message.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
