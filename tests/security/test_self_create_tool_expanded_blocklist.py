@@ -222,6 +222,7 @@ class TestCodeEvolutionPathTraversal:
         engine._repo_root = repo
         engine._test_command = "true"
         engine._test_timeout_seconds = 1200
+        engine._auto_scope_tests = False
         engine._proposals = []
         engine._lock = __import__("threading").Lock()
         engine._save = MagicMock()
@@ -270,6 +271,7 @@ class TestCodeEvolutionPathTraversal:
         engine._repo_root = repo
         engine._test_command = "true"
         engine._test_timeout_seconds = 1200
+        engine._auto_scope_tests = False
         engine._proposals = []
         engine._lock = __import__("threading").Lock()
         engine._save = MagicMock()
@@ -331,6 +333,7 @@ class TestCodeEvolutionEnvSanitization:
         engine._repo_root = repo
         engine._test_command = "python -m pytest"
         engine._test_timeout_seconds = 1200
+        engine._auto_scope_tests = False
         engine._proposals = []
         engine._lock = __import__("threading").Lock()
         engine._save = MagicMock()
