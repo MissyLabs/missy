@@ -5,8 +5,11 @@ user requests, or learned patterns.  Every modification goes through a
 multi-stage lifecycle: **proposed → approved → applied** (or **rejected**).
 
 Applied changes are wrapped in a git commit so that rollback is always a
-single ``git revert``.  Before any change is applied the full test suite is
-run; the proposal is rejected automatically if tests fail.
+single ``git revert``.  Before any change is applied, the tests directly
+associated with the changed file(s) are run (see
+``CodeEvolutionManager.auto_scope_tests``); the proposal is rejected
+automatically if tests fail. Scoping falls back to the full suite whenever
+nothing can be confidently associated with a diff.
 
 Security model:
 - All proposals require explicit human approval before application.
@@ -36,6 +39,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import shlex
 import subprocess
 import threading
 import uuid
@@ -176,6 +181,10 @@ class CodeEvolutionManager:
         repo_root: Root of the git repository.  Defaults to the Missy
             package's parent directory (the repo root).
         test_command: Shell command to validate changes before committing.
+            Used verbatim when ``auto_scope_tests`` is ``False``, and as
+            the fallback command when it's ``True`` but no tests can be
+            confidently associated with the proposal's changed files
+            (e.g. no ``tests/`` directory, or a non-Python diff).
         test_timeout_seconds: Wall-clock budget for the test_command
             subprocess in :meth:`apply`. The default test_command above
             runs the *entire* Missy test suite (20,000+ tests, observed
@@ -183,7 +192,22 @@ class CodeEvolutionManager:
             runner) -- this must comfortably exceed that or every apply,
             from any caller, always fails on a timeout regardless of
             whether the code change itself was good. Found live: the
-            previous hardcoded 300s (5 min) value guaranteed this.
+            previous hardcoded 300s (5 min) value guaranteed this. Left
+            generous even with auto_scope_tests=True, since a change to
+            a widely-imported module (e.g. agent/runtime.py) can still
+            legitimately scope to thousands of associated tests.
+        auto_scope_tests: When True (default), apply() narrows the test
+            run to only the tests directly associated with the
+            proposal's changed file(s) -- by test-module naming
+            convention (tests/**/test_<stem>*.py) and by scanning for
+            any test file that actually imports the changed module --
+            instead of running test_command's full suite unconditionally
+            on every single-file tweak. This is the *only* verification
+            gate before a self-modification is committed (apply() never
+            pushes, so CI never re-checks these commits), so scoping
+            always falls back to the unscoped test_command when nothing
+            can be confidently associated, rather than silently running
+            zero tests.
     """
 
     MAX_PROPOSALS = 50
@@ -194,11 +218,13 @@ class CodeEvolutionManager:
         repo_root: str | None = None,
         test_command: str = "python3 -m pytest tests/ -x -q --tb=short",
         test_timeout_seconds: int = 1200,
+        auto_scope_tests: bool = True,
     ) -> None:
         self._path = Path(store_path).expanduser()
         self._repo_root = Path(repo_root) if repo_root else _PACKAGE_ROOT.parent
         self._test_command = test_command
         self._test_timeout_seconds = test_timeout_seconds
+        self._auto_scope_tests = auto_scope_tests
         self._lock = threading.Lock()
         self._proposals: list[EvolutionProposal] = self._load()
 
@@ -265,6 +291,94 @@ class CodeEvolutionManager:
                     f"Original code not found in {diff.file_path}. "
                     f"Expected:\n{diff.original_code[:200]}"
                 )
+
+    # ------------------------------------------------------------------
+    # Test scoping
+    # ------------------------------------------------------------------
+
+    def _scoped_test_paths(self, diffs: list[FileDiff]) -> list[str]:
+        """Return test files directly associated with *diffs*, or ``[]``.
+
+        "Directly associated" means either of:
+
+        1. Naming convention -- ``tests/**/test_<stem>*.py`` for a
+           changed ``missy/**/<stem>.py``. Catches the common case
+           (``code_evolution.py`` -> ``test_code_evolution.py``,
+           ``test_code_evolution_coverage.py``, ...).
+        2. Import scanning -- any test file whose source text contains
+           the changed module's dotted path (``missy.agent.code_evolution``,
+           for both ``import missy.agent.code_evolution`` and
+           ``from missy.agent.code_evolution import X`` forms) or, for the
+           ``from missy.agent import code_evolution`` split-import form,
+           the changed file's package prefix plus its bare stem as a
+           whole word. Catches tests named after something else entirely
+           that still directly exercise the changed module (e.g.
+           ``tests/tools/test_code_evolve.py`` importing
+           ``CodeEvolutionManager`` from ``code_evolution.py``).
+
+        An empty return means "nothing could be confidently associated"
+        -- the caller must fall back to the full, unscoped test command
+        rather than treat this as "no tests needed."
+        """
+        tests_root = self._repo_root / "tests"
+        if not tests_root.is_dir():
+            return []
+
+        matched: set[Path] = set()
+        for diff in diffs:
+            changed = Path(diff.file_path)
+            if changed.suffix != ".py":
+                # No test module to scope a non-Python change to; the
+                # caller's full-suite fallback covers this diff instead.
+                continue
+            stem = changed.stem
+            parts = changed.with_suffix("").parts
+            full_dotted = ".".join(parts)
+            parent_dotted = ".".join(parts[:-1])
+
+            for candidate in tests_root.rglob(f"test_{stem}*.py"):
+                matched.add(candidate)
+
+            for candidate in tests_root.rglob("test_*.py"):
+                if candidate in matched:
+                    continue
+                try:
+                    text = candidate.read_text(errors="ignore")
+                except OSError:
+                    continue
+                split_import_match = (
+                    bool(parent_dotted)
+                    and parent_dotted in text
+                    and re.search(rf"\b{re.escape(stem)}\b", text)
+                )
+                if full_dotted in text or split_import_match:
+                    matched.add(candidate)
+
+        return sorted(str(p.relative_to(self._repo_root)) for p in matched)
+
+    def _scoped_test_argv(self, diffs: list[FileDiff]) -> list[str]:
+        """Return the pytest argv to run for *diffs*.
+
+        Splices the scoped test paths in place of the ``tests``/``tests/``
+        positional argument in ``test_command`` (preserving every flag,
+        e.g. ``-x -q --tb=short``). Falls back to the unscoped
+        ``test_command`` verbatim when auto-scoping is off, nothing can
+        be confidently associated, or ``test_command`` doesn't have a
+        recognizable ``tests``/``tests/`` argument to splice into.
+        """
+        base_argv = shlex.split(self._test_command)
+        if not self._auto_scope_tests:
+            return base_argv
+
+        scoped_paths = self._scoped_test_paths(diffs)
+        if not scoped_paths:
+            return base_argv
+
+        for token in ("tests/", "tests"):
+            if token in base_argv:
+                idx = base_argv.index(token)
+                return base_argv[:idx] + scoped_paths + base_argv[idx + 1 :]
+        return base_argv
 
     # ------------------------------------------------------------------
     # Git helpers
@@ -597,10 +711,9 @@ class CodeEvolutionManager:
                 }
             )
             safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
-            # Use shlex.split to avoid shell=True injection risks.
-            import shlex
-
-            test_argv = shlex.split(self._test_command)
+            # Use shlex.split (via _scoped_test_argv) to avoid shell=True
+            # injection risks -- shell=False below always applies.
+            test_argv = self._scoped_test_argv(prop.diffs)
             test_result = subprocess.run(
                 test_argv,
                 shell=False,

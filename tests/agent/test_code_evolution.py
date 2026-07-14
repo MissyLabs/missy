@@ -530,6 +530,177 @@ class TestApplyTestTimeout:
         assert "return 'hello'" in content
 
 
+class TestAutoScopeTests:
+    """FX-evolve-scoping: apply()'s only verification gate defaulted to
+    running the *entire* Missy test suite on every single-file change,
+    even a one-line diff to a leaf module -- correct, but needlessly
+    slow (the same 9-13 minute full-suite run FX-apply-timeout above
+    exists to survive). auto_scope_tests narrows apply()'s test run to
+    just the tests directly associated with the changed file(s),
+    falling back to the full suite whenever nothing can be confidently
+    associated with a diff.
+    """
+
+    def test_auto_scope_tests_default_is_true(self):
+        mgr = CodeEvolutionManager(store_path="/nonexistent/never/written.json")
+        assert mgr._auto_scope_tests is True
+
+    def test_scoped_test_paths_empty_when_no_tests_dir(self, tmp_repo, store_path):
+        mgr = CodeEvolutionManager(store_path=store_path, repo_root=str(tmp_repo))
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        assert mgr._scoped_test_paths(diffs) == []
+
+    def test_scoped_test_paths_naming_convention_match(self, tmp_repo, store_path):
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text("def test_ok():\n    assert True\n")
+        (tests_dir / "test_unrelated.py").write_text("def test_ok():\n    assert True\n")
+        mgr = CodeEvolutionManager(store_path=store_path, repo_root=str(tmp_repo))
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        assert mgr._scoped_test_paths(diffs) == ["tests/test_example.py"]
+
+    def test_scoped_test_paths_import_scan_match(self, tmp_repo, store_path):
+        """A test module named after something else entirely is still
+        picked up if it actually imports the changed module."""
+        tests_dir = tmp_repo / "tests" / "tools"
+        tests_dir.mkdir(parents=True)
+        (tests_dir / "test_wrapper.py").write_text(
+            "from missy.example import greet\n\ndef test_greet():\n    assert greet()\n"
+        )
+        mgr = CodeEvolutionManager(store_path=store_path, repo_root=str(tmp_repo))
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        assert mgr._scoped_test_paths(diffs) == ["tests/tools/test_wrapper.py"]
+
+    def test_scoped_test_paths_split_import_form_match(self, tmp_repo, store_path):
+        """``from missy import example`` doesn't contain the contiguous
+        dotted string "missy.example" -- the parent-dotted + bare-stem
+        fallback must still catch it."""
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_wrapper.py").write_text(
+            "from missy import example\n\ndef test_greet():\n    assert example.greet()\n"
+        )
+        mgr = CodeEvolutionManager(store_path=store_path, repo_root=str(tmp_repo))
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        assert mgr._scoped_test_paths(diffs) == ["tests/test_wrapper.py"]
+
+    def test_scoped_test_paths_non_python_diff_contributes_nothing(self, tmp_repo, store_path):
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text("def test_ok():\n    assert True\n")
+        mgr = CodeEvolutionManager(store_path=store_path, repo_root=str(tmp_repo))
+        diffs = [FileDiff("missy/config.yaml", "a: 1", "a: 2")]
+        assert mgr._scoped_test_paths(diffs) == []
+
+    def test_scoped_test_argv_splices_scoped_paths(self, tmp_repo, store_path):
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text("def test_ok():\n    assert True\n")
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="python3 -m pytest tests/ -x -q --tb=short",
+        )
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        argv = mgr._scoped_test_argv(diffs)
+        assert argv == [
+            "python3",
+            "-m",
+            "pytest",
+            "tests/test_example.py",
+            "-x",
+            "-q",
+            "--tb=short",
+        ]
+
+    def test_scoped_test_argv_falls_back_when_auto_scope_disabled(self, tmp_repo, store_path):
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text("def test_ok():\n    assert True\n")
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="python3 -m pytest tests/ -x -q --tb=short",
+            auto_scope_tests=False,
+        )
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        argv = mgr._scoped_test_argv(diffs)
+        assert argv == ["python3", "-m", "pytest", "tests/", "-x", "-q", "--tb=short"]
+
+    def test_scoped_test_argv_falls_back_when_nothing_matches(self, tmp_repo, store_path):
+        # No tests/ dir at all -> _scoped_test_paths() returns [].
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="python3 -m pytest tests/ -x -q --tb=short",
+        )
+        diffs = [FileDiff("missy/example.py", "return 'hello'", "return 'hi'")]
+        argv = mgr._scoped_test_argv(diffs)
+        assert argv == ["python3", "-m", "pytest", "tests/", "-x", "-q", "--tb=short"]
+
+    def test_apply_scoped_succeeds_while_unrelated_full_suite_test_would_fail(
+        self, tmp_repo, store_path
+    ):
+        """End-to-end proof, not just argv computation: a genuinely
+        failing, unrelated test elsewhere under tests/ must NOT stop a
+        scoped apply() from succeeding, because it's never selected to
+        run -- while the exact same kind of proposal against the
+        unscoped full suite (auto_scope_tests=False) must still fail,
+        proving scoping is what made the difference.
+        """
+        tests_dir = tmp_repo / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_example.py").write_text(
+            "def test_greet_is_a_string():\n    assert True\n"
+        )
+        other_dir = tests_dir / "other"
+        other_dir.mkdir()
+        (other_dir / "test_unrelated.py").write_text(
+            "def test_always_fails():\n    assert False, 'unrelated failure'\n"
+        )
+
+        scoped_mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="python3 -m pytest tests/ -x -q --tb=short",
+            test_timeout_seconds=30,
+        )
+        prop = scoped_mgr.propose(
+            title="Fix greeting",
+            description="change hello to hi",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        scoped_mgr.approve(prop.id)
+        result = scoped_mgr.apply(prop.id)
+        assert result["success"], result["test_output"]
+        content = (tmp_repo / "missy" / "example.py").read_text()
+        assert "return 'hi'" in content
+
+        # Same kind of proposal, unscoped: the unrelated failing test
+        # now runs too and must sink it.
+        unscoped_store = str(Path(store_path).parent / "evolutions_unscoped.json")
+        unscoped_mgr = CodeEvolutionManager(
+            store_path=unscoped_store,
+            repo_root=str(tmp_repo),
+            test_command="python3 -m pytest tests/ -x -q --tb=short",
+            test_timeout_seconds=30,
+            auto_scope_tests=False,
+        )
+        prop2 = unscoped_mgr.propose(
+            title="Fix greeting again",
+            description="change hi back to hi2",
+            file_path="missy/example.py",
+            original_code="return 'hi'",
+            proposed_code="return 'hi2'",
+        )
+        unscoped_mgr.approve(prop2.id)
+        result2 = unscoped_mgr.apply(prop2.id)
+        assert not result2["success"]
+        assert "unrelated failure" in result2["test_output"] or "Tests failed" in result2["message"]
+
+
 class TestStashIdentity:
     """Unit coverage for the SHA-identity-based stash helpers."""
 
