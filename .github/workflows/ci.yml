@@ -242,7 +242,15 @@ jobs:
         run: pip install -e ".[dev,vision,vector,otel]"
 
       - name: Run tests with coverage (shard ${{ matrix.shard.id }}/4)
-        run: python -m pytest ${{ matrix.shard.dirs }} -q --tb=short --cov=missy --cov-report=
+        # --cov-fail-under=0 overrides pyproject.toml's fail_under=90 for
+        # this per-shard run -- a single shard only covers a fraction of
+        # the codebase by construction, so pytest-cov's own threshold
+        # check would fail every shard regardless of test results. The
+        # real fail_under=90 check happens once, in the "coverage"
+        # job below, against the combined data from all 4 shards.
+        run: |
+          python -m pytest ${{ matrix.shard.dirs }} -q --tb=short \
+            --cov=missy --cov-report= --cov-fail-under=0
 
       - name: Rename coverage data file
         run: mv .coverage ".coverage.${{ matrix.shard.id }}"
