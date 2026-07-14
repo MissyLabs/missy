@@ -127,6 +127,14 @@ class DiscordChannel(BaseChannel):
         # Pending evolution reactions: message_id -> proposal_id
         self._pending_evolutions: dict[str, str] = {}
 
+        # Pending evolution *apply* reactions: message_id -> proposal_id.
+        # Separate tracking dict from _pending_evolutions above so an
+        # approve/reject reaction on the original proposal message and an
+        # apply/cancel reaction on the follow-up confirmation message can
+        # never be confused with each other -- a message_id is only ever
+        # tracked in one of the two dicts at a time.
+        self._pending_applies: dict[str, str] = {}
+
         # allowed_roles enforcement: cache of guild_id -> (fetched_at,
         # {role_id: role_name}), refreshed via the REST API on a TTL so
         # every message doesn't need its own round trip to Discord.
@@ -1611,12 +1619,59 @@ class DiscordChannel(BaseChannel):
             message_id: The bot's response message snowflake ID.
             proposal_id: The evolution proposal ID to track.
         """
-        self._pending_evolutions[message_id] = proposal_id
+        self._add_reaction_buttons(
+            channel_id,
+            message_id,
+            proposal_id,
+            self._pending_evolutions,
+            log_label="evolution",
+        )
+
+    def _add_apply_reactions(
+        self,
+        channel_id: str,
+        message_id: str,
+        proposal_id: str,
+    ) -> None:
+        """Add apply/cancel reaction buttons to an approval-confirmation message.
+
+        A distinct tracking dict (_pending_applies) from
+        add_evolution_reactions()'s _pending_evolutions -- an approve/
+        reject reaction on the original proposal message and an apply/
+        cancel reaction on this follow-up confirmation message must
+        never be confused with each other.
+
+        Args:
+            channel_id: The channel containing the message.
+            message_id: The bot's confirmation message snowflake ID.
+            proposal_id: The evolution proposal ID to track.
+        """
+        self._add_reaction_buttons(
+            channel_id,
+            message_id,
+            proposal_id,
+            self._pending_applies,
+            log_label="evolution-apply",
+        )
+
+    def _add_reaction_buttons(
+        self,
+        channel_id: str,
+        message_id: str,
+        proposal_id: str,
+        tracking: dict[str, str],
+        *,
+        log_label: str,
+    ) -> None:
+        """Shared implementation behind add_evolution_reactions() and
+        _add_apply_reactions() -- adds \u2705/\u274c and registers
+        *message_id* in whichever *tracking* dict the caller passes."""
+        tracking[message_id] = proposal_id
         try:
             self._rest.add_reaction(channel_id, message_id, "\u2705")  # ✅
             self._rest.add_reaction(channel_id, message_id, "\u274c")  # ❌
             self._emit_audit(
-                "discord.evolution.reactions_added",
+                f"discord.{log_label}.reactions_added",
                 "allow",
                 {
                     "channel_id": channel_id,
@@ -1625,16 +1680,17 @@ class DiscordChannel(BaseChannel):
                 },
             )
             logger.info(
-                "Discord: added evolution reactions to message %s (proposal %s)",
+                "Discord: added %s reactions to message %s (proposal %s)",
+                log_label,
                 message_id,
                 proposal_id,
             )
         except Exception as exc:
-            logger.error("Discord: failed to add evolution reactions: %s", exc)
-            self._pending_evolutions.pop(message_id, None)
+            logger.error("Discord: failed to add %s reactions: %s", log_label, exc)
+            tracking.pop(message_id, None)
 
     async def _handle_reaction(self, data: dict[str, Any]) -> None:
-        """Handle a MESSAGE_REACTION_ADD event for evolution approval."""
+        """Handle a MESSAGE_REACTION_ADD event for evolution approval/apply."""
         message_id = str(data.get("message_id", ""))
         user_id = str(data.get("user_id", ""))
         channel_id = str(data.get("channel_id", ""))
@@ -1645,12 +1701,25 @@ class DiscordChannel(BaseChannel):
         if self._is_own_message(user_id):
             return
 
-        # Only process reactions on tracked evolution messages.
-        proposal_id = self._pending_evolutions.get(message_id)
-        if not proposal_id:
+        if emoji_name not in ("\u2705", "\u274c"):
             return
 
-        if emoji_name not in ("\u2705", "\u274c"):
+        # A message_id is tracked in at most one of the two dicts at a
+        # time -- dispatch to whichever stage this reaction belongs to.
+        if message_id in self._pending_evolutions:
+            await self._handle_evolution_approval_reaction(
+                message_id, user_id, channel_id, emoji_name
+            )
+        elif message_id in self._pending_applies:
+            await self._handle_evolution_apply_reaction(message_id, user_id, channel_id, emoji_name)
+        # else: reaction on an untracked message -- ignore.
+
+    async def _handle_evolution_approval_reaction(
+        self, message_id: str, user_id: str, channel_id: str, emoji_name: str
+    ) -> None:
+        """Handle \u2705/\u274c on a proposal message: approve or reject it."""
+        proposal_id = self._pending_evolutions.get(message_id)
+        if not proposal_id:
             return
 
         action = "approve" if emoji_name == "\u2705" else "reject"
@@ -1702,11 +1771,13 @@ class DiscordChannel(BaseChannel):
             elif action == "approve":
                 if mgr.approve(proposal_id):
                     resolved = True
-                    self._rest.send_message(
+                    sent = self._rest.send_message(
                         channel_id,
                         f"\u2705 Evolution **{proposal_id}** approved by <@{user_id}>. "
-                        f"Run `missy evolve apply {proposal_id}` from a terminal on "
-                        "the host to apply it.",
+                        f"React \u2705 below to apply it now (patches the file, runs "
+                        f"tests, and commits only if they pass), or \u274c to cancel. "
+                        f"You can also run `missy evolve apply {proposal_id}` from a "
+                        "terminal on the host.",
                     )
                     self._emit_audit(
                         "discord.evolution.approved",
@@ -1717,6 +1788,9 @@ class DiscordChannel(BaseChannel):
                             "channel_id": channel_id,
                         },
                     )
+                    apply_message_id = str((sent or {}).get("id", ""))
+                    if apply_message_id:
+                        self._add_apply_reactions(channel_id, apply_message_id, proposal_id)
                 else:
                     self._rest.send_message(
                         channel_id,
@@ -1762,6 +1836,128 @@ class DiscordChannel(BaseChannel):
             self._rest.send_message(
                 channel_id,
                 f"Error processing evolution reaction: {exc}",
+            )
+
+    async def _handle_evolution_apply_reaction(
+        self, message_id: str, user_id: str, channel_id: str, emoji_name: str
+    ) -> None:
+        """Handle \u2705/\u274c on an approval-confirmation message: apply or
+        cancel an already-approved proposal.
+
+        \u2705 calls CodeEvolutionManager.apply() for real -- patches the
+        file(s), runs the real test suite, and only commits if tests
+        pass (auto-reverting otherwise; see apply()'s own docstring).
+        \u274c cancels via reject() instead of applying. Both require the
+        reactor to be a configured owner, same as the approve/reject
+        stage above.
+        """
+        proposal_id = self._pending_applies.get(message_id)
+        if not proposal_id:
+            return
+
+        action = "apply" if emoji_name == "\u2705" else "cancel"
+        logger.info(
+            "Discord: evolution %s by user %s for proposal %s",
+            action,
+            user_id,
+            proposal_id,
+        )
+
+        is_owner = user_id in self.account_config.owner_ids
+
+        try:
+            from missy.agent.code_evolution import CodeEvolutionManager
+
+            mgr = CodeEvolutionManager()
+            resolved = False
+
+            if not is_owner:
+                self._rest.send_message(
+                    channel_id,
+                    f"\u26a0\ufe0f <@{user_id}> is not a configured owner for this "
+                    f"bot, so evolution **{proposal_id}** cannot be {action}ed from "
+                    "Discord. An operator must run "
+                    f"`missy evolve {'apply' if action == 'apply' else 'reject'} "
+                    f"{proposal_id}` from a terminal on the host instead.",
+                )
+                self._emit_audit(
+                    f"discord.evolution.{action}_denied",
+                    "deny",
+                    {
+                        "proposal_id": proposal_id,
+                        "user_id": user_id,
+                        "channel_id": channel_id,
+                        "reason": "reactor_not_a_configured_owner",
+                    },
+                )
+            elif action == "apply":
+                resolved = True
+                result = mgr.apply(proposal_id)
+                if result.get("success"):
+                    commit_sha = str(result.get("commit_sha", ""))[:8]
+                    self._rest.send_message(
+                        channel_id,
+                        f"\u2705 Evolution **{proposal_id}** applied by <@{user_id}> "
+                        f"and committed ({commit_sha}).",
+                    )
+                    self._emit_audit(
+                        "discord.evolution.applied",
+                        "allow",
+                        {
+                            "proposal_id": proposal_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                            "commit_sha": commit_sha,
+                        },
+                    )
+                else:
+                    message = str(result.get("message", "Apply failed."))
+                    self._rest.send_message(
+                        channel_id,
+                        f"\u26a0\ufe0f Evolution **{proposal_id}** apply "
+                        f"attempted by <@{user_id}> but failed: {message}",
+                    )
+                    self._emit_audit(
+                        "discord.evolution.apply_failed",
+                        "error",
+                        {
+                            "proposal_id": proposal_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                            "message": message,
+                        },
+                    )
+            else:
+                if mgr.reject(proposal_id):
+                    resolved = True
+                    self._rest.send_message(
+                        channel_id,
+                        f"\u274c Evolution **{proposal_id}** apply cancelled by <@{user_id}>.",
+                    )
+                    self._emit_audit(
+                        "discord.evolution.apply_cancelled",
+                        "allow",
+                        {
+                            "proposal_id": proposal_id,
+                            "user_id": user_id,
+                            "channel_id": channel_id,
+                        },
+                    )
+                else:
+                    self._rest.send_message(
+                        channel_id,
+                        f"Could not cancel evolution **{proposal_id}** — "
+                        f"it may already be resolved.",
+                    )
+
+            if resolved:
+                self._pending_applies.pop(message_id, None)
+
+        except Exception as exc:
+            logger.error("Discord: evolution apply reaction handling failed: %s", exc)
+            self._rest.send_message(
+                channel_id,
+                f"Error processing evolution apply reaction: {exc}",
             )
 
     # ------------------------------------------------------------------
