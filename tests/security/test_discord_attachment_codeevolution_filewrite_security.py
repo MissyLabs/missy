@@ -36,6 +36,7 @@ def _make_evolution_engine(tmp_path: Path, test_command: str = "true"):
     engine = CodeEvolutionManager.__new__(CodeEvolutionManager)
     engine._repo_root = repo
     engine._test_command = test_command
+    engine._test_timeout_seconds = 1200
     engine._proposals = []
     engine._lock = threading.Lock()
     engine._save = MagicMock()

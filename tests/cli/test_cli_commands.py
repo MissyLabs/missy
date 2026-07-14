@@ -1095,7 +1095,19 @@ class TestApprovalsList:
         assert result.exit_code == 0
 
     def test_approvals_list_no_gateway_message(self, runner: CliRunner):
-        result = runner.invoke(cli, ["approvals", "list"])
+        """Must report "no active gateway" specifically when the gateway
+        API is unreachable -- mocked rather than relying on no real
+        `missy gateway start` happening to be running on the host during
+        the test, since on a dev/operator machine where the gateway runs
+        persistently this would otherwise get a legitimate "No pending
+        approval requests" response instead and fail non-deterministically
+        (found live: this exact false failure blocked a real
+        code_evolve apply(), which runs the test suite as its own
+        verification step, from ever succeeding)."""
+        import httpx
+
+        with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
+            result = runner.invoke(cli, ["approvals", "list"])
         assert "gateway" in result.output.lower() or "No active" in result.output
 
     def test_approvals_help_exits_zero(self, runner: CliRunner):
@@ -1118,7 +1130,12 @@ class TestDiscordPairingCli:
         assert result.exit_code == 0
 
     def test_pairing_list_no_gateway_message(self, runner: CliRunner):
-        result = runner.invoke(cli, ["discord", "pairing", "list"])
+        """See test_approvals_list_no_gateway_message's docstring -- same
+        fix, same live-observed root cause."""
+        import httpx
+
+        with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
+            result = runner.invoke(cli, ["discord", "pairing", "list"])
         assert "gateway" in result.output.lower() or "No active" in result.output
 
     def test_pairing_help_exits_zero(self, runner: CliRunner):
