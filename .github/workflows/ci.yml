@@ -30,38 +30,91 @@ jobs:
       - name: Ruff format check
         run: ruff format --check missy/ tests/
 
-  test:
-    name: Test (Python ${{ matrix.python-version }})
+  # ---------------------------------------------------------------------
+  # Test suite, sharded 4 ways per Python version to cut pipeline wall
+  # time. Shards are balanced by collected-test-count (not just directory
+  # count) across the 20 top-level tests/ subdirectories -- every
+  # subdirectory is assigned to exactly one shard below, so between the 4
+  # shards the full `tests/` tree is covered with no gaps and no overlap
+  # (verified against `pytest --collect-only` counts; rebalance the
+  # groups below if a subdirectory's test count grows a lot).
+  #
+  # These are intentionally NOT named "Test (Python 3.x)" directly:
+  # GitHub auto-suffixes matrix-generated check names with the matrix
+  # values, which would silently stop matching the literal check names
+  # ("Test (Python 3.11)" etc.) pinned in this repo's branch protection
+  # required_status_checks. Each test-3xx job below does the real (now
+  # parallel) work under its own distinct check name; the paired *-gate
+  # job immediately after it is a trivial, unmatrixed pass-through that
+  # republishes the literal required check name and fails for real
+  # (not "skipped", which some tooling treats as passing) if any shard
+  # failed.
+  # ---------------------------------------------------------------------
+
+  test-311:
+    name: "Test shards (Python 3.11)"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        shard:
+          - id: 1
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+          - id: 2
+            dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
+          - id: 3
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+          - id: 4
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          key: pip-3.11-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            pip-${{ matrix.python-version }}-
+            pip-3.11-
 
       - name: Install dependencies
         run: pip install -e ".[dev,vision,vector,otel]"
 
-      - name: Run tests
-        run: python -m pytest tests/ -x -q --tb=short
+      - name: Run tests (shard ${{ matrix.shard.id }}/4)
+        run: python -m pytest ${{ matrix.shard.dirs }} -x -q --tb=short
 
-  coverage:
-    name: Coverage
+  test-311-gate:
+    name: "Test (Python 3.11)"
     runs-on: ubuntu-latest
-    needs: [lint]
+    needs: [test-311]
+    if: always()
+    steps:
+      - name: Verify all shards passed
+        run: |
+          if [ "${{ needs.test-311.result }}" != "success" ]; then
+            echo "One or more Python 3.11 test shards failed."
+            exit 1
+          fi
+
+  test-312:
+    name: "Test shards (Python 3.12)"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 1
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+          - id: 2
+            dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
+          - id: 3
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+          - id: 4
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:
       - uses: actions/checkout@v4
 
@@ -80,10 +133,161 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,vision,vector,otel]"
 
-      - name: Run tests with coverage
+      - name: Run tests (shard ${{ matrix.shard.id }}/4)
+        run: python -m pytest ${{ matrix.shard.dirs }} -x -q --tb=short
+
+  test-312-gate:
+    name: "Test (Python 3.12)"
+    runs-on: ubuntu-latest
+    needs: [test-312]
+    if: always()
+    steps:
+      - name: Verify all shards passed
         run: |
-          python -m pytest tests/ -q --tb=short \
-            --cov=missy --cov-report=term-missing --cov-report=xml
+          if [ "${{ needs.test-312.result }}" != "success" ]; then
+            echo "One or more Python 3.12 test shards failed."
+            exit 1
+          fi
+
+  test-313:
+    name: "Test shards (Python 3.13)"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 1
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+          - id: 2
+            dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
+          - id: 3
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+          - id: 4
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-3.13-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            pip-3.13-
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,vision,vector,otel]"
+
+      - name: Run tests (shard ${{ matrix.shard.id }}/4)
+        run: python -m pytest ${{ matrix.shard.dirs }} -x -q --tb=short
+
+  test-313-gate:
+    name: "Test (Python 3.13)"
+    runs-on: ubuntu-latest
+    needs: [test-313]
+    if: always()
+    steps:
+      - name: Verify all shards passed
+        run: |
+          if [ "${{ needs.test-313.result }}" != "success" ]; then
+            echo "One or more Python 3.13 test shards failed."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------
+  # Coverage: same 4-way shard split (Python 3.12 only, matching the
+  # previous single-job behavior), combined into one report before
+  # enforcing pyproject.toml's [tool.coverage.report] fail_under=90 and
+  # uploading to Codecov -- combining is a straight union of per-shard
+  # line hits, so the merged percentage is identical to what a single
+  # unsharded run would have reported.
+  # ---------------------------------------------------------------------
+
+  coverage-shards:
+    name: "Coverage shards"
+    runs-on: ubuntu-latest
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 1
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+          - id: 2
+            dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
+          - id: 3
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+          - id: 4
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            pip-3.12-
+
+      - name: Install dependencies
+        run: pip install -e ".[dev,vision,vector,otel]"
+
+      - name: Run tests with coverage (shard ${{ matrix.shard.id }}/4)
+        run: python -m pytest ${{ matrix.shard.dirs }} -q --tb=short --cov=missy --cov-report=
+
+      - name: Rename coverage data file
+        run: mv .coverage ".coverage.${{ matrix.shard.id }}"
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-${{ matrix.shard.id }}
+          path: .coverage.${{ matrix.shard.id }}
+          include-hidden-files: true
+          retention-days: 1
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [coverage-shards]
+    if: always()
+    steps:
+      - name: Verify all coverage shards passed
+        run: |
+          if [ "${{ needs.coverage-shards.result }}" != "success" ]; then
+            echo "One or more coverage shards failed."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage
+        run: pip install coverage
+
+      - name: Download all coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+
+      - name: Combine coverage and enforce threshold
+        run: |
+          coverage combine
+          coverage report
+          coverage xml
 
       - name: Upload coverage to Codecov
         if: github.event_name == 'push'
