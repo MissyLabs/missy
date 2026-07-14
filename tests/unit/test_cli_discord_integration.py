@@ -89,31 +89,59 @@ class TestCliDiscordProcessChannel:
         assert response == "Test reply"
         assert mention_ids is None
 
-    def test_evolution_proposal_detection(self) -> None:
-        """Verify evolution proposal regex matching."""
-        import re
+    def test_evolution_proposal_detected_via_manager_diff_not_text_match(self) -> None:
+        """FX-evolution-detection: proposal detection no longer regex-
+        matches Missy's own final reply text for a literal "Evolution
+        proposed:" string -- the model paraphrases its own tool-call
+        summaries (e.g. "Proposed a calculator hardening evolution:"),
+        so that literal string was never guaranteed to survive into the
+        user-facing response. Detection instead diffs
+        CodeEvolutionManager.list_all() against a pre-run snapshot,
+        which is what _process_channel() in cli/main.py actually does."""
+        from missy.agent.code_evolution import EvolutionStatus
 
-        response = "Evolution proposed: abc123-def"
-        match = re.search(r"Evolution proposed:\s*(\S+)", response)
-        assert match is not None
-        assert match.group(1) == "abc123-def"
+        existing = MagicMock(id="existing-1", status=EvolutionStatus.PROPOSED)
+        new_one = MagicMock(id="new-abc123", status=EvolutionStatus.PROPOSED)
+        existing_ids = {existing.id}
 
-    def test_multi_file_evolution_proposal_detection(self) -> None:
-        """Verify multi-file evolution proposal regex matching."""
-        import re
+        all_proposals = [existing, new_one]
+        newly_proposed = [
+            p
+            for p in all_proposals
+            if p.id not in existing_ids and p.status == EvolutionStatus.PROPOSED
+        ]
 
-        response = "Multi-file evolution proposed: xyz789"
-        match = re.search(r"Multi-file evolution proposed:\s*(\S+)", response)
-        assert match is not None
-        assert match.group(1) == "xyz789"
+        assert [p.id for p in newly_proposed] == ["new-abc123"]
 
-    def test_no_evolution_proposal_no_match(self) -> None:
-        """No match when response doesn't contain evolution proposal."""
-        import re
+    def test_evolution_proposal_detection_ignores_non_proposed_status(self) -> None:
+        """A proposal that already existed but changed to APPROVED/
+        REJECTED before this snapshot check isn't a new proposal from
+        this turn, even though its ID wasn't in the pre-run snapshot in
+        some hypothetical id-reuse scenario -- status must also match."""
+        from missy.agent.code_evolution import EvolutionStatus
 
-        response = "Regular response text"
-        match = re.search(r"Evolution proposed:\s*(\S+)", response)
-        assert match is None
+        approved = MagicMock(id="new-1", status=EvolutionStatus.APPROVED)
+        existing_ids: set[str] = set()
+
+        newly_proposed = [
+            p
+            for p in [approved]
+            if p.id not in existing_ids and p.status == EvolutionStatus.PROPOSED
+        ]
+        assert newly_proposed == []
+
+    def test_no_new_proposals_when_nothing_created(self) -> None:
+        from missy.agent.code_evolution import EvolutionStatus
+
+        existing = MagicMock(id="existing-1", status=EvolutionStatus.PROPOSED)
+        existing_ids = {existing.id}
+
+        newly_proposed = [
+            p
+            for p in [existing]
+            if p.id not in existing_ids and p.status == EvolutionStatus.PROPOSED
+        ]
+        assert newly_proposed == []
 
     def test_session_id_extraction_from_message(self) -> None:
         """Session ID extracted from discord_author.id."""

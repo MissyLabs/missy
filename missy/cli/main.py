@@ -2777,6 +2777,25 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             with contextlib.suppress(asyncio.TimeoutError):
                                 await asyncio.wait_for(stop.wait(), timeout=7.0)
 
+                    # Snapshot existing evolution proposal IDs before the
+                    # agent runs, so a genuine new proposal created this
+                    # turn can be detected reliably afterward (see below)
+                    # instead of regex-matching Missy's own final reply
+                    # text for a literal "Evolution proposed:" string --
+                    # the model paraphrases its own tool-call summaries
+                    # (e.g. "Proposed a calculator hardening evolution:"),
+                    # so that literal string is not guaranteed to survive
+                    # into the user-facing response at all.
+                    _existing_proposal_ids: set[str] = set()
+                    try:
+                        from missy.agent.code_evolution import CodeEvolutionManager
+
+                        _existing_proposal_ids = {p.id for p in CodeEvolutionManager().list_all()}
+                    except Exception:
+                        logger.debug(
+                            "Could not snapshot existing evolution proposals", exc_info=True
+                        )
+
                     typing_task = asyncio.create_task(_typing_keepalive())
                     try:
                         loop = asyncio.get_running_loop()
@@ -2806,22 +2825,27 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         )
 
                         # Detect evolution proposals and add reaction buttons.
-                        if sent_id and "Evolution proposed:" in response:
-                            import re
+                        # Ground-truth comparison against the pre-run
+                        # snapshot above, not text-matching Missy's own
+                        # (unreliable, paraphrased) reply -- a proposal
+                        # created via code_evolve is real, durable state
+                        # in CodeEvolutionManager regardless of how the
+                        # model chose to describe it to the user.
+                        if sent_id:
+                            try:
+                                from missy.agent.code_evolution import (
+                                    CodeEvolutionManager,
+                                    EvolutionStatus,
+                                )
 
-                            _evo_match = re.search(r"Evolution proposed:\s*(\S+)", response)
-                            if _evo_match:
-                                _proposal_id = _evo_match.group(1)
-                                ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
-                        elif sent_id and "Multi-file evolution proposed:" in response:
-                            import re
-
-                            _evo_match = re.search(
-                                r"Multi-file evolution proposed:\s*(\S+)", response
-                            )
-                            if _evo_match:
-                                _proposal_id = _evo_match.group(1)
-                                ch.add_evolution_reactions(channel_id, sent_id, _proposal_id)
+                                for _prop in CodeEvolutionManager().list_all():
+                                    if (
+                                        _prop.id not in _existing_proposal_ids
+                                        and _prop.status == EvolutionStatus.PROPOSED
+                                    ):
+                                        ch.add_evolution_reactions(channel_id, sent_id, _prop.id)
+                            except Exception:
+                                logger.debug("Evolution proposal detection failed", exc_info=True)
                     except Exception as exc:
                         logger.error(
                             "Discord send failed after retries (channel=%s): %s",
