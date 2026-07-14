@@ -1122,6 +1122,12 @@ class AgentRuntime:
             make_no_fabricated_observation_prompt,
             make_verification_prompt,
         )
+        from missy.agent.response_guards import (
+            detect_fabrication,
+            detect_promise_without_action,
+            make_fabrication_retry_prompt,
+            make_promise_retry_prompt,
+        )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
         try:
@@ -1184,6 +1190,10 @@ class AgentRuntime:
         _placeholder_retries = 0
         _MAX_FABRICATION_RETRIES = 1
         _fabrication_retries = 0
+        _MAX_GENERAL_FABRICATION_RETRIES = 1
+        _general_fabrication_retries = 0
+        _MAX_PROMISE_RETRIES = 1
+        _promise_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
@@ -1512,6 +1522,64 @@ class AgentRuntime:
                             result="warn",
                             detail={"placeholder_text": final_text},
                         )
+
+                # General response guards (missy/agent/response_guards.py):
+                # a tool-free response that reads like it fabricated a
+                # completed action, or promised one it never took, is a
+                # likely root cause of a session "misresponding" to a
+                # later prompt -- a subsequent turn either builds on the
+                # false premise the prior turn asserted, or the user is
+                # left waiting on an action that was never actually
+                # queued as a tool call. Broader and request-agnostic
+                # compared to the placeholder check above (exact internal
+                # artifact strings) and the observation-specific check
+                # below (vision/memory requests only); tried first since
+                # it covers more ground.
+                if (
+                    not tool_names_used
+                    and _general_fabrication_retries < _MAX_GENERAL_FABRICATION_RETRIES
+                    and detect_fabrication(final_text, tool_names_used)
+                ):
+                    _general_fabrication_retries += 1
+                    logger.warning(
+                        "Tool loop response looked fabricated with zero tool calls; "
+                        "retrying once with a correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {"role": "user", "content": make_fabrication_retry_prompt()}
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.general_fabrication_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+                    continue
+
+                if (
+                    not tool_names_used
+                    and _promise_retries < _MAX_PROMISE_RETRIES
+                    and detect_promise_without_action(final_text, tool_names_used)
+                ):
+                    _promise_retries += 1
+                    logger.warning(
+                        "Tool loop response promised action with zero tool calls; "
+                        "retrying once with a correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append({"role": "user", "content": make_promise_retry_prompt()})
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.promise_without_action_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+                    continue
 
                 # FX-round2-F4: a request implying a vision/memory
                 # observation (see is_observation_task) answered with

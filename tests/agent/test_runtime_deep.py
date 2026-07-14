@@ -1028,6 +1028,178 @@ class TestFabricationRetryOnZeroToolObservation:
         assert result == "I still see a red mug."
 
 
+class TestGeneralFabricationRetry:
+    """missy/agent/response_guards.py: unlike TestFabricationRetryOnZero
+    ToolObservation above (scoped to vision/memory-observation-implying
+    requests), this is a request-agnostic guard against any tool-free
+    response that reads like it fabricated a completed action -- a
+    likely root cause of a session "misresponding" to a later prompt,
+    since the false claim becomes part of the conversation history a
+    subsequent turn builds on.
+    """
+
+    def test_fabricated_command_output_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("I checked the logs and everything looks fine."),
+            _make_stop_response("I don't actually have access to check logs directly."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("is everything okay on the server?")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.general_fabrication_retry"
+        ]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "I don't actually have access to check logs directly."
+
+    def test_genuine_tool_call_never_triggers_general_fabrication_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("shell_exec")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("shell_exec"),
+            _make_stop_response("I checked the logs and everything looks fine."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("is everything okay on the server?")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.general_fabrication_retry"
+        ]
+        assert retry_events == []
+        assert result == "I checked the logs and everything looks fine."
+
+    def test_ordinary_reply_never_triggers_general_fabrication_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [_make_stop_response("4")]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.general_fabrication_retry"
+        ]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "4"
+
+
+class TestPromiseWithoutActionRetry:
+    def test_promise_without_action_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("discord_upload_file")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("Working on it, give me a moment to generate that report."),
+            _make_stop_response("Sorry, I can't generate that report right now."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("generate me a report")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.promise_without_action_retry"
+        ]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "Sorry, I can't generate that report right now."
+
+    def test_casual_future_tense_never_triggers_retry(self):
+        """Regression guard for the exemption list: ordinary
+        conversational future tense ("I'll be here...") must not be
+        mistaken for an unfulfilled action promise."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("I'll be here if you need anything else!")
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("thanks for the help")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.promise_without_action_retry"
+        ]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "I'll be here if you need anything else!"
+
+    def test_genuine_tool_call_never_triggers_promise_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("discord_upload_file")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("discord_upload_file"),
+            _make_stop_response("Working on it, here's the file."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("generate me a report")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.promise_without_action_retry"
+        ]
+        assert retry_events == []
+        assert result == "Working on it, here's the file."
+
+
 # ---------------------------------------------------------------------------
 # 7. Runtime with persona — persona shapes system prompt
 # ---------------------------------------------------------------------------
