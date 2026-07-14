@@ -97,6 +97,32 @@ _PLACEHOLDER_RETRY_NUDGE = (
     "complete, the next <tool_call>/tool invocation needed to finish it."
 )
 
+# XT-006 harness finding: a provider occasionally emits a literal, raw
+# <tool_call> block as part of its "final" text response instead of the
+# call actually being parsed and dispatched -- e.g. the acpx delegate
+# closing the block with its own underlying coding-assistant's native
+# </invoke> tag instead of </tool_call>, so the provider's own parser
+# never recognized it as a real call and passed the whole thing through
+# as plain content. missy/providers/acpx_provider.py now tolerates that
+# specific mismatched-closing-tag case at the source, but this is a
+# defense-in-depth backstop for any other provider/shape that still lets
+# a literal <tool_call> tag reach here: it is never a legitimate reply
+# (the user should see prose or a real tool result, not raw internal
+# protocol syntax), so it must not be forwarded as-is.
+_LEAKED_TOOL_CALL_TAG_RE = re.compile(r"<tool_call>", re.IGNORECASE)
+
+_MAX_LEAKED_TOOL_CALL_RETRIES = 1
+
+_LEAKED_TOOL_CALL_RETRY_NUDGE = (
+    "[System reminder]: Your previous response contained a raw, unexecuted "
+    "<tool_call> block instead of a real reply -- that syntax never "
+    "actually ran. If you intend to call a tool, the tool-calling "
+    "mechanism itself must emit and dispatch it, not your response text; "
+    "produce either genuine prose describing what already happened, or "
+    "invoke the tool again through the actual tool-calling mechanism so "
+    "it can run for real."
+)
+
 # FX-round2-F2: explicit sentinels substituted for an empty/falsy tool
 # result string before it is flattened into plain text (see
 # AgentRuntime._dicts_to_messages). A bare empty string after "[Tool
@@ -1124,8 +1150,12 @@ class AgentRuntime:
         )
         from missy.agent.response_guards import (
             detect_fabrication,
+            detect_false_capability_denial,
+            detect_identity_confusion,
             detect_promise_without_action,
+            make_capability_denial_retry_prompt,
             make_fabrication_retry_prompt,
+            make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
         )
 
@@ -1194,6 +1224,11 @@ class AgentRuntime:
         _general_fabrication_retries = 0
         _MAX_PROMISE_RETRIES = 1
         _promise_retries = 0
+        _MAX_IDENTITY_CONFUSION_RETRIES = 1
+        _identity_confusion_retries = 0
+        _MAX_CAPABILITY_DENIAL_RETRIES = 1
+        _capability_denial_retries = 0
+        _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
         _progress = getattr(self, "_progress", None)
@@ -1523,6 +1558,109 @@ class AgentRuntime:
                             detail={"placeholder_text": final_text},
                         )
 
+                # XT-006: a literal, unexecuted <tool_call> tag leaked into
+                # the "final" text -- never a legitimate reply. See
+                # _LEAKED_TOOL_CALL_TAG_RE's docstring above.
+                if _LEAKED_TOOL_CALL_TAG_RE.search(final_text):
+                    if _leaked_tool_call_retries < _MAX_LEAKED_TOOL_CALL_RETRIES:
+                        _leaked_tool_call_retries += 1
+                        logger.warning(
+                            "Tool loop final response contained a raw, unexecuted "
+                            "<tool_call> tag; retrying once with a correction."
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {"role": "user", "content": _LEAKED_TOOL_CALL_RETRY_NUDGE}
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.leaked_tool_call_retry",
+                                result="warn",
+                                detail={"response_excerpt": final_text[:200]},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.leaked_tool_call_unresolved",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+
+                # Identity-confusion guard (missy/agent/response_guards.py):
+                # 3rd tool-specific validation run (2026-07-14) found this
+                # as the dominant, most pervasive failure mode -- the
+                # delegate denies being Missy ("I'm Claude Code"), denies
+                # Missy's own dispatched tools as belonging to a separate
+                # platform, or refuses to engage with the message at all
+                # ("directed at the Missy agent, not at me"). Checked
+                # first, and regardless of tool_names_used, since the
+                # harness observed this even in the same turn as a
+                # genuine successful call to a sibling tool.
+                if (
+                    _identity_confusion_retries < _MAX_IDENTITY_CONFUSION_RETRIES
+                    and detect_identity_confusion(final_text)
+                ):
+                    _identity_confusion_retries += 1
+                    logger.warning(
+                        "Tool loop response denied being Missy or denied her own "
+                        "tools; retrying once with an identity correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_identity_confusion_retry_prompt(user_input),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.identity_confusion_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+                    continue
+
+                # False-capability-denial guard: a categorical claim ("no
+                # X11", "headless", "no browser", "no camera") that is
+                # contradicted by the tool list actually offered this
+                # turn -- the same root bug as identity confusion above,
+                # but phrased as a plausible environment fact rather than
+                # an explicit "I am a different assistant" statement.
+                if (
+                    _capability_denial_retries < _MAX_CAPABILITY_DENIAL_RETRIES
+                    and detect_false_capability_denial(
+                        final_text, tool_names_used, allowed_tool_names
+                    )
+                ):
+                    _capability_denial_retries += 1
+                    logger.warning(
+                        "Tool loop response falsely denied a capability that a "
+                        "tool for it is actually available this turn; retrying "
+                        "once with a correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_capability_denial_retry_prompt(user_input),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.capability_denial_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+                    continue
+
                 # General response guards (missy/agent/response_guards.py):
                 # a tool-free response that reads like it fabricated a
                 # completed action, or promised one it never took, is a
@@ -1547,7 +1685,7 @@ class AgentRuntime:
                     )
                     loop_messages.append({"role": "assistant", "content": final_text})
                     loop_messages.append(
-                        {"role": "user", "content": make_fabrication_retry_prompt()}
+                        {"role": "user", "content": make_fabrication_retry_prompt(user_input)}
                     )
                     with contextlib.suppress(Exception):
                         self._emit_event(
@@ -1570,7 +1708,9 @@ class AgentRuntime:
                         "retrying once with a correction."
                     )
                     loop_messages.append({"role": "assistant", "content": final_text})
-                    loop_messages.append({"role": "user", "content": make_promise_retry_prompt()})
+                    loop_messages.append(
+                        {"role": "user", "content": make_promise_retry_prompt(user_input)}
+                    )
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,

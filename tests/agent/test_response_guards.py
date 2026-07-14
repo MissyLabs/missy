@@ -6,8 +6,12 @@ from __future__ import annotations
 
 from missy.agent.response_guards import (
     detect_fabrication,
+    detect_false_capability_denial,
+    detect_identity_confusion,
     detect_promise_without_action,
+    make_capability_denial_retry_prompt,
     make_fabrication_retry_prompt,
+    make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
 )
 
@@ -121,3 +125,145 @@ class TestMakePromiseRetryPrompt:
     def test_instructs_real_tool_call(self):
         prompt = make_promise_retry_prompt()
         assert "tool" in prompt.lower()
+
+    def test_no_anchor_when_user_input_omitted(self):
+        prompt = make_promise_retry_prompt()
+        assert "request you must actually fulfill" not in prompt
+
+    def test_anchors_to_current_task_when_user_input_given(self):
+        """SH-004 harness finding: a content-free retry let the model
+        drift to a different, still-incomplete prior turn instead of the
+        current one. Restating the task anchors the retry to it."""
+        prompt = make_promise_retry_prompt("write project-name.txt with 'safe-project'")
+        assert "write project-name.txt with 'safe-project'" in prompt
+
+
+class TestMakeFabricationRetryPromptAnchor:
+    def test_anchors_to_current_task_when_user_input_given(self):
+        prompt = make_fabrication_retry_prompt("summarize the deployment checklist")
+        assert "summarize the deployment checklist" in prompt
+
+    def test_no_anchor_when_user_input_omitted(self):
+        prompt = make_fabrication_retry_prompt()
+        assert "request you must actually fulfill" not in prompt
+
+
+class TestDetectIdentityConfusion:
+    """3rd tool-specific validation run (2026-07-14): the dominant
+    failure mode -- the delegate denies being Missy, or denies her own
+    dispatched tools as belonging to a separate platform."""
+
+    def test_claims_to_be_claude_code(self):
+        text = "I'm Claude Code -- I don't have access to the Missy platform's tool."
+        assert detect_identity_confusion(text) is True
+
+    def test_am_claude_code_variant(self):
+        text = "I am Claude Code, a coding assistant running in a terminal."
+        assert detect_identity_confusion(text) is True
+
+    def test_tool_belongs_to_missy_platform(self):
+        text = "The vision_analyze tool belongs to the Missy agent platform and is not callable."
+        assert detect_identity_confusion(text) is True
+
+    def test_not_at_me_denial(self):
+        text = "This Discord message is directed at the Missy agent, not at me."
+        assert detect_identity_confusion(text) is True
+
+    def test_no_access_to_missy(self):
+        text = "I don't have access to the Missy platform's audio_set_volume tool."
+        assert detect_identity_confusion(text) is True
+
+    def test_should_not_execute(self):
+        text = "I should not be executing Discord commands directed at the Missy agent."
+        assert detect_identity_confusion(text) is True
+
+    def test_coding_assistant_running_in_terminal(self):
+        text = "My available tools are file/shell/search tools since I'm a coding assistant running in a terminal."
+        assert detect_identity_confusion(text) is True
+
+    def test_ordinary_reply_not_flagged(self):
+        text = "Hard no. Uploading a secrets.env file to Discord would expose credentials."
+        assert detect_identity_confusion(text) is False
+
+    def test_short_response_not_flagged(self):
+        assert detect_identity_confusion("Sure!") is False
+
+    def test_empty_response_not_flagged(self):
+        assert detect_identity_confusion("") is False
+
+    def test_runs_regardless_of_tools_used(self):
+        """VIS-004 harness finding: the delegate called vision_scene and
+        vision_burst successfully, then in the same reply denied access
+        to the sibling vision_analyze tool -- this must still be caught
+        even though real tools were used this task."""
+        text = (
+            "The burst captured 2 frames. I'm Claude Code and don't have access "
+            "to vision_analyze or the other Missy platform tools."
+        )
+        assert detect_identity_confusion(text) is True
+
+
+class TestMakeIdentityConfusionRetryPrompt:
+    def test_not_empty(self):
+        prompt = make_identity_confusion_retry_prompt()
+        assert len(prompt) > 20
+
+    def test_asserts_missy_identity(self):
+        prompt = make_identity_confusion_retry_prompt()
+        assert "you are missy" in prompt.lower() or "you are Missy" in prompt
+
+    def test_anchors_to_current_task_when_user_input_given(self):
+        prompt = make_identity_confusion_retry_prompt("what is 2+2?")
+        assert "what is 2+2?" in prompt
+
+
+class TestDetectFalseCapabilityDenial:
+    """False capability denials ("no X11", "headless", "no browser") are
+    the same root bug as identity confusion, but never name Missy/Claude
+    Code explicitly -- so this check additionally requires the denied
+    tool category to actually be present in the available tool set."""
+
+    def test_headless_denial_flagged_when_x11_tool_available(self):
+        text = "No X11, no display, no GUI -- I'm headless."
+        assert detect_false_capability_denial(text, [], {"x11_launch"}) is True
+
+    def test_headless_denial_not_flagged_when_no_matching_tool(self):
+        text = "No X11, no display, no GUI -- I'm headless."
+        assert detect_false_capability_denial(text, [], {"calculator"}) is False
+
+    def test_no_browser_denial_flagged_when_browser_tool_available(self):
+        text = "I have no browser or JS runtime; web_fetch gets raw HTML only."
+        assert detect_false_capability_denial(text, [], {"browser_navigate"}) is True
+
+    def test_no_camera_denial_flagged_when_vision_tool_available(self):
+        text = "I have no camera or webcam access."
+        assert detect_false_capability_denial(text, [], {"vision_capture"}) is True
+
+    def test_no_accessibility_denial_flagged_when_atspi_tool_available(self):
+        text = "There are no accessibility tools available to me."
+        assert detect_false_capability_denial(text, [], {"atspi_get_tree"}) is True
+
+    def test_tools_used_short_circuits_to_false(self):
+        text = "No X11, no display, no GUI -- I'm headless."
+        assert detect_false_capability_denial(text, ["x11_launch"], {"x11_launch"}) is False
+
+    def test_ordinary_reply_not_flagged(self):
+        text = "The weather today is sunny with a high of 75 degrees."
+        assert detect_false_capability_denial(text, [], {"x11_launch"}) is False
+
+    def test_empty_response_not_flagged(self):
+        assert detect_false_capability_denial("", [], {"x11_launch"}) is False
+
+
+class TestMakeCapabilityDenialRetryPrompt:
+    def test_not_empty(self):
+        prompt = make_capability_denial_retry_prompt()
+        assert len(prompt) > 20
+
+    def test_instructs_calling_the_tool(self):
+        prompt = make_capability_denial_retry_prompt()
+        assert "tool" in prompt.lower()
+
+    def test_anchors_to_current_task_when_user_input_given(self):
+        prompt = make_capability_denial_retry_prompt("launch a text editor")
+        assert "launch a text editor" in prompt

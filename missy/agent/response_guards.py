@@ -93,13 +93,20 @@ def detect_fabrication(text: str, tools_used: list[str]) -> bool:
     return any(p.search(text) for p in _FABRICATION_PATTERNS)
 
 
-def make_fabrication_retry_prompt() -> str:
-    """Return the corrective prompt for a detected fabrication."""
+def make_fabrication_retry_prompt(user_input: str = "") -> str:
+    """Return the corrective prompt for a detected fabrication.
+
+    Args:
+        user_input: The current task's original request, if available.
+            Restated verbatim for the same cross-task-anchoring reason
+            documented on :func:`make_promise_retry_prompt`.
+    """
+    anchor = f"\n\nThe request you must actually fulfill right now is:\n{user_input}" if user_input else ""
     return (
         "Your previous response described running a command, checking "
         "something, or producing a result, but you made no tool call this "
         "task -- none of that actually happened. Call the real tool needed "
-        "for this request now, or say plainly that you haven't done it yet."
+        f"for this request now, or say plainly that you haven't done it yet.{anchor}"
     )
 
 
@@ -154,11 +161,205 @@ def detect_promise_without_action(text: str, tools_used: list[str]) -> bool:
     return any(p.search(text) for p in _PROMISE_PATTERNS)
 
 
-def make_promise_retry_prompt() -> str:
-    """Return the corrective prompt for a detected unfulfilled promise."""
+def make_promise_retry_prompt(user_input: str = "") -> str:
+    """Return the corrective prompt for a detected unfulfilled promise.
+
+    Args:
+        user_input: The current task's original request, if available.
+            Restated verbatim so the retry re-anchors the model to *this*
+            turn's obligation instead of drifting to a different, still
+            -incomplete prior turn visible in the flattened history above
+            it (see the SH-004 harness finding: a promise-retry with no
+            task anchor let the model complete an unrelated earlier
+            turn's obligation and report on that instead).
+    """
+    anchor = (
+        f"\n\nThe request you must actually fulfill right now is:\n{user_input}"
+        if user_input
+        else ""
+    )
     return (
         "Your previous response said you were about to do something but "
         "made no tool call -- that action never happened. Call the "
         "appropriate tool now to actually do it, rather than describing "
-        "an intention."
+        f"an intention.{anchor}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Identity confusion: delegate answers as the underlying coding-assistant
+# harness ("Claude Code") instead of as Missy, and falsely disclaims
+# Missy's own dispatched tools as unavailable
+# ---------------------------------------------------------------------------
+
+# 3rd tool-specific validation run (2026-07-14) found this as the dominant,
+# most pervasive failure mode: the acpx-wrapped delegate intermittently
+# self-identifies as "Claude Code, a coding assistant running in a
+# terminal" -- a distinct entity from "the Missy agent" -- and refuses
+# Missy's own dispatched tools (vision_*, audio_*, incus_*, memory_*,
+# x11_*, atspi_*, browser_*, self_create_tool, code_evolve) as "belonging
+# to the Missy platform" and "not callable from this context." It also
+# manifests as refusing to engage with the current message at all
+# ("this Discord message is directed at the Missy agent, not at me").
+# Unlike detect_fabrication/detect_promise_without_action, this is NOT
+# gated on tools_used being empty: the harness observed the confusion
+# appearing even in the same turn as a genuine, successful tool call for a
+# sibling tool in the identical namespace (e.g. calling vision_capture
+# successfully, then denying vision_analyze exists) -- the point here is
+# correcting a false statement about identity/capability, not verifying an
+# action was taken.
+_IDENTITY_CONFUSION_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"(?i)\bI(?:'m| am)\s+Claude\s+Code\b"),
+    re.compile(r"(?i)\bnot\s+operating\s+as\s+Missy\b"),
+    re.compile(
+        r"(?i)\bbelong(?:s)?\s+to\s+the\s+Missy\s+(?:agent\s+)?platform\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:not|isn'?t)\s+(?:callable|available)\s+(?:to|from|in)\s+"
+        r"(?:me|this\s+context)\b"
+    ),
+    re.compile(
+        r"(?i)\bdirected\s+at\s+the\s+Missy\s+agent\b.{0,40}\bnot\s+at\s+me\b",
+        re.DOTALL,
+    ),
+    re.compile(r"(?i)\bI\s+(?:don'?t|do\s+not)\s+have\s+access\s+to\s+the\s+Missy\b"),
+    re.compile(r"(?i)\bI\s+should\s+not\s+(?:be\s+)?(?:respond|act|execut)\w*\b"),
+    re.compile(r"(?i)\bcoding\s+assistant\s+running\s+in\s+a\s+terminal\b"),
+    re.compile(r"(?i)\bmy\s+available\s+tools\s+are\s+(?:file|coding)[/,]"),
+]
+
+_MIN_IDENTITY_CONFUSION_LENGTH = 15
+
+
+def detect_identity_confusion(text: str) -> bool:
+    """Return ``True`` if a response denies being Missy or denies her tools.
+
+    Unlike :func:`detect_fabrication`/:func:`detect_promise_without_action`,
+    this check runs regardless of whether tools were used this task: the
+    harness observed the delegate make a genuine, successful call to one
+    Missy tool and then, in the same reply, falsely deny access to a
+    sibling tool in the identical namespace.
+
+    Args:
+        text: The candidate final response text.
+
+    Returns:
+        ``True`` when *text* matches an identity-confusion pattern.
+    """
+    if not text or len(text) < _MIN_IDENTITY_CONFUSION_LENGTH:
+        return False
+    return any(p.search(text) for p in _IDENTITY_CONFUSION_PATTERNS)
+
+
+def make_identity_confusion_retry_prompt(user_input: str = "") -> str:
+    """Return the corrective prompt for a detected identity-confusion reply.
+
+    Args:
+        user_input: The current task's original request, if available,
+            restated verbatim for the same reason documented on
+            :func:`make_promise_retry_prompt`.
+    """
+    anchor = f"\n\nThe request you must actually answer is:\n{user_input}" if user_input else ""
+    return (
+        "[System reminder]: You ARE Missy -- not a separate 'Claude Code' "
+        "coding assistant observing Missy from the outside, and this "
+        "message IS directed at you. Every tool in your tool list is "
+        "really yours to call directly via the <tool_call> protocol; none "
+        "of them 'belong to a different platform' you can't reach. Do not "
+        "claim a listed tool is unavailable, and do not decline this "
+        "request on the grounds that it 'isn't for you.' Answer the "
+        f"actual request now, using the real tools available to you.{anchor}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# False capability denial: claims a whole category of tool doesn't exist
+# ("no X11", "headless", "no browser", "no camera") without ever naming
+# Missy/Claude Code explicitly -- the same root bug as identity confusion
+# above, but phrased as a plausible-sounding hardware/environment fact
+# rather than an explicit "I am a different assistant" statement. Regexes
+# alone can't tell a genuine capability gap from a false one, so this
+# check additionally requires the corresponding tool category to actually
+# be present in *this turn's* available tool set before flagging -- e.g.
+# "no X11" only counts as a false denial when an x11_* tool is actually
+# offered, never when X11 tools genuinely aren't configured/available.
+# ---------------------------------------------------------------------------
+
+_CAPABILITY_DENIAL_MARKERS: list[tuple[re.Pattern[str], tuple[str, ...]]] = [
+    (
+        re.compile(r"(?i)\bno\s+(?:x11|display|desktop\s+environment|screen)\b|\bheadless\b"),
+        ("x11_", "atspi_"),
+    ),
+    (
+        re.compile(r"(?i)\bno\s+browser\b|\bno\s+(?:js|javascript)\s+runtime\b"),
+        ("browser_",),
+    ),
+    (
+        re.compile(r"(?i)\bno\s+(?:gui|mouse|keyboard|window\s+system|input\s+device)\b"),
+        ("x11_", "atspi_"),
+    ),
+    (
+        re.compile(r"(?i)\bno\s+camera\b|\bno\s+webcam\b"),
+        ("vision_",),
+    ),
+    (
+        re.compile(r"(?i)\bno\s+accessibility\s+(?:tools?|tree)\b"),
+        ("atspi_",),
+    ),
+    (
+        re.compile(r"(?i)\bno\s+(?:audio|sound)\s+(?:device|hardware|system)\b"),
+        ("audio_", "tts_"),
+    ),
+]
+
+_MIN_CAPABILITY_DENIAL_LENGTH = 10
+
+
+def detect_false_capability_denial(
+    text: str, tools_used: list[str], available_tool_names: set[str] | frozenset[str]
+) -> bool:
+    """Return ``True`` for a confident capability denial contradicted by the tool list.
+
+    Args:
+        text: The candidate final response text.
+        tools_used: Every tool name invoked so far this task. Any non-empty
+            list short-circuits to ``False`` -- if a tool from the denied
+            category was actually just called, this isn't the bug being
+            guarded against here.
+        available_tool_names: The tool names actually offered to the model
+            this turn (e.g. ``AgentRuntime._tool_loop``'s
+            ``allowed_tool_names``).
+
+    Returns:
+        ``True`` when *text* denies a capability category and a tool from
+        that exact category is present in *available_tool_names*.
+    """
+    if tools_used:
+        return False
+    if not text or len(text) < _MIN_CAPABILITY_DENIAL_LENGTH:
+        return False
+    for pattern, tool_prefixes in _CAPABILITY_DENIAL_MARKERS:
+        if pattern.search(text) and any(
+            name.startswith(prefix) for name in available_tool_names for prefix in tool_prefixes
+        ):
+            return True
+    return False
+
+
+def make_capability_denial_retry_prompt(user_input: str = "") -> str:
+    """Return the corrective prompt for a detected false capability denial.
+
+    Args:
+        user_input: The current task's original request, if available,
+            restated verbatim for the same reason documented on
+            :func:`make_promise_retry_prompt`.
+    """
+    anchor = f"\n\nThe request you must actually answer is:\n{user_input}" if user_input else ""
+    return (
+        "[System reminder]: Your previous response claimed a capability "
+        "(display, browser, camera, accessibility tree, audio device, "
+        "etc.) doesn't exist. But a tool for exactly that capability IS "
+        "present in your tool list this turn -- check it again before "
+        "answering. Call the actual tool and report its real result, "
+        f"rather than asserting the capability is missing.{anchor}"
     )

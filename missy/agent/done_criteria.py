@@ -132,7 +132,14 @@ def make_verification_prompt() -> str:
         "If something failed or is incomplete, call the appropriate tool again to "
         "fix it — do not describe what went wrong, just retry with corrected "
         "parameters. Only once every relevant step has genuinely succeeded should "
-        "you reply with a concise summary for the user."
+        "you reply with a concise summary for the user. "
+        "When you report specific names, values, or counts (filenames, directory "
+        "entries, sizes, IDs) copy them exactly from the tool output above — never "
+        "substitute a plausible-sounding placeholder or example value (e.g. "
+        "'file-1.txt', 'dir-a') that isn't literally present in that output. A real "
+        "tool call happening this turn does not license inventing what it returned; "
+        "if you are unsure what a result actually contained, look at it again above "
+        "rather than guessing."
     )
 
 
