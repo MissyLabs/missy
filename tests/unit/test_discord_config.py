@@ -103,6 +103,7 @@ class TestDiscordAccountConfig:
         assert ac.guild_policies == {}
         assert ac.dm_policy is DiscordDMPolicy.DISABLED
         assert ac.dm_allowlist == []
+        assert ac.owner_ids == []
         assert ac.ack_reaction == ""
         assert ac.ignore_bots is True
         assert ac.allow_bots_if_mention_only is False
@@ -124,6 +125,7 @@ class TestDiscordAccountConfig:
             "application_id": "222",
             "dm_policy": "allowlist",
             "dm_allowlist": ["333", "444"],
+            "owner_ids": ["207153120688472064"],
             "ack_reaction": "eyes",
             "ignore_bots": False,
             "allow_bots_if_mention_only": True,
@@ -142,6 +144,7 @@ class TestDiscordAccountConfig:
         assert ac.application_id == "222"
         assert ac.dm_policy is DiscordDMPolicy.ALLOWLIST
         assert ac.dm_allowlist == ["333", "444"]
+        assert ac.owner_ids == ["207153120688472064"]
         assert ac.ack_reaction == "eyes"
         assert ac.ignore_bots is False
         assert ac.allow_bots_if_mention_only is True
@@ -159,6 +162,19 @@ class TestDiscordAccountConfig:
         assert ac.dm_policy is DiscordDMPolicy.DISABLED
         assert ac.guild_policies == {}
         assert ac.rate_limit_per_minute == 10  # DISC-CMD-008 default
+        assert ac.owner_ids == []  # fail closed: no owners configured
+
+    def test_parse_account_owner_ids(self) -> None:
+        ac = _parse_account({"owner_ids": ["207153120688472064", "111"]})
+        assert ac.owner_ids == ["207153120688472064", "111"]
+
+    def test_parse_account_owner_ids_coerced_to_strings(self) -> None:
+        """YAML may parse a bare numeric ID as an int -- Discord snowflake
+        IDs are compared as strings elsewhere (e.g. dm_allowlist), so a
+        non-string entry must not silently fail an `in` check later."""
+        ac = _parse_account({"owner_ids": [207153120688472064]})
+        assert ac.owner_ids == ["207153120688472064"]
+        assert isinstance(ac.owner_ids[0], str)
 
     def test_parse_account_rate_limit_per_minute_explicit(self) -> None:
         ac = _parse_account({"rate_limit_per_minute": 3})

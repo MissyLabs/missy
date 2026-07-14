@@ -6,12 +6,18 @@ Covers:
 - Ignores reactions from the bot itself
 - Ignores reactions on non-tracked messages
 - Ignores non-approve/reject emoji
-- SR-1.2/1.3: a ✅ reaction from any Discord user is refused, not
-  treated as approval -- CodeEvolutionManager.approve() must never be
-  called from this path, since a Discord reaction is not an
-  authenticated human operator. Only `missy evolve approve <id>` run
-  from a terminal on the host can approve a proposal. ❌ (reject) is
-  still available since it only narrows scope.
+- SR-1.2/1.3 + owner allowlist: a ✅/❌ reaction from a Discord user is
+  only treated as real approval/rejection when that user's ID is in
+  DiscordAccountConfig.owner_ids -- CodeEvolutionManager.approve()/
+  .reject() must never be called for a non-owner reactor, since a bare
+  Discord reaction is not by itself an authenticated human operator.
+  With no owners configured (the default), both actions stay fully
+  refused, matching the original SR-1.2/1.3 behavior; `missy evolve
+  approve/reject <id>` run from a terminal on the host always works
+  regardless of owner configuration.
+- A denied (non-owner) or failed (already-resolved) reaction must not
+  clear the pending-tracking entry, so the real owner can still act on
+  the same message afterward.
 - send_to() returns the last message ID
 - Gateway intents include reaction bits
 """
@@ -118,12 +124,13 @@ class TestHandleReaction:
         _run(channel._handle_reaction(data))
         mock_rest.send_message.assert_not_called()
 
-    def test_approve_reaction_is_refused_not_approved(
+    def test_approve_reaction_is_refused_for_non_owner(
         self, channel: DiscordChannel, mock_rest: MagicMock
     ):
-        # SR-1.2/1.3: a Discord user reacting with an emoji must never be
-        # able to approve a code-evolution proposal -- Discord identity is
-        # not an authenticated human operator. mgr.approve() must never be
+        # SR-1.2/1.3 + owner allowlist: a non-owner Discord user reacting
+        # with an emoji must never be able to approve a code-evolution
+        # proposal. The `channel` fixture configures no owner_ids, so
+        # every reactor is a non-owner here. mgr.approve() must never be
         # called from this path.
         channel._pending_evolutions["msg-1"] = "evo-1"
         mock_mgr = MagicMock()
@@ -152,19 +159,74 @@ class TestHandleReaction:
                 if len(mock_rest.send_message.call_args[0]) > 1
                 else ""
             )
-        assert "cannot be approved" in sent_content.lower()
+        assert "not a configured owner" in sent_content
         assert "missy evolve approve" in sent_content
-        # The proposal remains pending -- the reaction had no effect on it.
+        # A denial must not consume the pending tracking entry -- the
+        # real owner must still be able to act on this message afterward.
+        assert channel._pending_evolutions.get("msg-1") == "evo-1"
+
+    def test_approve_reaction_succeeds_for_configured_owner(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_evolutions["msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+        mock_mgr.approve.return_value = True
+
+        data = {
+            "message_id": "msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "\u2705"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.approve.assert_called_once_with("evo-1")
+        sent_content = mock_rest.send_message.call_args[0][1]
+        assert "approved" in sent_content.lower()
+        assert "missy evolve apply" in sent_content
+        # Resolved -- tracking is cleared.
         assert "msg-1" not in channel._pending_evolutions
 
-    def test_reject_reaction(self, channel: DiscordChannel, mock_rest: MagicMock):
+    def test_reject_reaction_denied_for_non_owner(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        """Reject was previously open to any reactor; it is now
+        owner-gated the same as approve, for a consistent security model
+        across both real approve/reject decisions."""
+        channel._pending_evolutions["msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+
+        data = {
+            "message_id": "msg-1",
+            "user_id": "user-42",
+            "channel_id": "ch-1",
+            "emoji": {"name": "\u274c"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        mock_mgr.reject.assert_not_called()
+        assert channel._pending_evolutions.get("msg-1") == "evo-1"
+
+    def test_reject_reaction_succeeds_for_configured_owner(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        channel.account_config.owner_ids = ["owner-1"]
         channel._pending_evolutions["msg-1"] = "evo-1"
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = True
 
         data = {
             "message_id": "msg-1",
-            "user_id": "user-42",
+            "user_id": "owner-1",
             "channel_id": "ch-1",
             "emoji": {"name": "\u274c"},
         }
@@ -199,6 +261,9 @@ class TestHandleReaction:
         call_args = mock_audit.call_args.args
         assert call_args[0] == "discord.evolution.approve_denied"
         assert call_args[1] == "deny"
+
+    def test_owner_ids_defaults_to_empty_fail_closed(self, channel: DiscordChannel) -> None:
+        assert channel.account_config.owner_ids == []
 
 
 # ---------------------------------------------------------------------------

@@ -1076,6 +1076,7 @@ class TestHandleReaction:
         ch = _make_channel()
         ch._bot_user_id = "bot-001"
         ch._pending_evolutions["msg-99"] = "proposal-abc"
+        ch.account_config.owner_ids = ["user-2"]  # owner: reject is allowed
 
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = True
@@ -1103,6 +1104,7 @@ class TestHandleReaction:
         ch = _make_channel()
         ch._bot_user_id = "bot-001"
         ch._pending_evolutions["msg-99"] = "proposal-abc"
+        ch.account_config.owner_ids = ["user-2"]  # owner: reject is allowed
 
         mock_mgr = MagicMock()
         mock_mgr.reject.return_value = False  # already resolved
@@ -1123,6 +1125,40 @@ class TestHandleReaction:
         ch._rest.send_message.assert_called()
         msg_arg = ch._rest.send_message.call_args[0][1]
         assert "Could not reject" in msg_arg
+
+    @pytest.mark.asyncio
+    async def test_reaction_reject_denied_for_non_owner(self):
+        """FX-owner-approval: reject now requires owner_ids membership too
+        (previously open to any reactor) -- a random non-owner reacting
+        must not be able to kill a pending proposal."""
+        import sys
+
+        ch = _make_channel()
+        ch._bot_user_id = "bot-001"
+        ch._pending_evolutions["msg-99"] = "proposal-abc"
+        # owner_ids left empty -- fail closed by default
+
+        mock_mgr = MagicMock()
+        ch._rest.send_message = MagicMock()
+
+        mock_evo_module = MagicMock()
+        mock_evo_module.CodeEvolutionManager = MagicMock(return_value=mock_mgr)
+
+        with patch.dict(sys.modules, {"missy.agent.code_evolution": mock_evo_module}):
+            data = {
+                "message_id": "msg-99",
+                "user_id": "random-user",
+                "channel_id": "chan-1",
+                "emoji": {"name": "\u274c"},
+            }
+            await ch._handle_reaction(data)
+
+        mock_mgr.reject.assert_not_called()
+        msg_arg = ch._rest.send_message.call_args[0][1]
+        assert "not a configured owner" in msg_arg
+        # Denial must not consume the pending tracking entry -- the real
+        # owner must still be able to act on this message afterward.
+        assert ch._pending_evolutions.get("msg-99") == "proposal-abc"
 
     @pytest.mark.asyncio
     async def test_reaction_evolution_exception_sends_error_message(self):

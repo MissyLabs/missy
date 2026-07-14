@@ -12,6 +12,7 @@ Example YAML::
         - token_env_var: DISCORD_BOT_TOKEN
           application_id: "1234567890"
           dm_policy: pairing
+          owner_ids: ["207153120688472064"]
           guild_policies:
             "987654321":
               enabled: true
@@ -91,6 +92,20 @@ class DiscordAccountConfig:
         dm_policy: Controls how the bot handles direct messages.
         dm_allowlist: Explicit user IDs permitted for DM when
             ``dm_policy == DiscordDMPolicy.ALLOWLIST``.
+        owner_ids: Discord user IDs treated as authenticated human
+            operators for security-sensitive Discord-native actions --
+            currently, approving/rejecting a ``code_evolve`` proposal via
+            the ✅/❌ reaction workflow (see
+            ``DiscordChannel._handle_reaction()``). Empty by default: with
+            no owners configured, reaction-based approval/rejection stays
+            fully disabled (fail closed), matching the behavior before
+            this field existed. A bare Discord user ID is a weaker
+            identity signal than an authenticated CLI session on the
+            host (anyone who can see and react to the message is *some*
+            Discord user, but not necessarily one of these IDs), so this
+            allowlist is what makes reaction-based approval acceptable at
+            all -- without it, any reactor could approve a change to
+            Missy's own source code with no authentication whatsoever.
         ack_reaction: Emoji used to acknowledge receipt of a message
             (e.g. ``"eyes"``).  Set to an empty string to disable.
         ignore_bots: When ``True`` the bot ignores messages from other bots.
@@ -109,6 +124,7 @@ class DiscordAccountConfig:
     guild_policies: dict[str, DiscordGuildPolicy] = field(default_factory=dict)
     dm_policy: DiscordDMPolicy = DiscordDMPolicy.DISABLED
     dm_allowlist: list[str] = field(default_factory=list)
+    owner_ids: list[str] = field(default_factory=list)
     ack_reaction: str = ""
     ignore_bots: bool = True
     allow_bots_if_mention_only: bool = False
@@ -200,6 +216,7 @@ def _parse_account(
         guild_policies=guild_policies,
         dm_policy=dm_policy,
         dm_allowlist=list(data.get("dm_allowlist", [])),
+        owner_ids=[str(uid) for uid in data.get("owner_ids", [])],
         ack_reaction=str(data.get("ack_reaction", "")),
         ignore_bots=_coerce_bool(data.get("ignore_bots"), True),
         allow_bots_if_mention_only=_coerce_bool(data.get("allow_bots_if_mention_only"), False),
