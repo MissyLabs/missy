@@ -1892,7 +1892,28 @@ class DiscordChannel(BaseChannel):
                 )
             elif action == "apply":
                 resolved = True
-                result = mgr.apply(proposal_id)
+                # CodeEvolutionManager.apply() is a synchronous call that
+                # patches files and then runs the real test suite as a
+                # subprocess -- observed taking anywhere from seconds to
+                # ~13 minutes (its own internal subprocess timeout is a
+                # separate, generous budget; see CodeEvolutionManager's
+                # test_timeout_seconds). Calling it directly on this
+                # coroutine would block the single-threaded asyncio event
+                # loop this whole gateway connection runs on for the
+                # entire duration -- not just this reaction, but every
+                # heartbeat, every other channel's messages, everything --
+                # exactly what was observed live ("Missy not responding"
+                # for several minutes after hitting apply). Dispatched to
+                # a background thread via run_in_executor instead, the
+                # same pattern cli/main.py's _process_channel() already
+                # uses for the (also potentially slow) agent.run() call.
+                self._rest.send_message(
+                    channel_id,
+                    f"⏳ Applying evolution **{proposal_id}** (patching the file "
+                    "and running the test suite -- this can take a few minutes)...",
+                )
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, mgr.apply, proposal_id)
                 if result.get("success"):
                     commit_sha = str(result.get("commit_sha", ""))[:8]
                     self._rest.send_message(

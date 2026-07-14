@@ -176,6 +176,14 @@ class CodeEvolutionManager:
         repo_root: Root of the git repository.  Defaults to the Missy
             package's parent directory (the repo root).
         test_command: Shell command to validate changes before committing.
+        test_timeout_seconds: Wall-clock budget for the test_command
+            subprocess in :meth:`apply`. The default test_command above
+            runs the *entire* Missy test suite (20,000+ tests, observed
+            taking 9-13 minutes on CI, and up to ~30 minutes on a slow
+            runner) -- this must comfortably exceed that or every apply,
+            from any caller, always fails on a timeout regardless of
+            whether the code change itself was good. Found live: the
+            previous hardcoded 300s (5 min) value guaranteed this.
     """
 
     MAX_PROPOSALS = 50
@@ -185,10 +193,12 @@ class CodeEvolutionManager:
         store_path: str = "~/.missy/evolutions.json",
         repo_root: str | None = None,
         test_command: str = "python3 -m pytest tests/ -x -q --tb=short",
+        test_timeout_seconds: int = 1200,
     ) -> None:
         self._path = Path(store_path).expanduser()
         self._repo_root = Path(repo_root) if repo_root else _PACKAGE_ROOT.parent
         self._test_command = test_command
+        self._test_timeout_seconds = test_timeout_seconds
         self._lock = threading.Lock()
         self._proposals: list[EvolutionProposal] = self._load()
 
@@ -597,7 +607,7 @@ class CodeEvolutionManager:
                 cwd=str(self._repo_root),
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=self._test_timeout_seconds,
                 env=safe_env,
             )
             test_output = test_result.stdout + test_result.stderr

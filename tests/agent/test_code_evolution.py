@@ -480,6 +480,56 @@ class TestApply:
         subprocess.run(["git", "stash", "drop"], cwd=str(tmp_repo), capture_output=True, check=True)
 
 
+class TestApplyTestTimeout:
+    """FX-apply-timeout: the previous hardcoded 300s subprocess timeout
+    guaranteed every apply() using the real default test_command (the
+    entire Missy test suite, observed taking 9-13+ minutes) would always
+    time out and fail regardless of whether the proposed change was
+    good. Live-confirmed blocking a real Discord-triggered apply.
+    test_timeout_seconds is now a real, configurable constructor
+    parameter threaded into the subprocess.run() call.
+    """
+
+    def test_default_timeout_is_generous(self):
+        mgr = CodeEvolutionManager(store_path="/nonexistent/never/written.json")
+        assert mgr._test_timeout_seconds == 1200
+
+    def test_custom_timeout_stored(self, tmp_repo, store_path):
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="true",
+            test_timeout_seconds=45,
+        )
+        assert mgr._test_timeout_seconds == 45
+
+    def test_custom_timeout_actually_used_by_apply(self, tmp_repo, store_path):
+        """Prove the configured value reaches subprocess.run(), not just
+        that the attribute is set -- a command that sleeps longer than a
+        short configured timeout must be killed and reported as a
+        timeout-flavored failure, not silently ignored."""
+        mgr = CodeEvolutionManager(
+            store_path=store_path,
+            repo_root=str(tmp_repo),
+            test_command="sleep 5",
+            test_timeout_seconds=1,
+        )
+        prop = mgr.propose(
+            title="T",
+            description="D",
+            file_path="missy/example.py",
+            original_code="return 'hello'",
+            proposed_code="return 'hi'",
+        )
+        mgr.approve(prop.id)
+        result = mgr.apply(prop.id)
+        assert not result["success"]
+        assert "timed out" in result["message"].lower() or "timeout" in result["message"].lower()
+        # File must still be reverted even on a timeout-triggered failure.
+        content = (tmp_repo / "missy" / "example.py").read_text()
+        assert "return 'hello'" in content
+
+
 class TestStashIdentity:
     """Unit coverage for the SHA-identity-based stash helpers."""
 

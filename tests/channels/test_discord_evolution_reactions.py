@@ -32,6 +32,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -315,6 +316,67 @@ class TestHandleEvolutionApplyReaction:
         assert "applied" in sent_content.lower()
         assert "abc12345" in sent_content
         assert "apply-msg-1" not in channel._pending_applies
+        # FX-apply-blocking: an immediate progress message is sent
+        # *before* the (potentially slow) apply() call, proving the
+        # dispatch is the non-blocking send-then-await-executor shape
+        # rather than one single blocking call with one final message.
+        assert mock_rest.send_message.call_count == 2
+        progress_content = mock_rest.send_message.call_args_list[0][0][1]
+        assert "applying" in progress_content.lower()
+
+    def test_apply_dispatched_via_executor_not_blocking_event_loop(
+        self, channel: DiscordChannel, mock_rest: MagicMock
+    ):
+        """FX-apply-blocking: live-observed root cause of "Missy stopped
+        responding" after hitting apply via Discord -- mgr.apply() was
+        called directly on the coroutine handling the reaction, blocking
+        the single-threaded asyncio event loop the whole gateway
+        connection (heartbeats, every other channel's messages) runs on
+        for however long the real test-suite subprocess took. Proven
+        here by running a second, concurrent coroutine on the same event
+        loop alongside the reaction handler -- it must keep making
+        progress (real interleaving) instead of stalling until apply()
+        returns."""
+        channel.account_config.owner_ids = ["owner-1"]
+        channel._pending_applies["apply-msg-1"] = "evo-1"
+        mock_mgr = MagicMock()
+
+        def _slow_apply(_proposal_id):
+            time.sleep(0.2)
+            return {"success": True, "message": "ok", "commit_sha": "abc123", "test_output": ""}
+
+        mock_mgr.apply.side_effect = _slow_apply
+
+        data = {
+            "message_id": "apply-msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+
+        async def _scenario():
+            other_progress = []
+
+            async def _other_coroutine():
+                for i in range(10):
+                    other_progress.append(i)
+                    await asyncio.sleep(0.02)
+
+            with patch(
+                "missy.agent.code_evolution.CodeEvolutionManager",
+                return_value=mock_mgr,
+            ):
+                await asyncio.gather(
+                    channel._handle_reaction(data),
+                    _other_coroutine(),
+                )
+            return other_progress
+
+        progress = asyncio.run(_scenario())
+        # If apply() had blocked the event loop, _other_coroutine()
+        # couldn't have interleaved any of its awaits during the ~0.2s
+        # apply() call, and progress would be far shorter (or empty).
+        assert len(progress) == 10
 
     def test_apply_failure_reports_message_and_stays_resolved(
         self, channel: DiscordChannel, mock_rest: MagicMock
