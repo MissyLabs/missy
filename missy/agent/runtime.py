@@ -2656,6 +2656,22 @@ class AgentRuntime:
                 provider=provider,
             )
             self._memory_store.add_turn(turn)
+            # 5th tool-specific validation run's OPS-012 finding:
+            # register_session() (the only thing that populates the
+            # `sessions` metadata table list_sessions() reads from) had
+            # zero production callers anywhere -- add_turn() only ever
+            # wrote to `turns`. Every real session was therefore
+            # permanently invisible to `missy sessions list` and to
+            # SleeptimeWorker._find_sessions_needing_work()'s eligibility
+            # check, so idle-triggered consolidation could never fire for
+            # a real conversation. register_session() is a cheap,
+            # idempotent upsert (ON CONFLICT DO UPDATE), so calling it on
+            # every turn is safe and also keeps `updated_at` current --
+            # exactly what SleeptimeWorker._session_recently_active()
+            # needs to judge idleness correctly.
+            register_session = getattr(self._memory_store, "register_session", None)
+            if register_session is not None:
+                register_session(session_id, provider=provider)
         except Exception as exc:
             # FX-B: persistence failure must never disappear silently.
             logger.warning(
@@ -3076,12 +3092,30 @@ class AgentRuntime:
         Returns:
             A :class:`~missy.memory.sqlite_store.SQLiteMemoryStore` instance,
             or ``None`` when unavailable.
+
+        Note:
+            There is no config path that intentionally disables memory --
+            this always attempts construction, so a ``None`` return means
+            construction genuinely failed (permissions, disk full,
+            corruption, etc.). The 5th tool-specific validation run found
+            this failure was previously swallowed silently: nothing logged
+            it, and ``Watchdog``'s health check (``missy/cli/main.py``)
+            treated a ``None`` store as "nothing to monitor" rather than a
+            failure, so the entire memory subsystem could silently disable
+            itself for a process's whole lifetime with zero operator-visible
+            symptom. Logging at ERROR here is the first half of the fix;
+            the second half is ``Watchdog``'s check itself.
         """
         try:
             from missy.memory.sqlite_store import SQLiteMemoryStore
 
             return SQLiteMemoryStore()
         except Exception:
+            logger.error(
+                "Failed to construct memory store -- memory persistence is "
+                "disabled for this process.",
+                exc_info=True,
+            )
             return None
 
     def _make_cost_tracker(self) -> Any:

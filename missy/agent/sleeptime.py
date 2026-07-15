@@ -277,16 +277,85 @@ class SleeptimeWorker:
                 self._stats.total_processing_seconds += elapsed
                 self._processing = False
 
+    def _process_playbook_promotions(self, threshold: int = 3) -> None:
+        """Check Playbook for patterns eligible for promotion and mark them.
+
+        5th tool-specific validation run's OPS-014 finding:
+        :meth:`~missy.agent.playbook.Playbook.get_promotable` and
+        :meth:`~missy.agent.playbook.Playbook.mark_promoted` had zero
+        production callers anywhere -- ``Playbook.record()`` (the write
+        side) is genuinely wired into :meth:`AgentRuntime.run`'s
+        learnings-extraction path and real patterns do accumulate
+        genuine success counts, but nothing ever checked whether any of
+        them crossed the promotion threshold. This makes that check
+        actually run, emitting an audit event per promotable pattern
+        (so an operator can see it via ``missy audit recent``) and
+        marking it promoted so it isn't re-reported every cycle.
+
+        Independent of ``self._memory_store`` -- ``Playbook`` is its own
+        JSON-backed store (``~/.missy/playbook.json``), not the
+        conversation memory store this worker otherwise processes.
+
+        Args:
+            threshold: Minimum ``success_count`` for promotion, matching
+                :meth:`~missy.agent.playbook.Playbook.get_promotable`'s
+                own default.
+        """
+        try:
+            from missy.agent.playbook import Playbook
+
+            playbook = Playbook()
+            promotable = playbook.get_promotable(threshold=threshold)
+            for entry in promotable:
+                # Each entry is handled independently so one bad entry
+                # (a publish failure or a mark_promoted error) can't block
+                # the rest of the batch.
+                try:
+                    from missy.core.events import AuditEvent, event_bus
+
+                    event_bus.publish(
+                        AuditEvent.now(
+                            session_id="sleeptime",
+                            task_id=entry.pattern_id,
+                            event_type="playbook.pattern_promotable",
+                            category="plugin",
+                            result="allow",
+                            detail={
+                                "pattern_id": entry.pattern_id,
+                                "task_type": entry.task_type,
+                                "description": entry.description,
+                                "success_count": entry.success_count,
+                            },
+                        )
+                    )
+                except Exception:
+                    logger.debug(
+                        "SleeptimeWorker: failed to publish playbook promotion audit event.",
+                        exc_info=True,
+                    )
+                try:
+                    playbook.mark_promoted(entry.pattern_id)
+                except Exception:
+                    logger.debug(
+                        "SleeptimeWorker: failed to mark playbook pattern promoted.",
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.debug("SleeptimeWorker: playbook promotion check failed.", exc_info=True)
+
     def _process_cycle(self) -> None:
         """Run one background processing cycle.
 
         Steps:
+        0. Check Playbook for patterns eligible for promotion.
         1. Identify sessions with unsummarised turns.
         2. Summarise batches of old turns, creating
            :class:`~missy.memory.sqlite_store.SummaryRecord` objects.
         3. Extract learnings from tool-heavy turns.
         4. Publish start/complete events to the message bus.
         """
+        self._process_playbook_promotions()
+
         if self._memory_store is None:
             logger.debug("SleeptimeWorker: no memory_store — nothing to do.")
             return

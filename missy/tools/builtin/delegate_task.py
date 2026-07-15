@@ -25,11 +25,16 @@ class DelegateTaskTool(BaseTool):
         "Decompose a compound, multi-step task into sub-agent calls and run "
         "them, respecting any sequential dependencies you describe (e.g. "
         "numbered steps or 'first...then...') and running independent steps "
-        "concurrently. Each step runs as a full agent turn with the same "
-        "tools and permissions available to you right now -- it does not "
-        "grant any additional capability. Use this for genuinely "
-        "decomposable work (e.g. 'research X, then Y, then combine "
-        "results'), not for a single atomic action."
+        "concurrently (up to 3 at a time). Each step runs as a full agent "
+        "turn with the same tools and permissions available to you right "
+        "now -- it does not grant any additional capability. Use this for "
+        "genuinely decomposable work (e.g. 'research X, then Y, then "
+        "combine results'), not for a single atomic action. IMPORTANT: "
+        "list ALL independent subtasks in ONE call's prompt (as a numbered "
+        "list) -- that is what actually gets them run concurrently. Calling "
+        "this tool once per subtask instead forces them to run one at a "
+        "time, since each tool call in your own turn is handled before the "
+        "next begins."
     )
     permissions = ToolPermissions()
     parameters = {
@@ -37,7 +42,11 @@ class DelegateTaskTool(BaseTool):
             "type": "string",
             "description": (
                 "The compound task to decompose, as a numbered list or a "
-                "sequence using connectives like 'then'/'first'/'finally'."
+                "sequence using connectives like 'then'/'first'/'finally'. "
+                "Put every independent subtask in this single string (e.g. "
+                "'1. ... 2. ... 3. ...') rather than making separate calls "
+                "to this tool per subtask, so independent ones actually run "
+                "concurrently instead of serially."
             ),
             "required": True,
         },

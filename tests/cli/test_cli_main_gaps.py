@@ -586,6 +586,113 @@ class TestGatewayStartMcpHealthCheck:
             _os.unlink(cfg_path)
 
 
+class TestGatewayStartMemoryStoreHealthCheck:
+    """Regression test for the 5th tool-specific validation run's OPS-011
+    finding: AgentRuntime._make_memory_store() always attempts
+    construction (there is no config path that intentionally disables
+    memory), so a None _memory_store can only mean construction genuinely
+    failed. The Watchdog check previously treated None as "nothing to
+    monitor" (returning True), which silently masked a real startup
+    failure -- the bot kept responding normally with zero memory
+    persistence and the Watchdog reported healthy indefinitely. The check
+    must now report unhealthy when the store is None.
+    """
+
+    def test_memory_store_check_reports_unhealthy_when_store_is_none(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                mock_agent_runtime_cls.return_value._memory_store = None
+
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+                assert result.exit_code == 0
+                registered = {
+                    call.args[0]: call.args[1]
+                    for call in mock_watchdog_cls.return_value.register.call_args_list
+                }
+                check_fn = registered["memory_store"]
+
+                assert check_fn() is False
+
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+    def test_memory_store_check_reports_healthy_when_store_works(self, runner: CliRunner):
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+
+            call_count = [0]
+
+            def fake_sleep(t):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                elif call_count[0] > 5:
+                    raise SystemExit(0)
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime") as mock_agent_runtime_cls,
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("time.sleep", side_effect=fake_sleep),
+                patch("yaml.safe_load", return_value={}),
+                patch("missy.agent.watchdog.Watchdog") as mock_watchdog_cls,
+            ):
+                mock_store = MagicMock()
+                mock_agent_runtime_cls.return_value._memory_store = mock_store
+
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+                assert result.exit_code == 0
+                registered = {
+                    call.args[0]: call.args[1]
+                    for call in mock_watchdog_cls.return_value.register.call_args_list
+                }
+                check_fn = registered["memory_store"]
+
+                assert check_fn() is True
+                mock_store.get_session_turns.assert_called_once_with(
+                    "watchdog-healthcheck", limit=1
+                )
+
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestGatewayStartAgentRuntimeShutdown:
     """Regression: AgentRuntime.shutdown() (which stops the SleeptimeWorker
     background daemon thread cleanly) had zero call sites anywhere in the

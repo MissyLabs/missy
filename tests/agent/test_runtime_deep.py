@@ -2818,3 +2818,31 @@ class TestSleeptimeWiring:
 
         leaked = [t for t in threading.enumerate() if t.name == "missy-sleeptime"]
         assert leaked == [], f"{len(leaked)} sleeptime thread(s) leaked across tests"
+
+
+class TestMakeMemoryStoreFailureLogging:
+    """Regression test for the 5th tool-specific validation run's OPS-011
+    finding: _make_memory_store() previously swallowed a construction
+    failure (permissions, disk full, corruption) with a bare `except
+    Exception: return None` and zero logging -- combined with Watchdog's
+    check treating None as "nothing to monitor", this let the entire
+    memory subsystem silently disable itself for a process's whole
+    lifetime with no operator-visible symptom at all. Construction
+    failure must now be logged at ERROR."""
+
+    def test_construction_failure_logs_error_and_returns_none(self, caplog):
+        import logging
+
+        with (
+            patch(
+                "missy.memory.sqlite_store.SQLiteMemoryStore",
+                side_effect=OSError("unable to open database file"),
+            ),
+            caplog.at_level(logging.ERROR, logger="missy.agent.runtime"),
+        ):
+            result = AgentRuntime._make_memory_store()
+
+        assert result is None
+        assert any(
+            "Failed to construct memory store" in record.message for record in caplog.records
+        )

@@ -2447,7 +2447,17 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     def _check_memory_store() -> bool:
         store = getattr(_agent, "_memory_store", None)
         if store is None:
-            return True  # no memory store configured; nothing to monitor
+            # AgentRuntime._make_memory_store() always attempts
+            # construction -- there is no config path that intentionally
+            # disables memory -- so a None store here can only mean
+            # construction failed (permissions, disk full, corruption).
+            # The 5th tool-specific validation run found this previously
+            # returned True ("nothing to monitor"), which silently masked
+            # a genuine startup failure for the rest of the process's
+            # lifetime: no audit event, no ERROR log, the bot kept
+            # responding normally with zero memory persistence and the
+            # Watchdog reported healthy indefinitely.
+            return False
         store.get_session_turns("watchdog-healthcheck", limit=1)
         return True
 

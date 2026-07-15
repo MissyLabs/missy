@@ -10,7 +10,11 @@ Example::
     from missy.agent.prompt_patches import PromptPatchManager, PatchType
 
     mgr = PromptPatchManager()
-    mgr.propose(PatchType.TOOL_USAGE_HINT, "Always verify file paths before writing.", confidence=0.9)
+    # Note: TOOL_USAGE_HINT/DOMAIN_KNOWLEDGE/STYLE_PREFERENCE patches with
+    # confidence >= 0.8 auto-approve immediately (see propose()) -- use
+    # WORKFLOW_PATTERN or ERROR_AVOIDANCE (as below) to see a patch land
+    # in PROPOSED status for manual `missy patches approve/reject` review.
+    mgr.propose(PatchType.WORKFLOW_PATTERN, "Batch independent subtasks into one delegate_task call.", confidence=0.9)
     print(mgr.build_patch_prompt())
 """
 
