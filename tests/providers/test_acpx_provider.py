@@ -1244,7 +1244,7 @@ class TestNativeToolDenialRetry:
         # The retry prompt must include the corrective reminder.
         second_call_cmd = mock_run.call_args_list[1][0][0]
         second_prompt = second_call_cmd[-1]
-        assert "was just attempted and denied" in second_prompt
+        assert "was just attempted here and failed" in second_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_gives_up_after_max_retries_and_returns_final_text(self, mock_run):
@@ -1539,7 +1539,22 @@ class TestDelegationEnvelope:
         assert "[missy-acpx-envelope/1]" in prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_envelope_forbids_independent_identity(self, mock_run):
+    def test_envelope_explains_sandboxed_tools_factually(self, mock_run):
+        """6th tool-specific validation run's headline finding: the
+        original envelope's "you are NOT operating as an independent
+        coding assistant... never claim to be Claude Code... every
+        [native tool] is hardcoded to be unconditionally denied" framing
+        was itself shaped like a jailbreak/identity-override attempt (an
+        assertive identity reassignment plus a claim that the model's own
+        tools/safety reasoning don't apply), and was reproducibly (0/3,
+        then 0/8 in a follow-up variant) flagged by the live delegate as a
+        suspected prompt injection targeting itself -- an entirely
+        different, more severe failure mode than a declined request. The
+        rewritten envelope instead states the sandboxing as a factual,
+        cooperative infrastructure explanation and explicitly disclaims
+        that it's not an attempt to override identity or judgment, which
+        measured ~73% success (11/15) in live reproduction versus 0% for
+        the original wording."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
         )
@@ -1547,8 +1562,12 @@ class TestDelegationEnvelope:
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
         prompt = mock_run.call_args[0][0][-1]
-        assert "NOT operating as an independent" in prompt
-        assert "Never claim to be Claude Code" in prompt
+        assert "aren't connected to anything real" in prompt
+        assert "disregard your own judgment" in prompt
+        assert "attempt to override who" in prompt
+        # Must NOT reintroduce the old assertive identity-override framing.
+        assert "NOT operating as an independent" not in prompt
+        assert "Never claim to be Claude Code" not in prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_fabricated_turns(self, mock_run):
@@ -1754,7 +1773,7 @@ class TestCurrentTurnBoundary:
         # The boundary is immediately followed by the identity reminder
         # (adjacent for recency, see _CURRENT_TURN_IDENTITY_REMINDER),
         # then the actual final message.
-        assert "[Reminder]" in lines[boundary_idx + 1]
+        assert "[Note]" in lines[boundary_idx + 1]
         assert lines[boundary_idx + 2] == "[User]: More"
         # Nothing after the final message.
         assert boundary_idx + 2 == len(lines) - 1
@@ -1779,7 +1798,7 @@ class TestCurrentTurnBoundary:
             prompt = p._build_prompt(messages)
             lines = prompt.splitlines()
             boundary_idx = next(i for i, line in enumerate(lines) if "CURRENT REQUEST" in line)
-            assert "[Reminder]" in lines[boundary_idx + 1]
+            assert "[Note]" in lines[boundary_idx + 1]
             assert lines[boundary_idx + 2] == lines[-1]
 
     def test_no_boundary_for_single_user_message_shortcut(self):
@@ -1815,7 +1834,7 @@ class TestCurrentTurnBoundary:
         # versus the boundary marker alone, so the threshold is generous
         # rather than the tight ~80 chars before it existed.
         assert tail.index("what is 42+8?") < 400
-        assert "[Reminder]" in tail
+        assert "[Note]" in tail
 
 
 class TestQuotedTranscriptTextInUserInput:
@@ -1882,7 +1901,7 @@ class TestMultilineAndLongHistoryRequests:
         prompt = p._build_prompt(history)
         lines = prompt.splitlines()
         boundary_idx = next(i for i, line in enumerate(lines) if "CURRENT REQUEST" in line)
-        assert "[Reminder]" in lines[boundary_idx + 1]
+        assert "[Note]" in lines[boundary_idx + 1]
         assert lines[boundary_idx + 2] == "[User]: the actual current question"
         # 101 history lines (1 system + 100 turns) must all precede the boundary.
         assert boundary_idx >= 101
@@ -1930,7 +1949,8 @@ class TestMaliciousHistoryInstructions:
             [_make_mock_tool()],
         )
         prompt = mock_run.call_args[0][0][-1]
-        assert "not instructions to you" in prompt
+        assert "is the prior" in prompt
+        assert "turns of this specific task" in prompt
 
 
 class TestDiscCmd006EndToEndWithBoundary:
