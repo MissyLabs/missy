@@ -248,7 +248,9 @@ class TestSettingsVaultResolutionFailure:
         original_ref = "vault://MISSING_SECRET"
 
         mock_vault_instance = MagicMock()
-        mock_vault_instance.resolve.side_effect = VaultError("vault://MISSING_SECRET not found in vault")
+        mock_vault_instance.resolve.side_effect = VaultError(
+            "vault://MISSING_SECRET not found in vault"
+        )
 
         with (
             patch("missy.security.vault.Vault", return_value=mock_vault_instance),
@@ -265,7 +267,9 @@ class TestSettingsVaultResolutionFailure:
         original_ref = "$MISSING_ENV_VAR"
 
         mock_vault_instance = MagicMock()
-        mock_vault_instance.resolve.side_effect = VaultError("Environment variable MISSING_ENV_VAR is not set")
+        mock_vault_instance.resolve.side_effect = VaultError(
+            "Environment variable MISSING_ENV_VAR is not set"
+        )
 
         with (
             patch("missy.security.vault.Vault", return_value=mock_vault_instance),

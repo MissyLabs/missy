@@ -428,10 +428,14 @@ class TestManagerPauseResumePersistence:
         m2.start()
         ap_job = m2._scheduler.get_job(job.id)
         assert ap_job is not None, "Paused job must still be registered with APScheduler on reload"
-        assert ap_job.next_run_time is None, "Re-registered paused job must not be scheduled to fire"
+        assert ap_job.next_run_time is None, (
+            "Re-registered paused job must not be scheduled to fire"
+        )
         m2.resume_job(job.id)
         resumed_ap_job = m2._scheduler.get_job(job.id)
-        assert resumed_ap_job.next_run_time is not None, "resume_job() must reschedule the job to fire"
+        assert resumed_ap_job.next_run_time is not None, (
+            "resume_job() must reschedule the job to fire"
+        )
         m2.stop()
 
 

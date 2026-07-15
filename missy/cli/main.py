@@ -876,7 +876,7 @@ def schedule() -> None:
     "--timezone",
     "job_timezone",
     default="",
-    help="IANA timezone string for the schedule (e.g. \"America/New_York\").",
+    help='IANA timezone string for the schedule (e.g. "America/New_York").',
 )
 @click.pass_context
 def schedule_add(
@@ -918,9 +918,7 @@ def schedule_add(
         if backoff_seconds
         else None
     )
-    parsed_retry_on = (
-        [x.strip() for x in retry_on.split(",") if x.strip()] if retry_on else None
-    )
+    parsed_retry_on = [x.strip() for x in retry_on.split(",") if x.strip()] if retry_on else None
 
     try:
         mgr.start()

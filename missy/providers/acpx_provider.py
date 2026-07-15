@@ -921,8 +921,7 @@ class AcpxProvider(BaseProvider):
             return False
         if not _ACP_BRIDGE_SCRIPT_PATH.is_file():
             logger.error(
-                "acp_bridge.mjs not found at %s; refusing to mark provider "
-                "available.",
+                "acp_bridge.mjs not found at %s; refusing to mark provider available.",
                 _ACP_BRIDGE_SCRIPT_PATH,
             )
             self._emit_event("", "", "error", "acp_bridge.mjs missing")
@@ -1236,7 +1235,9 @@ class AcpxProvider(BaseProvider):
                 bridge_error = self._extract_bridge_error(last_line)
                 stderr = proc.stderr.read() if proc.stderr else ""
                 detail = bridge_error or stderr.strip()[:500]
-                raise ProviderError(f"acp_bridge stream exited with code {proc.returncode}: {detail}")
+                raise ProviderError(
+                    f"acp_bridge stream exited with code {proc.returncode}: {detail}"
+                )
         except ProviderError:
             raise
         except Exception as exc:
@@ -1478,7 +1479,6 @@ class AcpxProvider(BaseProvider):
             return stdout.strip()
 
         return ""
-
 
     @staticmethod
     def _extract_text_from_event(event: dict) -> str:
