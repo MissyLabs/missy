@@ -77,10 +77,38 @@ async function main() {
   const { cwd, systemPrompt, prompt, timeoutMs } = request;
   const effectiveTimeout = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : 120000;
 
+  // detached: true makes this the leader of its own process group (setsid),
+  // rather than a plain child of this script's own process. `npx` does not
+  // exec-replace itself with the resolved `claude-agent-acp` binary -- it
+  // spawns it as a genuine child process, which in turn spawns the actual
+  // `claude` CLI as a further child. A plain agentProcess.kill() only
+  // signals the immediate npx PID, leaving both descendant levels running
+  // as orphans (reparented to init) the instant npx itself exits -- exactly
+  // the leaked `claude`/`claude-agent-acp` process pairs observed piling up
+  // in production. Killing the whole group via a negative PID (see
+  // killAgentProcessGroup below) is required to actually stop the tree.
   const agentProcess = spawn(AGENT_COMMAND, AGENT_ARGS, {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
   });
+
+  function killAgentProcessGroup(signal = "SIGKILL") {
+    if (agentProcess.pid == null) return;
+    try {
+      // Negative PID signals the whole process group (only valid because
+      // detached: true made agentProcess its own group leader above).
+      process.kill(-agentProcess.pid, signal);
+    } catch {
+      // ESRCH (already exited) or some other reason the group signal
+      // failed -- fall back to at least killing the immediate process.
+      try {
+        agentProcess.kill(signal);
+      } catch {
+        // Already gone; nothing left to clean up.
+      }
+    }
+  }
 
   let stderrBuf = "";
   agentProcess.stderr.on("data", (d) => {
@@ -148,7 +176,7 @@ async function main() {
     ok = false;
     errorMessage = `${err.message}${stderrBuf ? ` (stderr: ${stderrBuf.slice(0, 2000)})` : ""}`;
   } finally {
-    agentProcess.kill();
+    killAgentProcessGroup();
   }
 
   if (ok) {
