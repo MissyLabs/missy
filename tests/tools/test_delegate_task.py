@@ -122,3 +122,15 @@ class TestSchema:
         schema = tool.get_schema()
         assert schema["name"] == "delegate_task"
         assert "prompt" in schema["parameters"]["required"]
+
+    def test_description_encourages_batching_into_one_call(self, tool):
+        """Regression test for the 5th tool-specific validation run's
+        TDEEP-015 finding: 6 independent subtasks ran in a perfectly
+        serial 3-second chain instead of exercising MAX_CONCURRENT's
+        real 3-way parallelism, because the calling model issued 6
+        separate single-subtask delegate_task calls rather than one call
+        listing all 6. The tool description must explicitly steer the
+        model toward batching independent subtasks into one call."""
+        schema = tool.get_schema()
+        assert "one call" in schema["description"].lower()
+        assert "concurrent" in schema["parameters"]["properties"]["prompt"]["description"].lower()

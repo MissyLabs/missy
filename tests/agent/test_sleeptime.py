@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from missy.agent.sleeptime import (
     SLEEPTIME_CYCLE_COMPLETE,
@@ -17,6 +19,19 @@ from missy.agent.sleeptime import (
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_playbook():
+    """Prevent _process_cycle()'s playbook-promotion check (added for the
+    5th tool-specific validation run's OPS-014 fix) from touching the real
+    user's ~/.missy/playbook.json during any test in this file. Returns a
+    MagicMock whose get_promotable() defaults to an empty list, so every
+    pre-existing test's behavior/assertions are unaffected unless a test
+    explicitly overrides the mock."""
+    with patch("missy.agent.playbook.Playbook") as mock_cls:
+        mock_cls.return_value.get_promotable.return_value = []
+        yield mock_cls
 
 
 def _make_turn(
@@ -200,6 +215,83 @@ class TestIsProcessing:
 # ---------------------------------------------------------------------------
 # _process_cycle
 # ---------------------------------------------------------------------------
+
+
+class TestProcessPlaybookPromotions:
+    """Regression tests for the 5th tool-specific validation run's OPS-014
+    finding: Playbook.get_promotable()/mark_promoted() had zero production
+    callers -- real patterns accumulated genuine success counts via
+    Playbook.record() (wired into AgentRuntime's learnings-extraction
+    path), but nothing ever checked whether any crossed the promotion
+    threshold. _process_playbook_promotions() now makes that check
+    actually run."""
+
+    def _make_entry(self, pattern_id="p1", success_count=5):
+        entry = MagicMock()
+        entry.pattern_id = pattern_id
+        entry.task_type = "shell"
+        entry.description = "shell_exec succeeded"
+        entry.success_count = success_count
+        return entry
+
+    def test_marks_promotable_entries_as_promoted(self, _isolate_playbook):
+        entry = self._make_entry()
+        _isolate_playbook.return_value.get_promotable.return_value = [entry]
+
+        worker = SleeptimeWorker(config=SleeptimeConfig())
+        worker._process_playbook_promotions()
+
+        _isolate_playbook.return_value.mark_promoted.assert_called_once_with("p1")
+
+    def test_noop_when_nothing_promotable(self, _isolate_playbook):
+        _isolate_playbook.return_value.get_promotable.return_value = []
+
+        worker = SleeptimeWorker(config=SleeptimeConfig())
+        worker._process_playbook_promotions()
+
+        _isolate_playbook.return_value.mark_promoted.assert_not_called()
+
+    def test_independent_of_memory_store(self, _isolate_playbook):
+        """Playbook is its own JSON-backed store, unrelated to the
+        conversation memory_store this worker otherwise processes -- the
+        promotion check must run even when memory_store is None."""
+        entry = self._make_entry()
+        _isolate_playbook.return_value.get_promotable.return_value = [entry]
+
+        worker = SleeptimeWorker(config=SleeptimeConfig(), memory_store=None)
+        worker._process_cycle()
+
+        _isolate_playbook.return_value.mark_promoted.assert_called_once_with("p1")
+
+    def test_publishes_audit_event_per_promotable_entry(self, _isolate_playbook):
+        entry = self._make_entry(pattern_id="p2", success_count=7)
+        _isolate_playbook.return_value.get_promotable.return_value = [entry]
+
+        with patch("missy.core.events.event_bus") as mock_bus:
+            worker = SleeptimeWorker(config=SleeptimeConfig())
+            worker._process_playbook_promotions()
+
+        mock_bus.publish.assert_called_once()
+        (event,), _ = mock_bus.publish.call_args
+        assert event.event_type == "playbook.pattern_promotable"
+        assert event.detail["pattern_id"] == "p2"
+        assert event.detail["success_count"] == 7
+
+    def test_get_promotable_exception_does_not_crash_cycle(self, _isolate_playbook):
+        _isolate_playbook.return_value.get_promotable.side_effect = Exception("boom")
+
+        worker = SleeptimeWorker(config=SleeptimeConfig())
+        # Should not raise.
+        worker._process_playbook_promotions()
+
+    def test_mark_promoted_exception_does_not_crash_cycle(self, _isolate_playbook):
+        entry = self._make_entry()
+        _isolate_playbook.return_value.get_promotable.return_value = [entry]
+        _isolate_playbook.return_value.mark_promoted.side_effect = Exception("boom")
+
+        worker = SleeptimeWorker(config=SleeptimeConfig())
+        # Should not raise.
+        worker._process_playbook_promotions()
 
 
 class TestProcessCycle:

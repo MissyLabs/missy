@@ -1415,6 +1415,54 @@ class TestRuntimeSaveTurn:
         assert turn.content == "reply"
         assert turn.provider == "fake"
 
+    def test_save_turn_registers_session(self):
+        """Regression test for the 5th tool-specific validation run's
+        OPS-012 finding: register_session() (the only thing that
+        populates the `sessions` metadata table list_sessions() reads
+        from) had zero production callers, so every real session was
+        invisible to `missy sessions list` and to SleeptimeWorker's
+        idle-consolidation eligibility check. _save_turn() must call it
+        on every turn, alongside add_turn()."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            good_store = MagicMock()
+            runtime._memory_store = good_store
+
+            runtime._save_turn("s1", "assistant", "reply", provider="fake")
+
+        good_store.register_session.assert_called_once_with("s1", provider="fake")
+
+    def test_save_turn_tolerates_store_without_register_session(self):
+        """A memory-store backend with no register_session() at all (e.g.
+        a minimal test double) must not break turn saving."""
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=reg):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+
+            class MinimalStore:
+                def __init__(self):
+                    self.turns = []
+
+                def add_turn(self, turn):
+                    self.turns.append(turn)
+
+            store = MinimalStore()
+            runtime._memory_store = store
+
+            # Should not raise
+            runtime._save_turn("s1", "user", "hello")
+
+        assert len(store.turns) == 1
+
     def test_save_turn_failure_emits_audit_event(self):
         from missy.agent.runtime import AgentConfig, AgentRuntime
 
