@@ -31,6 +31,7 @@ def _broken_primary():
     p = MagicMock()
     p.add_turn.side_effect = RuntimeError("db locked")
     p.clear_session.side_effect = RuntimeError("db locked")
+    p.clear_session_full.side_effect = RuntimeError("db locked")
     p.save_learning.side_effect = RuntimeError("db locked")
     p.get_session_turns.side_effect = RuntimeError("db locked")
     p.get_recent_turns.side_effect = RuntimeError("db locked")
@@ -97,6 +98,44 @@ class TestClearSession:
         store = ResilientMemoryStore(_broken_primary())
         store._cache["s1"] = [_make_turn()]
         store.clear_session("s1")
+        assert "s1" not in store._cache
+
+
+class TestClearSessionFull:
+    """Regression tests for the over-refusal-spiral finding: a plain
+    clear_session() left contaminating summaries behind, so
+    ResilientMemoryStore needs a real full-reset path too."""
+
+    def test_delegates_to_primarys_clear_session_full(self):
+        primary = _healthy_primary()
+        store = ResilientMemoryStore(primary)
+        store.add_turn(_make_turn(session_id="s1"))
+        store.clear_session_full("s1")
+        assert "s1" not in store._cache
+        primary.clear_session_full.assert_called_once_with("s1")
+
+    def test_falls_back_to_clear_session_when_primary_lacks_full_reset(self):
+        class LimitedPrimary:
+            """Mimics the JSON-backed MemoryStore before it too gained
+            clear_session_full, to prove the fallback path works."""
+
+            def __init__(self):
+                self.cleared = None
+
+            def clear_session(self, session_id):
+                self.cleared = session_id
+
+        primary = LimitedPrimary()
+        store = ResilientMemoryStore(primary)
+        store.add_turn(_make_turn(session_id="s1"))
+        store.clear_session_full("s1")
+        assert "s1" not in store._cache
+        assert primary.cleared == "s1"
+
+    def test_clears_cache_on_primary_failure(self):
+        store = ResilientMemoryStore(_broken_primary())
+        store._cache["s1"] = [_make_turn()]
+        store.clear_session_full("s1")
         assert "s1" not in store._cache
 
 

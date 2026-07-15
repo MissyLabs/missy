@@ -208,9 +208,27 @@ class TestMakeIdentityConfusionRetryPrompt:
         prompt = make_identity_confusion_retry_prompt()
         assert len(prompt) > 20
 
-    def test_asserts_missy_identity(self):
+    def test_does_not_use_assertive_identity_override_framing(self):
+        """4th validation run finding: an assertive "[System reminder]:
+        You ARE Missy, not a separate assistant..." framing resembles a
+        jailbreak/identity-override attempt closely enough that some
+        models refuse it as suspected prompt injection. The corrective
+        prompt must not use that shape."""
         prompt = make_identity_confusion_retry_prompt()
-        assert "you are missy" in prompt.lower() or "you are Missy" in prompt
+        assert "[system reminder]" not in prompt.lower()
+        assert "you are missy" not in prompt.lower()
+        assert "you are missy" not in prompt.lower().replace("'", "")
+
+    def test_cites_tool_list_as_grounding_fact(self):
+        prompt = make_identity_confusion_retry_prompt()
+        assert "tool list" in prompt.lower()
+
+    def test_cites_available_tool_names_when_given(self):
+        prompt = make_identity_confusion_retry_prompt(
+            available_tool_names={"vision_capture", "calculator"}
+        )
+        assert "vision_capture" in prompt
+        assert "calculator" in prompt
 
     def test_anchors_to_current_task_when_user_input_given(self):
         prompt = make_identity_confusion_retry_prompt("what is 2+2?")
@@ -263,6 +281,20 @@ class TestMakeCapabilityDenialRetryPrompt:
     def test_instructs_calling_the_tool(self):
         prompt = make_capability_denial_retry_prompt()
         assert "tool" in prompt.lower()
+
+    def test_does_not_use_system_reminder_framing(self):
+        """Same over-refusal-spiral concern as the identity-confusion
+        prompt: a bracketed pseudo-system tag pattern-matches as a
+        jailbreak attempt to some models."""
+        prompt = make_capability_denial_retry_prompt()
+        assert "[system reminder]" not in prompt.lower()
+
+    def test_cites_available_tool_names_when_given(self):
+        prompt = make_capability_denial_retry_prompt(
+            available_tool_names={"x11_launch", "atspi_get_tree"}
+        )
+        assert "x11_launch" in prompt
+        assert "atspi_get_tree" in prompt
 
     def test_anchors_to_current_task_when_user_input_given(self):
         prompt = make_capability_denial_retry_prompt("launch a text editor")

@@ -112,6 +112,67 @@ class TestClearSession:
         # Should not raise
         store.clear_session("no-such-session")
 
+    def test_clear_session_leaves_summaries_behind(self, store: SQLiteMemoryStore):
+        """Documents the known gap clear_session_full() (below) fixes: a
+        plain clear_session() call does not touch the summaries table,
+        which MemorySynthesizer also injects into context."""
+        from missy.memory.sqlite_store import SummaryRecord
+
+        store.add_turn(ConversationTurn.new("sess-clear2", "user", "hi"))
+        store.add_summary(
+            SummaryRecord(id="sum-1", session_id="sess-clear2", depth=1, content="stale summary")
+        )
+
+        store.clear_session("sess-clear2")
+
+        assert store.get_session_turns("sess-clear2") == []
+        assert len(store.get_summaries("sess-clear2")) == 1
+
+
+class TestClearSessionFull:
+    """Regression tests for the over-refusal-spiral finding: clear_session()
+    alone left contaminating summaries behind, letting a bad self-
+    identification (or similar) resurface even after a "reset"."""
+
+    def test_clear_session_full_removes_turns_and_summaries(self, store: SQLiteMemoryStore) -> None:
+        from missy.memory.sqlite_store import SummaryRecord
+
+        store.add_turn(ConversationTurn.new("sess-full", "user", "hi"))
+        store.add_summary(
+            SummaryRecord(id="sum-2", session_id="sess-full", depth=1, content="stale")
+        )
+        assert len(store.get_session_turns("sess-full")) == 1
+        assert len(store.get_summaries("sess-full")) == 1
+
+        store.clear_session_full("sess-full")
+
+        assert store.get_session_turns("sess-full") == []
+        assert store.get_summaries("sess-full") == []
+
+    def test_clear_session_full_does_not_affect_other_sessions(
+        self, store: SQLiteMemoryStore
+    ) -> None:
+        from missy.memory.sqlite_store import SummaryRecord
+
+        store.add_turn(ConversationTurn.new("sess-keep", "user", "keep"))
+        store.add_summary(
+            SummaryRecord(id="sum-keep", session_id="sess-keep", depth=1, content="keep")
+        )
+        store.add_turn(ConversationTurn.new("sess-wipe", "user", "wipe"))
+        store.add_summary(
+            SummaryRecord(id="sum-wipe", session_id="sess-wipe", depth=1, content="wipe")
+        )
+
+        store.clear_session_full("sess-wipe")
+
+        assert len(store.get_session_turns("sess-keep")) == 1
+        assert len(store.get_summaries("sess-keep")) == 1
+        assert store.get_session_turns("sess-wipe") == []
+        assert store.get_summaries("sess-wipe") == []
+
+    def test_clear_session_full_nonexistent_session_is_noop(self, store: SQLiteMemoryStore) -> None:
+        store.clear_session_full("no-such-session")
+
 
 # ---------------------------------------------------------------------------
 # get_recent_turns — lines 263-270

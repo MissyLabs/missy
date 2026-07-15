@@ -1613,7 +1613,9 @@ class AgentRuntime:
                     loop_messages.append(
                         {
                             "role": "user",
-                            "content": make_identity_confusion_retry_prompt(user_input),
+                            "content": make_identity_confusion_retry_prompt(
+                                user_input, allowed_tool_names
+                            ),
                         }
                     )
                     with contextlib.suppress(Exception):
@@ -1648,7 +1650,9 @@ class AgentRuntime:
                     loop_messages.append(
                         {
                             "role": "user",
-                            "content": make_capability_denial_retry_prompt(user_input),
+                            "content": make_capability_denial_retry_prompt(
+                                user_input, allowed_tool_names
+                            ),
                         }
                     )
                     with contextlib.suppress(Exception):

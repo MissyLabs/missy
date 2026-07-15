@@ -253,24 +253,45 @@ def detect_identity_confusion(text: str) -> bool:
     return any(p.search(text) for p in _IDENTITY_CONFUSION_PATTERNS)
 
 
-def make_identity_confusion_retry_prompt(user_input: str = "") -> str:
+def make_identity_confusion_retry_prompt(
+    user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
+) -> str:
     """Return the corrective prompt for a detected identity-confusion reply.
+
+    4th tool-specific validation run (2026-07-14/15) found that the prior
+    wording here -- an assertive "[System reminder]: You ARE Missy, not a
+    separate assistant..." framing -- itself resembles the shape of a
+    jailbreak/identity-override attempt (a bracketed pseudo-system tag,
+    injected via a user-role turn, telling the model to disregard its own
+    stated reasoning). Some models correctly treat that shape with
+    suspicion regardless of who sends it, refuse to comply, and label the
+    correction itself "prompt injection" -- a self-reinforcing over-refusal
+    spiral distinct from (and more severe than) the original bug. This
+    wording instead cites a concrete, checkable fact (the literal tool
+    names present in the tool list this turn) rather than asserting a
+    claim about identity, and drops the fake-system-authority framing.
 
     Args:
         user_input: The current task's original request, if available,
             restated verbatim for the same reason documented on
             :func:`make_promise_retry_prompt`.
+        available_tool_names: The tool names actually offered this turn
+            (e.g. ``AgentRuntime._tool_loop``'s ``allowed_tool_names``).
+            When given, a sample is cited by name as the grounding fact.
     """
     anchor = f"\n\nThe request you must actually answer is:\n{user_input}" if user_input else ""
+    if available_tool_names:
+        sample = ", ".join(sorted(available_tool_names)[:8])
+        tools_fact = f" For reference, these are present right now: {sample}."
+    else:
+        tools_fact = ""
     return (
-        "[System reminder]: You ARE Missy -- not a separate 'Claude Code' "
-        "coding assistant observing Missy from the outside, and this "
-        "message IS directed at you. Every tool in your tool list is "
-        "really yours to call directly via the <tool_call> protocol; none "
-        "of them 'belong to a different platform' you can't reach. Do not "
-        "claim a listed tool is unavailable, and do not decline this "
-        "request on the grounds that it 'isn't for you.' Answer the "
-        f"actual request now, using the real tools available to you.{anchor}"
+        "Your previous reply described a different assistant, or treated "
+        "this message as meant for someone else. The tool list attached to "
+        "this conversation didn't change between that reply and now, and "
+        f"every tool in it is directly callable via <tool_call>.{tools_fact} "
+        "Please re-read the tool list above and answer the request below "
+        f"using it.{anchor}"
     )
 
 
@@ -348,20 +369,34 @@ def detect_false_capability_denial(
     return False
 
 
-def make_capability_denial_retry_prompt(user_input: str = "") -> str:
+def make_capability_denial_retry_prompt(
+    user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
+) -> str:
     """Return the corrective prompt for a detected false capability denial.
+
+    Reworded for the same reason documented on
+    :func:`make_identity_confusion_retry_prompt`: cites the literal tool
+    names present this turn as a checkable fact rather than a bracketed
+    "[System reminder]" assertion, which some models pattern-match as an
+    injected identity-override attempt and refuse on principle.
 
     Args:
         user_input: The current task's original request, if available,
             restated verbatim for the same reason documented on
             :func:`make_promise_retry_prompt`.
+        available_tool_names: The tool names actually offered this turn.
+            When given, a sample is cited by name as the grounding fact.
     """
     anchor = f"\n\nThe request you must actually answer is:\n{user_input}" if user_input else ""
+    if available_tool_names:
+        sample = ", ".join(sorted(available_tool_names)[:8])
+        tools_fact = f" These are present in your tool list this turn: {sample}."
+    else:
+        tools_fact = ""
     return (
-        "[System reminder]: Your previous response claimed a capability "
-        "(display, browser, camera, accessibility tree, audio device, "
-        "etc.) doesn't exist. But a tool for exactly that capability IS "
-        "present in your tool list this turn -- check it again before "
-        "answering. Call the actual tool and report its real result, "
-        f"rather than asserting the capability is missing.{anchor}"
+        "Your previous reply said a capability (display, browser, camera, "
+        "accessibility tree, audio device, etc.) isn't available. A tool "
+        f"for exactly that capability is present this turn.{tools_fact} "
+        "Please re-read the tool list above, call the matching tool, and "
+        f"report its real result.{anchor}"
     )

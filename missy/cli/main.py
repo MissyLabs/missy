@@ -371,6 +371,27 @@ def _print_success(message: str) -> None:
     console.print(Panel(message, title="[green]Success[/]", border_style="green", expand=False))
 
 
+def _ensure_tool_registry():
+    """Return the process-level ToolRegistry, bootstrapping it if needed.
+
+    Standalone CLI commands (e.g. `missy tools benchmark run`) run in a
+    fresh process that never goes through the main agent-construction path
+    (`gateway_start`/`ask`/`run`), which is the only place that otherwise
+    calls init_tool_registry() + register_builtin_tools(). Without this,
+    get_tool_registry() always raises "not initialised".
+    """
+    from missy.tools.registry import get_tool_registry, init_tool_registry
+
+    try:
+        return get_tool_registry()
+    except RuntimeError:
+        from missy.tools.builtin import register_builtin_tools
+
+        registry = init_tool_registry()
+        register_builtin_tools(registry)
+        return registry
+
+
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
@@ -4669,17 +4690,13 @@ def security_scan(
 
     config_path = ctx.obj["config_path"]
 
-    # Attempt to load the config without requiring it to succeed — the scanner
-    # handles missing/malformed configs gracefully.
-    loaded_config = None
-    try:
-        from missy.config.settings import load_config
-
-        loaded_config = load_config(str(Path(config_path).expanduser()))
-    except Exception:
-        pass  # Scanner will emit SEC-000 finding
-
-    scanner = SecurityScanner(config=loaded_config, config_path=config_path)
+    # Let the scanner lazily load the config itself (scan_all() handles a
+    # missing/malformed file by emitting a SEC-000 finding rather than
+    # raising). Pre-loading it here and passing it in via `config=` would
+    # skip SecurityScanner's own _load_raw_provider_keys() step, which is
+    # what lets SEC-002/SEC-060 correctly exempt "vault://KEY" references
+    # from being flagged as plaintext secrets.
+    scanner = SecurityScanner(config_path=config_path)
     result = scanner.scan_all()
 
     # Apply severity filter
@@ -6337,9 +6354,8 @@ def benchmark_run(
     Results are persisted by default; pass --no-persist to skip.
     """
     from missy.tools.benchmark.runner import BenchmarkRunner
-    from missy.tools.registry import get_tool_registry
 
-    registry = get_tool_registry()
+    registry = _ensure_tool_registry()
     tool = registry.get(tool_name)
     if tool is None:
         _print_error(
@@ -6454,13 +6470,8 @@ def benchmark_run_llm(
     permissions).
     """
     from missy.tools.benchmark import LLMBenchmarkRunner, LLMBenchmarkTask, MockToolProvider
-    from missy.tools.registry import get_tool_registry
 
-    try:
-        registry = get_tool_registry()
-    except RuntimeError as exc:
-        _print_error(str(exc))
-        raise SystemExit(1) from None
+    registry = _ensure_tool_registry()
     tool = registry.get(tool_name)
     if tool is None:
         _print_error(

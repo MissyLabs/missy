@@ -108,6 +108,9 @@ class ResilientMemoryStore:
     def clear_session(self, session_id: str) -> None:
         """Remove all turns for *session_id* from cache and primary.
 
+        Note this does not clear persisted summaries -- see
+        :meth:`clear_session_full` for a genuine full reset.
+
         Args:
             session_id: The session whose turns should be deleted.
         """
@@ -115,6 +118,29 @@ class ResilientMemoryStore:
             self._cache.pop(session_id, None)
         try:
             self._primary.clear_session(session_id)
+            self._on_success()
+        except Exception as exc:
+            self._on_failure(exc)
+
+    def clear_session_full(self, session_id: str) -> None:
+        """Remove all turns AND all summaries for *session_id*.
+
+        Falls back to :meth:`clear_session` when the primary store has no
+        ``clear_session_full`` of its own (e.g. the plain JSON-backed
+        :class:`~missy.memory.store.MemoryStore`, which has no summaries
+        table to begin with).
+
+        Args:
+            session_id: The session to fully reset.
+        """
+        with self._lock:
+            self._cache.pop(session_id, None)
+        try:
+            full_reset = getattr(self._primary, "clear_session_full", None)
+            if full_reset is not None:
+                full_reset(session_id)
+            else:
+                self._primary.clear_session(session_id)
             self._on_success()
         except Exception as exc:
             self._on_failure(exc)

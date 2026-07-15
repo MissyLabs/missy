@@ -163,6 +163,20 @@ class MemoryStore:
                 self._save()
         logger.debug("Cleared %d turn(s) for session %r.", removed, session_id)
 
+    def clear_session_full(self, session_id: str) -> None:
+        """Remove all turns for a given session (alias of :meth:`clear_session`).
+
+        This backend has no separate summaries table (see
+        :meth:`get_summaries`'s no-op stub above), so a full reset is
+        identical to a plain :meth:`clear_session` here. Provided for
+        interface parity with
+        :meth:`~missy.memory.sqlite_store.SQLiteMemoryStore.clear_session_full`.
+
+        Args:
+            session_id: The session to fully reset.
+        """
+        self.clear_session(session_id)
+
     def compact_session(self, session_id: str, keep_recent: int = 10) -> int:
         """Summarise and remove old turns for a session, keeping the most recent *keep_recent*.
 

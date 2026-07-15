@@ -343,6 +343,45 @@ class TestCheckConfigSecurity:
         assert "SEC-002" in ids
         assert "SEC-060" in ids
 
+    def test_sec_002_vault_ref_not_flagged_via_real_cli_command(self, tmp_path, monkeypatch):
+        """Regression test for OPS-009: the real `missy security scan` CLI
+        command pre-loaded the config with load_config() and passed it in
+        via `SecurityScanner(config=loaded_config, ...)`. That bypasses
+        SecurityScanner's own lazy-load branch (`if self.config is None`),
+        so `_load_raw_provider_keys()` never ran and every vault-referenced
+        key was flagged identically to a real plaintext mistake -- even
+        though the two constructor-level tests above already prove the
+        scanner class itself handles this correctly when only config_path
+        is passed. This exercises the actual CLI command end-to-end.
+        """
+        from click.testing import CliRunner
+
+        from missy.cli.main import cli
+
+        monkeypatch.setattr(
+            "missy.security.vault.Vault.resolve",
+            lambda self, ref: "sk-ant-actualsecretvalue1234567890",
+        )
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "providers:\n"
+            "  anthropic:\n"
+            "    model: claude-sonnet-4-6\n"
+            "    api_key: vault://ANTHROPIC_KEY\n"
+            "vault:\n"
+            "  enabled: true\n"
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--config", str(cfg_path), "security", "scan", "--json-output"],
+        )
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        ids = [f["id"] for f in payload["findings"]]
+        assert "SEC-002" not in ids
+        assert "SEC-060" not in ids
+
     def test_sec_003_old_config_version(self, tmp_path):
         cfg = _make_config(config_version=0)
         scanner = _scanner(config=cfg, tmp_path=tmp_path / ".missy")
