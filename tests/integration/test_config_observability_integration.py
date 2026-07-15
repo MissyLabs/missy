@@ -1049,8 +1049,16 @@ class TestConfigVaultReferences:
         assert cfg.providers["anthropic"].api_key == "sk-ant-resolved-secret"
         mock_vault.resolve.assert_called_once_with("vault://ANTHROPIC_API_KEY")
 
-    def test_vault_reference_silenced_when_vault_unavailable(self, tmp_path: Path) -> None:
-        """When the vault raises, the reference is passed through / left as-is."""
+    def test_vault_reference_raises_when_vault_unavailable(self, tmp_path: Path) -> None:
+        """When the vault raises, load_config fails loudly rather than silently.
+
+        VAULT-004 (6th tool-specific validation run): this previously fell
+        back to using the literal, unresolved reference string as the
+        "resolved" api_key, which would only fail later, confusingly, at
+        actual provider-API-call time with no link back to the real root
+        cause. A broken secret reference must fail clearly at config-load
+        time instead.
+        """
         cfg_path = _write_yaml(
             tmp_path,
             """
@@ -1062,12 +1070,11 @@ class TestConfigVaultReferences:
             """,
         )
 
-        with patch("missy.security.vault.Vault", side_effect=Exception("vault unavailable")):
-            # load_config must not raise — it logs and falls back gracefully.
-            cfg = load_config(str(cfg_path))
-
-        # The fallback is to return the original reference unchanged.
-        assert cfg.providers["anthropic"].api_key == "vault://MISSING_KEY"
+        with (
+            patch("missy.security.vault.Vault", side_effect=Exception("vault unavailable")),
+            pytest.raises(ConfigurationError, match="MISSING_KEY"),
+        ):
+            load_config(str(cfg_path))
 
     def test_env_var_reference_resolved(self, tmp_path: Path) -> None:
         """$ENV_VAR references are resolved from the process environment."""

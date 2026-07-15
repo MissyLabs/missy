@@ -168,6 +168,7 @@ class TestWizardBacksUp:
 
     def test_wizard_backs_up_on_overwrite(self, tmp_path):
         from missy.cli.wizard import run_wizard_noninteractive
+        from missy.config.plan import list_backups
 
         config_file = tmp_path / ".missy" / "config.yaml"
         config_file.parent.mkdir(parents=True, exist_ok=True)
@@ -181,8 +182,19 @@ class TestWizardBacksUp:
             workspace=str(tmp_path / "workspace"),
         )
 
-        # Since we can't control the default backup dir in tests, just verify
-        # the config was overwritten
         assert config_file.exists()
         content = config_file.read_text()
         assert "anthropic" in content
+
+        # CFGPLAN-001 (6th tool-specific validation run): backup_config()
+        # used to default to the hardcoded, absolute ~/.missy/config.d
+        # regardless of *this* tmp_path config file's own location, so
+        # every test run silently polluted the real operator's config
+        # backup history with fake fixture content -- and could evict
+        # genuine backups out of the retained max-5 window. The backup
+        # must now land in a config.d directory alongside this tmp_path
+        # config file, not the real one.
+        backups = list_backups(config_path=config_file)
+        assert len(backups) == 1
+        assert backups[0].parent == config_file.parent / "config.d"
+        assert backups[0].read_text() == "original: content\n"

@@ -768,20 +768,36 @@ def _resolve_vault_ref(value: str | None, vault_dir: str = "~/.missy/secrets") -
     Returns the resolved secret string, or the original value unchanged
     if it is not a vault/env reference.  Returns ``None`` if *value* is
     ``None``.
+
+    Raises:
+        ConfigurationError: If *value* is a ``vault://``/``$ENV``
+            reference that fails to resolve -- a missing vault key, an
+            unset env var, or any other failure constructing/using the
+            vault (I/O error, permissions, corruption). VAULT-004 (6th
+            tool-specific validation run): this used to swallow the
+            failure in a bare ``except Exception`` and fall through to
+            returning the *literal, unresolved reference string* as if
+            it were the real secret -- a broken ``$ENV_VAR`` or
+            ``vault://KEY`` in config.yaml would silently become the
+            actual (garbage) credential value, only surfacing later and
+            confusingly as a generic provider auth failure with no
+            connection back to the real, typo'd root cause. Failing
+            loudly here at config-load time, matching
+            :meth:`Vault.resolve`'s own documented contract, is the
+            whole point of using a ``vault://``/``$ENV`` reference in
+            the first place instead of a plain string.
     """
     if not value:
         return value
     if value.startswith(("vault://", "$")):
+        from missy.security.vault import Vault
+
         try:
-            from missy.security.vault import Vault
-
             return Vault(vault_dir).resolve(value)
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).debug(
-                "Failed to resolve secret reference %r", value, exc_info=True
-            )
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Failed to resolve secret reference {value!r}: {exc}"
+            ) from exc
     return value
 
 

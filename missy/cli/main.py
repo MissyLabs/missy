@@ -838,6 +838,46 @@ def schedule() -> None:
         "to opt this specific job into unrestricted tool access."
     ),
 )
+@click.option("--description", default="", help="Optional description of the job.")
+@click.option(
+    "--max-attempts",
+    "max_attempts",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Maximum retry attempts on failure.",
+)
+@click.option(
+    "--backoff-seconds",
+    "backoff_seconds",
+    default="",
+    help='Comma-separated retry delays in seconds, e.g. "30,60,300" (default: 30,60,300).',
+)
+@click.option(
+    "--retry-on",
+    "retry_on",
+    default="",
+    help='Comma-separated error categories that trigger a retry, e.g. "network,provider_error".',
+)
+@click.option(
+    "--delete-after-run",
+    "delete_after_run",
+    is_flag=True,
+    default=False,
+    help="Remove this job after it runs once successfully.",
+)
+@click.option(
+    "--active-hours",
+    "active_hours",
+    default="",
+    help='"HH:MM-HH:MM" window; the job is skipped when it fires outside it.',
+)
+@click.option(
+    "--timezone",
+    "job_timezone",
+    default="",
+    help='IANA timezone string for the schedule (e.g. "America/New_York").',
+)
 @click.pass_context
 def schedule_add(
     ctx: click.Context,
@@ -846,6 +886,13 @@ def schedule_add(
     task: str,
     provider: str,
     capability_mode: str,
+    description: str,
+    max_attempts: int,
+    backoff_seconds: str,
+    retry_on: str,
+    delete_after_run: bool,
+    active_hours: str,
+    job_timezone: str,
 ) -> None:
     """Add a new scheduled job.
 
@@ -863,8 +910,15 @@ def schedule_add(
     from missy.core.exceptions import SchedulerError
     from missy.scheduler.manager import SchedulerManager
 
-    _load_subsystems(ctx.obj["config_path"])
-    mgr = SchedulerManager()
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    mgr = SchedulerManager(max_jobs=getattr(cfg.scheduling, "max_jobs", 0))
+
+    parsed_backoff = (
+        [int(x.strip()) for x in backoff_seconds.split(",") if x.strip()]
+        if backoff_seconds
+        else None
+    )
+    parsed_retry_on = [x.strip() for x in retry_on.split(",") if x.strip()] if retry_on else None
 
     try:
         mgr.start()
@@ -874,6 +928,13 @@ def schedule_add(
             task=task,
             provider=provider,
             capability_mode=capability_mode,
+            description=description,
+            max_attempts=max_attempts,
+            backoff_seconds=parsed_backoff,
+            retry_on=parsed_retry_on,
+            delete_after_run=delete_after_run,
+            active_hours=active_hours,
+            timezone=job_timezone,
         )
         mgr.stop()
     except ValueError as exc:
@@ -2229,6 +2290,8 @@ def _resolve_discord_pairing(
 
     resolved_key = _resolve_approvals_api_key(api_key)
     verb = "approve" if approve else "deny"
+    # APPROVAL-003: "deny" + "d" reads as "denyd", not "denied".
+    past_tense = "approved" if approve else "denied"
     url = f"http://{host}:{port}/api/v1/discord/pairing/{user_id}/{verb}"
     headers = {"X-API-Key": resolved_key} if resolved_key else {}
 
@@ -2245,7 +2308,7 @@ def _resolve_discord_pairing(
         sys.exit(1)
 
     if resp.status_code == 200:
-        _print_success(f"Discord user {user_id!r} pairing {verb}d.")
+        _print_success(f"Discord user {user_id!r} pairing {past_tense}.")
     elif resp.status_code == 404:
         _print_error(f"No pending pairing request for user {user_id!r}.")
         sys.exit(1)
@@ -2509,6 +2572,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             scheduler_manager = SchedulerManager(
                 default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
+                max_jobs=getattr(cfg.scheduling, "max_jobs", 0),
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
@@ -2566,6 +2630,14 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             _voice_safe_chat_agent.config.max_spend_usd = new_max_spend
         if scheduler_manager is not None:
             scheduler_manager._default_max_spend_usd = new_max_spend  # noqa: SLF001
+            # SCHED-003: same in-place-repoint treatment for max_jobs --
+            # read once at construction otherwise, so editing
+            # scheduling.max_jobs in config.yaml while the gateway keeps
+            # running would have no effect on this already-constructed
+            # scheduler_manager until a full restart.
+            scheduler_manager._max_jobs = getattr(  # noqa: SLF001
+                new_cfg.scheduling, "max_jobs", 0
+            )
 
     config_watcher = ConfigWatcher(
         ctx.obj["config_path"], reload_fn=_apply_config_and_refresh_runtimes
@@ -3619,6 +3691,7 @@ def vault_delete(ctx: click.Context, key: str) -> None:
             _print_success(f"Key [bold]{key}[/] deleted.")
         else:
             _print_error(f"Key {key!r} not found.")
+            sys.exit(1)
     except VaultError as exc:
         _print_error(str(exc))
         sys.exit(1)
@@ -3654,7 +3727,15 @@ def sessions_cleanup(ctx: click.Context, older_than: int, dry_run: bool) -> None
     _load_subsystems(ctx.obj["config_path"])
     store = SQLiteMemoryStore()
     if dry_run:
-        console.print(f"[dim]Dry run: would delete turns older than {older_than} days.[/]")
+        # SESSDEEP-002: run the real COUNT query rather than echoing back
+        # a hardcoded, generic message -- an operator deciding whether to
+        # commit to a real cleanup needs the actual number affected, not
+        # just their own --older-than value reflected back at them.
+        would_remove = store.cleanup(older_than_days=older_than, dry_run=True)
+        console.print(
+            f"[dim]Dry run: would delete {would_remove} conversation turn(s) "
+            f"older than {older_than} days.[/]"
+        )
         return
     removed = store.cleanup(older_than_days=older_than)
     _print_success(f"Removed {removed} conversation turn(s) older than {older_than} days.")
@@ -3795,6 +3876,10 @@ def _resolve_approval(
 
     resolved_key = _resolve_approvals_api_key(api_key)
     verb = "approve" if approve else "deny"
+    # APPROVAL-003: "deny" + "d" reads as "denyd", not "denied" -- past
+    # tense needs its own mapping, not a naive suffix on the verb used
+    # for the URL path.
+    past_tense = "approved" if approve else "denied"
     url = f"http://{host}:{port}/api/v1/approvals/{approval_id}/{verb}"
     headers = {"X-API-Key": resolved_key} if resolved_key else {}
 
@@ -3811,7 +3896,7 @@ def _resolve_approval(
         sys.exit(1)
 
     if resp.status_code == 200:
-        _print_success(f"Request {approval_id!r} {verb}d.")
+        _print_success(f"Request {approval_id!r} {past_tense}.")
     elif resp.status_code == 404:
         _print_error(f"No pending approval with id {approval_id!r}.")
         sys.exit(1)
@@ -4571,7 +4656,8 @@ def config_backups(ctx: click.Context) -> None:
     """List all config backups."""
     from missy.config.plan import list_backups
 
-    backups = list_backups()
+    config_path = ctx.obj.get("config_path", DEFAULT_CONFIG)
+    backups = list_backups(config_path=config_path)
     if not backups:
         console.print("[dim]No config backups found.[/]")
         return
@@ -4599,7 +4685,7 @@ def config_diff(ctx: click.Context) -> None:
         _print_error(f"Config file not found: {config_file}")
         sys.exit(1)
 
-    backups = list_backups()
+    backups = list_backups(config_path=config_file)
     if not backups:
         console.print("[dim]No backups to compare against.[/]")
         return
@@ -4641,7 +4727,7 @@ def config_plan(ctx: click.Context) -> None:
         console.print("[dim]No config file exists yet. Run 'missy setup' to create one.[/]")
         return
 
-    backups = list_backups()
+    backups = list_backups(config_path=config_file)
     if not backups:
         console.print("[dim]No previous backups. Current config is the baseline.[/]")
         return

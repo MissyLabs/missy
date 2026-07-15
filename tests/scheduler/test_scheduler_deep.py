@@ -502,8 +502,15 @@ class TestPauseResumePersistence:
 
         assert loaded.enabled is True
 
-    def test_paused_job_not_scheduled_on_restart(self, jobs_path: str) -> None:
-        """A disabled job must not be registered with APScheduler on reload."""
+    def test_paused_job_registered_paused_on_restart(self, jobs_path: str) -> None:
+        """SCHED-004: a disabled job must still be registered (paused, not firing) on reload.
+
+        Previously it was skipped entirely, so a separate later
+        `missy schedule resume` invocation's fresh SchedulerManager had
+        no such job in APScheduler and failed. It must now always be
+        re-registered, just paused (next_run_time is None) so it never
+        actually fires while disabled but can still be resumed.
+        """
         m1 = SchedulerManager(jobs_file=jobs_path)
         m1.start()
         job = m1.add_job("noschedule", "every 5 minutes", "t")
@@ -515,7 +522,8 @@ class TestPauseResumePersistence:
         ap_job = m2._scheduler.get_job(job.id)
         m2.stop()
 
-        assert ap_job is None, "paused job must not be re-scheduled on start"
+        assert ap_job is not None, "paused job must still be registered on restart"
+        assert ap_job.next_run_time is None, "paused job must not be scheduled to fire"
 
 
 # ---------------------------------------------------------------------------

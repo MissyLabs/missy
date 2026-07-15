@@ -326,8 +326,11 @@ class TestVaultDelete:
         mock_vault.delete.return_value = False
         with _SubsystemsPatch(), patch("missy.security.vault.Vault", return_value=mock_vault):
             result = runner.invoke(cli, ["--config", cfg_path, "vault", "delete", "GHOST"])
-        # CLI may silently handle "not found" (vault.delete returns False)
-        assert result.exit_code == 0
+        # VAULT-002: a nonexistent key must exit nonzero, matching vault_get's
+        # equivalent not-found handling, so a script checking only the exit
+        # code isn't misled into believing the deletion succeeded.
+        assert result.exit_code == 1
+        assert "not found" in result.output
 
     def test_vault_delete_vault_error_exits_one(self, runner: CliRunner):
         from missy.security.vault import VaultError
@@ -448,6 +451,13 @@ class TestScheduleAdd:
             task="Check the news",
             provider="anthropic",
             capability_mode="safe-chat",
+            description="",
+            max_attempts=3,
+            backoff_seconds=None,
+            retry_on=None,
+            delete_after_run=False,
+            active_hours="",
+            timezone="",
         )
 
     def test_schedule_add_explicit_full_capability_mode(self, runner: CliRunner):
@@ -484,6 +494,13 @@ class TestScheduleAdd:
             task="Check the news",
             provider="anthropic",
             capability_mode="full",
+            description="",
+            max_attempts=3,
+            backoff_seconds=None,
+            retry_on=None,
+            delete_after_run=False,
+            active_hours="",
+            timezone="",
         )
 
     def test_schedule_add_rejects_invalid_capability_mode(self, runner: CliRunner):
@@ -1042,6 +1059,7 @@ class TestSessionsCleanup:
     def test_sessions_cleanup_dry_run_does_not_delete(self, runner: CliRunner):
         cfg_path = _write_temp_config()
         mock_store = MagicMock()
+        mock_store.cleanup.return_value = 7
         with (
             _SubsystemsPatch(),
             patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store),
@@ -1051,8 +1069,13 @@ class TestSessionsCleanup:
                 ["--config", cfg_path, "sessions", "cleanup", "--dry-run"],
             )
         assert result.exit_code == 0
-        mock_store.cleanup.assert_not_called()
+        # SESSDEEP-002: --dry-run must now run a real COUNT-style preview
+        # (dry_run=True is a non-destructive SELECT, not a DELETE) rather
+        # than short-circuiting before ever touching the store, so it can
+        # report the actual number of turns that would be affected.
+        mock_store.cleanup.assert_called_once_with(older_than_days=30, dry_run=True)
         assert "Dry run" in result.output or "dry" in result.output.lower()
+        assert "7" in result.output
 
     def test_sessions_cleanup_respects_older_than(self, runner: CliRunner):
         cfg_path = _write_temp_config()

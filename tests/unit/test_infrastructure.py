@@ -1238,7 +1238,7 @@ class TestResilientMemoryStoreCleanup:
         primary.cleanup.return_value = 42
         store = ResilientMemoryStore(primary)
         result = store.cleanup(older_than_days=7)
-        primary.cleanup.assert_called_once_with(older_than_days=7)
+        primary.cleanup.assert_called_once_with(older_than_days=7, dry_run=False)
         assert result == 42
 
     def test_returns_zero_on_primary_failure(self):

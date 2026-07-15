@@ -1102,7 +1102,7 @@ class SQLiteMemoryStore:
     # Maintenance
     # ------------------------------------------------------------------
 
-    def cleanup(self, older_than_days: int = 30) -> int:
+    def cleanup(self, older_than_days: int = 30, dry_run: bool = False) -> int:
         """Delete turns older than *older_than_days* days.
 
         Turns pinned via :meth:`set_turn_pinned` are preserved regardless
@@ -1110,12 +1110,30 @@ class SQLiteMemoryStore:
 
         Args:
             older_than_days: Age threshold in days.
+            dry_run: When ``True``, run the same ``WHERE`` clause as a
+                ``SELECT COUNT(*)`` instead of ``DELETE`` -- nothing is
+                removed. SESSDEEP-002 (6th tool-specific validation run):
+                the CLI's ``--dry-run`` used to short-circuit before ever
+                calling into the store at all, returning a hardcoded
+                generic message with no real preview of how many turns
+                or which sessions would actually be affected. The
+                non-destructive safety property held either way, but the
+                practical value of a dry run -- telling an operator the
+                real impact before they commit -- was undermined.
 
         Returns:
-            Number of rows deleted.
+            Number of rows deleted (or, when *dry_run* is ``True``, the
+            number of rows that WOULD be deleted).
         """
         conn = self._conn()
         cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
+        if dry_run:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE timestamp < ? "
+                "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1",
+                (cutoff,),
+            ).fetchone()
+            return int(row[0]) if row else 0
         cur = conn.execute(
             "DELETE FROM turns WHERE timestamp < ? "
             "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1",

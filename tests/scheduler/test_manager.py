@@ -88,6 +88,66 @@ class TestAddJob:
         assert len(ids) == 2
 
 
+class TestMaxJobsEnforcement:
+    """SCHED-003: scheduling.max_jobs must actually be enforced.
+
+    Previously a real, documented, correctly-parsed config field with
+    zero enforcement anywhere -- setting max_jobs: 1 and adding 2 jobs
+    succeeded identically both times, with no refusal.
+    """
+
+    def test_unlimited_by_default(self, tmp_jobs_file: str):
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file)
+        mgr.start()
+        mgr.add_job("a", "every 5 minutes", "t")
+        mgr.add_job("b", "every 5 minutes", "t")
+        mgr.add_job("c", "every 5 minutes", "t")
+        assert len(mgr.list_jobs()) == 3
+        mgr.stop()
+
+    def test_second_job_refused_at_limit_one(self, tmp_jobs_file: str):
+        from missy.core.exceptions import SchedulerError
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, max_jobs=1)
+        mgr.start()
+        mgr.add_job("first", "every 5 minutes", "t")
+        with pytest.raises(SchedulerError, match="max_jobs"):
+            mgr.add_job("second", "every 5 minutes", "t")
+        assert len(mgr.list_jobs()) == 1
+        mgr.stop()
+
+    def test_refused_job_not_persisted(self, tmp_jobs_file: str):
+        from missy.core.exceptions import SchedulerError
+
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, max_jobs=1)
+        mgr.start()
+        mgr.add_job("first", "every 5 minutes", "t")
+        with pytest.raises(SchedulerError):
+            mgr.add_job("second", "every 5 minutes", "t")
+        data = json.loads(Path(tmp_jobs_file).read_text())
+        assert len(data) == 1
+        mgr.stop()
+
+    def test_room_freed_after_remove(self, tmp_jobs_file: str):
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, max_jobs=1)
+        mgr.start()
+        first = mgr.add_job("first", "every 5 minutes", "t")
+        mgr.remove_job(first.id)
+        # Room freed up -- adding again must succeed.
+        second = mgr.add_job("second", "every 5 minutes", "t")
+        assert len(mgr.list_jobs()) == 1
+        assert second.name == "second"
+        mgr.stop()
+
+    def test_zero_max_jobs_is_unlimited(self, tmp_jobs_file: str):
+        mgr = SchedulerManager(jobs_file=tmp_jobs_file, max_jobs=0)
+        mgr.start()
+        for i in range(5):
+            mgr.add_job(f"job{i}", "every 5 minutes", "t")
+        assert len(mgr.list_jobs()) == 5
+        mgr.stop()
+
+
 class TestRawCronDayOfWeekEndToEnd:
     """Regression: CronTrigger.from_crontab() applies no conversion between
     standard crontab's day-of-week numbering (Sunday=0..Saturday=6) and

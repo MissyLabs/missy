@@ -149,7 +149,7 @@ class TestFallbackBehaviour:
         primary.cleanup.return_value = 4
         store = ResilientMemoryStore(primary)
         result = store.cleanup()
-        primary.cleanup.assert_called_once_with(older_than_days=30)
+        primary.cleanup.assert_called_once_with(older_than_days=30, dry_run=False)
         assert result == 4
 
     def test_get_learnings_returns_empty_list_on_failure(self):
@@ -419,15 +419,24 @@ class TestCleanup:
         primary.cleanup.return_value = 0
         store = ResilientMemoryStore(primary)
         store.cleanup()
-        primary.cleanup.assert_called_once_with(older_than_days=30)
+        primary.cleanup.assert_called_once_with(older_than_days=30, dry_run=False)
 
     def test_cleanup_custom_age_forwarded(self):
         primary = _healthy()
         primary.cleanup.return_value = 7
         store = ResilientMemoryStore(primary)
         result = store.cleanup(older_than_days=14)
-        primary.cleanup.assert_called_once_with(older_than_days=14)
+        primary.cleanup.assert_called_once_with(older_than_days=14, dry_run=False)
         assert result == 7
+
+    def test_cleanup_dry_run_forwarded(self):
+        """SESSDEEP-002: dry_run must be threaded through to the primary store."""
+        primary = _healthy()
+        primary.cleanup.return_value = 9
+        store = ResilientMemoryStore(primary)
+        result = store.cleanup(older_than_days=14, dry_run=True)
+        primary.cleanup.assert_called_once_with(older_than_days=14, dry_run=True)
+        assert result == 9
 
     def test_cleanup_returns_row_count_from_primary(self):
         primary = _healthy()

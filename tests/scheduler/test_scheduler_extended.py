@@ -404,7 +404,20 @@ class TestManagerPauseResumePersistence:
         data = json.loads(Path(jobs_path).read_text(encoding="utf-8"))
         assert data[0]["enabled"] is True
 
-    def test_paused_job_not_in_apscheduler_on_restart(self, jobs_path: str) -> None:
+    def test_paused_job_registered_but_paused_in_apscheduler_on_restart(
+        self, jobs_path: str
+    ) -> None:
+        """SCHED-004: a paused job must still be registered (just paused) on reload.
+
+        Previously start() skipped every disabled job entirely, so a job
+        paused via one CLI invocation's SchedulerManager was never
+        re-registered by a later, separate invocation's fresh start() --
+        `missy schedule resume` would then fail with "No job by the id
+        of ... was found" even though the job was clearly still present
+        in jobs.json. The job must now always be registered on reload,
+        with next_run_time None (paused) rather than absent entirely, so
+        a later resume_job() call in ANY process can find and resume it.
+        """
         m1 = SchedulerManager(jobs_file=jobs_path)
         m1.start()
         job = m1.add_job("noschedule", "every 5 minutes", "t")
@@ -414,9 +427,16 @@ class TestManagerPauseResumePersistence:
         m2 = SchedulerManager(jobs_file=jobs_path)
         m2.start()
         ap_job = m2._scheduler.get_job(job.id)
+        assert ap_job is not None, "Paused job must still be registered with APScheduler on reload"
+        assert ap_job.next_run_time is None, (
+            "Re-registered paused job must not be scheduled to fire"
+        )
+        m2.resume_job(job.id)
+        resumed_ap_job = m2._scheduler.get_job(job.id)
+        assert resumed_ap_job.next_run_time is not None, (
+            "resume_job() must reschedule the job to fire"
+        )
         m2.stop()
-
-        assert ap_job is None, "Paused job must not be registered with APScheduler on reload"
 
 
 class TestManagerRemoveAllJobs:
