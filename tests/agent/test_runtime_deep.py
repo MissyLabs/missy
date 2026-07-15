@@ -2698,6 +2698,84 @@ class TestMcpToolDispatch:
         client.call_tool.assert_not_called()
 
 
+class TestExecuteToolMissingRequiredParams:
+    """A tool call missing a required parameter must be refused before
+    ever reaching registry.execute()/tool.execute(), rather than raising
+    a raw Python TypeError that ToolRegistry.execute() has to catch as an
+    "unhandled exception". Reported live: a delegate repeatedly called
+    shell_exec with no `command` argument at all, crashing with
+    "ShellExecTool.execute() missing 1 required keyword-only argument:
+    'command'" three times in a row before the agent loop ran out of
+    max_iterations without ever recovering."""
+
+    def test_shell_exec_missing_command_refused_without_crashing(self):
+        from missy.providers.base import ToolCall
+        from missy.tools.builtin.shell_exec import ShellExecTool
+        from missy.tools.registry import init_tool_registry
+
+        treg = init_tool_registry()
+        treg.register(ShellExecTool())
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+
+        tc = ToolCall(id="tc1", name="shell_exec", arguments={})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert result.is_error
+        assert "command" in result.content
+        assert "missing required parameter" in result.content.lower()
+        # Must never have reached the tool's own execute() at all (no
+        # raw TypeError, no real subprocess spawned).
+        assert "TypeError" not in result.content
+        assert "Exit code" not in result.content
+
+    def test_shell_exec_with_command_present_is_not_refused(self):
+        """The new guard must not false-positive on a well-formed call."""
+        from missy.providers.base import ToolCall
+        from missy.tools.builtin.shell_exec import ShellExecTool
+        from missy.tools.registry import init_tool_registry
+
+        treg = init_tool_registry()
+        treg.register(ShellExecTool())
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+
+        tc = ToolCall(id="tc1", name="shell_exec", arguments={"command": "echo hi"})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        # No policy engine is initialised in this unit test's isolated
+        # scope, so the call is correctly denied at the (separate) policy
+        # layer -- what matters here is that it got PAST the new
+        # required-params guard to reach that layer at all, rather than
+        # being rejected as "missing required parameter(s)" despite
+        # `command` clearly being present.
+        assert "missing required parameter" not in result.content.lower()
+
+    def test_calculator_missing_expression_refused_without_crashing(self):
+        """Same guard, a different tool with a different required param name."""
+        from missy.providers.base import ToolCall
+        from missy.tools.builtin.calculator import CalculatorTool
+        from missy.tools.registry import init_tool_registry
+
+        treg = init_tool_registry()
+        treg.register(CalculatorTool())
+        provider = _make_provider()
+        registry = _make_registry({"fake": provider})
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            rt = AgentRuntime(AgentConfig(provider="fake"))
+
+        tc = ToolCall(id="tc1", name="calculator", arguments={})
+        result = rt._execute_tool(tc, session_id="sess-1", task_id="task-1")
+
+        assert result.is_error
+        assert "expression" in result.content
+        assert "missing required parameter" in result.content.lower()
+
+
 class TestSleeptimeWiring:
     """SR-4.1: SleeptimeWorker is constructed+started at __init__ time
     exactly as its own module docstring documents (operator-confirmed:

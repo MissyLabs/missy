@@ -2295,6 +2295,52 @@ class AgentRuntime:
                 tool_args, session_id=session_id, task_id=task_id
             )
 
+        # A call missing a required parameter (e.g. shell_exec with no
+        # `command`) must not reach registry.execute() at all. Most
+        # built-in tools declare their required arguments as keyword-only
+        # parameters with no default, so a missing one fails Python's own
+        # argument binding with a raw TypeError ("missing 1 required
+        # keyword-only argument: 'command'") before the tool's own
+        # execute() body -- and its own, more specific validation --
+        # ever runs. ToolRegistry.execute() still catches that TypeError
+        # so the process itself never crashes, but every occurrence logs
+        # as a scary-looking "unhandled exception" traceback, and the raw
+        # Python error text is a confusing, low-signal message for the
+        # model to self-correct from compared to a direct "you forgot X"
+        # rejection. Checked here (not by giving every tool's parameters
+        # a default) so the fix is universal across every built-in and
+        # future tool, not per-tool.
+        tool_for_schema = registry.get(tool_call.name)
+        if tool_for_schema is not None:
+            schema = tool_for_schema.get_schema() if hasattr(tool_for_schema, "get_schema") else {}
+            required_params = schema.get("parameters", {}).get("required", [])
+            missing_params = [p for p in required_params if p not in tool_args]
+            if missing_params:
+                logger.warning(
+                    "Tool %r call missing required parameter(s) %s; refusing dispatch "
+                    "without ever calling the tool.",
+                    tool_call.name,
+                    missing_params,
+                )
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="tool_execute",
+                    result="deny",
+                    detail={"tool": tool_call.name, "reason": "missing_required_params"},
+                )
+                self._score_tool_trust(tool_call.name, success=False)
+                return ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content=(
+                        f"Tool {tool_call.name!r} call is missing required "
+                        f"parameter(s): {missing_params}. Re-emit the <tool_call> "
+                        "with all required parameters included."
+                    ),
+                    is_error=True,
+                )
+
         try:
             last_exc: Exception | None = None
             for attempt in range(_MAX_TOOL_RETRIES + 1):
