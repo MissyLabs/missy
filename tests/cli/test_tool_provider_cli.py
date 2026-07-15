@@ -266,7 +266,7 @@ def test_benchmark_run_llm_tool_not_found() -> None:
     from missy.cli.main import cli
 
     runner = CliRunner()
-    with patch("missy.tools.registry.get_tool_registry") as mock_reg:
+    with patch("missy.cli.main._ensure_tool_registry") as mock_reg:
         mock_reg.return_value.get.return_value = None
         result = runner.invoke(
             cli,
@@ -282,7 +282,7 @@ def test_benchmark_run_llm_mock_provider_success() -> None:
 
     tool = _make_mock_tool("calculator")
     runner = CliRunner()
-    with patch("missy.tools.registry.get_tool_registry") as mock_reg:
+    with patch("missy.cli.main._ensure_tool_registry") as mock_reg:
         mock_reg.return_value.get.return_value = tool
         result = runner.invoke(
             cli,
@@ -302,13 +302,42 @@ def test_benchmark_run_llm_mock_provider_success() -> None:
     assert "Tool call made: yes" in result.output
 
 
+def test_benchmark_run_llm_bootstraps_uninitialised_registry() -> None:
+    """Regression test for BENCH-001's sibling bug: `run-llm` previously
+    caught the "not initialised" RuntimeError and printed it as an error
+    instead of ever bootstrapping the registry, so the command could never
+    actually run against a fresh process."""
+    from missy.cli.main import cli
+    from missy.tools import registry as registry_module
+
+    registry_module._registry = None
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "tools",
+            "benchmark",
+            "run-llm",
+            "calculator",
+            "--prompt",
+            "please compute '2 + 2'",
+            "--no-persist",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "ToolRegistry has not been initialised" not in result.output
+    assert registry_module.get_tool_registry().get("calculator") is not None
+
+
 def test_benchmark_run_llm_unconfigured_provider() -> None:
     from missy.cli.main import cli
 
     tool = _make_mock_tool("calculator")
     runner = CliRunner()
     with (
-        patch("missy.tools.registry.get_tool_registry") as mock_reg,
+        patch("missy.cli.main._ensure_tool_registry") as mock_reg,
         patch("missy.providers.registry.get_registry") as mock_preg,
     ):
         mock_reg.return_value.get.return_value = tool
@@ -336,7 +365,7 @@ def test_benchmark_run_llm_execute_warns() -> None:
 
     tool = _make_mock_tool("calculator")
     runner = CliRunner()
-    with patch("missy.tools.registry.get_tool_registry") as mock_reg:
+    with patch("missy.cli.main._ensure_tool_registry") as mock_reg:
         mock_reg.return_value.get.return_value = tool
         mock_reg.return_value.execute.return_value = MagicMock(success=True, output=4, error=None)
         result = runner.invoke(
@@ -362,7 +391,7 @@ def test_benchmark_run_llm_invalid_expect_arg() -> None:
 
     tool = _make_mock_tool("calculator")
     runner = CliRunner()
-    with patch("missy.tools.registry.get_tool_registry") as mock_reg:
+    with patch("missy.cli.main._ensure_tool_registry") as mock_reg:
         mock_reg.return_value.get.return_value = tool
         result = runner.invoke(
             cli,

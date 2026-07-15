@@ -437,11 +437,38 @@ class SQLiteMemoryStore:
     def clear_session(self, session_id: str) -> None:
         """Delete all turns for *session_id*.
 
+        Note this does NOT delete the session's ``summaries`` rows --
+        :class:`~missy.memory.synthesizer.MemorySynthesizer` also injects
+        those into context, so a stale/contaminating summary (e.g. one
+        recording an earlier turn's incorrect self-identification) can
+        still resurface after this call. Use :meth:`clear_session_full`
+        for a genuine full reset.
+
         Args:
             session_id: The session whose turns should be deleted.
         """
         conn = self._conn()
         conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+        conn.commit()
+
+    def clear_session_full(self, session_id: str) -> None:
+        """Delete all turns AND all summaries for *session_id*.
+
+        4th tool-specific validation run (2026-07-14/15) found that
+        :meth:`clear_session` alone was insufficient to reset a session
+        contaminated by the "over-refusal spiral" (a model treating its
+        own corrective retry as a jailbreak attempt): the persisted
+        ``summaries`` table, also injected into context by
+        :class:`~missy.memory.synthesizer.MemorySynthesizer`, kept the
+        contamination alive across a plain :meth:`clear_session` call.
+        This clears both tables so a session can genuinely start fresh.
+
+        Args:
+            session_id: The session to fully reset.
+        """
+        conn = self._conn()
+        conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
         conn.commit()
 
     def delete_turn(self, turn_id: str) -> bool:

@@ -106,12 +106,46 @@ def test_benchmark_run_tool_not_found() -> None:
     from missy.cli.main import cli
 
     runner = CliRunner()
-    with patch("missy.tools.registry.get_tool_registry") as mock_reg:
-        mock_reg.return_value.get.return_value = None
+    with patch("missy.cli.main._ensure_tool_registry") as mock_ensure:
+        mock_ensure.return_value.get.return_value = None
         result = runner.invoke(cli, ["tools", "benchmark", "run", "nonexistent_tool"])
 
     assert result.exit_code != 0
     assert "not registered" in result.output
+
+
+def test_benchmark_run_bootstraps_uninitialised_registry() -> None:
+    """Regression test for BENCH-001: `missy tools benchmark run` used to
+    crash with "ToolRegistry has not been initialised" because it called
+    get_tool_registry() directly without ever bootstrapping the process-level
+    registry the way the main agent-construction path does. It must now
+    succeed even when init_tool_registry() was never called beforehand."""
+    from missy.cli.main import cli
+    from missy.tools import registry as registry_module
+    from missy.tools.benchmark.runner import SuiteRunReport
+
+    # Simulate a fresh process: no registry installed yet.
+    registry_module._registry = None
+
+    mock_report = SuiteRunReport(
+        suite_name="calculator_auto_direct",
+        tool_name="calculator",
+        provider="direct",
+        scored_results=[],
+        aggregate={"composite": 0.5, "correctness": 0.5, "reliability": 0.5, "latency_ms": 10.0},
+        started_at="2026-07-07T00:00:00+00:00",
+        finished_at="2026-07-07T00:00:01+00:00",
+        error_count=0,
+    )
+
+    runner_cli = CliRunner()
+    with patch("missy.tools.benchmark.runner.BenchmarkRunner.run_suite", return_value=mock_report):
+        result = runner_cli.invoke(cli, ["tools", "benchmark", "run", "calculator", "--no-persist"])
+
+    assert result.exit_code == 0
+    assert "ToolRegistry has not been initialised" not in result.output
+    # The real registry should now be installed and contain the real tool.
+    assert registry_module.get_tool_registry().get("calculator") is not None
 
 
 def test_benchmark_run_success() -> None:
@@ -165,7 +199,7 @@ def test_benchmark_run_success() -> None:
     )
 
     with (
-        patch("missy.tools.registry.get_tool_registry") as mock_reg,
+        patch("missy.cli.main._ensure_tool_registry") as mock_reg,
         patch("missy.tools.benchmark.runner.BenchmarkRunner.run_suite", return_value=mock_report),
         patch("missy.tools.benchmark.benchmark_store.BenchmarkStore.save_batch"),
     ):
@@ -228,7 +262,7 @@ def test_benchmark_run_shows_failure() -> None:
     )
 
     with (
-        patch("missy.tools.registry.get_tool_registry") as mock_reg,
+        patch("missy.cli.main._ensure_tool_registry") as mock_reg,
         patch("missy.tools.benchmark.runner.BenchmarkRunner.run_suite", return_value=mock_report),
     ):
         mock_reg.return_value.get.return_value = mock_tool
@@ -265,7 +299,7 @@ def test_benchmark_run_persists_by_default() -> None:
     )
 
     with (
-        patch("missy.tools.registry.get_tool_registry") as mock_reg,
+        patch("missy.cli.main._ensure_tool_registry") as mock_reg,
         patch(
             "missy.tools.benchmark.runner.BenchmarkRunner.run_suite", return_value=mock_report
         ) as mock_run,
