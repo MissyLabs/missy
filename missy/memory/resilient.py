@@ -337,17 +337,20 @@ class ResilientMemoryStore:
     # Maintenance
     # ------------------------------------------------------------------
 
-    def cleanup(self, older_than_days: int = 30) -> int:
+    def cleanup(self, older_than_days: int = 30, dry_run: bool = False) -> int:
         """Delegate cleanup to the primary store.
 
         Args:
             older_than_days: Age threshold in days.
+            dry_run: When ``True``, count matching rows without deleting
+                them (see :meth:`SQLiteMemoryStore.cleanup`).
 
         Returns:
-            Number of rows deleted, or 0 on failure.
+            Number of rows deleted (or that would be deleted, if
+            *dry_run*), or 0 on failure.
         """
         try:
-            result = self._primary.cleanup(older_than_days=older_than_days)
+            result = self._primary.cleanup(older_than_days=older_than_days, dry_run=dry_run)
             self._on_success()
             return result
         except Exception as exc:

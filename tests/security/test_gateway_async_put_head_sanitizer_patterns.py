@@ -1240,6 +1240,7 @@ class TestSchedulerTaskLengthValidation:
         mgr._scheduler = MagicMock()
         mgr._jobs = {}
         mgr.jobs_file = MagicMock()
+        mgr._max_jobs = 0
 
         with pytest.raises(ValueError, match="too long"):
             mgr.add_job(
@@ -1257,6 +1258,7 @@ class TestSchedulerTaskLengthValidation:
         mgr._scheduler = MagicMock()
         mgr._jobs = {}
         mgr.jobs_file = MagicMock()
+        mgr._max_jobs = 0
 
         with (
             patch.object(mgr, "_schedule_job"),

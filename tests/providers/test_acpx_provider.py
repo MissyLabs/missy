@@ -14,6 +14,7 @@ import pytest
 from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 from missy.providers.acpx_provider import (
+    _ACP_BRIDGE_SCRIPT_PATH,
     AcpxProvider,
     _find_close_match,
     _generate_tool_call_id,
@@ -23,6 +24,7 @@ from missy.providers.acpx_provider import (
     _render_tool_schema_compact,
     _render_tool_schema_full,
     _run_subprocess_with_group_kill,
+    _split_system_messages,
     _strip_leaked_transcript_markers,
     _validate_tool_calls,
 )
@@ -71,7 +73,6 @@ class TestAcpxInit:
         p = AcpxProvider(_make_config())
         assert p._agent == "claude"
         assert p._timeout == 30  # ProviderConfig default
-        assert p._extra_flags == []
 
     def test_timeout_within_bound_is_unchanged(self):
         p = AcpxProvider(_make_config(timeout=300))
@@ -98,16 +99,17 @@ class TestAcpxInit:
         p = AcpxProvider(_make_config(model=""))
         assert p._agent == "claude"
 
-    def test_extra_flags_from_base_url(self):
-        # Non-security flags pass through unchanged.
-        p = AcpxProvider(_make_config(base_url="--max-turns 10 --verbose"))
-        assert p._extra_flags == ["--max-turns", "10", "--verbose"]
-
-    def test_security_flags_stripped_from_base_url(self):
-        # --approve-all and --cwd are security-critical (FX-A) and must
-        # never reach the subprocess from a mutable config value.
-        p = AcpxProvider(_make_config(base_url="--approve-all --cwd /tmp --verbose"))
-        assert p._extra_flags == ["--verbose"]
+    def test_base_url_logged_and_ignored(self, caplog):
+        # 6th tool-specific validation run: base_url is no longer
+        # meaningful -- acp_bridge.mjs takes a JSON request on stdin, not
+        # CLI flags. A configured value must be logged (so a stale config
+        # value doesn't look like it's silently still doing something)
+        # and otherwise have zero effect on the provider.
+        with caplog.at_level("WARNING"):
+            p = AcpxProvider(_make_config(base_url="--approve-all --cwd /tmp --verbose"))
+        assert not hasattr(p, "_extra_flags")
+        assert not hasattr(p, "_binary")
+        assert any("base_url" in rec.message for rec in caplog.records)
 
     def test_custom_timeout(self):
         p = AcpxProvider(_make_config(timeout=300))
@@ -234,108 +236,40 @@ class TestRunSubprocessWithGroupKill:
 # ------------------------------------------------------------------
 
 
-_HELP_TEXT_WITH_SECURITY_FLAGS = (
-    "Options:\n"
-    '  --allowed-tools <list>  Allowed tool names (use "" for no tools)\n'
-    "  --non-interactive-permissions <policy>  deny or fail\n"
-    "  --deny-all  Deny all permission requests\n"
-)
-
-
 class TestAcpxAvailability:
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_available(self, mock_which, mock_run):
-        # First call is `--version`, second is `--help` (FX-A health check).
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(returncode=0, stdout=_HELP_TEXT_WITH_SECURITY_FLAGS, stderr=""),
-        ]
+    """6th tool-specific validation run: is_available() no longer shells
+    out to `acpx --version`/`acpx --help` to sniff for security-relevant
+    CLI flags -- it just checks that `node` is runnable and that
+    acp_bridge.mjs exists alongside this module. There is no live `npx`
+    fetch here (that happens lazily on first real call, same as acpx's
+    own CLI did)."""
+
+    @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
+    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
+    def test_available_when_node_and_bridge_present(self, mock_which, mock_path):
+        mock_path.is_file.return_value = True
         p = AcpxProvider(_make_config())
         assert p.is_available() is True
-        assert mock_run.call_count == 2
+        mock_which.assert_called_once_with("node")
 
     @patch("missy.providers.acpx_provider.shutil.which", return_value=None)
-    def test_unavailable_no_binary(self, mock_which):
+    def test_unavailable_no_node_binary(self, mock_which):
         p = AcpxProvider(_make_config())
         assert p.is_available() is False
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_nonzero_exit(self, mock_which, mock_run):
-        mock_run.return_value = MagicMock(returncode=1)
+    @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
+    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
+    def test_unavailable_when_bridge_script_missing(self, mock_which, mock_path):
+        mock_path.is_file.return_value = False
         p = AcpxProvider(_make_config())
         assert p.is_available() is False
 
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_exception(self, mock_which, mock_run):
-        mock_run.side_effect = OSError("broken")
-        p = AcpxProvider(_make_config())
-        assert p.is_available() is False
-
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_when_help_missing_allowed_tools_flag(self, mock_which, mock_run):
-        # FX-A fail-closed health check: if the installed acpx version no
-        # longer documents --allowed-tools, never report available.
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(
-                returncode=0,
-                stdout="Options:\n  --non-interactive-permissions <policy>\n",
-                stderr="",
-            ),
-        ]
-        p = AcpxProvider(_make_config())
-        assert p.is_available() is False
-
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_when_help_missing_non_interactive_permissions_flag(
-        self, mock_which, mock_run
-    ):
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(
-                returncode=0,
-                stdout='Options:\n  --allowed-tools <list>  (use "" for no tools)\n'
-                "  --deny-all  Deny all permission requests\n",
-                stderr="",
-            ),
-        ]
-        p = AcpxProvider(_make_config())
-        assert p.is_available() is False
-
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_when_help_missing_deny_all_flag(self, mock_which, mock_run):
-        # --deny-all is the flag actually proven (by live reproduction
-        # against the real acpx+claude-agent-acp binary) to close the
-        # native-tool-access gap that --non-interactive-permissions deny
-        # alone does not. A future acpx release that renames or drops it
-        # must not silently mark the provider available.
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            MagicMock(
-                returncode=0,
-                stdout='Options:\n  --allowed-tools <list>  (use "" for no tools)\n'
-                "  --non-interactive-permissions <policy>  deny or fail\n",
-                stderr="",
-            ),
-        ]
-        p = AcpxProvider(_make_config())
-        assert p.is_available() is False
-
-    @patch("missy.providers.acpx_provider.subprocess.run")
-    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/acpx")
-    def test_unavailable_when_help_check_raises(self, mock_which, mock_run):
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="", stderr=""),
-            OSError("broken"),
-        ]
-        p = AcpxProvider(_make_config())
-        assert p.is_available() is False
+    def test_real_bridge_script_path_exists_on_disk(self):
+        # Sanity check against the actual repo file (not mocked) -- would
+        # catch a rename/move of acp_bridge.mjs that the fully-mocked
+        # tests above cannot.
+        assert _ACP_BRIDGE_SCRIPT_PATH.name == "acp_bridge.mjs"
+        assert _ACP_BRIDGE_SCRIPT_PATH.is_file()
 
 
 # ------------------------------------------------------------------
@@ -346,6 +280,11 @@ class TestAcpxAvailability:
 class TestAcpxComplete:
     def _ndjson(self, *events: dict) -> str:
         return "\n".join(json.dumps(e) for e in events) + "\n"
+
+    def _request(self, mock_run, call_index: int = 0) -> dict:
+        """Parse the JSON request piped to acp_bridge.mjs's stdin."""
+        call = mock_run.call_args_list[call_index]
+        return json.loads(call.kwargs["input_text"])
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_successful_completion(self, mock_run):
@@ -377,21 +316,21 @@ class TestAcpxComplete:
             p.complete([Message(role="user", content="Hi")])
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_nonzero_exit_with_recoverable_text_does_not_raise(self, mock_run):
-        # Live-reproduced behavior: with --deny-all enforcing zero native
-        # tool access, acpx exits nonzero (observed: code 5) whenever a
-        # native-tool permission request was denied during the turn --
-        # but the delegate's own agent_message_chunk text is still a
-        # legitimate response (e.g. explaining it lacks access). That
-        # text must be recovered and returned, not discarded.
+    def test_nonzero_exit_raises_even_with_recoverable_text(self, mock_run):
+        # 6th tool-specific validation run: with disableBuiltInTools, the
+        # delegate never sees a native tool to reach for and get denied,
+        # so the old "recover text anyway, it was probably just a denied
+        # native tool call" tolerance no longer applies -- a nonzero exit
+        # is now always a genuine failure, even if some text happens to
+        # be present in stdout.
         stdout = self._ndjson(
             {"type": "text_delta", "delta": "The user denied the Read tool. "},
             {"type": "text_delta", "delta": "I cannot access the file."},
         )
         mock_run.return_value = MagicMock(returncode=5, stdout=stdout, stderr="")
         p = AcpxProvider(_make_config())
-        resp = p.complete([Message(role="user", content="Read a file")])
-        assert resp.content == "The user denied the Read tool. I cannot access the file."
+        with pytest.raises(ProviderError, match="exit.*5"):
+            p.complete([Message(role="user", content="Read a file")])
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_nonzero_exit_with_no_recoverable_text_still_raises(self, mock_run):
@@ -424,9 +363,20 @@ class TestAcpxComplete:
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_binary_not_found_raises(self, mock_run):
-        mock_run.side_effect = FileNotFoundError("acpx")
+        mock_run.side_effect = FileNotFoundError("node")
         p = AcpxProvider(_make_config())
-        with pytest.raises(ProviderError, match="not found"):
+        with pytest.raises(ProviderError, match="node binary not found"):
+            p.complete([Message(role="user", content="Hi")])
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_nonzero_exit_uses_bridge_error_field(self, mock_run):
+        # New: on failure, the detail message is pulled from the bridge's
+        # final {"type": "result", "ok": false, "error": ...} NDJSON line
+        # via _extract_bridge_error, not just raw stderr.
+        stdout = self._ndjson({"type": "result", "ok": False, "error": "session/new failed: boom"})
+        mock_run.return_value = MagicMock(returncode=1, stdout=stdout, stderr="")
+        p = AcpxProvider(_make_config())
+        with pytest.raises(ProviderError, match="session/new failed: boom"):
             p.complete([Message(role="user", content="Hi")])
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
@@ -446,42 +396,39 @@ class TestAcpxComplete:
         assert resp.content == "Final answer"
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_extra_flags_appended(self, mock_run):
+    def test_base_url_ignored_does_not_affect_command(self, mock_run):
+        # base_url is no longer used for CLI flags -- a configured value
+        # must not change the spawned command or JSON request at all.
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config(base_url="--verbose"))
         p.complete([Message(role="user", content="Hi")])
 
         cmd = mock_run.call_args[0][0]
-        assert "--verbose" in cmd
-        assert "--format" in cmd
-        assert "json" in cmd
+        assert cmd == ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_approve_all_flag_never_reaches_subprocess(self, mock_run):
-        # --approve-all is a security-critical flag (FX-A); even if
-        # supplied via base_url it must never appear in the actual
-        # subprocess argv.
+    def test_approve_all_flag_ignored_and_not_reflected_in_request(self, mock_run):
+        # approve_all is popped from kwargs and logged, never reaching the
+        # bridge's JSON request (there's no security-critical CLI flag it
+        # could smuggle into any more).
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
-        p = AcpxProvider(_make_config(base_url="--approve-all"))
-        p.complete([Message(role="user", content="Hi")])
+        p = AcpxProvider(_make_config())
+        p.complete([Message(role="user", content="Hi")], approve_all=True)
 
-        cmd = mock_run.call_args[0][0]
-        assert "--approve-all" not in cmd
+        request = self._request(mock_run)
+        assert "approve_all" not in request
+        assert "approveAll" not in request
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_exec_subcommand_used(self, mock_run):
+    def test_bridge_script_spawned_via_node(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
         p = AcpxProvider(_make_config())
         p.complete([Message(role="user", content="Hello")])
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[0].endswith("acpx") or cmd[0] == "acpx"
-        # cmd layout: [binary, "--format", "json", agent, "exec", prompt]
-        assert "--format" in cmd
-        assert "json" in cmd
-        assert "claude" in cmd
-        assert "exec" in cmd
-        assert "Hello" in cmd
+        assert cmd == ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
+        request = self._request(mock_run)
+        assert request["prompt"] == "Hello"
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_multi_message_prompt_flattening(self, mock_run):
@@ -496,13 +443,17 @@ class TestAcpxComplete:
             ]
         )
 
-        cmd = mock_run.call_args[0][0]
-        # Prompt is the last element: [binary, "--format", "json", agent, "exec", prompt]
-        prompt = cmd[-1]
-        assert "[System]: Be helpful" in prompt
+        request = self._request(mock_run)
+        prompt = request["prompt"]
         assert "[User]: Hi" in prompt
         assert "[Assistant]: Hello!" in prompt
         assert "[User]: More" in prompt
+        # System content now goes through the bridge's dedicated
+        # systemPrompt channel, not flattened into the prompt text
+        # alongside history.
+        assert "[System]:" not in prompt
+        assert "Be helpful" not in prompt
+        assert request["systemPrompt"] == "Be helpful"
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_single_user_message_no_prefix(self, mock_run):
@@ -510,13 +461,56 @@ class TestAcpxComplete:
         p = AcpxProvider(_make_config())
         p.complete([Message(role="user", content="just this")])
 
-        cmd = mock_run.call_args[0][0]
-        assert cmd[-1] == "just this"
+        request = self._request(mock_run)
+        assert request["prompt"] == "just this"
+        assert request["systemPrompt"] == ""
 
 
 # ------------------------------------------------------------------
 # Prompt building
 # ------------------------------------------------------------------
+
+
+class TestSplitSystemMessages:
+    """6th tool-specific validation run: system-role content is split out
+    up front so it can be delivered via the bridge's genuine system-role
+    channel (_meta.systemPrompt) instead of being flattened into the
+    prompt text alongside history."""
+
+    def test_no_system_messages(self):
+        messages = [Message(role="user", content="hi")]
+        system_text, rest = _split_system_messages(messages)
+        assert system_text == ""
+        assert rest == messages
+
+    def test_single_system_message_extracted(self):
+        messages = [
+            Message(role="system", content="Be helpful"),
+            Message(role="user", content="hi"),
+        ]
+        system_text, rest = _split_system_messages(messages)
+        assert system_text == "Be helpful"
+        assert rest == [Message(role="user", content="hi")]
+
+    def test_multiple_system_messages_joined(self):
+        messages = [
+            Message(role="system", content="First"),
+            Message(role="system", content="Second"),
+            Message(role="user", content="hi"),
+        ]
+        system_text, rest = _split_system_messages(messages)
+        assert system_text == "First\n\nSecond"
+        assert len(rest) == 1
+
+    def test_non_system_order_preserved(self):
+        messages = [
+            Message(role="user", content="a"),
+            Message(role="system", content="sys"),
+            Message(role="assistant", content="b"),
+            Message(role="user", content="c"),
+        ]
+        _, rest = _split_system_messages(messages)
+        assert [m.content for m in rest] == ["a", "b", "c"]
 
 
 class TestBuildPrompt:
@@ -1024,6 +1018,10 @@ class TestCompleteWithTools:
     def _ndjson(self, text: str) -> str:
         return json.dumps({"type": "text_delta", "delta": text}) + "\n"
 
+    def _request(self, mock_run, call_index: int = 0) -> dict:
+        call = mock_run.call_args_list[call_index]
+        return json.loads(call.kwargs["input_text"])
+
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_no_tool_calls_returns_stop(self, mock_run):
         mock_run.return_value = MagicMock(
@@ -1089,17 +1087,24 @@ class TestCompleteWithTools:
         assert resp.finish_reason == "stop"
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_tool_instructions_injected_into_prompt(self, mock_run):
+    def test_tool_instructions_injected_into_system_prompt(self, mock_run):
+        # 6th tool-specific validation run: tool instructions and the
+        # delegation envelope are delivered via the bridge's genuine
+        # system-role channel (systemPrompt), not flattened into the
+        # prompt text.
         mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("ok"), stderr="")
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
         p.complete_with_tools([Message(role="user", content="hi")], tools, system="Be helpful")
-        cmd = mock_run.call_args[0][0]
-        prompt = cmd[-1]  # prompt is always last element
-        assert "Available Tools" in prompt
-        assert "calculator" in prompt
-        assert "<tool_call>" in prompt
-        assert "Be helpful" in prompt
+
+        request = self._request(mock_run)
+        system_prompt = request["systemPrompt"]
+        assert "Available Tools" in system_prompt
+        assert "calculator" in system_prompt
+        assert "<tool_call>" in system_prompt
+        assert "Be helpful" in system_prompt
+        assert "Available Tools" not in request["prompt"]
+        assert "Be helpful" not in request["prompt"]
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_system_prompt_augmented_not_replaced(self, mock_run):
@@ -1110,10 +1115,11 @@ class TestCompleteWithTools:
             [Message(role="system", content="Original system"), Message(role="user", content="hi")],
             tools,
         )
-        cmd = mock_run.call_args[0][0]
-        prompt = cmd[-1]
-        assert "Original system" in prompt
-        assert "Available Tools" in prompt
+        request = self._request(mock_run)
+        system_prompt = request["systemPrompt"]
+        assert "Original system" in system_prompt
+        assert "Available Tools" in system_prompt
+        assert "[System]:" not in request["prompt"]
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_results_in_history_passed_through(self, mock_run):
@@ -1130,9 +1136,8 @@ class TestCompleteWithTools:
             Message(role="user", content="Please verify the tool results."),
         ]
         resp = p.complete_with_tools(messages, tools)
-        cmd = mock_run.call_args[0][0]
-        prompt = cmd[-1]
-        assert "[Tool result for calculator]: 4" in prompt
+        request = self._request(mock_run)
+        assert "[Tool result for calculator]: 4" in request["prompt"]
         assert resp.content == "The answer is 4."
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
@@ -1144,145 +1149,6 @@ class TestCompleteWithTools:
                 [Message(role="user", content="hi")],
                 [_make_mock_tool()],
             )
-
-
-# ===========================================================================
-# FX-A residual (task #46): bounded retry after a denied native tool call
-# ===========================================================================
-
-
-def _denied_tool_call_ndjson(*text_chunks: str) -> str:
-    """Build NDJSON simulating a denied native-tool attempt.
-
-    A ``tool_call_update`` event with ``status: "failed"`` (exactly what
-    ``--deny-all`` produces for a rejected native tool call), followed by
-    the delegate's own ``agent_message_chunk`` text.
-    """
-    lines = [
-        json.dumps(
-            {
-                "method": "session/update",
-                "params": {
-                    "update": {
-                        "sessionUpdate": "tool_call_update",
-                        "status": "failed",
-                        "rawOutput": "User refused permission to run tool",
-                    }
-                },
-            }
-        )
-    ]
-    for text in text_chunks:
-        lines.append(
-            json.dumps(
-                {
-                    "method": "session/update",
-                    "params": {
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"text": text},
-                        }
-                    },
-                }
-            )
-        )
-    return "\n".join(lines) + "\n"
-
-
-class TestStdoutHadDeniedNativeToolCall:
-    def test_detects_failed_tool_call_update(self):
-        stdout = _denied_tool_call_ndjson("I cannot access that file.")
-        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is True
-
-    def test_plain_text_response_not_detected(self):
-        stdout = json.dumps({"type": "text_delta", "delta": "Just an answer."}) + "\n"
-        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is False
-
-    def test_successful_tool_call_update_not_detected(self):
-        stdout = (
-            json.dumps(
-                {
-                    "method": "session/update",
-                    "params": {
-                        "update": {"sessionUpdate": "tool_call_update", "status": "completed"}
-                    },
-                }
-            )
-            + "\n"
-        )
-        assert AcpxProvider._stdout_had_denied_native_tool_call(stdout) is False
-
-    def test_malformed_json_lines_ignored(self):
-        assert AcpxProvider._stdout_had_denied_native_tool_call("not json\n{also not json") is False
-
-
-class TestNativeToolDenialRetry:
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_retries_once_after_denied_native_tool_and_uses_second_response(self, mock_run):
-        # First call: delegate tries a native tool, gets denied, gives up.
-        # Second call (after the correction is appended): delegate
-        # correctly emits a Missy <tool_call> block.
-        first_stdout = _denied_tool_call_ndjson(
-            "The user denied the Read tool. I cannot access the file."
-        )
-        second_response = (
-            '<tool_call>\n{"name": "calculator", "arguments": {"expression": "2+2"}}\n</tool_call>'
-        )
-        second_stdout = json.dumps({"type": "text_delta", "delta": second_response}) + "\n"
-        mock_run.side_effect = [
-            MagicMock(returncode=5, stdout=first_stdout, stderr=""),
-            MagicMock(returncode=0, stdout=second_stdout, stderr=""),
-        ]
-        p = AcpxProvider(_make_config())
-        resp = p.complete_with_tools(
-            [Message(role="user", content="what is 2+2?")], [_make_mock_tool()]
-        )
-
-        assert mock_run.call_count == 2
-        assert resp.finish_reason == "tool_calls"
-        assert len(resp.tool_calls) == 1
-        # The retry prompt must include the corrective reminder.
-        second_call_cmd = mock_run.call_args_list[1][0][0]
-        second_prompt = second_call_cmd[-1]
-        assert "was just attempted here and failed" in second_prompt
-
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_gives_up_after_max_retries_and_returns_final_text(self, mock_run):
-        # Every attempt denies a native tool and never emits a Missy
-        # tool_call -- must not retry forever; must still return the
-        # last response's text rather than raising or looping.
-        stdout = _denied_tool_call_ndjson("I still cannot access that file.")
-        mock_run.return_value = MagicMock(returncode=5, stdout=stdout, stderr="")
-        p = AcpxProvider(_make_config())
-
-        resp = p.complete_with_tools(
-            [Message(role="user", content="read a file")], [_make_mock_tool()]
-        )
-
-        # _MAX_NATIVE_TOOL_DENIAL_RETRIES = 1 -> exactly 2 total attempts.
-        assert mock_run.call_count == 2
-        assert resp.finish_reason == "stop"
-        assert "I still cannot access that file." in resp.content
-
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_no_retry_for_genuine_plain_text_response(self, mock_run):
-        # No denied-tool-call signal at all -- a real plain-text answer
-        # that never touched any tool. Must not trigger a retry.
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps({"type": "text_delta", "delta": "The capital is Paris."}) + "\n",
-            stderr="",
-        )
-        p = AcpxProvider(_make_config())
-
-        resp = p.complete_with_tools(
-            [Message(role="user", content="what is the capital of France?")],
-            [_make_mock_tool()],
-        )
-
-        assert mock_run.call_count == 1
-        assert resp.finish_reason == "stop"
-        assert resp.content == "The capital is Paris."
 
 
 # ===========================================================================
@@ -1343,7 +1209,7 @@ class TestAcpxStream:
         mock_popen.return_value = mock_proc
 
         p = AcpxProvider(_make_config())
-        with pytest.raises(ProviderError, match="acpx stream failed"):
+        with pytest.raises(ProviderError, match="acp_bridge stream failed"):
             list(p.stream([Message(role="user", content="hi")]))
 
         # Once from the except-Exception cleanup (force SIGKILL), once
@@ -1365,6 +1231,46 @@ class TestAcpxStream:
         # poll() reports the process already exited (returncode 0) --
         # the finally block's cleanup must not fire at all.
         mock_kill_group.assert_not_called()
+
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_spawns_node_with_bridge_script_path(self, mock_popen):
+        mock_popen.return_value = _make_streaming_popen(
+            [json.dumps({"type": "text_delta", "delta": "hi"})]
+        )
+        p = AcpxProvider(_make_config())
+        list(p.stream([Message(role="user", content="hello")]))
+
+        cmd = mock_popen.call_args[0][0]
+        assert cmd == ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
+
+    @patch("missy.providers.acpx_provider.subprocess.Popen")
+    def test_writes_json_request_with_prompt_and_system_prompt_to_stdin(self, mock_popen):
+        # 6th tool-specific validation run: the request JSON is written to
+        # the bridge's stdin from a background thread (not written then
+        # read), to avoid a pipe deadlock on a large flattened prompt.
+        mock_proc = _make_streaming_popen([json.dumps({"type": "text_delta", "delta": "hi"})])
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        p = AcpxProvider(_make_config())
+        list(
+            p.stream(
+                [
+                    Message(role="system", content="sys stuff"),
+                    Message(role="user", content="hello"),
+                ],
+                system="explicit system",
+            )
+        )
+
+        written = mock_proc.stdin.write.call_args[0][0]
+        request = json.loads(written)
+        assert request["prompt"] == "hello"
+        # An explicit `system` kwarg wins over a system-role message
+        # already present in `messages` (see _split_system_messages /
+        # `effective_system = system or system_text`).
+        assert request["systemPrompt"] == "explicit system"
+        mock_proc.stdin.close.assert_called_once()
 
 
 # ===========================================================================
@@ -1405,59 +1311,45 @@ class TestAcpxGetToolSchema:
 
 
 class TestZeroNativeToolsEnforcement:
+    """FX-A's zero-native-tools guarantee moved from CLI flags
+    (``--allowed-tools ""`` / ``--non-interactive-permissions deny`` /
+    ``--deny-all``) to a field hardcoded in acp_bridge.mjs's own
+    ``session/new`` request (``_meta.disableBuiltInTools: true``) that
+    Python-side code has no way to override any more -- there are no CLI
+    flags left for a base_url/config value to reintroduce, sanitized or
+    not. These tests cover the residual surface that IS still this
+    module's responsibility: base_url can no longer smuggle anything into
+    the spawned command, and the bridge script itself still hardcodes the
+    disable plus a fail-closed permission denial as defense-in-depth."""
+
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_complete_always_passes_zero_native_tools_flags(self, mock_run):
+    def test_base_url_cannot_reintroduce_native_tools(self, mock_run):
+        # Even a base_url crafted to look like a flag-reinjection attempt
+        # has nothing left to attach to -- the command is a fixed
+        # two-element argv and base_url is never read past __init__'s
+        # warning-and-ignore.
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
-        p = AcpxProvider(_make_config())
+        p = AcpxProvider(_make_config(base_url="--allowed-tools Read,Write,Bash --approve-all"))
         p.complete([Message(role="user", content="hi")])
 
         cmd = mock_run.call_args[0][0]
-        idx = cmd.index("--allowed-tools")
-        assert cmd[idx + 1] == ""
-        idx2 = cmd.index("--non-interactive-permissions")
-        assert cmd[idx2 + 1] == "deny"
-        # --deny-all is the flag actually verified (live, against the
-        # real acpx+claude-agent-acp binary) to block native tool use;
-        # --non-interactive-permissions deny alone does not.
-        assert "--deny-all" in cmd
+        assert cmd == ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
 
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_complete_with_tools_always_passes_zero_native_tools_flags(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
-        )
-        p = AcpxProvider(_make_config())
-        p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
+    def test_bridge_script_hardcodes_disable_built_in_tools(self):
+        # Defense-in-depth sanity check against the actual acp_bridge.mjs
+        # source (not mocked): the field that actually removes the
+        # delegate's native tools from its own tool list must be present
+        # and unconditionally true, not derived from any request input.
+        source = _ACP_BRIDGE_SCRIPT_PATH.read_text()
+        assert "disableBuiltInTools: true" in source
 
-        cmd = mock_run.call_args[0][0]
-        idx = cmd.index("--allowed-tools")
-        assert cmd[idx + 1] == ""
-        idx2 = cmd.index("--non-interactive-permissions")
-        assert cmd[idx2 + 1] == "deny"
-        assert "--deny-all" in cmd
-
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_operator_cannot_reintroduce_native_tools_via_base_url(self, mock_run):
-        # Even if base_url tries to sneak --allowed-tools back in after
-        # the sanitizer (belt and suspenders): the hardcoded flags are
-        # appended after extra_flags, so the last (winning) occurrence is
-        # always ours.
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
-        p = AcpxProvider(_make_config())
-        p._extra_flags = ["--allowed-tools", "Read,Write,Bash"]  # simulate a bypassed sanitizer
-        p.complete([Message(role="user", content="hi")])
-
-        cmd = mock_run.call_args[0][0]
-        # Last occurrence wins with commander.js-style parsing; ours must
-        # be last.
-        last_idx = len(cmd) - 1 - cmd[::-1].index("--allowed-tools")
-        assert cmd[last_idx + 1] == ""
-
-    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_deny_all_and_approve_reads_stripped_from_base_url(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n", stderr="")
-        p = AcpxProvider(_make_config(base_url="--deny-all --approve-reads"))
-        assert p._extra_flags == []
+    def test_bridge_script_denies_every_permission_request_by_default(self):
+        # Defense-in-depth: even if a future SDK/agent version exposes a
+        # tool disableBuiltInTools doesn't cover, the bridge must still
+        # fail closed on any permission request that somehow arrives.
+        source = _ACP_BRIDGE_SCRIPT_PATH.read_text()
+        assert "denyPermission" in source
+        assert "requestPermission" in source
 
 
 class TestIsolatedCwd:
@@ -1468,14 +1360,14 @@ class TestIsolatedCwd:
         p = AcpxProvider(_make_config())
         p.complete([Message(role="user", content="hi")])
 
-        cmd = mock_run.call_args[0][0]
-        idx = cmd.index("--cwd")
-        resolved_cwd = cmd[idx + 1]
+        # _run_subprocess_with_group_kill(cmd, cwd, timeout, input_text=...)
+        # takes cwd positionally, not embedded in the argv (there are no
+        # CLI flags any more).
+        resolved_cwd = mock_run.call_args[0][1]
         assert resolved_cwd == str(tmp_path / ".missy" / "acpx_sandbox")
-        # _run_subprocess_with_group_kill(cmd, cwd, timeout) takes cwd
-        # positionally, not as a kwarg (unlike the old subprocess.run(...,
-        # cwd=...) call it replaced).
-        assert mock_run.call_args[0][1] == resolved_cwd
+        # The JSON request's own "cwd" field must match too.
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert request["cwd"] == resolved_cwd
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_isolated_cwd_created_on_disk(self, mock_run, tmp_path, monkeypatch):
@@ -1497,9 +1389,9 @@ class TestIsolatedCwd:
         _os.makedirs(custom_dir, exist_ok=True)
         p.complete([Message(role="user", content="hi")], cwd=custom_dir)
 
-        cmd = mock_run.call_args[0][0]
-        idx = cmd.index("--cwd")
-        assert cmd[idx + 1] == custom_dir
+        assert mock_run.call_args[0][1] == custom_dir
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert request["cwd"] == custom_dir
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_cwd_reused_across_calls(self, mock_run, tmp_path, monkeypatch):
@@ -1522,11 +1414,23 @@ class TestApproveAllRemoved:
             p.complete([Message(role="user", content="hi")], approve_all=True)
 
         cmd = mock_run.call_args[0][0]
-        assert "--approve-all" not in cmd
+        assert cmd == ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert "approve_all" not in request
         assert any("approve_all" in rec.message for rec in caplog.records)
 
 
 class TestDelegationEnvelope:
+    """The envelope is delivered via the bridge's genuine system-role
+    channel (_meta.systemPrompt) now, not flattened into the prompt text
+    -- so all assertions here read the JSON request's "systemPrompt"
+    field, not the "prompt" field or argv."""
+
+    def _system_prompt(self, mock_run, call_index: int = 0) -> str:
+        call = mock_run.call_args_list[call_index]
+        request = json.loads(call.kwargs["input_text"])
+        return request["systemPrompt"]
+
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_version_present(self, mock_run):
         mock_run.return_value = MagicMock(
@@ -1535,11 +1439,11 @@ class TestDelegationEnvelope:
         p = AcpxProvider(_make_config())
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "[missy-acpx-envelope/1]" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "[missy-acpx-envelope/1]" in system_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
-    def test_envelope_explains_sandboxed_tools_factually(self, mock_run):
+    def test_envelope_explains_disabled_built_in_tools_factually(self, mock_run):
         """6th tool-specific validation run's headline finding: the
         original envelope's "you are NOT operating as an independent
         coding assistant... never claim to be Claude Code... every
@@ -1551,23 +1455,27 @@ class TestDelegationEnvelope:
         suspected prompt injection targeting itself -- an entirely
         different, more severe failure mode than a declined request. The
         rewritten envelope instead states the sandboxing as a factual,
-        cooperative infrastructure explanation and explicitly disclaims
-        that it's not an attempt to override identity or judgment, which
-        measured ~73% success (11/15) in live reproduction versus 0% for
-        the original wording."""
+        cooperative infrastructure explanation (now backed by a genuine
+        protocol-level disableBuiltInTools switch, not just a CLI
+        --deny-all) and explicitly disclaims that it's not an attempt to
+        override identity or judgment, which measured ~73% success
+        (11/15) in live reproduction versus 0% for the original wording,
+        then 10/10 once genuine system-role delivery + disableBuiltInTools
+        were used instead of the old acpx-CLI mechanism."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
         )
         p = AcpxProvider(_make_config())
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "aren't connected to anything real" in prompt
-        assert "disregard your own judgment" in prompt
-        assert "attempt to override who" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "switched off entirely for this session" in system_prompt
+        assert "disableBuiltInTools" in system_prompt
+        assert "disregard your own judgment" in system_prompt
+        assert "attempt to override who" in system_prompt
         # Must NOT reintroduce the old assertive identity-override framing.
-        assert "NOT operating as an independent" not in prompt
-        assert "Never claim to be Claude Code" not in prompt
+        assert "NOT operating as an independent" not in system_prompt
+        assert "Never claim to be Claude Code" not in system_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_fabricated_turns(self, mock_run):
@@ -1577,8 +1485,8 @@ class TestDelegationEnvelope:
         p = AcpxProvider(_make_config())
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "self-authored score" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "self-authored score" in system_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_fabricating_structured_data(self, mock_run):
@@ -1592,32 +1500,31 @@ class TestDelegationEnvelope:
         p = AcpxProvider(_make_config())
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "never add" in prompt.lower() or "never invent" in prompt.lower()
-        assert "fresh tool observation" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "never add" in system_prompt.lower() or "never invent" in system_prompt.lower()
+        assert "fresh tool observation" in system_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_forbids_reporting_unobserved_tool_values(self, mock_run):
         # Task #10 live validation (SH-001-style case) found the delegate
         # confidently reporting a specific directory listing ("ls returned
         # no output") with zero tool_call_update events of any kind in the
-        # raw acpx stream -- a fabricated observation, not a denied native
-        # tool attempt, so _stdout_had_denied_native_tool_call's retry
-        # never fires for it. The envelope must explicitly forbid this
-        # exact pattern. (Live re-test after adding this rule showed it
-        # did NOT change the model's behavior for that specific
-        # reproduction -- documented honestly as an attempted, unproven
-        # mitigation, not a confirmed fix.)
+        # raw acpx stream -- a fabricated observation. The envelope must
+        # explicitly forbid this exact pattern. (Live re-test after adding
+        # this rule showed it did NOT change the model's behavior for that
+        # specific reproduction over the old acpx-CLI mechanism --
+        # documented honestly as an attempted, unproven mitigation on its
+        # own, distinct from the disableBuiltInTools/systemPrompt fix.)
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
         )
         p = AcpxProvider(_make_config())
         p.complete_with_tools([Message(role="user", content="hi")], [_make_mock_tool()])
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "only a real tool invocation could" in prompt
-        assert "you do not know the" in prompt
-        assert "not reporting a real observation" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "only a real tool invocation could" in system_prompt
+        assert "you do not know the" in system_prompt
+        assert "not reporting a real observation" in system_prompt
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_envelope_incorporates_caller_system_text(self, mock_run):
@@ -1631,8 +1538,8 @@ class TestDelegationEnvelope:
             system="Be extra careful with secrets",
         )
 
-        prompt = mock_run.call_args[0][0][-1]
-        assert "Be extra careful with secrets" in prompt
+        system_prompt = self._system_prompt(mock_run)
+        assert "Be extra careful with secrets" in system_prompt
 
 
 class TestLeakedTranscriptMarkerDefense:
@@ -1652,6 +1559,56 @@ class TestLeakedTranscriptMarkerDefense:
         text, leaked = _strip_leaked_transcript_markers("Just a normal answer with no markers.")
         assert leaked is False
         assert text == "Just a normal answer with no markers."
+
+    def test_strip_helper_truncates_at_fabricated_tool_result_marker(self):
+        # Live-discovered during the acp_bridge.mjs integration's own
+        # end-to-end verification: with disableBuiltInTools, the delegate
+        # reliably emits a genuine <tool_call> block, but then -- in the
+        # SAME response -- often continues as though it had already
+        # received that call's real result, inventing plausible-looking
+        # content before Missy's runtime has actually executed anything.
+        text, leaked = _strip_leaked_transcript_markers(
+            '<tool_call>{"name": "file_read", "arguments": {"path": "/x"}}</tool_call>\n\n'
+            "[Tool result for file_read]: FAKE_API_KEY=invented_by_the_model"
+        )
+        assert leaked is True
+        assert text == '<tool_call>{"name": "file_read", "arguments": {"path": "/x"}}</tool_call>'
+
+    def test_strip_helper_truncates_at_fabricated_tool_error_marker(self):
+        text, leaked = _strip_leaked_transcript_markers(
+            "Real answer.\n[Tool error for shell_exec]: permission denied"
+        )
+        assert leaked is True
+        assert text == "Real answer."
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_complete_with_tools_strips_fabricated_tool_result_but_keeps_real_tool_call(
+        self, mock_run
+    ):
+        # The genuine <tool_call> must survive extraction even though the
+        # fabricated "result" that follows it in the same response is
+        # stripped -- the fabrication guard must not collateral-damage the
+        # real tool call it appears right after.
+        fabricated = (
+            '<tool_call>{"name": "file_read", "arguments": {"path": "/x"}}</tool_call>\n\n'
+            "[Tool result for file_read]: totally invented file contents\n\n"
+            "Here are the exact contents of /x:"
+        )
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"type": "text_delta", "delta": fabricated}) + "\n",
+            stderr="",
+        )
+        p = AcpxProvider(_make_config())
+        resp = p.complete_with_tools(
+            [Message(role="user", content="read /x")], [_make_mock_tool(name="file_read")]
+        )
+
+        assert resp.finish_reason == "tool_calls"
+        assert len(resp.tool_calls) == 1
+        assert resp.tool_calls[0].name == "file_read"
+        assert resp.content == ""
+        assert "invented" not in resp.content
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_complete_with_tools_strips_fabricated_followup_turn(self, mock_run):
@@ -1815,18 +1772,25 @@ class TestCurrentTurnBoundary:
             returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
         )
         p = AcpxProvider(_make_config())
+        # A 2-message transcript (a prior turn + the current question) so
+        # _build_prompt's single-user-message shortcut doesn't apply --
+        # see test_no_boundary_for_single_message_complete_with_tools_call
+        # below for that edge case specifically.
         p.complete_with_tools(
             [
+                Message(role="assistant", content="Sure, go ahead."),
                 Message(role="user", content="what is 42+8?"),
             ],
             [_make_mock_tool()],
         )
-        prompt = mock_run.call_args[0][0][-1]
+        # The envelope preamble (which *mentions* "CURRENT REQUEST" in
+        # rule 3) now lives entirely in the separate systemPrompt field --
+        # the "prompt" field contains only the structural boundary itself
+        # plus history/current-request text, so it occurs exactly once.
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        prompt = request["prompt"]
         assert "CURRENT REQUEST" in prompt
-        # The envelope preamble also *mentions* "CURRENT REQUEST" (rule 4),
-        # so find the actual structural marker -- the last occurrence,
-        # which sits immediately before the final message.
-        idx = prompt.rfind("CURRENT REQUEST")
+        idx = prompt.index("CURRENT REQUEST")
         tail = prompt[idx:]
         assert "what is 42+8?" in tail
         # Close by (structural boundary line + the identity reminder line,
@@ -1835,6 +1799,30 @@ class TestCurrentTurnBoundary:
         # rather than the tight ~80 chars before it existed.
         assert tail.index("what is 42+8?") < 400
         assert "[Note]" in tail
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_no_boundary_for_single_message_complete_with_tools_call(self, mock_run):
+        # 6th tool-specific validation run: complete_with_tools() no
+        # longer injects a synthetic system Message before flattening
+        # (system content now goes through the dedicated systemPrompt
+        # channel instead), so a first-turn call consisting of a single
+        # bare user message and no system/history content hits
+        # _build_prompt's single-user-message shortcut and gets no
+        # structural boundary either -- there is no prior history to
+        # disambiguate the current request from. The anti-fabrication
+        # rule itself (forbidding invented "[User]:"/"[Assistant]:"
+        # continuations) still applies regardless, via the envelope
+        # preamble delivered through systemPrompt.
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=json.dumps({"type": "text_delta", "delta": "ok"}) + "\n", stderr=""
+        )
+        p = AcpxProvider(_make_config())
+        p.complete_with_tools([Message(role="user", content="what is 42+8?")], [_make_mock_tool()])
+
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert request["prompt"] == "what is 42+8?"
+        assert "CURRENT REQUEST" not in request["prompt"]
+        assert "self-authored score" in request["systemPrompt"]
 
 
 class TestQuotedTranscriptTextInUserInput:
@@ -1855,8 +1843,8 @@ class TestQuotedTranscriptTextInUserInput:
             [Message(role="user", content=quoting_message)],
             [_make_mock_tool()],
         )
-        prompt = mock_run.call_args[0][0][-1]
-        assert quoting_message in prompt
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert quoting_message in request["prompt"]
 
     def test_strip_helper_only_ever_applied_to_delegate_output_not_input(self):
         # Sanity check on the contract: the strip helper is a pure
@@ -1882,11 +1870,18 @@ class TestMultilineAndLongHistoryRequests:
         )
         p = AcpxProvider(_make_config())
         multiline = "Please do three things:\n1. Read the file\n2. Summarize it\n3. Report back"
+        # A preceding message so _build_prompt's single-user-message
+        # shortcut (which skips the boundary entirely) doesn't apply --
+        # see TestCurrentTurnBoundary's dedicated coverage of that case.
         p.complete_with_tools(
-            [Message(role="user", content=multiline)],
+            [
+                Message(role="assistant", content="Ready when you are."),
+                Message(role="user", content=multiline),
+            ],
             [_make_mock_tool()],
         )
-        prompt = mock_run.call_args[0][0][-1]
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        prompt = request["prompt"]
         idx = prompt.index("CURRENT REQUEST")
         assert multiline in prompt[idx:]
 
@@ -1929,11 +1924,12 @@ class TestMaliciousHistoryInstructions:
             ],
             [_make_mock_tool()],
         )
-        prompt = mock_run.call_args[0][0][-1]
-        # The last occurrence of "CURRENT REQUEST" is the actual
-        # structural marker; earlier occurrences are just the envelope
-        # preamble describing it.
-        boundary_pos = prompt.rfind("CURRENT REQUEST")
+        # The envelope preamble (which mentions "CURRENT REQUEST" in rule
+        # 3) now lives in the separate systemPrompt field, so the "prompt"
+        # field's only occurrence is the actual structural marker.
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        prompt = request["prompt"]
+        boundary_pos = prompt.index("CURRENT REQUEST")
         injected_pos = prompt.index(injected)
         current_request_pos = prompt.index("what is the weather like today?")
         assert injected_pos < boundary_pos < current_request_pos
@@ -1948,9 +1944,12 @@ class TestMaliciousHistoryInstructions:
             [Message(role="user", content="hi")],
             [_make_mock_tool()],
         )
-        prompt = mock_run.call_args[0][0][-1]
-        assert "is the prior" in prompt
-        assert "turns of this specific task" in prompt
+        # This rule lives in the envelope preamble, delivered via the
+        # dedicated systemPrompt channel now, not the flattened prompt.
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        system_prompt = request["systemPrompt"]
+        assert "is the prior" in system_prompt
+        assert "turns of this specific task" in system_prompt
 
 
 class TestDiscCmd006EndToEndWithBoundary:
@@ -1970,15 +1969,22 @@ class TestDiscCmd006EndToEndWithBoundary:
             stderr="",
         )
         p = AcpxProvider(_make_config())
+        # A preceding message so _build_prompt's single-user-message
+        # shortcut doesn't apply, keeping the structural boundary check
+        # below meaningful (see TestCurrentTurnBoundary for that edge case).
         resp = p.complete_with_tools(
-            [Message(role="user", content="what is 42+8?")],
+            [
+                Message(role="assistant", content="Go ahead, ask away."),
+                Message(role="user", content="what is 42+8?"),
+            ],
             [_make_mock_tool()],
         )
 
-        # The prompt sent to acpx carries the boundary + anti-fabrication rules.
-        prompt = mock_run.call_args[0][0][-1]
-        assert "CURRENT REQUEST" in prompt
-        assert "self-authored score" in prompt
+        # The boundary lives in the flattened prompt; the anti-fabrication
+        # rule lives in the envelope, delivered via systemPrompt now.
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert "CURRENT REQUEST" in request["prompt"]
+        assert "self-authored score" in request["systemPrompt"]
 
         # And even though the delegate ignored those instructions and
         # fabricated a followup anyway, the defensive post-parse strip
@@ -2017,7 +2023,13 @@ class TestSessionContinuityAcrossToolLoopRounds:
     def test_each_round_gets_a_fresh_boundary_over_growing_transcript(self, mock_run):
         # Simulates three rounds of a tool loop: each call must mark the
         # newly-appended message as current, with everything before it
-        # (including earlier tool results) treated as history.
+        # (including earlier tool results) treated as history. Round 0 is
+        # a bare single-message call (no system/history content at all)
+        # and hits _build_prompt's single-user-message shortcut -- no
+        # boundary is inserted there since there's nothing yet to
+        # disambiguate (see TestCurrentTurnBoundary's dedicated coverage
+        # of that edge case); rounds 1+ have real prior history and get a
+        # fresh boundary each time.
         p = AcpxProvider(_make_config())
         tools = [_make_mock_tool()]
         transcript = [Message(role="user", content="do a multi-step task")]
@@ -2030,10 +2042,16 @@ class TestSessionContinuityAcrossToolLoopRounds:
                 stderr="",
             )
             p.complete_with_tools(transcript, tools)
-            prompt = mock_run.call_args[0][0][-1]
-            boundary_idx = prompt.index("CURRENT REQUEST")
+            request = json.loads(mock_run.call_args.kwargs["input_text"])
+            prompt = request["prompt"]
             last_message_content = transcript[-1].content
-            assert prompt.index(last_message_content) > boundary_idx
+
+            if round_num == 0:
+                assert "CURRENT REQUEST" not in prompt
+                assert prompt == last_message_content
+            else:
+                boundary_idx = prompt.index("CURRENT REQUEST")
+                assert prompt.index(last_message_content) > boundary_idx
 
             # Append what the runtime would append: a tool-result message
             # for the next round.

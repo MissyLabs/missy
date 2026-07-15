@@ -15,9 +15,36 @@ DEFAULT_BACKUP_DIR = "~/.missy/config.d"
 MAX_BACKUPS = 5
 
 
-def _backup_dir(path: Path | None = None) -> Path:
-    """Return the resolved backup directory path."""
-    return (path or Path(DEFAULT_BACKUP_DIR)).expanduser()
+def _backup_dir(path: Path | None = None, config_path: str | Path | None = None) -> Path:
+    """Return the resolved backup directory path.
+
+    Args:
+        path: An explicit backup directory, if the caller has one.
+        config_path: The config file this backup directory is *for*, used
+            to derive a default when *path* is not given. CFGPLAN-001
+            (6th tool-specific validation run): this used to default to
+            the hardcoded, absolute ``~/.missy/config.d`` regardless of
+            *config_path* -- so even a fully test-isolated ``tmp_path``
+            config file's backup still landed in the real, live
+            ``~/.missy/config.d``, silently polluting the operator's own
+            config backup history with fake fixture content (and, since
+            backups are pruned to a max of 5, potentially evicting
+            genuine backups out of the retained window). Deriving from
+            *config_path*'s own parent directory when it's provided
+            preserves the exact same real-world default (a real config
+            at ``~/.missy/config.yaml`` still backs up to
+            ``~/.missy/config.d``) while making a differently-located
+            config file (test fixture or otherwise) keep its backups
+            alongside itself instead.
+
+    Returns:
+        The resolved, expanded backup directory path.
+    """
+    if path is not None:
+        return path.expanduser()
+    if config_path is not None:
+        return (Path(config_path).expanduser().parent / "config.d").expanduser()
+    return Path(DEFAULT_BACKUP_DIR).expanduser()
 
 
 def backup_config(config_path: str | Path, backup_dir: str | Path | None = None) -> Path:
@@ -25,13 +52,17 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
 
     Args:
         config_path: Path to the current config file.
-        backup_dir: Directory to store backups (default ``~/.missy/config.d``).
+        backup_dir: Directory to store backups. Defaults to a
+            ``config.d`` directory alongside *config_path* itself (see
+            :func:`_backup_dir`) rather than an absolute, hardcoded
+            default -- for the real ``~/.missy/config.yaml`` this is
+            still ``~/.missy/config.d``, unchanged from before.
 
     Returns:
         Path to the newly created backup file.
     """
     src = Path(config_path).expanduser()
-    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None)
+    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=src)
     dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -67,12 +98,15 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
 
     Args:
         config_path: Path to the current config file.
-        backup_dir: Directory containing backups.
+        backup_dir: Directory containing backups. Defaults to a
+            ``config.d`` directory alongside *config_path* itself (see
+            :func:`_backup_dir`), matching :func:`backup_config`'s
+            default.
 
     Returns:
         Path to the restored backup, or ``None`` if no backups exist.
     """
-    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None)
+    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=config_path)
     backups = list_backups(dest_dir)
     if not backups:
         return None
@@ -91,7 +125,9 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
     return latest
 
 
-def list_backups(backup_dir: str | Path | None = None) -> list[Path]:
+def list_backups(
+    backup_dir: str | Path | None = None, config_path: str | Path | None = None
+) -> list[Path]:
     """Return all backup files sorted by true backup creation order (oldest first).
 
     Sorted by filename rather than ``stat().st_mtime``: ``shutil.copy2()``
@@ -107,12 +143,17 @@ def list_backups(backup_dir: str | Path | None = None) -> list[Path]:
     the oldest/latest backup.
 
     Args:
-        backup_dir: Directory to scan (default ``~/.missy/config.d``).
+        backup_dir: Directory to scan (default derived from *config_path*,
+            or ``~/.missy/config.d`` if that's not given either).
+        config_path: The config file these backups are for, used to
+            derive the default *backup_dir* the same way
+            :func:`backup_config`/:func:`rollback` do (see
+            :func:`_backup_dir`) when *backup_dir* isn't given directly.
 
     Returns:
         List of :class:`Path` objects for each backup file.
     """
-    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None)
+    dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=config_path)
     if not dest_dir.exists():
         return []
     return sorted(

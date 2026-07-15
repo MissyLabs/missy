@@ -226,39 +226,52 @@ class TestConfigWatcherStatOSError:
 
 
 class TestSettingsVaultResolutionFailure:
-    """_resolve_vault_ref: when Vault().resolve() raises, returns the original value.
+    """_resolve_vault_ref: when Vault().resolve() raises VaultError, fail loudly.
 
-    The function does a local ``from missy.security.vault import Vault`` inside the
-    try block, so we patch the Vault class at its definition site.
+    VAULT-004 (6th tool-specific validation run): this used to swallow the
+    failure and silently return the original, unresolved reference string
+    as if it were the real secret. It now raises ConfigurationError instead,
+    matching Vault.resolve()'s own documented contract -- a broken
+    vault://KEY or $ENV_VAR reference should fail at config-load time, not
+    silently become a garbage credential that only fails confusingly later
+    at provider-call time.
+
+    The function does a local ``from missy.security.vault import Vault``
+    inside the try block, so we patch the Vault class at its definition site.
     """
 
-    def test_vault_resolve_exception_returns_original_value(self) -> None:
-        """When Vault.resolve raises, the function logs debug and returns the original ref."""
+    def test_vault_resolve_exception_raises_configuration_error(self) -> None:
         from missy.config.settings import _resolve_vault_ref
+        from missy.core.exceptions import ConfigurationError
+        from missy.security.vault import VaultError
 
         original_ref = "vault://MISSING_SECRET"
 
         mock_vault_instance = MagicMock()
-        mock_vault_instance.resolve.side_effect = Exception("vault not initialised")
+        mock_vault_instance.resolve.side_effect = VaultError("vault://MISSING_SECRET not found in vault")
 
-        with patch("missy.security.vault.Vault", return_value=mock_vault_instance):
-            result = _resolve_vault_ref(original_ref)
+        with (
+            patch("missy.security.vault.Vault", return_value=mock_vault_instance),
+            pytest.raises(ConfigurationError, match="MISSING_SECRET"),
+        ):
+            _resolve_vault_ref(original_ref)
 
-        assert result == original_ref
-
-    def test_vault_resolve_env_exception_returns_original_value(self) -> None:
-        """$ENV references that raise also fall through to return the original string."""
+    def test_vault_resolve_env_exception_raises_configuration_error(self) -> None:
+        """$ENV references that raise also fail loudly rather than falling through."""
         from missy.config.settings import _resolve_vault_ref
+        from missy.core.exceptions import ConfigurationError
+        from missy.security.vault import VaultError
 
         original_ref = "$MISSING_ENV_VAR"
 
         mock_vault_instance = MagicMock()
-        mock_vault_instance.resolve.side_effect = Exception("env var missing")
+        mock_vault_instance.resolve.side_effect = VaultError("Environment variable MISSING_ENV_VAR is not set")
 
-        with patch("missy.security.vault.Vault", return_value=mock_vault_instance):
-            result = _resolve_vault_ref(original_ref)
-
-        assert result == original_ref
+        with (
+            patch("missy.security.vault.Vault", return_value=mock_vault_instance),
+            pytest.raises(ConfigurationError, match="MISSING_ENV_VAR"),
+        ):
+            _resolve_vault_ref(original_ref)
 
     def test_non_vault_ref_returned_unchanged(self) -> None:
         """Plain strings bypass vault resolution entirely."""

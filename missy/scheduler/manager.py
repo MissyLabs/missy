@@ -71,6 +71,18 @@ class SchedulerManager:
             AgentConfig sites but not others" gap ``default_max_spend_usd``
             closed for the spend cap. ``None``/omitted means no extra
             kwargs are added, matching ``AgentConfig``'s own defaults.
+        max_jobs: The operator's configured ``scheduling.max_jobs`` cap
+            (0 = unlimited, matching :class:`~missy.config.settings.SchedulingPolicy`'s
+            own default). SCHED-003 (6th tool-specific validation run):
+            this was a real, documented, correctly-parsed config field
+            with ZERO enforcement anywhere in the codebase -- the only
+            other reference to it was ``api/diagnostics.py`` merely
+            *displaying* the configured value and, ironically,
+            *recommending* operators set it for tighter posture, with no
+            actual effect. Live-verified: setting ``max_jobs: 1`` and
+            adding 2 jobs previously succeeded identically both times.
+            Enforced in :meth:`add_job` by counting existing jobs before
+            allowing a new one.
     """
 
     def __init__(
@@ -78,10 +90,12 @@ class SchedulerManager:
         jobs_file: str = "~/.missy/jobs.json",
         default_max_spend_usd: float = 0.0,
         default_tool_policy_kwargs: dict[str, Any] | None = None,
+        max_jobs: int = 0,
     ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
         self._default_max_spend_usd = default_max_spend_usd
         self._default_tool_policy_kwargs = default_tool_policy_kwargs or {}
+        self._max_jobs = max_jobs
         self._scheduler: BackgroundScheduler = BackgroundScheduler()
         self._jobs: dict[str, ScheduledJob] = {}
 
@@ -109,12 +123,29 @@ class SchedulerManager:
         # down the entire scheduler, not just itself. Live-reproduced: a
         # jobs.json with one valid and one invalid-schedule job caused
         # start() to raise before scheduling either.
+        #
+        # SCHED-004 (6th tool-specific validation run): a disabled
+        # (job.enabled == False, i.e. paused via pause_job()) job used to
+        # be skipped here entirely -- never registered with THIS
+        # SchedulerManager instance's APScheduler at all. Since
+        # `missy schedule pause`/`missy schedule resume` are each a
+        # separate CLI invocation that constructs its own standalone
+        # SchedulerManager().start(), a job paused via one invocation was
+        # never re-registered by a subsequent invocation's fresh start(),
+        # so resume_job()'s self._scheduler.resume_job(job_id) genuinely
+        # found no such job in that fresh APScheduler instance and raised
+        # "No job by the id of ... was found" -- even though the job was
+        # clearly still present in self._jobs / jobs.json. Every
+        # persisted job is now always registered here regardless of
+        # `enabled`, immediately paused via APScheduler's own pause_job()
+        # if it's disabled -- so it's always present for a later resume,
+        # in any process, while still never actually firing while paused.
         skipped: list[str] = []
         for job in self._jobs.values():
-            if not job.enabled:
-                continue
             try:
                 self._schedule_job(job)
+                if not job.enabled:
+                    self._scheduler.pause_job(job.id)
             except Exception as exc:
                 skipped.append(job.id)
                 logger.error(
@@ -210,8 +241,25 @@ class SchedulerManager:
         Raises:
             ValueError: When *schedule* cannot be parsed, or
                 *capability_mode* is not a recognized value.
-            SchedulerError: When APScheduler fails to register the job.
+            SchedulerError: When APScheduler fails to register the job,
+                or the operator's configured ``max_jobs`` limit
+                (SCHED-003) would be exceeded.
         """
+        # SCHED-003: enforce the operator's configured job cap before any
+        # other validation, so a capped-out operator gets a clear refusal
+        # rather than the job silently being created anyway.
+        if self._max_jobs and len(self._jobs) >= self._max_jobs:
+            self._emit_event(
+                event_type="scheduler.job.add",
+                result="deny",
+                detail={"name": name, "error": f"max_jobs limit of {self._max_jobs} reached"},
+            )
+            raise SchedulerError(
+                f"Cannot add job: max_jobs limit of {self._max_jobs} reached "
+                f"({len(self._jobs)} job(s) already scheduled). Remove an "
+                "existing job first, or raise scheduling.max_jobs in config.yaml."
+            )
+
         # --- Input validation ---
         if not name or not name.strip():
             raise ValueError("Job name must not be empty.")

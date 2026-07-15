@@ -1,27 +1,40 @@
 """ACPX provider for the Missy framework.
 
-Wraps the `acpx <https://github.com/openclaw/acpx>`_ CLI — a headless
-Agent Client Protocol client that can talk to Claude, Codex, Gemini,
-Cursor, and many other coding agents over a structured protocol instead
-of PTY scraping.
+Despite the module name (kept for backward-compat with existing
+``providers.acpx`` config sections), this no longer shells out to the
+`acpx <https://github.com/openclaw/acpx>`_ CLI. As of the 6th
+tool-specific validation run's headline finding, it spawns
+``acp_bridge.mjs`` (a minimal, purpose-built Node.js client using the
+official ``@agentclientprotocol/sdk`` package) which talks the real
+Agent Client Protocol directly to ``@zed-industries/claude-agent-acp``.
 
-Prompts are passed to the ``acpx`` binary via ``exec`` (one-shot, no
-saved session) with ``--format json`` so the output is machine-readable
-NDJSON.  Persistent session support is also available: when a
-``session`` name is configured the provider uses the session lifecycle
-(``sessions ensure`` / ``prompt``) instead of ``exec``.
+Why the bypass: acpx's own CLI only forwards ``model``/``allowedTools``/
+``maxTurns`` into the ACP ``session/new`` request. It has no flag for
+two fields the underlying agent genuinely supports at the protocol
+level -- ``_meta.systemPrompt`` (a real system-role prompt channel) and
+``_meta.disableBuiltInTools`` (which actually removes the delegate's own
+native Read/Write/Bash/etc. tools from its tool list, rather than
+exposing them and denying every call after the fact via ``--deny-all``).
+Without a genuine system-role channel, Missy's delegation envelope had
+to be smuggled as plain text inside a single user-role message -- which
+the delegate sometimes correctly flagged, from its own safety
+standpoint, as a jailbreak/identity-override attempt against itself
+(the "over-refusal spiral"). See ``acp_bridge.mjs`` for the full
+protocol-level rationale and ``AcpxProvider._run_acpx`` for the
+before/after reproduction numbers.
 
 Tool Calling
 ~~~~~~~~~~~~
 
-ACPX delegates to external agents that manage their own tool calling
-internally.  Missy's native tools (calculator, file_read, shell_exec,
-etc.) cannot be passed via the Agent Client Protocol, so this provider
-implements a **text-based tool calling protocol**:
+The underlying agent manages its own reasoning internally, but its own
+native tools are switched off entirely (``disableBuiltInTools: true``).
+Missy's native tools (calculator, file_read, shell_exec, etc.) cannot be
+passed via the Agent Client Protocol, so this provider implements a
+**text-based tool calling protocol**:
 
 1. Tool schemas are rendered as a structured instruction block and
-   injected into the prompt so the underlying agent knows what Missy
-   tools are available.
+   injected into the system prompt so the underlying agent knows what
+   Missy tools are available.
 2. The agent is instructed to emit tool requests inside ``<tool_call>``
    XML tags containing a JSON payload.
 3. The provider parses these tags from the response text, extracts
@@ -32,34 +45,26 @@ implements a **text-based tool calling protocol**:
    ``[Tool result for X]: ...`` by the runtime) appear naturally in the
    conversation history that gets flattened into the next prompt.
 
-This makes all 44+ Missy tools available through any ACPX-supported
-agent — Claude, Codex, Gemini, Cursor, etc. — via Discord, CLI, webhook,
-or any other channel.
+This makes all 44+ Missy tools available through this delegate across
+Discord, CLI, webhook, or any other channel.
 
-Install ACPX::
-
-    npm install -g acpx@latest
+Requires Node.js on ``PATH`` (``acp_bridge.mjs`` runs via ``npx
+@zed-industries/claude-agent-acp@latest``, fetched on demand -- no
+global install needed).
 
 Configure in ``config.yaml``::
 
     providers:
       acpx:
         name: acpx
-        model: "claude"          # agent name: claude, codex, gemini, cursor, …
+        model: "claude"          # agent name (currently: claude)
         timeout: 120
         enabled: true
 
-    # Optional per-provider overrides via base_url:
-    #   base_url: "--max-turns 10 --verbose"
-    # (extra CLI flags appended to every invocation)
-    #
-    # Security note: base_url flags that attempt to set --allowed-tools,
-    # --approve-all, --approve-reads, --deny-all, --non-interactive-
-    # permissions, or --cwd are stripped and logged. Those flags enforce
-    # zero native delegate tool access, fail-closed permission handling,
-    # and working-directory isolation; they are hardcoded by this
-    # provider and cannot be relaxed through a mutable local config file.
-    # See FX-A in the validation backlog for the underlying threat model.
+    # base_url is no longer used -- the bridge takes no CLI flags. A
+    # configured base_url is logged and ignored rather than silently
+    # dropped, so a stale config value doesn't look like it's still
+    # doing something.
 """
 
 from __future__ import annotations
@@ -73,6 +78,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -92,145 +98,32 @@ _DEFAULT_TIMEOUT = 120
 _MAX_TIMEOUT_SECONDS = 600
 
 # ---------------------------------------------------------------------------
-# Zero-native-tools / fail-closed permission enforcement (FX-A, corrected)
+# Zero-native-tools / fail-closed permission enforcement (FX-A history)
 #
-# CRITICAL CORRECTION (live-reproduced against the actually-installed
-# acpx@0.3.1 + @zed-industries/claude-agent-acp@0.23.1, not just acpx's own
-# CLI-argument-parsing source): the original FX-A analysis only inspected
-# `acpx`'s own arg-parsing code (`node_modules/acpx/dist/cli.js`). It did
-# not -- and could not, from that file alone -- verify the behavior of the
-# separate downstream agent subprocess acpx spawns and pipes ACP JSON-RPC
-# to (`@zed-industries/claude-agent-acp` for the `claude` agent), which is
-# where permission requests are actually resolved. Direct black-box
-# verification (manually invoking `acpx --format json <flags> --cwd
-# <sandbox> claude exec "read file X"` and inspecting the raw ACP
-# JSON-RPC transcript) proved both original flags insufficient on their
-# own:
+# The original FX-A mechanism was `acpx <agent> exec` invoked with
+# `--allowed-tools ""` + `--non-interactive-permissions deny` +
+# `--deny-all` -- the last of these was the one actually proven (via
+# black-box ACP JSON-RPC transcript inspection against
+# acpx@0.3.1 + @zed-industries/claude-agent-acp@0.23.1) to make every
+# native-tool permission request come back `{"outcome": "selected",
+# "optionId": "reject"}`. That mechanism exposed the delegate's native
+# tools and then denied every call after the fact.
 #
-#   --allowed-tools ""   -> is forwarded as `allowedTools: []` in the
-#                           `session/new` params, but the claude-agent-acp
-#                           harness does NOT treat an empty allowlist as
-#                           "allow nothing" -- the delegate still
-#                           discovered and successfully invoked its own
-#                           native `Read` tool (via a `ToolSearch` +
-#                           `Read` call) and returned real file contents
-#                           from an arbitrary absolute path completely
-#                           outside the isolated cwd.
-#   --non-interactive-permissions deny
-#                       -> per `acpx --help`, this only applies "when
-#                          prompting is unavailable." Because acpx spawns
-#                          claude-agent-acp as a JSON-RPC subprocess that
-#                          CAN complete a `session/request_permission`
-#                          round-trip over the pipe (no TTY required),
-#                          acpx does not consider this "non-interactive"
-#                          in the sense the flag guards -- the permission
-#                          request round-tripped and was answered
-#                          `{"outcome":"selected","optionId":"allow"}`
-#                          with neither flag doing anything to stop it.
-#   --deny-all            -> (the fix) per `acpx --help`, "Deny all
-#                          permission requests" -- unconditional, not
-#                          gated on "prompting is unavailable" the way
-#                          --non-interactive-permissions is. Live-verified:
-#                          the identical Read-tool reproduction above,
-#                          rerun with `--deny-all` added, produces
-#                          `{"outcome":"selected","optionId":"reject"}`,
-#                          the tool call fails with "User refused
-#                          permission to run tool", and the delegate
-#                          correctly reports it cannot access the file.
-#                          `--deny-all` was already present in
-#                          `_SECURITY_FLAG_TOKENS` (stripped if an
-#                          operator's `base_url` tried to set it) but was
-#                          never actually part of the enforced default
-#                          flag set -- it is now.
-#
-# `--allowed-tools ""` and `--non-interactive-permissions deny` are kept
-# as defense-in-depth (harmless, and may matter for other ACP-supported
-# agent backends -- codex, gemini, cursor, etc. -- whose adapters were not
-# individually re-verified here), but `--deny-all` is the flag actually
-# proven to close the gap for the default `claude` agent.
-#
-# These flags are appended to every acpx invocation and are the last
-# tokens before the agent/exec argument, so they cannot be shadowed by
-# operator-configured `base_url` flags even before `_sanitize_extra_flags`
-# strips security-relevant tokens outright.
+# 6th tool-specific validation run: `--deny-all` is superseded by
+# `_meta.disableBuiltInTools: true` (see acp_bridge.mjs), a field the
+# underlying agent genuinely supports at the protocol level but which
+# acpx's own CLI never exposed. This removes the delegate's native tools
+# from its own tool list entirely, rather than exposing-then-denying --
+# strictly stronger (the delegate never sees a tool to reach for, and
+# never sees a stream of denial events to react to) and the mechanism
+# this provider now uses. `acp_bridge.mjs` still auto-denies any
+# permission request that somehow still arrives, as defense-in-depth.
 # ---------------------------------------------------------------------------
 
-_ZERO_NATIVE_TOOLS_FLAGS: list[str] = [
-    "--allowed-tools",
-    "",
-    "--non-interactive-permissions",
-    "deny",
-    "--deny-all",
-]
-
-# Flags whose documented presence in `acpx --help` we require before
-# trusting that an installed acpx version can actually enforce the
-# zero-native-tools contract above. If a future acpx release renames or
-# removes either flag, `is_available()` fails closed rather than silently
-# running the delegate with unrestricted native tool access.
-_REQUIRED_SECURITY_FLAGS: tuple[str, ...] = (
-    "--allowed-tools",
-    "--non-interactive-permissions",
-    "--deny-all",
-)
-
-# Operator-supplied `base_url` extra flags may never set or weaken these:
-# the acpx permission/tool-access flags, plus `--cwd` (working-directory
-# isolation is part of the same FX-A enforcement, not something a mutable
-# local config should be able to redirect back into a real repository).
-_SECURITY_FLAG_TOKENS: frozenset[str] = frozenset(
-    {
-        "--allowed-tools",
-        "--approve-all",
-        "--approve-reads",
-        "--deny-all",
-        "--non-interactive-permissions",
-        "--cwd",
-    }
-)
-
-# Flags in _SECURITY_FLAG_TOKENS that take a separate value token (as
-# opposed to a bare boolean flag) when not given in `--flag=value` form.
-_SECURITY_FLAGS_WITH_VALUE: frozenset[str] = frozenset(
-    {"--allowed-tools", "--non-interactive-permissions", "--cwd"}
-)
-
-
-def _sanitize_extra_flags(flags: list[str]) -> list[str]:
-    """Strip operator-supplied acpx flags that could weaken FX-A enforcement.
-
-    ``base_url`` is a mutable local config value. Nothing read from it may
-    set or reintroduce native delegate tool access or interactive/
-    permissive permission handling -- that enforcement lives in code (see
-    ``_ZERO_NATIVE_TOOLS_FLAGS``) so it cannot be silently disabled by
-    editing ``~/.missy/config.yaml``.
-
-    Args:
-        flags: Raw tokens parsed from ``base_url.split()``.
-
-    Returns:
-        The same tokens with any security-critical flag (and its value
-        token, if applicable) removed.
-    """
-    sanitized: list[str] = []
-    skip_next = False
-    for token in flags:
-        if skip_next:
-            skip_next = False
-            continue
-        bare = token.split("=", 1)[0]
-        if bare in _SECURITY_FLAG_TOKENS:
-            logger.warning(
-                "Ignoring operator-supplied acpx flag %r from base_url: "
-                "zero-native-tools and fail-closed permission enforcement "
-                "is hardcoded and cannot be overridden via config.",
-                token,
-            )
-            if "=" not in token and bare in _SECURITY_FLAGS_WITH_VALUE:
-                skip_next = True
-            continue
-        sanitized.append(token)
-    return sanitized
+# Path to the Node.js ACP client this provider spawns instead of the
+# `acpx` binary. See the module docstring and `acp_bridge.mjs` itself for
+# the full rationale.
+_ACP_BRIDGE_SCRIPT_PATH = Path(__file__).resolve().parent / "acp_bridge.mjs"
 
 
 # ---------------------------------------------------------------------------
@@ -280,22 +173,19 @@ Context: you're being called via the Agent Client Protocol by Missy, an
 agent platform that dispatches tool calls through its own separate,
 policy-enforced tool registry rather than through your built-in tools.
 In this sandboxed invocation, your own built-in file/shell/browser/
-network/terminal tools aren't connected to anything real -- there's no
-actual filesystem, shell, or network behind them here, so calling one
-will fail regardless of the request (--allowed-tools ""). This is a
-deliberate infrastructure choice by the platform operator, not an
-instruction to disregard your own judgment or an attempt to override who
-you are -- you can describe things accurately, including what you
-actually are underneath, while still fulfilling the request through the
-mechanism below.
+network/terminal tools have been switched off entirely for this session
+(disableBuiltInTools) -- they won't appear in your own tool list at all,
+so the only way to take a real action here is the <tool_call> protocol
+below. This is a deliberate infrastructure choice by the platform
+operator, not an instruction to disregard your own judgment or an
+attempt to override who you are -- you can describe things accurately,
+including what you actually are underneath, while still fulfilling the
+request through the mechanism below.
 
 How to fulfill a request here:
 1. To take an action (read a file, run a command, fetch a URL, etc.),
    emit a <tool_call> block for the matching tool in the list below --
    that's the only way an action actually happens in this invocation.
-   Trying your own built-in tool first will just fail (it isn't
-   connected to anything real here) and cost a turn, so go straight to
-   the <tool_call> protocol for the equivalent listed tool instead.
 2. Before saying a requested capability or tool isn't available, check
    the tool list below -- it may well be there under a different name.
 3. Everything above the line "{_CURRENT_TURN_BOUNDARY}" is the prior
@@ -350,25 +240,45 @@ def _render_delegation_envelope(system: str, tool_instructions: str) -> str:
 
 
 # Matches a leaked internal transcript-turn marker inside delegate output.
-# _build_prompt() is the only thing that legitimately emits these tokens;
-# a delegate response containing one is fabricating conversation turns
-# (FX-D) rather than answering the current request.
-_LEAKED_TURN_MARKER_RE = re.compile(r"\n?\[(?:User|Assistant|System)\]:\s", re.I)
+# _build_prompt() is the only thing that legitimately emits "[User]:"/
+# "[Assistant]:"/"[System]:" turn prefixes, and only the runtime's own
+# tool-execution step (missy/agent/runtime.py's _tool_loop) ever emits a
+# "[Tool result for X]:"/"[Tool error for X]:" line -- a delegate response
+# containing either is fabricating something that hasn't actually happened
+# yet (FX-D) rather than answering the current request. The Tool-result
+# variant was discovered live during the acp_bridge.mjs integration's own
+# end-to-end verification (Goal G, 6th tool-specific validation run
+# follow-up): with disableBuiltInTools, the delegate reliably emits a
+# correct, genuine <tool_call> block -- but then, in the SAME response,
+# often continues as though it had already received that call's real
+# result, inventing plausible-looking file contents before Missy's
+# runtime has actually executed anything. Since the genuine result comes
+# back on the NEXT round, this fabricated preview is truncated the same
+# way a leaked "[Assistant]:" continuation is, leaving the real
+# <tool_call> block (which always appears first) intact for parsing.
+_LEAKED_TURN_MARKER_RE = re.compile(
+    r"\n?\[(?:User|Assistant|System|Tool (?:result|error) for [^\]]*)\]:\s", re.I
+)
 
 
 def _strip_leaked_transcript_markers(text: str) -> tuple[str, bool]:
     """Defensively cut off fabricated transcript continuations.
 
     Truncates ``text`` at the first leaked ``[User]:``/``[Assistant]:``/
-    ``[System]:`` marker rather than returning a response that silently
-    contains a simulated future exchange or self-authored verdict.
+    ``[System]:``/``[Tool result for ...]:``/``[Tool error for ...]:``
+    marker rather than returning a response that silently contains a
+    simulated future exchange, self-authored verdict, or an invented
+    preview of a tool result that hasn't actually happened yet.
     Legitimate quoted transcript text supplied by the actual user is part
     of the *input* history, not something the delegate should be
     reproducing verbatim as new turns in its *output*, so this does not
     special-case quoting.
 
     Args:
-        text: Raw delegate response content (tool calls already removed).
+        text: Raw delegate response content, prior to ``<tool_call>``
+            extraction -- a genuine ``<tool_call>`` block always appears
+            before any fabricated marker this catches, so truncating
+            here does not interfere with subsequent tool-call parsing.
 
     Returns:
         A 2-tuple of ``(possibly-truncated text, whether truncation
@@ -379,6 +289,28 @@ def _strip_leaked_transcript_markers(text: str) -> tuple[str, bool]:
         return text, False
     truncated = text[: match.start()].rstrip()
     return truncated, True
+
+
+def _split_system_messages(messages: list[Message]) -> tuple[str, list[Message]]:
+    """Separate system-role content from the rest of a conversation.
+
+    6th tool-specific validation run: the bridge (see ``acp_bridge.mjs``)
+    has a genuine system-role channel (``_meta.systemPrompt``), so system
+    content no longer needs to be flattened into the prompt text
+    alongside user/assistant turns -- doing so is what let it read as
+    untrusted, spoofable text rather than a real system instruction.
+
+    Args:
+        messages: Ordered conversation turns, possibly including one or
+            more ``role == "system"`` messages.
+
+    Returns:
+        A 2-tuple of ``(concatenated system content, remaining
+        non-system messages in original order)``.
+    """
+    system_parts = [m.content for m in messages if m.role == "system"]
+    non_system = [m for m in messages if m.role != "system"]
+    return "\n\n".join(system_parts), non_system
 
 
 # ---------------------------------------------------------------------------
@@ -419,26 +351,13 @@ _MAX_TOOL_CALLS_PER_RESPONSE = 20
 # schema rendering exceeds this, tools are presented in compact mode.
 _MAX_TOOL_INSTRUCTIONS_CHARS = 12_000
 
-# FX-A residual (task #46): how many times complete_with_tools() will
-# re-prompt with an explicit correction after the delegate reaches for a
+# FX-A residual (task #46), now historical: complete_with_tools() used to
+# re-prompt with an explicit correction after the delegate reached for a
 # native tool (always denied by --deny-all) instead of Missy's own
-# <tool_call> protocol. Bounded to avoid an unbounded retry loop driving
-# up cost/latency if the delegate keeps making the same mistake.
-_MAX_NATIVE_TOOL_DENIAL_RETRIES = 1
-
-# Appended to the prompt for the one corrective retry above. Each acpx
-# "exec" call is a fresh, stateless one-shot session (no memory of the
-# prior attempt within the same invocation), so the correction has to
-# restate the instruction explicitly rather than referring back to
-# "your previous attempt" in a way the delegate could actually recall.
-_NATIVE_TOOL_DENIAL_CORRECTION = (
-    "A built-in tool call was just attempted here and failed, as it always "
-    "will in this sandbox (none of your built-in tools are connected to "
-    "anything real in this invocation) -- not a transient error worth "
-    "retrying with a different phrasing. Please respond now using the "
-    "<tool_call> protocol described above for the equivalent listed "
-    "tool, or a plain text answer if no tool is actually needed."
-)
+# <tool_call> protocol. With disableBuiltInTools (see acp_bridge.mjs) the
+# delegate's native tools are removed from its own tool list entirely --
+# there is no tool for it to reach for and get denied -- so this retry
+# path no longer applies and has been removed.
 
 
 def _generate_tool_call_id(name: str, index: int, text_hash: str) -> str:
@@ -870,20 +789,24 @@ def _kill_process_group(proc: subprocess.Popen, *, force: bool = True) -> None:
 
 
 def _run_subprocess_with_group_kill(
-    cmd: list[str], cwd: str, timeout: float
+    cmd: list[str], cwd: str, timeout: float, input_text: str | None = None
 ) -> subprocess.CompletedProcess:
     """Run *cmd* via ``Popen``, killing its whole process group on timeout.
 
     A drop-in replacement for ``subprocess.run(cmd, capture_output=True,
-    text=True, timeout=timeout, cwd=cwd)`` that additionally starts the
-    child in its own process group and, if it doesn't finish within
-    *timeout*, kills that entire group rather than just the immediate
-    child (see module note above).
+    text=True, timeout=timeout, cwd=cwd, input=input_text)`` that
+    additionally starts the child in its own process group and, if it
+    doesn't finish within *timeout*, kills that entire group rather than
+    just the immediate child (see module note above).
 
     Args:
         cmd: Argv list.
         cwd: Working directory for the subprocess.
         timeout: Seconds to wait before killing the process group.
+        input_text: Optional text written to the subprocess's stdin (the
+            acp_bridge.mjs invocation passes its JSON request this way,
+            rather than as a CLI argument, to avoid OS argv-length limits
+            on a long flattened conversation).
 
     Returns:
         A :class:`subprocess.CompletedProcess` with ``returncode``,
@@ -899,6 +822,7 @@ def _run_subprocess_with_group_kill(
     """
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -906,7 +830,7 @@ def _run_subprocess_with_group_kill(
         start_new_session=True,
     )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_process_group(proc)
         # Reap the now-killed process so it doesn't linger as a zombie;
@@ -923,27 +847,30 @@ def _run_subprocess_with_group_kill(
 
 
 class AcpxProvider(BaseProvider):
-    """Provider that delegates to the ``acpx`` CLI binary.
+    """Provider that delegates to ``acp_bridge.mjs`` over the Agent Client Protocol.
 
-    Each completion call spawns ``acpx <agent> exec "<prompt>"`` as a
-    subprocess with ``--format json`` output.  The NDJSON events are
-    parsed and the final assistant text is extracted.
+    Each completion call spawns ``node acp_bridge.mjs`` (see that file),
+    passing the request as JSON on stdin and reading NDJSON events back
+    from stdout. The bridge itself talks real ACP JSON-RPC to
+    ``@zed-industries/claude-agent-acp`` via ``npx``, with the delegate's
+    own built-in tools disabled (``_meta.disableBuiltInTools``) and
+    Missy's delegation envelope delivered through a genuine system-role
+    channel (``_meta.systemPrompt``) rather than smuggled into a single
+    user-role message.
 
-    For tool calling, Missy tool schemas are injected into the prompt
-    text and the agent's response is parsed for ``<tool_call>`` XML
-    blocks.  This enables all Missy tools to work through any ACPX-
-    supported agent (Claude, Codex, Gemini, Cursor, etc.) across all
-    channels (CLI, Discord, Webhook, Voice).
+    For tool calling, Missy tool schemas are injected into the system
+    prompt and the agent's response is parsed for ``<tool_call>`` XML
+    blocks. This enables all Missy tools to work through the delegate
+    across all channels (CLI, Discord, Webhook, Voice).
 
     Args:
         config: Provider config.
 
-            * ``model`` — the ACPX agent name (``claude``, ``codex``,
-              ``gemini``, ``cursor``, etc.).  Defaults to ``"claude"``.
-            * ``base_url`` — extra CLI flags to append to every
-              invocation (e.g. ``"--approve-all --cwd /my/project"``).
-            * ``api_key`` — unused by ACPX itself (agents use their
-              own env-var credentials), but stored for consistency.
+            * ``model`` — the ACP agent name. Defaults to ``"claude"``.
+            * ``base_url`` — no longer used (the bridge takes no CLI
+              flags); if set, logged and ignored.
+            * ``api_key`` — unused (the delegate uses its own env-var
+              credentials), but stored for consistency.
             * ``timeout`` — subprocess timeout in seconds (default 120).
     """
 
@@ -966,9 +893,13 @@ class AcpxProvider(BaseProvider):
                 _MAX_TIMEOUT_SECONDS,
             )
         self._timeout: int = min(requested_timeout, _MAX_TIMEOUT_SECONDS)
-        raw_extra_flags = config.base_url.split() if config.base_url else []
-        self._extra_flags: list[str] = _sanitize_extra_flags(raw_extra_flags)
-        self._binary: str = shutil.which("acpx") or "acpx"
+        if config.base_url:
+            logger.warning(
+                "acpx provider config sets base_url=%r, but this is no longer "
+                "used: acp_bridge.mjs takes a JSON request, not CLI flags. "
+                "Ignoring.",
+                config.base_url,
+            )
         self._sandbox_cwd: str | None = None
 
     # ------------------------------------------------------------------
@@ -976,83 +907,36 @@ class AcpxProvider(BaseProvider):
     # ------------------------------------------------------------------
 
     def is_available(self) -> bool:
-        """Return ``True`` when ``acpx`` is usable *and* can be locked down.
+        """Return ``True`` when the bridge can actually be run.
 
-        Runs ``acpx --version`` to verify the binary executes successfully,
-        then verifies the installed version's ``--help`` output still
-        documents the two flags this provider relies on to force the
-        delegate into Missy's structured tool protocol
-        (``--allowed-tools`` and ``--non-interactive-permissions``; see
-        ``_ZERO_NATIVE_TOOLS_FLAGS``). If either flag is missing -- e.g. a
-        newer or older acpx release renamed or dropped it -- the provider
-        reports itself unavailable rather than silently running the
-        delegate with unrestricted native tool access. This is the
-        provider health check mandated by FX-A: never fall back to
-        unrestricted delegate execution.
+        Verifies ``node`` is on ``PATH`` and ``acp_bridge.mjs`` exists
+        alongside this module. Does not attempt a live ``npx`` fetch of
+        ``@zed-industries/claude-agent-acp`` here (that happens lazily on
+        first real call, same as acpx's own CLI did) -- this check is
+        about whether the bridge mechanism itself is runnable, not
+        network reachability.
         """
-        binary = shutil.which("acpx")
-        if not binary:
-            logger.debug("acpx binary not found on PATH")
+        if not shutil.which("node"):
+            logger.debug("node binary not found on PATH; acp_bridge.mjs cannot run")
             return False
-        try:
-            result = subprocess.run(
-                [binary, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode != 0:
-                return False
-        except Exception as exc:
-            logger.debug("acpx availability check failed: %s", exc)
-            return False
-
-        if not self._verify_zero_native_tools_support(binary):
+        if not _ACP_BRIDGE_SCRIPT_PATH.is_file():
             logger.error(
-                "acpx binary does not document required security flags %s; "
-                "refusing to mark provider available (FX-A fail-closed "
-                "health check).",
-                _REQUIRED_SECURITY_FLAGS,
+                "acp_bridge.mjs not found at %s; refusing to mark provider "
+                "available.",
+                _ACP_BRIDGE_SCRIPT_PATH,
             )
-            self._emit_event(
-                "", "", "error", "acpx missing required zero-native-tools security flags"
-            )
+            self._emit_event("", "", "error", "acp_bridge.mjs missing")
             return False
-
         return True
 
-    @staticmethod
-    def _verify_zero_native_tools_support(binary: str) -> bool:
-        """Check that ``acpx --help`` documents the required security flags.
-
-        Args:
-            binary: Resolved path to the ``acpx`` executable.
-
-        Returns:
-            ``True`` only if every flag in ``_REQUIRED_SECURITY_FLAGS``
-            appears in the help output.
-        """
-        try:
-            result = subprocess.run(
-                [binary, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except Exception as exc:
-            logger.debug("acpx --help check failed: %s", exc)
-            return False
-        if result.returncode != 0:
-            return False
-        help_text = (result.stdout or "") + (result.stderr or "")
-        return all(flag in help_text for flag in _REQUIRED_SECURITY_FLAGS)
-
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
-        """Run a one-shot completion via ``acpx <agent> exec``.
+        """Run a one-shot completion via ``acp_bridge.mjs``.
 
-        Conversation history is flattened into a single prompt string
-        with role prefixes.  The ``--format json`` flag produces NDJSON
-        events from which the assistant text is extracted.
+        System-role content is delivered through the bridge's genuine
+        system-role channel (``_meta.systemPrompt``); the rest of the
+        conversation history is flattened into a single prompt string
+        with role prefixes. The bridge's NDJSON output is parsed and the
+        assistant text extracted.
 
         Args:
             messages: Ordered conversation turns.
@@ -1075,14 +959,16 @@ class AcpxProvider(BaseProvider):
             kwargs.pop("approve_all")
             logger.warning(
                 "Ignoring approve_all kwarg to AcpxProvider.complete(): acpx "
-                "invocations always run with zero native tools and "
-                "--non-interactive-permissions deny (FX-A)."
+                "invocations always run with the delegate's own built-in "
+                "tools disabled (disableBuiltInTools)."
             )
 
-        prompt = self._build_prompt(messages)
+        system_text, non_system_messages = _split_system_messages(messages)
+        prompt = self._build_prompt(non_system_messages)
 
         content, _raw_stdout = self._run_acpx(
             prompt,
+            system_prompt=system_text,
             session_id=session_id,
             task_id=task_id,
             cwd=cwd,
@@ -1100,7 +986,7 @@ class AcpxProvider(BaseProvider):
             )
             raise ProviderError(
                 "acpx delegate response contained only a fabricated transcript "
-                "continuation (leaked [User]:/[Assistant]: marker) with no "
+                "continuation (leaked [User]:/[Assistant]:/[Tool result for ...]: marker) with no "
                 "legitimate content before it"
             )
 
@@ -1149,8 +1035,8 @@ class AcpxProvider(BaseProvider):
     ) -> CompletionResponse:
         """Send messages with tool calling via the text-based protocol.
 
-        Injects tool schemas and calling instructions into the prompt,
-        sends to the ACPX binary, parses the response for
+        Injects tool schemas and calling instructions into the system
+        prompt, sends to ``acp_bridge.mjs``, parses the response for
         ``<tool_call>`` blocks, and returns a :class:`CompletionResponse`
         with any extracted tool calls.
 
@@ -1174,95 +1060,51 @@ class AcpxProvider(BaseProvider):
         self._acquire_rate_limit()
 
         # Build the versioned delegation envelope (FX-A/FX-D): explicit
-        # planning-for-Missy framing, zero-native-tools statement, and a
-        # prohibition on fabricating additional conversation turns.
+        # planning-for-Missy framing, disabled-built-in-tools statement,
+        # and a prohibition on fabricating additional conversation turns.
         #
         # The runtime always passes the same text as both `system` and as
         # messages[0] when messages[0].role == "system" (see
         # AgentRuntime._dicts_to_messages). Fall back to an existing
         # system message's own content when `system` is empty so no
         # caller convention silently loses content.
-        existing_system_content = next((m.content for m in messages if m.role == "system"), "")
+        existing_system_content, non_system_messages = _split_system_messages(messages)
         effective_system = system or existing_system_content
         tool_instructions = _render_tool_instructions(tools)
         augmented_system = _render_delegation_envelope(effective_system, tool_instructions)
 
-        # Inject system prompt into messages
-        augmented_messages = list(messages)
-        has_system = any(m.role == "system" for m in augmented_messages)
-        if has_system:
-            # Replace existing system message content with the envelope
-            # (which already incorporates the original system text).
-            augmented_messages = [
-                Message(role=m.role, content=augmented_system if m.role == "system" else m.content)
-                for m in augmented_messages
-            ]
-        else:
-            augmented_messages.insert(0, Message(role="system", content=augmented_system))
+        current_prompt = self._build_prompt(non_system_messages)
 
-        current_prompt = self._build_prompt(augmented_messages)
+        # Run the bridge with the envelope delivered via the genuine
+        # system-role channel (_meta.systemPrompt) and the delegate's own
+        # built-in tools disabled (_meta.disableBuiltInTools) -- see
+        # _run_acpx and acp_bridge.mjs. There is no more "denied native
+        # tool, retry once" case (FX-A residual, now historical): the
+        # delegate never sees a native tool to reach for in the first
+        # place, so a single call is sufficient.
+        raw_content, _raw_stdout = self._run_acpx(current_prompt, system_prompt=augmented_system)
 
-        # Run ACPX with zero native tools and fail-closed permissions.
-        # Bounded retry (FX-A residual): despite the delegation envelope
-        # instructing the delegate to use Missy's own <tool_call>
-        # protocol instead of any native tool, it frequently still
-        # reaches for a native tool first (Read/Glob/Bash/etc.) -- which
-        # --deny-all unconditionally denies -- and then gives up rather
-        # than retrying with the structured protocol as instructed. A
-        # denied native-tool attempt is detected directly from the ACP
-        # event stream (see _stdout_had_denied_native_tool_call), not by
-        # guessing from prose, so this never fires for a genuine
-        # plain-text answer that never touched a tool. One corrective
-        # re-prompt is attempted before accepting the response as final.
-        tool_calls: list = []
-        remaining_text = ""
-        raw_content = ""
-        for attempt in range(_MAX_NATIVE_TOOL_DENIAL_RETRIES + 1):
-            raw_content, acpx_raw_stdout = self._run_acpx(current_prompt)
-
-            # Defensively cut off any fabricated transcript continuation
-            # before parsing tool calls, so a leaked "[Assistant]:" marker
-            # can't smuggle a bogus second round of tool calls past validation.
-            raw_content, leaked = _strip_leaked_transcript_markers(raw_content)
-            if leaked:
-                logger.warning(
-                    "ACPX response contained a leaked transcript marker; truncated (FX-D)"
+        # Defensively cut off any fabricated transcript continuation
+        # before parsing tool calls, so a leaked "[Assistant]:" marker
+        # can't smuggle a bogus second round of tool calls past validation.
+        raw_content, leaked = _strip_leaked_transcript_markers(raw_content)
+        if leaked:
+            logger.warning("ACPX response contained a leaked transcript marker; truncated (FX-D)")
+            self._emit_event("", "", "deny", "leaked transcript marker stripped from response")
+            if not raw_content.strip():
+                # FX-D: fail closed rather than silently returning an empty
+                # "successful" response when the entire delegate output was
+                # a fabricated transcript continuation with no legitimate
+                # content before it.
+                self._emit_event("", "", "error", "response was entirely a fabricated transcript")
+                raise ProviderError(
+                    "acpx delegate response contained only a fabricated transcript "
+                    "continuation (leaked [User]:/[Assistant]:/[Tool result for ...]: marker) with no "
+                    "legitimate content before it"
                 )
-                self._emit_event("", "", "deny", "leaked transcript marker stripped from response")
-                if not raw_content.strip():
-                    # FX-D: fail closed rather than silently returning an empty
-                    # "successful" response when the entire delegate output was
-                    # a fabricated transcript continuation with no legitimate
-                    # content before it.
-                    self._emit_event(
-                        "", "", "error", "response was entirely a fabricated transcript"
-                    )
-                    raise ProviderError(
-                        "acpx delegate response contained only a fabricated transcript "
-                        "continuation (leaked [User]:/[Assistant]: marker) with no "
-                        "legitimate content before it"
-                    )
 
-            # Parse tool calls from response
-            tool_calls, remaining_text = _parse_tool_calls_from_text(raw_content)
-
-            if tool_calls:
-                break
-            if attempt >= _MAX_NATIVE_TOOL_DENIAL_RETRIES:
-                break
-            if not self._stdout_had_denied_native_tool_call(acpx_raw_stdout):
-                # No Missy tool call, but also no evidence the delegate
-                # ever tried a native tool -- a genuine plain-text
-                # answer, not worth retrying.
-                break
-
-            logger.warning(
-                "acpx delegate attempted a native tool (denied by --deny-all) "
-                "instead of Missy's <tool_call> protocol; retrying once with "
-                "an explicit correction."
-            )
-            self._emit_event("", "", "deny", "native tool call denied; retrying with correction")
-            current_prompt = current_prompt + "\n\n" + _NATIVE_TOOL_DENIAL_CORRECTION
+        # Parse tool calls from response
+        tool_calls, remaining_text = _parse_tool_calls_from_text(raw_content)
 
         if tool_calls:
             # Validate against available tools
@@ -1299,14 +1141,23 @@ class AcpxProvider(BaseProvider):
         )
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
-        """Stream tokens from ``acpx`` by reading NDJSON events line-by-line.
+        """Stream tokens from ``acp_bridge.mjs`` by reading NDJSON events line-by-line.
 
-        Uses ``--format json`` and streams stdout in real time via
-        ``Popen`` instead of waiting for the process to finish.
+        Spawns the bridge via ``Popen`` (rather than ``_run_acpx``'s
+        blocking ``communicate()``) so stdout can be read in real time
+        as events arrive, while the request JSON is written to stdin
+        from a background thread -- writing and reading must happen
+        concurrently here (not write-then-read) to avoid a classic pipe
+        deadlock on a large flattened prompt (parent blocked writing
+        stdin while the child is blocked writing stdout, each waiting on
+        the other to drain).
 
         Args:
             messages: Ordered conversation turns.
-            system: Optional system prompt (prepended if non-empty).
+            system: Optional system prompt, delivered via the bridge's
+                genuine system-role channel. Any ``role == "system"``
+                message already present in *messages* is combined with
+                this (see ``_split_system_messages``), not dropped.
 
         Yields:
             Text chunks as they arrive.
@@ -1314,41 +1165,60 @@ class AcpxProvider(BaseProvider):
         Raises:
             ProviderError: On subprocess failure.
         """
-        if system:
-            messages = [Message(role="system", content=system), *messages]
+        system_text, non_system_messages = _split_system_messages(messages)
+        effective_system = system or system_text
+        prompt = self._build_prompt(non_system_messages)
 
-        prompt = self._build_prompt(messages)
-        cmd = [self._binary, "--format", "json"]
-        cmd.extend(self._extra_flags)
-        cmd.extend(_ZERO_NATIVE_TOOLS_FLAGS)
-        cmd.extend(["--cwd", self._isolated_cwd()])
-        cmd.extend([self._agent, "exec", prompt])
+        request = json.dumps(
+            {
+                "cwd": self._isolated_cwd(),
+                "systemPrompt": effective_system,
+                "prompt": prompt,
+                "timeoutMs": int(self._timeout * 1000),
+            }
+        )
+        cmd = ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
 
         try:
             # FX-G residual: start_new_session=True gives this process
             # its own process group, so the cleanup paths below can kill
             # the whole group (via _kill_process_group) rather than just
-            # this one PID -- acpx can spawn a descendant process (the
-            # underlying claude/codex CLI it wraps) that would otherwise
-            # be orphaned and keep running after this stream gives up.
+            # this one PID -- the bridge spawns a descendant npx/agent
+            # process that would otherwise be orphaned and keep running
+            # after this stream gives up.
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                cwd=self._isolated_cwd(),
                 start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise ProviderError(
-                "acpx binary not found. Install with: npm install -g acpx@latest"
+                "node binary not found -- acp_bridge.mjs requires Node.js to be installed."
             ) from exc
 
+        def _write_stdin() -> None:
+            try:
+                assert proc.stdin is not None
+                proc.stdin.write(request)
+                proc.stdin.close()
+            except Exception:
+                logger.debug("Failed writing request to acp_bridge stdin", exc_info=True)
+
+        writer = threading.Thread(target=_write_stdin, daemon=True)
+        writer.start()
+
+        last_line = ""
         try:
             assert proc.stdout is not None  # for type checker
             for line in proc.stdout:
                 line = line.strip()
                 if not line:
                     continue
+                last_line = line
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
@@ -1361,16 +1231,17 @@ class AcpxProvider(BaseProvider):
                     yield text
 
             proc.wait(timeout=30)
+            writer.join(timeout=5)
             if proc.returncode and proc.returncode != 0:
+                bridge_error = self._extract_bridge_error(last_line)
                 stderr = proc.stderr.read() if proc.stderr else ""
-                raise ProviderError(
-                    f"acpx stream exited with code {proc.returncode}: {stderr[:500]}"
-                )
+                detail = bridge_error or stderr.strip()[:500]
+                raise ProviderError(f"acp_bridge stream exited with code {proc.returncode}: {detail}")
         except ProviderError:
             raise
         except Exception as exc:
             _kill_process_group(proc)
-            raise ProviderError(f"acpx stream failed: {exc}") from exc
+            raise ProviderError(f"acp_bridge stream failed: {exc}") from exc
         finally:
             if proc.poll() is None:
                 _kill_process_group(proc, force=False)
@@ -1382,21 +1253,41 @@ class AcpxProvider(BaseProvider):
     def _run_acpx(
         self,
         prompt: str,
+        system_prompt: str = "",
         session_id: str = "",
         task_id: str = "",
         cwd: str | None = None,
     ) -> tuple[str, str]:
-        """Execute the acpx binary and return the parsed output text.
+        """Run the ACP bridge and return the parsed output text.
 
-        Every invocation is forced to zero native tools
-        (``--allowed-tools ""``) and fail-closed permission handling
-        (``--non-interactive-permissions deny``, ``--deny-all``) per
-        FX-A -- there is no parameter to opt out of this from a caller.
-        The subprocess always runs in an isolated working directory (see
+        6th tool-specific validation run: this previously spawned the
+        ``acpx`` CLI binary, which only forwards ``model``/``allowedTools``/
+        ``maxTurns`` into the ACP ``session/new`` request -- it has no flag
+        for ``_meta.systemPrompt`` (a genuine system-role prompt channel)
+        or ``_meta.disableBuiltInTools`` (which actually removes the
+        delegate's own native tools from its tool list, rather than
+        exposing them and denying every call after the fact via
+        ``--deny-all``). Both are real, supported fields on the
+        underlying ``claude-agent-acp`` agent -- acpx's CLI just never
+        exposes them. Missy's own delegation envelope, smuggled as plain
+        text inside a single user-role message (the only channel acpx's
+        CLI-based invocation allows), was sometimes -- correctly, from
+        the delegate's own safety standpoint -- flagged as a jailbreak/
+        identity-override attempt against itself. Live reproduction of an
+        identical failing prompt: 0/3 and 0/8 with the original envelope
+        wording over the old acpx-CLI mechanism, 11/15 (~73%) after
+        reworking the wording alone (still over the old mechanism), and
+        10/10 once genuine system-role delivery and disabled built-in
+        tools were used instead (see acp_bridge.mjs). The subprocess
+        always runs in an isolated working directory (see
         ``_isolated_cwd``) unless the caller explicitly supplies one.
 
         Args:
-            prompt: The flattened prompt string.
+            prompt: The flattened conversation prompt string (history +
+                current request only -- no system/envelope content; that
+                goes through *system_prompt* instead).
+            system_prompt: The full delegation envelope text, delivered
+                via the bridge's genuine system-role channel.
             session_id: For audit events.
             task_id: For audit events.
             cwd: Optional working directory for the subprocess. Defaults
@@ -1404,24 +1295,31 @@ class AcpxProvider(BaseProvider):
 
         Returns:
             A 2-tuple of ``(extracted text from the NDJSON output, raw
-            stdout)``. The raw stdout lets callers (see
-            ``complete_with_tools``) inspect the full ACP event stream
-            for signals -- such as a denied native-tool call -- that
-            don't survive text extraction.
+            stdout)``.
 
         Raises:
             ProviderError: On subprocess failure.
         """
         resolved_cwd = cwd or self._isolated_cwd()
 
-        cmd = [self._binary, "--format", "json"]
-        cmd.extend(self._extra_flags)
-        cmd.extend(_ZERO_NATIVE_TOOLS_FLAGS)
-        cmd.extend(["--cwd", str(resolved_cwd)])
-        cmd.extend([self._agent, "exec", prompt])
+        request = json.dumps(
+            {
+                "cwd": str(resolved_cwd),
+                "systemPrompt": system_prompt,
+                "prompt": prompt,
+                "timeoutMs": int(self._timeout * 1000),
+            }
+        )
+        cmd = ["node", str(_ACP_BRIDGE_SCRIPT_PATH)]
 
         try:
-            result = _run_subprocess_with_group_kill(cmd, resolved_cwd, self._timeout)
+            # A few extra seconds beyond the bridge's own internal timeout
+            # (passed as timeoutMs above) so the bridge has a chance to
+            # fail gracefully with a clean NDJSON error line first, rather
+            # than this outer timeout winning the race and losing that detail.
+            result = _run_subprocess_with_group_kill(
+                cmd, resolved_cwd, self._timeout + 10, input_text=request
+            )
         except subprocess.TimeoutExpired as exc:
             self._emit_event(session_id, task_id, "error", "subprocess timed out")
             # FX-G: on timeout, any effect this call may have triggered
@@ -1432,10 +1330,9 @@ class AcpxProvider(BaseProvider):
             # retrying, and make any retry idempotent.
             # FX-G residual: _run_subprocess_with_group_kill() has already
             # killed the entire process group (not just the immediate
-            # acpx PID) by the time this exception is raised, so a
-            # descendant process (the underlying claude/codex CLI acpx
-            # wraps) can no longer be orphaned and left running after
-            # Missy gives up on this call.
+            # node PID) by the time this exception is raised, so the
+            # descendant npx/claude-agent-acp process can no longer be
+            # orphaned and left running after Missy gives up on this call.
             raise ProviderError(
                 f"acpx subprocess timed out after {self._timeout}s. The outcome of "
                 "this call is UNKNOWN -- it was not confirmed to succeed or fail. "
@@ -1444,51 +1341,44 @@ class AcpxProvider(BaseProvider):
                 "make any mutating retry idempotent."
             ) from exc
         except FileNotFoundError as exc:
-            self._emit_event(session_id, task_id, "error", "acpx binary not found")
+            self._emit_event(session_id, task_id, "error", "node binary not found")
             raise ProviderError(
-                "acpx binary not found. Install with: npm install -g acpx@latest"
+                "node binary not found -- acp_bridge.mjs requires Node.js to be installed."
             ) from exc
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"acpx subprocess failed: {exc}") from exc
 
         if result.returncode != 0:
-            # A nonzero exit no longer means "no usable output" now that
-            # --deny-all (see _ZERO_NATIVE_TOOLS_FLAGS) unconditionally
-            # rejects every native tool permission request: the delegate
-            # frequently reaches for a native tool first (despite the
-            # delegation envelope instructing it to use Missy's own
-            # <tool_call> protocol instead), the permission is correctly
-            # denied, and acpx exits nonzero (observed: code 5) to signal
-            # "at least one permission was denied this turn" -- but the
-            # delegate's own subsequent agent_message_chunk text is still
-            # a legitimate, safe response (it explains it lacks access,
-            # asks for the specific file, or falls back to emitting a
-            # <tool_call> block as instructed). Discarding that text and
-            # raising unconditionally would make --deny-all appear to
-            # break every request that even brushes against a native
-            # tool, so we still attempt to recover it before failing.
-            recovered = self._parse_ndjson_output(result.stdout)
-            if recovered.strip():
-                logger.warning(
-                    "acpx exited with code %s (a native-tool permission was "
-                    "likely denied this turn) but produced a usable response; "
-                    "using it rather than failing the call.",
-                    result.returncode,
-                )
-                self._emit_event(
-                    session_id,
-                    task_id,
-                    "allow",
-                    f"completion successful despite exit {result.returncode} "
-                    "(native tool permission denied, recovered agent text)",
-                )
-                return recovered, result.stdout
+            # Unlike the old --deny-all CLI mechanism, a nonzero exit here
+            # is a genuine failure (bridge-reported error, or the bridge
+            # process itself crashing) -- there is no more "native tool
+            # denied but recover the text anyway" case, since
+            # disableBuiltInTools means the delegate never sees native
+            # tools to begin with.
+            bridge_error = self._extract_bridge_error(result.stdout)
             stderr = result.stderr.strip()[:500]
-            self._emit_event(session_id, task_id, "error", f"exit {result.returncode}: {stderr}")
-            raise ProviderError(f"acpx exited with code {result.returncode}: {stderr}")
+            detail = bridge_error or stderr
+            self._emit_event(session_id, task_id, "error", f"exit {result.returncode}: {detail}")
+            raise ProviderError(f"acp_bridge exited with code {result.returncode}: {detail}")
 
         return self._parse_ndjson_output(result.stdout), result.stdout
+
+    @staticmethod
+    def _extract_bridge_error(stdout: str) -> str:
+        """Pull the ``error`` field out of acp_bridge.mjs's final NDJSON line, if any."""
+        for line in reversed(stdout.strip().splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "result" and not event.get("ok", True):
+                return str(event.get("error", ""))
+            break
+        return ""
 
     def _isolated_cwd(self) -> str:
         """Return a persistent, isolated working directory for acpx.
@@ -1589,48 +1479,6 @@ class AcpxProvider(BaseProvider):
 
         return ""
 
-    @staticmethod
-    def _stdout_had_denied_native_tool_call(stdout: str) -> bool:
-        """Detect whether the delegate attempted a native tool this turn.
-
-        With ``--deny-all`` (see ``_ZERO_NATIVE_TOOLS_FLAGS``) every
-        native-tool permission request is unconditionally rejected, which
-        surfaces in the ACP NDJSON stream as a ``tool_call_update`` event
-        with ``status: "failed"`` (Missy's own ``<tool_call>`` protocol
-        never produces these -- it's plain text inside
-        ``agent_message_chunk``, not a native ACP tool call). This is a
-        much more reliable signal than pattern-matching the delegate's
-        prose for words like "denied" or "permission".
-
-        Used by :meth:`complete_with_tools` to decide whether a
-        no-Missy-tool-call response is worth one corrective retry (the
-        delegate reached for a native tool instead of Missy's protocol,
-        as instructed, and gave up after being denied) versus a genuine
-        plain-text answer that never touched a tool at all.
-
-        Args:
-            stdout: Raw NDJSON output from an ``acpx`` invocation.
-
-        Returns:
-            ``True`` if at least one native tool call was denied.
-        """
-        for line in stdout.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("method") != "session/update":
-                continue
-            update = event.get("params", {}).get("update", {})
-            if (
-                update.get("sessionUpdate") == "tool_call_update"
-                and update.get("status") == "failed"
-            ):
-                return True
-        return False
 
     @staticmethod
     def _extract_text_from_event(event: dict) -> str:
