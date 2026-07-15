@@ -102,6 +102,19 @@ class TestPromptGenerators:
         assert "complete" in prompt.lower() or "tool output" in prompt.lower()
         assert len(prompt) > 20
 
+    def test_verification_prompt_forbids_placeholder_values(self):
+        """DISC-CMD-004 harness finding (2026-07-14): genuine, audit-
+        verified list_files/file_read/file_write calls were made, but the
+        reported directory listing was entirely invented (fabricated
+        filenames that don't exist). Unlike the zero-tool-call guards in
+        response_guards.py, this can't be caught deterministically since
+        real tools WERE used -- the verification prompt is strengthened
+        to explicitly forbid substituting example-looking values for the
+        actual tool output."""
+        prompt = make_verification_prompt()
+        assert "copy" in prompt.lower() or "exactly" in prompt.lower()
+        assert "placeholder" in prompt.lower() or "invent" in prompt.lower()
+
 
 class TestIsObservationTask:
     """FX-round2-F4: detects requests implying a real vision/memory

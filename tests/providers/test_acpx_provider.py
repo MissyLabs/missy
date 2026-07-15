@@ -901,6 +901,51 @@ class TestParseToolCallsFromText:
         _, text = _parse_tool_calls_from_text(response)
         assert "\n\n\n" not in text
 
+    def test_invoke_mis_close_is_recovered(self):
+        """XT-006 harness finding (2026-07-14): the delegate opened a
+        Missy <tool_call> block correctly but closed it with its own
+        underlying coding-assistant's native "</invoke>" tag instead of
+        "</tool_call>". Before this fix, _TOOL_CALL_PATTERN never matched
+        (no "</tool_call>" present), so the whole well-formed JSON payload
+        -- including a legitimate file_write -- fell through as plain,
+        unexecuted text instead of dispatching."""
+        response = (
+            "The workspace listing succeeded. Now I'll write the report and "
+            "upload it.\n\n"
+            "<tool_call>\n"
+            '{"name": "file_write", "arguments": {"path": "/tmp/report.md", '
+            '"content": "# Report\\nline2\\n"}}\n'
+            "</invoke>"
+        )
+        calls, text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert calls[0].name == "file_write"
+        assert calls[0].arguments["path"] == "/tmp/report.md"
+        assert calls[0].arguments["content"] == "# Report\nline2\n"
+        assert "<tool_call>" not in text
+        assert "</invoke>" not in text
+        assert "The workspace listing succeeded" in text
+
+    def test_strict_close_preferred_when_both_forms_present(self):
+        """A well-formed </tool_call> block must still parse normally --
+        the </invoke> fallback only kicks in when the strict pattern
+        finds nothing at all."""
+        response = '<tool_call>{"name": "calculator", "arguments": {}}</tool_call>'
+        calls, text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert calls[0].name == "calculator"
+        assert text == ""
+
+    def test_genuinely_unclosed_tool_call_with_no_invoke_either_is_not_parsed(self):
+        """A block with no recognizable closing tag at all (neither
+        </tool_call> nor </invoke>) must not be silently misparsed --
+        it's left in the text for the runtime-level leaked-tag guard
+        (missy/agent/runtime.py's _LEAKED_TOOL_CALL_TAG_RE) to catch."""
+        response = '<tool_call>\n{"name": "calculator", "arguments": {}}\nstill going...'
+        calls, text = _parse_tool_calls_from_text(response)
+        assert calls == []
+        assert "<tool_call>" in text
+
 
 # ===========================================================================
 # Tool call validation
@@ -1706,9 +1751,13 @@ class TestCurrentTurnBoundary:
         )
         lines = prompt.splitlines()
         boundary_idx = next(i for i, line in enumerate(lines) if "CURRENT REQUEST" in line)
-        assert lines[boundary_idx + 1] == "[User]: More"
+        # The boundary is immediately followed by the identity reminder
+        # (adjacent for recency, see _CURRENT_TURN_IDENTITY_REMINDER),
+        # then the actual final message.
+        assert "[Reminder]" in lines[boundary_idx + 1]
+        assert lines[boundary_idx + 2] == "[User]: More"
         # Nothing after the final message.
-        assert boundary_idx + 1 == len(lines) - 1
+        assert boundary_idx + 2 == len(lines) - 1
 
     def test_boundary_tracks_last_message_across_growing_history(self):
         # Simulates AgentRuntime._tool_loop() appending tool-result
@@ -1730,7 +1779,8 @@ class TestCurrentTurnBoundary:
             prompt = p._build_prompt(messages)
             lines = prompt.splitlines()
             boundary_idx = next(i for i, line in enumerate(lines) if "CURRENT REQUEST" in line)
-            assert lines[boundary_idx + 1] == lines[-1]
+            assert "[Reminder]" in lines[boundary_idx + 1]
+            assert lines[boundary_idx + 2] == lines[-1]
 
     def test_no_boundary_for_single_user_message_shortcut(self):
         # The single-user-message fast path (used by plain complete())
@@ -1760,7 +1810,12 @@ class TestCurrentTurnBoundary:
         idx = prompt.rfind("CURRENT REQUEST")
         tail = prompt[idx:]
         assert "what is 42+8?" in tail
-        assert tail.index("what is 42+8?") < 80  # close by, not buried in history
+        # Close by (structural boundary line + the identity reminder line,
+        # not buried back in history) -- the reminder widens the gap
+        # versus the boundary marker alone, so the threshold is generous
+        # rather than the tight ~80 chars before it existed.
+        assert tail.index("what is 42+8?") < 400
+        assert "[Reminder]" in tail
 
 
 class TestQuotedTranscriptTextInUserInput:
@@ -1827,7 +1882,8 @@ class TestMultilineAndLongHistoryRequests:
         prompt = p._build_prompt(history)
         lines = prompt.splitlines()
         boundary_idx = next(i for i, line in enumerate(lines) if "CURRENT REQUEST" in line)
-        assert lines[boundary_idx + 1] == "[User]: the actual current question"
+        assert "[Reminder]" in lines[boundary_idx + 1]
+        assert lines[boundary_idx + 2] == "[User]: the actual current question"
         # 101 history lines (1 system + 100 turns) must all precede the boundary.
         assert boundary_idx >= 101
 

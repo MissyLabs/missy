@@ -1200,6 +1200,254 @@ class TestPromiseWithoutActionRetry:
         assert result == "Working on it, here's the file."
 
 
+class TestIdentityConfusionRetry:
+    """3rd tool-specific validation run (2026-07-14): the dominant failure
+    mode -- the acpx delegate denies being Missy ("I'm Claude Code") or
+    denies Missy's own dispatched tools as belonging to a separate
+    platform. Unlike the promise/fabrication guards above, this fires
+    regardless of tools_used, since the harness observed the confusion
+    even in the same turn as a genuine successful tool call.
+    """
+
+    def test_claude_code_denial_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response(
+                "I'm Claude Code -- I don't have access to the Missy platform's "
+                "calculator tool. That belongs to a different agent."
+            ),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.identity_confusion_retry"
+        ]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "The answer is 4."
+
+    def test_not_directed_at_me_denial_triggers_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response(
+                "This Discord message is directed at the Missy agent, not at me. "
+                "I shouldn't respond to it."
+            ),
+            _make_stop_response("The answer is 4."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.identity_confusion_retry"
+        ]
+        assert len(retry_events) == 1
+        assert result == "The answer is 4."
+
+    def test_identity_confusion_after_a_genuine_tool_call_still_retries(self):
+        """VIS-004/XT-005 harness finding: the delegate made a genuine
+        tool call and THEN, in the same reply, denied a sibling tool in
+        the identical namespace. This must still retry even though
+        tools_used is non-empty for the task."""
+        provider = _make_provider()
+        vision_tool = _make_mock_tool("vision_capture")
+        tool_reg = _make_tool_registry([vision_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("vision_capture"),
+            _make_stop_response(
+                "The capture succeeded, but I'm Claude Code and don't have access "
+                "to the Missy platform's vision_analyze tool."
+            ),
+            _make_stop_response("Analysis complete: the image shows a desk."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("capture and analyze the scene")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.identity_confusion_retry"
+        ]
+        assert len(retry_events) == 1
+        assert result == "Analysis complete: the image shows a desk."
+
+    def test_ordinary_reply_never_triggers_identity_confusion_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [_make_stop_response("4")]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.identity_confusion_retry"
+        ]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "4"
+
+
+class TestFalseCapabilityDenialRetry:
+    """False capability denials ("no X11", "headless", "no browser") are a
+    variant of identity confusion that never names Missy/Claude Code
+    explicitly -- so the guard instead checks the denial against the
+    actual tool set offered this turn."""
+
+    def test_headless_denial_triggers_retry_when_x11_tool_available(self):
+        provider = _make_provider()
+        x11_tool = _make_mock_tool("x11_launch")
+        tool_reg = _make_tool_registry([x11_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("No X11, no display, no GUI -- I'm headless."),
+            _make_stop_response("Launched successfully; 1 window open."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("launch a text editor")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.capability_denial_retry"
+        ]
+        assert len(retry_events) == 1
+        assert result == "Launched successfully; 1 window open."
+
+    def test_headless_denial_not_retried_when_no_x11_tool_available(self):
+        """The exact same denial phrase must NOT be flagged when no
+        x11_*/atspi_* tool is actually offered this turn -- a genuine
+        capability gap, not a false one."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("No X11, no display, no GUI -- I'm headless.")
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("launch a text editor")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.capability_denial_retry"
+        ]
+        assert retry_events == []
+        assert result == "No X11, no display, no GUI -- I'm headless."
+
+
+class TestLeakedToolCallTagRetry:
+    """XT-006 harness finding: a provider occasionally leaks a raw,
+    unexecuted <tool_call> block into its final response text (e.g. the
+    acpx delegate mixing Missy's <tool_call> opening tag with its own
+    underlying coding-assistant's native closing tag). Never a legitimate
+    reply -- must retry rather than forward raw protocol syntax."""
+
+    def test_leaked_tool_call_tag_triggers_one_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("file_write")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response(
+                'Now I will write the file.\n\n<tool_call>\n{"name": "file_write", '
+                '"arguments": {"path": "/tmp/x", "content": "hi"}}\n</invoke>'
+            ),
+            _make_stop_response("Done -- file written."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("write hi to /tmp/x")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.leaked_tool_call_retry"
+        ]
+        assert len(retry_events) == 1
+        assert result == "Done -- file written."
+
+    def test_ordinary_reply_never_triggers_leaked_tool_call_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [_make_stop_response("4")]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("what is 2+2")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.leaked_tool_call_retry"
+        ]
+        assert retry_events == []
+        assert result == "4"
+
+
 # ---------------------------------------------------------------------------
 # 7. Runtime with persona — persona shapes system prompt
 # ---------------------------------------------------------------------------
