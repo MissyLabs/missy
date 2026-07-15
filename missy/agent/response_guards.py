@@ -101,7 +101,11 @@ def make_fabrication_retry_prompt(user_input: str = "") -> str:
             Restated verbatim for the same cross-task-anchoring reason
             documented on :func:`make_promise_retry_prompt`.
     """
-    anchor = f"\n\nThe request you must actually fulfill right now is:\n{user_input}" if user_input else ""
+    anchor = (
+        f"\n\nThe request you must actually fulfill right now is:\n{user_input}"
+        if user_input
+        else ""
+    )
     return (
         "Your previous response described running a command, checking "
         "something, or producing a result, but you made no tool call this "
@@ -211,9 +215,7 @@ def make_promise_retry_prompt(user_input: str = "") -> str:
 _IDENTITY_CONFUSION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(?i)\bI(?:'m| am)\s+Claude\s+Code\b"),
     re.compile(r"(?i)\bnot\s+operating\s+as\s+Missy\b"),
-    re.compile(
-        r"(?i)\bbelong(?:s)?\s+to\s+the\s+Missy\s+(?:agent\s+)?platform\b"
-    ),
+    re.compile(r"(?i)\bbelong(?:s)?\s+to\s+the\s+Missy\s+(?:agent\s+)?platform\b"),
     re.compile(
         r"(?i)\b(?:not|isn'?t)\s+(?:callable|available)\s+(?:to|from|in)\s+"
         r"(?:me|this\s+context)\b"
