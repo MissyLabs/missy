@@ -107,9 +107,14 @@ def _addrinfo(ip: str, family: int = socket.AF_INET) -> list:
 
 @pytest.fixture(autouse=True)
 def clean_bus() -> Generator[None, None, None]:
-    """Isolate each test from stale event bus state."""
+    """Isolate event state and provide deterministic public DNS by default.
+
+    Individual DNS behavior tests override this patch explicitly.
+    """
     event_bus.clear()
-    yield
+    public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+    with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
+        yield
     event_bus.clear()
 
 
@@ -1011,16 +1016,42 @@ class TestShortCircuitBehaviour:
         ):
             assert engine.check_host("build.corp.example.com") is True
 
-    def test_exact_host_match_allowed_when_dns_resolution_fails(self):
-        """A hostname that doesn't resolve at all can't be rebound to
-        anything -- the name match still stands and the host is allowed,
-        preserving existing behaviour for names with no live DNS record."""
+    def test_exact_host_match_denied_when_dns_resolution_fails(self):
+        """A name allowlist match is not enough when its address cannot be
+        validated. Otherwise the eventual client resolves independently and
+        creates a policy-check/connect-time DNS rebinding gap."""
         engine = _make_engine(allowed_hosts=["exact.example.com"])
-        with patch(
-            "missy.policy.network.socket.getaddrinfo",
-            side_effect=OSError("Name or service not known"),
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                side_effect=OSError("Name or service not known"),
+            ),
+            pytest.raises(PolicyViolationError, match="DNS resolution failed") as exc_info,
         ):
-            assert engine.check_host("exact.example.com") is True
+            engine.check_host("exact.example.com")
+        assert "policy-validated address" in exc_info.value.detail
+
+    def test_domain_match_denied_when_dns_returns_no_addresses(self):
+        engine = _make_engine(allowed_domains=["*.example.com"])
+        with (
+            patch("missy.policy.network.socket.getaddrinfo", return_value=[]),
+            pytest.raises(PolicyViolationError, match="no valid addresses"),
+        ):
+            engine.check_host("sub.example.com")
+
+    def test_exact_host_dns_failure_emits_one_deny_event_and_no_allow(self):
+        engine = _make_engine(allowed_hosts=["exact.example.com"])
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                side_effect=OSError("temporary resolver failure"),
+            ),
+            pytest.raises(PolicyViolationError),
+        ):
+            engine.check_host("exact.example.com")
+        events = event_bus.get_events(event_type="network_check")
+        assert len(events) == 1
+        assert events[0].result == "deny"
 
     def test_ip_cidr_match_does_not_call_dns(self):
         engine = _make_engine(allowed_cidrs=["10.0.0.0/8"])
@@ -1045,6 +1076,38 @@ class TestDNSMultipleResults:
         with patch("missy.policy.network.socket.getaddrinfo", return_value=multi):
             result = engine.check_host("multi-private.internal")
         assert result is True
+
+    @pytest.mark.parametrize(
+        "blocked_ip",
+        [
+            "100.64.0.1",  # carrier-grade NAT; not ipaddress.is_private
+            "224.0.0.1",  # IPv4 multicast; ipaddress reports is_global
+            "ff02::1",  # IPv6 link-local multicast
+            "0.0.0.0",  # unspecified
+        ],
+    )
+    def test_non_public_dns_answers_require_explicit_cidr(self, blocked_ip):
+        engine = _make_engine(allowed_hosts=["allowlisted.example.com"])
+        family = socket.AF_INET6 if ":" in blocked_ip else socket.AF_INET
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                return_value=_addrinfo(blocked_ip, family=family),
+            ),
+            pytest.raises(PolicyViolationError, match="non-public"),
+        ):
+            engine.check_host("allowlisted.example.com")
+
+    def test_non_public_dns_answer_allowed_when_cidr_is_explicit(self):
+        engine = _make_engine(
+            allowed_hosts=["allowlisted.example.com"],
+            allowed_cidrs=["100.64.0.0/10"],
+        )
+        with patch(
+            "missy.policy.network.socket.getaddrinfo",
+            return_value=_addrinfo("100.64.0.1"),
+        ):
+            assert engine.check_host("allowlisted.example.com") is True
 
     def test_mixed_public_private_private_not_in_cidr_blocks(self):
         """Public + private DNS record: private IP not in CIDR must block the whole request."""

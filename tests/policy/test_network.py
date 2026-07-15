@@ -20,9 +20,14 @@ from missy.policy.network import NetworkPolicyEngine
 
 @pytest.fixture(autouse=True)
 def clear_event_bus() -> Generator[None, None, None]:
-    """Ensure each test starts with a clean event bus."""
+    """Ensure each test starts with a clean bus and deterministic public DNS.
+
+    Individual DNS behavior tests override this patch explicitly.
+    """
     event_bus.clear()
-    yield
+    public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+    with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
+        yield
     event_bus.clear()
 
 
@@ -262,6 +267,17 @@ class TestCheckHostResolved:
             allowed, ip = engine.check_host_resolved("api.example.com")
         assert allowed is True
         assert ip == "93.184.216.34"
+
+    def test_allowlisted_name_dns_failure_never_returns_unpinned_allow(self):
+        engine = make_engine(allowed_hosts=["api.example.com"])
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                side_effect=OSError("resolver unavailable"),
+            ),
+            pytest.raises(PolicyViolationError, match="DNS resolution failed"),
+        ):
+            engine.check_host_resolved("api.example.com")
 
     def test_domain_match_returns_resolved_ip(self):
         engine = make_engine(allowed_domains=["*.example.com"])

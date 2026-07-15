@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.core.exceptions import PolicyViolationError
+
 # ---------------------------------------------------------------------------
 # Scheduler manager: _load_jobs error paths
 # ---------------------------------------------------------------------------
@@ -286,9 +288,11 @@ class TestNetworkPolicyIPParsing:
         fake_infos = [
             (2, 1, 6, "", ("not-an-ip", 80)),
         ]
-        with patch("socket.getaddrinfo", return_value=fake_infos):
-            result = engine.check_host("example.com", 80)
-        assert result is not None
+        with (
+            patch("socket.getaddrinfo", return_value=fake_infos),
+            pytest.raises(PolicyViolationError, match="no valid addresses"),
+        ):
+            engine.check_host("example.com", 80)
 
 
 # ---------------------------------------------------------------------------

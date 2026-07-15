@@ -230,6 +230,32 @@ class TestHandleAskSecretsDetection:
         assert result_kind == "deny"
 
     @pytest.mark.asyncio
+    async def test_scanner_error_fails_closed_and_is_audited(self):
+        interaction = _make_interaction(
+            "ask", options=[{"name": "prompt", "value": "ordinary prompt"}]
+        )
+        interaction["member"] = {"user": {"id": "user-alice"}}
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        channel._agent_runtime = mock_agent
+
+        with patch(
+            "missy.security.secrets.SecretsDetector.has_secrets",
+            side_effect=RuntimeError("scanner offline"),
+        ):
+            result = await _handle_ask(interaction, channel)
+
+        mock_agent.run.assert_not_called()
+        assert "safely inspect" in result
+        channel._emit_audit.assert_called_once_with(
+            "discord.channel.credential_scan_failed",
+            "error",
+            {"author_id": "user-alice", "source": "slash_command_ask"},
+        )
+        assert "ordinary prompt" not in repr(channel._emit_audit.call_args)
+        assert "scanner offline" not in repr(channel._emit_audit.call_args)
+
+    @pytest.mark.asyncio
     async def test_prompt_without_secret_still_forwarded_normally(self):
         interaction = _make_interaction(
             "ask", options=[{"name": "prompt", "value": "What time is it?"}]

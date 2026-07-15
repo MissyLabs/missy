@@ -997,6 +997,25 @@ class TestInteractiveApprovalFlow:
         assert resp.status_code == 200
         approval.prompt_user.assert_called_once()
 
+    def test_operator_approval_still_fails_closed_when_dns_cannot_be_pinned(self) -> None:
+        self._use_restrictive()
+        approval = self._make_approval(prompt_returns=True)
+        set_interactive_approval(approval)
+
+        client = PolicyHTTPClient()
+        with (
+            patch(
+                "missy.policy.network.NetworkPolicyEngine._resolve_best_effort",
+                return_value=[],
+            ),
+            patch.object(httpx.Client, "get") as mock_get,
+            pytest.raises(PolicyViolationError, match="could not be resolved"),
+        ):
+            client.get("https://operator-approved.example.com/")
+
+        approval.prompt_user.assert_called_once()
+        mock_get.assert_not_called()
+
     def test_operator_denies_raises_policy_violation(self) -> None:
         self._use_restrictive()
         approval = self._make_approval(prompt_returns=False)

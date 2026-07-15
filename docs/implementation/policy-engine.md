@@ -90,16 +90,21 @@ The host is normalised to lowercase with IPv6 brackets stripped.
 3. **Exact host match** -- Compare the host against each entry in
    `allowed_hosts`. The configured entry may include a port suffix
    (`"api.github.com:443"`); the port is stripped before comparison.
-   Case-insensitive.
+   Case-insensitive. A name match still requires successful DNS resolution
+   so the address can be validated and pinned to the eventual connection.
 
 4. **Domain suffix match** -- Compare the host against `allowed_domains`.
    - `"github.com"` matches only `"github.com"` exactly.
    - `"*.github.com"` matches `"api.github.com"`, `"github.com"`, and any
      subdomain ending in `.github.com`.
+   - Matching names are denied if DNS fails or returns no valid address;
+     default-deny mode never permits an unvalidated second lookup later.
 
 5. **DNS resolution + CIDR re-check** -- Resolve the hostname using
-   `socket.getaddrinfo()` and check each resulting IP address against the
-   CIDR allow-lists. DNS failures fall through to deny.
+   `socket.getaddrinfo()` and check each resulting IP address. DNS failures
+   and empty/invalid results fail closed. Private, reserved, multicast,
+   local, and otherwise non-public results require an explicit matching
+   `allowed_cidrs` entry.
 
 6. **Deny** -- If none of the above matched, raise `PolicyViolationError`
    with `category="network"`.

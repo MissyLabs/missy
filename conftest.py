@@ -1,4 +1,8 @@
 # conftest.py — pytest configuration
+import contextlib
+import socket
+from unittest.mock import patch
+
 import pytest
 
 collect_ignore = ["tests/discord_live_test.py"]
@@ -39,7 +43,32 @@ def _stop_sleeptime_workers_after_test():
     finally:
         AgentRuntime._make_sleeptime_worker = original
         for worker in created:
-            try:
+            with contextlib.suppress(Exception):
                 worker.stop(timeout=1.0)
-            except Exception:
-                pass
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_public_dns_for_policy_tests(request):
+    """Keep policy/gateway unit tests offline and deterministic.
+
+    Default-deny hostname checks now require a validated address. Most legacy
+    unit tests exercise allowlist matching rather than DNS behavior and used
+    invented hostnames, implicitly relying on resolution failure being allowed.
+    Give those tests a stable public answer. Tests that exercise DNS behavior
+    patch ``socket.getaddrinfo`` explicitly and override this outer patch. The
+    pinned-transport integration suite is excluded because it opens a real
+    loopback server and verifies the actual resolver call count.
+    """
+    path = str(request.fspath)
+    relevant_roots = ("/tests/policy/", "/tests/gateway/", "/tests/unit/", "/tests/integration/")
+    is_policy_or_gateway_test = any(root in path for root in relevant_roots)
+    needs_real_network = path.endswith(
+        ("test_pinned_transport.py", "test_gateway_cost_checkpoint_webhook_edges.py")
+    )
+    if not is_policy_or_gateway_test or needs_real_network:
+        yield
+        return
+
+    public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+    with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
+        yield
