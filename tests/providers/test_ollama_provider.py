@@ -283,6 +283,63 @@ class TestOllamaCompleteWithTools:
         assert result.finish_reason == "stop"
         assert result.tool_calls == []
 
+    def _tool(self, name):
+        tool = MagicMock()
+        tool.name = name
+        tool.description = name
+        tool.get_schema.return_value = {"parameters": {"type": "object", "properties": {}}}
+        return tool
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_tool_call_salvaged_from_content_when_not_structured(self, mock_client_cls):
+        """A model that emits the tool call as JSON text in `content` (no
+        structured `tool_calls`) is recovered and executed, not leaked."""
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "qwen2.5-coder:14b",
+            "message": {
+                "role": "assistant",
+                "content": '{"name": "list_files", "arguments": {"path": "/x"}}',
+            },
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config())
+        result = p.complete_with_tools(
+            [Message(role="user", content="list")], [self._tool("list_files")]
+        )
+        assert result.finish_reason == "tool_calls"
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "list_files"
+        assert result.tool_calls[0].arguments == {"path": "/x"}
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_content_json_not_salvaged_when_name_is_not_an_offered_tool(self, mock_client_cls):
+        """A JSON payload the user legitimately asked for is not mistaken for a
+        tool call when its name matches no offered tool."""
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": '{"name": "vision_devices", "arguments": {}}',
+            },
+            "prompt_eval_count": 5,
+            "eval_count": 5,
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config())
+        result = p.complete_with_tools(
+            [Message(role="user", content="x")], [self._tool("list_files")]
+        )
+        assert result.finish_reason == "stop"
+        assert result.tool_calls == []
+
     @patch("missy.providers.ollama_provider.PolicyHTTPClient")
     def test_tool_call_string_args_handled(self, mock_client_cls):
         """If arguments is a string instead of dict, treat as empty."""

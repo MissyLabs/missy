@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -91,6 +92,89 @@ def _message_to_ollama_payload(msg: Message) -> dict[str, Any]:
     if images:
         payload["images"] = images
     return payload
+
+
+# Matches a ``<tool_call> ... </tool_call>`` block (qwen/Hermes style) OR a bare
+# top-level JSON object, so we can recover a tool call a model emitted as plain
+# text instead of via Ollama's structured ``message.tool_calls`` field.
+_TOOL_CALL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _salvage_tool_calls_from_content(
+    content: str, tool_schemas: list[dict[str, Any]]
+) -> tuple[list[ToolCall], str]:
+    """Recover tool calls a model emitted as text in ``content``.
+
+    Some models/templates on Ollama (seen with several qwen builds) emit a tool
+    call as literal JSON in the message content instead of populating the
+    structured ``message.tool_calls`` field, so the call leaks to the user
+    unexecuted. This conservatively recovers such a call: a candidate is
+    promoted **only** when it parses to ``{"name": <name>, "arguments": {...}}``
+    and ``<name>`` is one of the tool names actually offered this turn — so an
+    ordinary JSON payload the user legitimately asked the model to produce is
+    never mistaken for a tool call.
+
+    Args:
+        content: The assistant message content text.
+        tool_schemas: The Ollama tool schemas sent this turn (``{"type":
+            "function", "function": {"name": ...}}``), used to validate names.
+
+    Returns:
+        ``(tool_calls, cleaned_content)`` — recovered calls (possibly empty) and
+        the content with any promoted tool-call text removed.
+    """
+    if not content or not tool_schemas:
+        return [], content
+
+    valid_names = {
+        (s.get("function") or {}).get("name") for s in tool_schemas if isinstance(s, dict)
+    }
+    valid_names.discard(None)
+    valid_names.discard("")
+    if not valid_names:
+        return [], content
+
+    candidates = _TOOL_CALL_TAG_RE.findall(content)
+    if not candidates:
+        stripped = content.strip()
+        # Only treat the whole message as a call when it *is* a JSON object, to
+        # avoid misreading prose that merely contains a brace.
+        if stripped.startswith("{") and stripped.endswith("}"):
+            m = _JSON_OBJECT_RE.search(stripped)
+            if m:
+                candidates = [m.group(0)]
+
+    recovered: list[ToolCall] = []
+    cleaned = content
+    for raw in candidates:
+        try:
+            obj = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        name = obj.get("name") or obj.get("tool") or ""
+        if name not in valid_names:
+            continue
+        args = obj.get("arguments", obj.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+        recovered.append(
+            ToolCall(id=name[:8], name=name, arguments=args if isinstance(args, dict) else {})
+        )
+        cleaned = cleaned.replace(f"<tool_call>{raw}</tool_call>", "").replace(raw, "")
+
+    if recovered:
+        logger.info(
+            "OllamaProvider: recovered %d tool call(s) from message content that the "
+            "model emitted as text instead of structured tool_calls",
+            len(recovered),
+        )
+    return recovered, cleaned.strip()
 
 
 class OllamaProvider(BaseProvider):
@@ -380,6 +464,14 @@ class OllamaProvider(BaseProvider):
                         arguments=tc_args if isinstance(tc_args, dict) else {},
                     )
                 )
+
+        # Fallback: some models emit the tool call as JSON text in `content`
+        # instead of the structured `tool_calls` field, which would otherwise
+        # leak to the user unexecuted. Recover it (validated against the offered
+        # tool names) so tool-calling stays reliable across model/template quirks.
+        if not parsed_tool_calls:
+            salvaged, content_text = _salvage_tool_calls_from_content(content_text, tool_schemas)
+            parsed_tool_calls = salvaged
 
         if parsed_tool_calls:
             self._emit_event("", "", "allow", "tool_calls")
