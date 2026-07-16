@@ -60,21 +60,32 @@ ComfyUI 0.28 core ships Stable Audio Open 1.0 support (`ConditioningStableAudio`
 input — so audio generation and muxing happen **inside the same workflow graph** as the video,
 in one server round-trip, GPU-accelerated end to end.
 
-Two new parameters, valid with **every** backend:
+Parameters, valid with **every** backend:
 
 - `audio_prompt` — text description of the soundtrack ("gentle rain and distant thunder",
-  "upbeat synthwave"). Adds a Stable Audio Open branch:
-  `CheckpointLoaderSimple(stable-audio-open-1.0.safetensors)` → `CLIPTextEncode` (pos/neg) →
-  `ConditioningStableAudio(seconds_total = final video duration)` → `EmptyLatentAudio` →
-  `KSampler` → `VAEDecodeAudio` → `VHS_VideoCombine.audio`.
+  "upbeat synthwave"). Builds an audio branch selected by `audio_model`.
+- `audio_model` — **`stable-audio-3`** (default, recommended) or **`stable-audio-open-1.0`** (legacy).
 - `audio_path` — mux an existing local audio file instead (uploaded to ComfyUI's input dir,
   loaded via `LoadAudio`). Mutually exclusive with `audio_prompt`.
 
-Models: `Comfy-Org/stable-audio-open-1.0_repackaged` (non-gated) →
-`models/checkpoints/stable-audio-open-1.0.safetensors`, plus `google-t5/t5-base`'s
-`model.safetensors` saved as `models/text_encoders/t5_base.safetensors` (the checkpoint does not
-embed a text encoder; it is loaded via `CLIPLoader(type="stable_audio")`, exactly as in ComfyUI's
-official audio example).
+**`stable-audio-3`** (Stable Audio 3.0 medium base, open-weight, May 2026) — per ComfyUI's official
+`audio_stable_audio_3_medium_base` template's direct (no-reprompt) path:
+`CheckpointLoaderSimple(stable_audio_3_medium_base.safetensors)` +
+`CLIPLoader(t5gemma_b_b_ul2.safetensors, type="stable_audio")` → `CLIPTextEncode` (pos/neg) →
+`KSampler(sampler="lcm", scheduler="simple")` → `VAEDecodeAudio` → `VHS_VideoCombine.audio`.
+SA3 has **no** `ConditioningStableAudio` node — clip length comes from `EmptyLatentAudio` alone.
+Every node class_type already exists in ComfyUI, but running SA3 also needs a ComfyUI build whose
+loaders recognize the SA3 checkpoint architecture (ComfyUI 0.28 predates it) plus the two SA3 model
+files; the tool's preflight names either if missing. Models: `Comfy-Org/stable-audio-3` →
+`models/checkpoints/stable_audio_3_medium_base.safetensors` + `models/text_encoders/t5gemma_b_b_ul2.safetensors`.
+
+**`stable-audio-open-1.0`** (legacy fallback) — the original branch:
+`CheckpointLoaderSimple(stable-audio-open-1.0.safetensors)` → `CLIPTextEncode` (pos/neg) →
+`ConditioningStableAudio(seconds_total = final video duration)` → `EmptyLatentAudio` →
+`KSampler(dpmpp_3m_sde_gpu)` → `VAEDecodeAudio` → `VHS_VideoCombine.audio`. Models:
+`Comfy-Org/stable-audio-open-1.0_repackaged` → `models/checkpoints/stable-audio-open-1.0.safetensors`,
+plus `google-t5/t5-base`'s `model.safetensors` saved as `models/text_encoders/t5_base.safetensors`.
+Both models load the encoder via `CLIPLoader(type="stable_audio")` (the checkpoint embeds none).
 
 Audio duration is derived from the *final* frame count and fps (i.e. after interpolation), so
 the soundtrack always matches the clip length. `audio_negative_prompt` defaults to `"noise, distortion, low quality"`.
@@ -85,8 +96,10 @@ the soundtrack always matches the clip length. `audio_negative_prompt` defaults 
 
 | File | Dir | Source | Purpose |
 |------|-----|--------|---------|
-| `stable-audio-open-1.0.safetensors` | `checkpoints/` | Comfy-Org/stable-audio-open-1.0_repackaged | audio generation |
-| `t5_base.safetensors` | `text_encoders/` | google-t5/t5-base (model.safetensors) | audio text encoder |
+| `stable_audio_3_medium_base.safetensors` | `checkpoints/` | Comfy-Org/stable-audio-3 | audio generation (default, SA3) |
+| `t5gemma_b_b_ul2.safetensors` | `text_encoders/` | Comfy-Org/stable-audio-3 | SA3 audio text encoder |
+| `stable-audio-open-1.0.safetensors` | `checkpoints/` | Comfy-Org/stable-audio-open-1.0_repackaged | audio generation (legacy, SA1) |
+| `t5_base.safetensors` | `text_encoders/` | google-t5/t5-base (model.safetensors) | SA1 audio text encoder |
 | `rife_v4.26.safetensors` | `frame_interpolation/` | Comfy-Org/frame_interpolation | RIFE interpolation |
 | `film_net_fp16.safetensors` | `frame_interpolation/` | Comfy-Org/frame_interpolation | FILM alternative |
 | `RealESRGAN_x2plus.pth` | `upscale_models/` | xinntao/Real-ESRGAN v0.2.1 | 2x upscale |

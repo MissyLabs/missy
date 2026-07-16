@@ -24,10 +24,12 @@ graph, GPU-accelerated):
   backends so output plays smoothly instead of as a slide show.
 * **Upscaling** -- optional 2x RealESRGAN pass (``upscale=True``).
 
-Audio (all backends): ``audio_prompt`` generates a soundtrack with
-Stable Audio Open 1.0 in the same graph, sized to the final clip
-duration, and muxes it into the MP4 via ``VHS_VideoCombine``'s ``audio``
-input. Alternatively ``audio_path`` muxes an existing local audio file.
+Audio (all backends): ``audio_prompt`` generates a soundtrack in the same
+graph -- with Stable Audio 3.0 medium base by default (``audio_model``,
+open-weight, May 2026), or Stable Audio Open 1.0 as a legacy fallback --
+sized to the final clip duration, and muxes it into the MP4 via
+``VHS_VideoCombine``'s ``audio`` input. Alternatively ``audio_path`` muxes an
+existing local audio file.
 
 The tool preflights the server before submitting: it verifies a GPU
 (CUDA/ROCm/MPS/XPU) device is actually present (``allow_cpu=True`` to
@@ -53,8 +55,11 @@ root for sources):
 * svd: ``svd_xt.safetensors`` (``models/checkpoints/``)
 * animatediff: ``v1-5-pruned-emaonly.safetensors`` (``models/checkpoints/``)
   plus ``mm_sd_v15_v2.ckpt`` (``models/animatediff_models/``)
-* audio: ``stable-audio-open-1.0.safetensors`` (``models/checkpoints/``)
-  plus ``t5_base.safetensors`` (``models/text_encoders/``)
+* audio (default, stable-audio-3): ``stable_audio_3_medium_base.safetensors``
+  (``models/checkpoints/``) plus ``t5gemma_b_b_ul2.safetensors``
+  (``models/text_encoders/``); requires a ComfyUI build with SA3 model support
+* audio (legacy, stable-audio-open-1.0): ``stable-audio-open-1.0.safetensors``
+  (``models/checkpoints/``) plus ``t5_base.safetensors`` (``models/text_encoders/``)
 * interpolation: ``rife_v4.26.safetensors`` (``models/frame_interpolation/``)
 * upscale: ``RealESRGAN_x2plus.pth`` (``models/upscale_models/``)
 
@@ -112,8 +117,15 @@ _ANIMATEDIFF_MOTION_MODULE = "mm_sd_v15_v2.ckpt"
 _WAN_DIFFUSION_MODEL = "wan2.2_ti2v_5B_fp16.safetensors"
 _WAN_TEXT_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 _WAN_VAE = "wan2.2_vae.safetensors"
+# Audio backends. Stable Audio 3.0 (medium base, open-weight, May 2026) is the
+# default/recommended text-to-audio model; Stable Audio Open 1.0 (2024) is kept
+# as a legacy fallback for ComfyUI installs that predate SA3 core-model support.
+_AUDIO3_CHECKPOINT = "stable_audio_3_medium_base.safetensors"
+_AUDIO3_TEXT_ENCODER = "t5gemma_b_b_ul2.safetensors"
 _AUDIO_CHECKPOINT = "stable-audio-open-1.0.safetensors"
 _AUDIO_TEXT_ENCODER = "t5_base.safetensors"
+_VALID_AUDIO_MODELS = frozenset({"stable-audio-3", "stable-audio-open-1.0"})
+_DEFAULT_AUDIO_MODEL = "stable-audio-3"
 _INTERPOLATION_MODEL = "rife_v4.26.safetensors"
 _UPSCALE_MODEL = "RealESRGAN_x2plus.pth"
 
@@ -122,6 +134,8 @@ _MODEL_SOURCES = {
     _WAN_DIFFUSION_MODEL: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
     _WAN_TEXT_ENCODER: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
     _WAN_VAE: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    _AUDIO3_CHECKPOINT: "huggingface.co/Comfy-Org/stable-audio-3 (checkpoints/)",
+    _AUDIO3_TEXT_ENCODER: "huggingface.co/Comfy-Org/stable-audio-3 (text_encoders/)",
     _AUDIO_CHECKPOINT: "huggingface.co/Comfy-Org/stable-audio-open-1.0_repackaged",
     _AUDIO_TEXT_ENCODER: "huggingface.co/google-t5/t5-base (model.safetensors, renamed)",
     _INTERPOLATION_MODEL: "huggingface.co/Comfy-Org/frame_interpolation",
@@ -567,6 +581,71 @@ def _append_audio_generation(
     return ["au7", 0]
 
 
+def _append_audio_generation_sa3(
+    graph: dict[str, Any],
+    *,
+    audio_prompt: str,
+    audio_negative_prompt: str,
+    seconds: float,
+    steps: int,
+    cfg: float,
+    seed: int,
+    ckpt_name: str = _AUDIO3_CHECKPOINT,
+    text_encoder: str = _AUDIO3_TEXT_ENCODER,
+) -> list[Any]:
+    """Add a Stable Audio 3.0 (medium base) text-to-audio branch; returns AUDIO.
+
+    Follows ComfyUI's official ``audio_stable_audio_3_medium_base`` template's
+    direct (no-reprompt) path: the checkpoint supplies the diffusion model and
+    audio VAE, the T5-Gemma encoder is loaded via ``CLIPLoader(type="stable_audio")``
+    (same loader type string as SA-Open 1.0, only the encoder file differs), and
+    the positive/negative ``CLIPTextEncode`` conditionings feed ``KSampler``
+    directly -- SA3 drops the ``ConditioningStableAudio`` node, so clip length is
+    controlled solely by ``EmptyLatentAudio``'s ``seconds``. Sampler/scheduler
+    are ``lcm``/``simple`` per the template. Every node class_type here already
+    exists in current ComfyUI; running SA3 additionally requires a ComfyUI build
+    whose model loaders recognise the SA3 checkpoint architecture plus the two
+    SA3 model files (preflight surfaces either if missing).
+    """
+    graph["au0"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": text_encoder, "type": "stable_audio"},
+    }
+    graph["au1"] = {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt_name}}
+    graph["au2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": audio_prompt, "clip": ["au0", 0]},
+    }
+    graph["au3"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": audio_negative_prompt, "clip": ["au0", 0]},
+    }
+    graph["au5"] = {
+        "class_type": "EmptyLatentAudio",
+        "inputs": {"seconds": seconds, "batch_size": 1},
+    }
+    graph["au6"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["au1", 0],
+            "positive": ["au2", 0],
+            "negative": ["au3", 0],
+            "latent_image": ["au5", 0],
+            "seed": seed,
+            "steps": steps,
+            "cfg": cfg,
+            "sampler_name": "lcm",
+            "scheduler": "simple",
+            "denoise": 1.0,
+        },
+    }
+    graph["au7"] = {
+        "class_type": "VAEDecodeAudio",
+        "inputs": {"samples": ["au6", 0], "vae": ["au1", 2]},
+    }
+    return ["au7", 0]
+
+
 def _append_audio_file(graph: dict[str, Any], uploaded_name: str) -> list[Any]:
     """Add a LoadAudio node for a file already uploaded to ComfyUI's input
     directory; returns the AUDIO ref."""
@@ -688,6 +767,7 @@ class VideoGenerateTool(BaseTool):
         audio_path: str = "",
         audio_steps: int = 50,
         audio_cfg: float = 5.0,
+        audio_model: str = _DEFAULT_AUDIO_MODEL,
         checkpoint: str = "",
         motion_module: str = "",
         video_frames: int = 0,
@@ -726,12 +806,14 @@ class VideoGenerateTool(BaseTool):
                 optional for ``wan`` (switches it to image-to-video).
             negative_prompt: What to avoid. Defaults to a per-backend
                 standard negative prompt.
-            audio_prompt: Description of a soundtrack to generate (Stable
-                Audio Open) and mux into the video. Works with every
+            audio_prompt: Description of a soundtrack to generate (via
+                ``audio_model``) and mux into the video. Works with every
                 backend. Mutually exclusive with ``audio_path``.
             audio_negative_prompt: What the soundtrack should avoid.
             audio_path: Local audio file to mux into the video instead of
                 generating one.
+            audio_model: Text-to-audio model -- ``"stable-audio-3"`` (default,
+                recommended) or ``"stable-audio-open-1.0"`` (legacy fallback).
             audio_steps: Sampling steps for audio generation (default 50).
             audio_cfg: CFG scale for audio generation (default 5.0).
             checkpoint: Override the backend's default model filename
@@ -793,6 +875,13 @@ class VideoGenerateTool(BaseTool):
                 success=False,
                 output=None,
                 error=f"Unknown backend {backend!r}; must be one of {sorted(_VALID_BACKENDS)}.",
+            )
+        audio_model = (audio_model or _DEFAULT_AUDIO_MODEL).strip().lower()
+        if audio_model not in _VALID_AUDIO_MODELS:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Unknown audio_model {audio_model!r}; must be one of {sorted(_VALID_AUDIO_MODELS)}.",
             )
         if video_format not in _VIDEO_FORMATS:
             return ToolResult(
@@ -885,6 +974,7 @@ class VideoGenerateTool(BaseTool):
                     checkpoint=checkpoint,
                     motion_module=motion_module,
                     audio_generation=bool(audio_prompt),
+                    audio_model=audio_model,
                     interpolate=interpolate,
                     upscale=upscale,
                 )
@@ -966,7 +1056,12 @@ class VideoGenerateTool(BaseTool):
                 audio_ref = None
                 audio_info: dict[str, Any] | None = None
                 if audio_prompt:
-                    audio_ref = _append_audio_generation(
+                    audio_builder = (
+                        _append_audio_generation
+                        if audio_model == "stable-audio-open-1.0"
+                        else _append_audio_generation_sa3
+                    )
+                    audio_ref = audio_builder(
                         graph,
                         audio_prompt=audio_prompt,
                         audio_negative_prompt=audio_negative_prompt,
@@ -975,7 +1070,11 @@ class VideoGenerateTool(BaseTool):
                         cfg=float(_clamp(audio_cfg, 0.0, 30.0)),
                         seed=seed,
                     )
-                    audio_info = {"source": "generated", "prompt": audio_prompt}
+                    audio_info = {
+                        "source": "generated",
+                        "prompt": audio_prompt,
+                        "model": audio_model,
+                    }
                 elif audio_path:
                     audio_ref = _append_audio_file(graph, uploaded_audio)
                     audio_info = {"source": "file", "path": audio_path}
@@ -1103,6 +1202,7 @@ class VideoGenerateTool(BaseTool):
         audio_generation: bool,
         interpolate: int,
         upscale: bool,
+        audio_model: str = _DEFAULT_AUDIO_MODEL,
     ) -> list[tuple[str, str]]:
         """List the ``(model_folder, filename)`` pairs this run needs."""
         required: list[tuple[str, str]] = []
@@ -1116,8 +1216,12 @@ class VideoGenerateTool(BaseTool):
             required.append(("text_encoders", _WAN_TEXT_ENCODER))
             required.append(("vae", _WAN_VAE))
         if audio_generation:
-            required.append(("checkpoints", _AUDIO_CHECKPOINT))
-            required.append(("text_encoders", _AUDIO_TEXT_ENCODER))
+            if audio_model == "stable-audio-open-1.0":
+                required.append(("checkpoints", _AUDIO_CHECKPOINT))
+                required.append(("text_encoders", _AUDIO_TEXT_ENCODER))
+            else:
+                required.append(("checkpoints", _AUDIO3_CHECKPOINT))
+                required.append(("text_encoders", _AUDIO3_TEXT_ENCODER))
         if interpolate > 1:
             required.append(("frame_interpolation", _INTERPOLATION_MODEL))
         if upscale:
@@ -1340,6 +1444,15 @@ class VideoGenerateTool(BaseTool):
                     "audio_cfg": {
                         "type": "number",
                         "description": "Audio generation CFG scale (default: 5.0).",
+                    },
+                    "audio_model": {
+                        "type": "string",
+                        "enum": sorted(_VALID_AUDIO_MODELS),
+                        "description": (
+                            "Text-to-audio model for audio_prompt. 'stable-audio-3' "
+                            "(default, recommended) or 'stable-audio-open-1.0' (legacy "
+                            "fallback for ComfyUI installs without SA3 support)."
+                        ),
                     },
                     "checkpoint": {
                         "type": "string",
