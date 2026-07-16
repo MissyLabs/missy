@@ -16,6 +16,7 @@ from missy.tools.builtin.video_generate import (
     VideoGenerateTool,
     _append_audio_file,
     _append_audio_generation,
+    _append_audio_generation_sa3,
     _append_interpolation,
     _append_upscale,
     _append_video_combine,
@@ -311,6 +312,45 @@ class TestGraphComposition:
         assert combine["inputs"]["audio"] == audio_ref
         _assert_wiring_consistent(graph)
 
+    def test_audio_generation_sa3_branch(self) -> None:
+        graph, image_ref = self._base_graph()
+        audio_ref = _append_audio_generation_sa3(
+            graph,
+            audio_prompt="gentle waves and seagulls",
+            audio_negative_prompt="noise",
+            seconds=5.0,
+            steps=50,
+            cfg=7.0,
+            seed=11,
+        )
+        assert graph[audio_ref[0]]["class_type"] == "VAEDecodeAudio"
+        # SA3 uses the T5-Gemma encoder via the same stable_audio CLIP type.
+        clip_loader = next(n for n in graph.values() if n["class_type"] == "CLIPLoader")
+        assert clip_loader["inputs"]["type"] == "stable_audio"
+        assert clip_loader["inputs"]["clip_name"] == "t5gemma_b_b_ul2.safetensors"
+        ckpt = next(n for n in graph.values() if n["class_type"] == "CheckpointLoaderSimple")
+        assert ckpt["inputs"]["ckpt_name"] == "stable_audio_3_medium_base.safetensors"
+        # SA3 drops ConditioningStableAudio; conditioning feeds the sampler directly
+        # and duration comes solely from EmptyLatentAudio. (The audio sampler is the
+        # SA3 builder's fixed "au6" node -- the base graph has its own video KSampler.)
+        assert not any(n["class_type"] == "ConditioningStableAudio" for n in graph.values())
+        sampler = graph["au6"]
+        assert sampler["class_type"] == "KSampler"
+        assert sampler["inputs"]["sampler_name"] == "lcm"
+        assert sampler["inputs"]["scheduler"] == "simple"
+        assert graph[sampler["inputs"]["positive"][0]]["class_type"] == "CLIPTextEncode"
+        assert graph["au5"]["inputs"]["seconds"] == 5.0
+        _append_video_combine(
+            graph,
+            image_ref,
+            audio_ref=audio_ref,
+            frame_rate=24,
+            filename_prefix="pfx",
+            video_format="h264-mp4",
+            crf=17,
+        )
+        _assert_wiring_consistent(graph)
+
     def test_audio_file_branch(self) -> None:
         graph, image_ref = self._base_graph()
         audio_ref = _append_audio_file(graph, "song.mp3")
@@ -397,11 +437,16 @@ _MODEL_LISTINGS = {
     "checkpoints": [
         "svd_xt.safetensors",
         "v1-5-pruned-emaonly.safetensors",
+        "stable_audio_3_medium_base.safetensors",
         "stable-audio-open-1.0.safetensors",
     ],
     "animatediff_models": ["mm_sd_v15_v2.ckpt"],
     "diffusion_models": ["wan2.2_ti2v_5B_fp16.safetensors"],
-    "text_encoders": ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "t5_base.safetensors"],
+    "text_encoders": [
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "t5gemma_b_b_ul2.safetensors",
+        "t5_base.safetensors",
+    ],
     "vae": ["wan2.2_vae.safetensors"],
     "frame_interpolation": ["rife_v4.26.safetensors", "film_net_fp16.safetensors"],
     "upscale_models": ["RealESRGAN_x2plus.pth"],
@@ -628,7 +673,11 @@ class TestVideoGenerateExecuteHappyPaths:
         assert result.output["frames"] == 97
         assert result.output["duration_seconds"] > 3.5
         assert result.output["seed"] == 1234
-        assert result.output["audio"] == {"source": "generated", "prompt": "gentle rain on leaves"}
+        assert result.output["audio"] == {
+            "source": "generated",
+            "prompt": "gentle rain on leaves",
+            "model": "stable-audio-3",
+        }
         assert result.output["gpu"]["type"] == "cuda"
         assert save_path.read_bytes() == b"fake video bytes"
 
