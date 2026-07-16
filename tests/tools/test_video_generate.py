@@ -974,6 +974,40 @@ class TestVideoGenerateToolResolvers:
         hosts = tool.resolve_network_hosts({"comfyui_host": "10.0.0.5", "comfyui_port": 9000})
         assert hosts == ["10.0.0.5:9000"]
 
+    def test_default_host_port_from_env_with_local_fallback(self, monkeypatch) -> None:
+        """MISSY_COMFYUI_HOST sets the target; the local server is always
+        appended as a fallback so generation degrades to the local box when a
+        configured remote is down."""
+        import importlib
+
+        import missy.tools.builtin.video_generate as vg
+
+        monkeypatch.setenv("MISSY_COMFYUI_HOST", "10.0.0.230")
+        monkeypatch.setenv("MISSY_COMFYUI_PORT", "8199")
+        importlib.reload(vg)
+        try:
+            tool = vg.VideoGenerateTool()
+            # remote primary, local fallback appended
+            assert tool.resolve_network_hosts({}) == ["10.0.0.230:8199", "127.0.0.1:8199"]
+            # comma-separated ordered list, each optionally host:port
+            monkeypatch.setenv("MISSY_COMFYUI_HOST", "10.0.0.230:9000,10.0.0.231")
+            assert vg._comfyui_candidates_from_env() == [
+                ("10.0.0.230", 9000),
+                ("10.0.0.231", 8199),
+                ("127.0.0.1", 8199),
+            ]
+            # an explicit kwarg is a single target with no fallback
+            assert tool.resolve_network_hosts(
+                {"comfyui_host": "1.2.3.4", "comfyui_port": 9000}
+            ) == ["1.2.3.4:9000"]
+            # a local-only config does not duplicate the fallback
+            monkeypatch.setenv("MISSY_COMFYUI_HOST", "127.0.0.1")
+            assert vg._comfyui_candidates_from_env() == [("127.0.0.1", 8199)]
+        finally:
+            monkeypatch.delenv("MISSY_COMFYUI_HOST", raising=False)
+            monkeypatch.delenv("MISSY_COMFYUI_PORT", raising=False)
+            importlib.reload(vg)
+
     def test_resolve_filesystem_targets_with_all_paths(self) -> None:
         tool = VideoGenerateTool()
         read_paths, write_paths = tool.resolve_filesystem_targets(
