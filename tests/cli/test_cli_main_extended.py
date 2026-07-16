@@ -1940,9 +1940,17 @@ class TestVoiceTestBranches:
             )
         ]
 
+        from missy.channels.voice.tts.base import AudioBuffer
+
         mock_tts = MagicMock()
-        # synthesize is async; return a coroutine that yields bytes
-        mock_tts.synthesize = AsyncMock(return_value=b"\x00" * 44100)
+        # synthesize is async and returns an AudioBuffer (the real contract),
+        # not raw bytes; load() must be callable without error.
+        mock_tts.load = MagicMock(return_value=None)
+        mock_tts.synthesize = AsyncMock(
+            return_value=AudioBuffer(
+                data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav"
+            )
+        )
 
         with (
             patch("missy.channels.voice.registry.DeviceRegistry", return_value=mock_reg),

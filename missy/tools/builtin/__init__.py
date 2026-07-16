@@ -69,6 +69,7 @@ from missy.tools.builtin.memory_tools import (
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
+from missy.tools.builtin.video_edit import VideoEditTool
 from missy.tools.builtin.video_generate import VideoGenerateTool
 from missy.tools.builtin.vision_tools import (
     VisionAnalyzeTool,
@@ -134,6 +135,7 @@ __all__ = [
     "MemorySearchTool",
     "SelfCreateTool",
     "ShellExecTool",
+    "VideoEditTool",
     "VideoGenerateTool",
     "WebFetchTool",
     "X11ClickTool",
@@ -203,6 +205,7 @@ _ALL_TOOL_CLASSES = [
     TTSSpeakTool,
     AudioListDevicesTool,
     AudioSetVolumeTool,
+    VideoEditTool,
     VideoGenerateTool,
     WebFetchTool,
     X11ClickTool,

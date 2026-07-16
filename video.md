@@ -192,9 +192,133 @@ Two fixes discovered live (both folded into the implementation):
    UNET is now loaded with `weight_dtype="fp8_e4m3fn"`, which completes with headroom
    (~7.6 GB peak) at negligible quality cost.
 
-## 7. Explicitly out of scope
+## 7. Explicitly out of scope (generation)
 
 - Managing the ComfyUI process itself (stays a systemd-managed external service).
 - Lip-sync / speech TTS tracks (Missy's Piper TTS is a separate subsystem; muxing a Piper WAV
   via `audio_path` already works and covers the practical need).
 - Wan 2.2 14B (needs ≥16 GB VRAM even at fp8) and streaming progress events over WebSocket.
+
+---
+
+# Part II — Video Editing (`video_edit` tool)
+
+Audit date: 2026-07-16. Second pass over the video tool set. Part I (generation) is
+implemented and live-verified; the remaining capability gap is that **Missy can create
+clips but cannot do anything with them afterwards**.
+
+## 8. Editing gaps found
+
+| # | Gap | Severity |
+|---|-----|----------|
+| E1 | **No splicing** — two or more generated clips cannot be joined into one video. `video_generate` caps a single clip at ~5 s (svd/animatediff) or ~5 s wan default; longer content requires concatenation, which today means the operator shelling out manually. | high (goal) |
+| E2 | **No text overlay** — no way to caption, title, or watermark a video. | high (goal) |
+| E3 | **No basic edits** — no trim/cut, no speed change, no resize of an existing file. "Improve based on feedback" for anything temporal (too long, wrong pacing) currently means a full, slow re-generation. | high (goal) |
+| E4 | **Concat is not naive** — generated clips vary in resolution/fps/audio presence (svd@24fps-interp vs wan@24fps vs animatediff@16fps; some have audio tracks, some are silent). A raw `concat` demuxer join produces broken files; inputs must be normalized (scale/pad/fps/audio) first. | design constraint |
+| E5 | **ComfyUI is the wrong backend for editing** — deterministic cut/join/overlay work needs no GPU sampling and no model; running it through a ComfyUI graph adds latency, VRAM pressure and fragility for zero benefit. | design decision |
+
+## 9. Design
+
+**New tool `video_edit`** (`missy/tools/builtin/video_edit.py`), backed by **ffmpeg/ffprobe**
+as the external tool (E5) — `/usr/bin/ffmpeg` 6.1.1 system package, invoked as a direct
+subprocess (list argv, no shell, sanitized environment following `tts_speak.py`'s
+`_SAFE_*_ENV_VARS` precedent). Verified present in this build: `drawtext` (libfreetype),
+`concat`, `xfade`/`acrossfade`, `atempo`, `libx264`/`libx265`, and `h264_nvenc`/`hevc_nvenc`
+for GPU-accelerated encoding on the same RTX 3070 the generation backend uses.
+
+One tool, an `operation` parameter (mirrors the single-tool-multiple-backends shape of
+`video_generate`):
+
+| operation | purpose | key parameters |
+|-----------|---------|----------------|
+| `concat` | splice 2+ videos into one (E1) | `inputs` (list, order preserved), `transition` (`"none"` \| `"crossfade"`), `transition_duration` |
+| `trim` | frame-accurate cut (E3) | `input`, `start`, `end` or `duration` (re-encode, not `-c copy`, for frame accuracy) |
+| `text` | overlay text (E2) | `input`, `text`, `position` (9 presets or `x`/`y` expressions), `font_size` (0 = auto ≈ height/12), `font_color`, `box` + `box_color`/`box_opacity`, `start`/`end` (timed captions via `enable=between(t,a,b)`), `font_file` |
+| `speed` | change playback speed (E3) | `input`, `factor` 0.25–4.0 (video `setpts`, audio pitch-preserving chained `atempo`) |
+| `resize` | rescale (E3) | `input`, `width`/`height` (0 = derive from aspect; snapped to even) |
+
+Design points:
+
+- **Concat normalization (E4)**: every input is probed with `ffprobe -print_format json`;
+  the target canvas is the first input's resolution (max-fps of the set). Each input goes
+  through `scale=W:H:force_original_aspect_ratio=decrease` + `pad` (letterbox, never
+  distort) + `setsar=1` + `fps=F`, then the `concat` filter. Audio: if *any* input has an
+  audio stream, silent `anullsrc` tracks are synthesized for the ones that don't (trimmed
+  to that input's duration) so `concat=v=1:a=1` always has matched pairs; if *no* input has
+  audio the output is video-only. `transition="crossfade"` chains pairwise
+  `xfade=fade` / `acrossfade` with offsets computed from the probed durations.
+- **drawtext escaping**: the text is written to a **temp textfile** and passed via
+  drawtext's `textfile=` option — sidestepping ffmpeg's notoriously fragile filter-graph
+  quoting entirely; arbitrary user text (colons, quotes, percent signs) cannot break or
+  inject into the filter graph. Default font: DejaVuSans-Bold, located by `_find_font()`
+  probing standard paths (`fonts/truetype/dejavu`, liberation, freefont), overridable via
+  `font_file`.
+- **Encoding**: same surface as `video_generate` — `video_format` = `h264-mp4` (default) /
+  `h265-mp4` / `nvenc_h264-mp4` (NVENC GPU encode), `crf` (default 17; nvenc maps to `-cq`),
+  `+faststart`, `yuv420p`, audio AAC 192k. Output defaults to a timestamped
+  `~/.missy/videos/edit_<ts>.mp4` with the same never-overwrite numeric-suffix collision
+  handling as `video_generate`.
+- **Output dict**: `path`, `operation`, `width`, `height`, `fps`, `duration_seconds`,
+  `has_audio`, `size_bytes`, `inputs` (count), `encoder`, `elapsed_seconds` — the result is
+  ffprobe'd after encoding, so the reported numbers describe the actual file, not the request.
+- **Chaining**: complex edits compose by calling the tool repeatedly (trim → text → concat),
+  exactly like `video_generate`'s "iteration is just calling the tool again" contract.
+
+## 10. Security / policy integration
+
+- `permissions = ToolPermissions(shell=True, filesystem_read=True, filesystem_write=True)`.
+- `resolve_shell_command()` returns `"ffmpeg && ffprobe"` (both binaries run every
+  invocation) — the same SR-1.5 convention as `tts_speak.py`, so `ShellPolicy` checks the
+  real host binaries, not a meaningless `command` kwarg. With shell policy disabled or the
+  binaries not allow-listed, the tool is denied fail-closed.
+- `resolve_filesystem_targets()` declares the real per-call values: reads = `inputs`/
+  `input`/`font_file`, writes = `save_path` or the default videos dir.
+- ffmpeg runs with argv lists (never `shell=True`), a minimal environment, `-nostdin`,
+  and a hard timeout (default 600 s, parameter-overridable); stderr tail is surfaced in
+  errors.
+- Input files must exist and probe as media before any encode starts (actionable errors,
+  matching the generation tool's preflight philosophy).
+
+## 11. Tests + verification plan
+
+- `tests/tools/test_video_edit.py`, same style as `test_video_generate.py`: pure builder
+  functions (`_build_*_command`) asserted structurally without ffmpeg; execute() paths with
+  monkeypatched `subprocess.run`/probe; validation rejections; resolver coverage.
+- Live verification (real ffmpeg 6.1.1): synthesize test clips (`testsrc2`/`sine`), then
+  concat (mixed fps/audio inputs + crossfade), trim, text overlay, speed, resize, NVENC —
+  each output ffprobe-verified (streams, duration, dimensions).
+
+## 12. Live verification results (ffmpeg 6.1.1, 2026-07-16)
+
+Synthetic inputs: 640×480@24 4 s (audio), 1024×576@12 3 s (**silent**), 640×480@24 3 s
+(audio) — deliberately mixed resolution/fps/audio-presence.
+
+| Run | Result |
+|-----|--------|
+| concat all 3 mixed inputs | ✅ 10.0 s (= 4+3+3), 640×480 @ 24 fps, audio present (silent track synthesized for the middle clip) |
+| concat crossfade 0.75 s | ✅ 6.25 s (= 4+3−0.75), xfade + acrossfade |
+| trim 1.0→3.0 s | ✅ exactly 2.0 s output |
+| text overlay, timed 0.5–3.5 s | ✅ frame-extracted at t=2 (rendered) and t=3.9 (absent) — pixel-verified |
+| speed 2x | ✅ 4.0 s → 2.083 s, audio pitch preserved |
+| resize width=1280, NVENC | ✅ 1280×960 (aspect derived), `h264_nvenc` GPU encode |
+| `video_format=h265-mp4` | ✅ ffprobe: `hevc` stream |
+
+Two issues discovered live (both folded into the implementation + regression tests):
+
+1. **drawtext silently renders nothing when the text contains `%`** (its default
+   expansion mode treats `%` as the start of a `%{...}` function; ffmpeg still exits 0,
+   so the failure is invisible without pixel-checking the output). Fixed with
+   `expansion=none` — the tool overlays literal text, never expansion templates.
+2. **`x`/`y`/color parameters were an injection surface**: they enter the filter graph
+   verbatim, so a crafted value (`x=0,movie=/etc/passwd`) could smuggle a whole new
+   filter — including sources reading files the filesystem policy never saw. Now
+   whitelist-validated (`_EXPR_SAFE`/`_COLOR_SAFE`: no `:`/`,`/`;`/`=`/quotes/backslash);
+   the text content itself was already immune via the textfile route.
+
+## 13. Explicitly out of scope (editing)
+
+- A general ffmpeg passthrough (arbitrary filter graphs) — that's `shell_exec` + operator
+  policy territory, not a structured tool.
+- Subtitle files (SRT/ASS burn-in), picture-in-picture, chroma key.
+- Re-encoding-free (`-c copy`) fast paths — frame accuracy and normalization are worth the
+  encode cost at these clip lengths.

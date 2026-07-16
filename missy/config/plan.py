@@ -65,8 +65,14 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
     dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=src)
     dest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
+    # Name the backup after the *source* file, not a hardcoded "config.yaml".
+    # For the real ~/.missy/config.yaml this is unchanged; for a
+    # differently-named config (a migration fixture, a test tmp file) the
+    # backup no longer masquerades as a config.yaml backup and no longer
+    # shares one flat namespace with unrelated configs in the same dir.
+    prefix = src.name
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    backup_path = dest_dir / f"config.yaml.{timestamp}"
+    backup_path = dest_dir / f"{prefix}.{timestamp}"
     # Two backup_config() calls within the same wall-clock second (the
     # timestamp's resolution) previously produced the identical filename,
     # and shutil.copy2() overwrites an existing file with no collision
@@ -77,17 +83,19 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
     # lost.
     suffix = 1
     while backup_path.exists():
-        backup_path = dest_dir / f"config.yaml.{timestamp}_{suffix}"
+        backup_path = dest_dir / f"{prefix}.{timestamp}_{suffix}"
         suffix += 1
     shutil.copy2(str(src), str(backup_path))
 
-    _prune_backups(dest_dir)
+    _prune_backups(dest_dir, prefix=prefix)
     return backup_path
 
 
-def _prune_backups(backup_dir: Path, max_keep: int = MAX_BACKUPS) -> None:
-    """Remove oldest backups so that at most *max_keep* remain."""
-    backups = list_backups(backup_dir)
+def _prune_backups(
+    backup_dir: Path, max_keep: int = MAX_BACKUPS, prefix: str = "config.yaml"
+) -> None:
+    """Remove oldest backups (for *prefix*) so that at most *max_keep* remain."""
+    backups = list_backups(backup_dir, prefix=prefix)
     while len(backups) > max_keep:
         oldest = backups.pop(0)
         oldest.unlink()
@@ -107,7 +115,7 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
         Path to the restored backup, or ``None`` if no backups exist.
     """
     dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=config_path)
-    backups = list_backups(dest_dir)
+    backups = list_backups(dest_dir, prefix=Path(config_path).name)
     if not backups:
         return None
 
@@ -126,7 +134,9 @@ def rollback(config_path: str | Path, backup_dir: str | Path | None = None) -> P
 
 
 def list_backups(
-    backup_dir: str | Path | None = None, config_path: str | Path | None = None
+    backup_dir: str | Path | None = None,
+    config_path: str | Path | None = None,
+    prefix: str | None = None,
 ) -> list[Path]:
     """Return all backup files sorted by true backup creation order (oldest first).
 
@@ -156,8 +166,14 @@ def list_backups(
     dest_dir = _backup_dir(Path(backup_dir) if backup_dir else None, config_path=config_path)
     if not dest_dir.exists():
         return []
+    # Match backups for a specific source config: explicit *prefix* wins,
+    # else derive it from *config_path*'s filename, else fall back to the
+    # historical "config.yaml" prefix (the real config, and any pre-existing
+    # backups written before source-named backups landed).
+    if prefix is None:
+        prefix = Path(config_path).name if config_path else "config.yaml"
     return sorted(
-        (p for p in dest_dir.iterdir() if p.name.startswith("config.yaml.")),
+        (p for p in dest_dir.iterdir() if p.name.startswith(f"{prefix}.")),
         key=lambda p: p.name,
     )
 

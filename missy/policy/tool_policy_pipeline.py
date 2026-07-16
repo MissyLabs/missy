@@ -87,6 +87,23 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "vision_analyze",
     "vision_devices",
     "vision_scene",
+    # Media generation/editing: unlike the browser/x11/atspi tools above,
+    # these do NOT grant host GUI/desktop control -- video_generate talks to
+    # an external ComfyUI server over HTTP and video_edit shells out to
+    # ffmpeg with argv lists, both writing only to ~/.missy/videos. They are
+    # a normal Discord request ("make me a short video / caption this clip")
+    # and are strictly narrower in scope than shell_exec, which is already
+    # exposed here. Their absence made the entire VIDGEN/VIDEDIT Discord test
+    # surface unreachable and drove the model to fabricate results by hand.
+    "video_generate",
+    "video_edit",
+    # Read-only / policy-inheriting agent tools that a Discord user legitimately
+    # needs: memory retrieval is read-only, and delegate_task sub-agents inherit
+    # (never widen) the parent's capability_mode/policy.
+    "memory_search",
+    "memory_describe",
+    "memory_expand",
+    "delegate_task",
 )
 
 DEFAULT_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
@@ -114,6 +131,8 @@ DEFAULT_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
         "tts_speak",
     ),
     "audio": ("tts_speak", "audio_list_devices", "audio_set_volume"),
+    "video": ("video_generate", "video_edit"),
+    "memory": ("memory_search", "memory_describe", "memory_expand"),
     "incus": tuple(name for name in MISSY_DISCORD_TOOLS if name.startswith("incus_")),
     "vision": tuple(name for name in MISSY_DISCORD_TOOLS if name.startswith("vision_")),
     "desktop": (
