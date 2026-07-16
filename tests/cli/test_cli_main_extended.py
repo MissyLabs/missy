@@ -1947,7 +1947,9 @@ class TestVoiceTestBranches:
         # not raw bytes; load() must be callable without error.
         mock_tts.load = MagicMock(return_value=None)
         mock_tts.synthesize = AsyncMock(
-            return_value=AudioBuffer(data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav")
+            return_value=AudioBuffer(
+                data=b"\x00" * 44100, sample_rate=22050, channels=1, format="wav"
+            )
         )
 
         with (

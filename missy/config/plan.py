@@ -91,7 +91,9 @@ def backup_config(config_path: str | Path, backup_dir: str | Path | None = None)
     return backup_path
 
 
-def _prune_backups(backup_dir: Path, max_keep: int = MAX_BACKUPS, prefix: str = "config.yaml") -> None:
+def _prune_backups(
+    backup_dir: Path, max_keep: int = MAX_BACKUPS, prefix: str = "config.yaml"
+) -> None:
     """Remove oldest backups (for *prefix*) so that at most *max_keep* remain."""
     backups = list_backups(backup_dir, prefix=prefix)
     while len(backups) > max_keep:
