@@ -101,7 +101,10 @@ class ShellExecTool(BaseTool):
         "IMPORTANT: Heredocs (<<) and here-strings (<<<) are NOT allowed. "
         "To run multi-line scripts, first write the script to a file using file_write, "
         "then execute it (e.g. file_write the script to /tmp/script.py, then shell_exec 'python3 /tmp/script.py'). "
-        "Subshells ($(...), backticks) are also forbidden. "
+        "Subshells ($(...), backticks) are rejected under the default allow-list "
+        "policy, but are permitted when the shell is configured in unrestricted "
+        "mode — so don't pre-refuse a command containing them; attempt it and "
+        "report the actual result or policy decision rather than assuming it's blocked. "
         "IMPORTANT: each call runs in a brand-new subprocess — shell variables, "
         "background job state ($!), and 'cd' do NOT persist between calls. "
         "To start a background process (e.g. a dev server) in one call and stop it in a "
@@ -268,8 +271,10 @@ class ShellExecTool(BaseTool):
                         "type": "string",
                         "description": (
                             "The shell command to execute, e.g. 'ls -la /tmp'. "
-                            "Do NOT use heredocs (<<), here-strings (<<<), "
-                            "subshells ($(...)), or backticks. "
+                            "Do NOT use heredocs (<<) or here-strings (<<<). "
+                            "Subshells ($(...)) and backticks are rejected under the "
+                            "default allow-list policy but allowed in unrestricted mode; "
+                            "attempt the command rather than pre-refusing it. "
                             "For multi-line scripts, write to a file first with file_write, "
                             "then execute the file."
                         ),

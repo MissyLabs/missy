@@ -4562,6 +4562,7 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
     import time
 
     from missy.channels.voice.registry import DeviceRegistry
+    from missy.channels.voice.tts.base import AudioBuffer  # noqa: F401 (type hint)
     from missy.channels.voice.tts.piper import PiperTTS
 
     # Validate node exists
@@ -4572,23 +4573,42 @@ def voice_test(ctx: click.Context, node_id: str, text: str) -> None:
         _print_error(f"Node {node_id!r} not found in registry.")
         sys.exit(1)
 
+    # Resolve the configured TTS voice so the test uses the same model the
+    # running gateway would.
+    tts_voice = "en_US-lessac-medium"
+    config_path = ctx.obj.get("config_path") if ctx.obj else None
+    if config_path:
+        try:
+            import yaml
+
+            cfg_file = Path(config_path).expanduser()
+            if cfg_file.exists():
+                raw = yaml.safe_load(cfg_file.read_text()) or {}
+                tts_voice = raw.get("voice", {}).get("tts", {}).get("voice", tts_voice)
+        except Exception:
+            logger.debug("voice test: failed to load voice config", exc_info=True)
+
     console.print(f"Synthesizing test phrase for node [bold]{node_id[:8]}[/]...")
     try:
-        tts = PiperTTS()
+        tts = PiperTTS(voice=tts_voice)
+        # PiperTTS.synthesize() requires load() to have resolved the binary and
+        # model file first; without this the command always failed with
+        # "PiperTTS.load() must be called before synthesize()" even when piper
+        # was installed.
+        tts.load()
 
-        async def _synth() -> bytes:
+        async def _synth() -> AudioBuffer:
             return await tts.synthesize(text)
 
         start = time.monotonic()
-        audio_bytes = asyncio.run(_synth())
+        audio = asyncio.run(_synth())
         elapsed = time.monotonic() - start
 
-        # Estimate duration: PCM 16-bit mono 22050 Hz is piper's default output rate
-        sample_rate = 22050
-        duration_s = len(audio_bytes) / (sample_rate * 2)
+        # AudioBuffer.duration_ms is derived from the real PCM length and
+        # sample rate, so no manual byte-math estimate is needed.
         _print_success(
             f"TTS synthesis succeeded in {elapsed:.2f}s — "
-            f"{len(audio_bytes):,} bytes, ~{duration_s:.1f}s of audio."
+            f"{len(audio.data):,} bytes, ~{audio.duration_ms / 1000:.1f}s of audio."
         )
         console.print(
             f"[dim]Would send to node {node.friendly_name or node_id[:8]} "
@@ -6582,11 +6602,15 @@ def benchmark_run_llm(
     else:
         from missy.providers.registry import get_registry
 
+        # A fresh CLI process has not initialised the provider registry; do it
+        # from config here (mirrors _load_subsystems) so run-llm against a real
+        # provider works standalone instead of failing "registry not
+        # initialised" the way 'benchmark run' used to before its own fix.
         try:
             preg = get_registry()
-        except RuntimeError as exc:
-            _print_error(f"Provider registry not initialised: {exc}")
-            raise SystemExit(1) from None
+        except RuntimeError:
+            _load_subsystems(ctx.obj["config_path"] if ctx.obj else "~/.missy/config.yaml")
+            preg = get_registry()
         provider = preg.get(provider_name)
         if provider is None:
             _print_error(
