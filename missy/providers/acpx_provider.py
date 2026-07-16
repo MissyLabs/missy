@@ -343,6 +343,34 @@ _TOOL_CALL_PATTERN_ALT_CLOSE = re.compile(
     re.DOTALL,
 )
 
+# Live-discovered (7th tool-specific validation run follow-up): unlike
+# XT-006 (a Missy <tool_call> block closed with the wrong tag), the
+# delegate sometimes emits its OWN underlying coding assistant's entire
+# native tool-invocation XML format from the start --
+# <function_calls><invoke name="X"><parameter name="Y">value</parameter>
+# </invoke></function_calls> -- with no "<tool_call>" opening tag
+# anywhere in the response at all. disableBuiltInTools (see
+# acp_bridge.mjs) removes the delegate's native tools from its own tool
+# list, but doesn't stop it from reflexively *writing text* in that
+# familiar shape when the underlying model is deeply habituated to it.
+# Because _parse_tool_calls_from_text() previously bailed out entirely
+# whenever "<tool_call>" was absent, this whole block -- including a
+# real, well-formed, evidently-intended shell_exec/etc. call -- fell
+# through as unparsed, undispatched plain text. Reported live: this
+# leaked raw, truncated protocol XML directly into a Discord message
+# ("<function_calls>\n<invoke name=\"shell_exec\">...") while the
+# delegate's actual intended action never happened, and the agent loop
+# burned through max_iterations waiting for a result that could never
+# arrive for a call nothing ever executed.
+_NATIVE_INVOKE_PATTERN = re.compile(
+    r'<invoke\s+name="([^"]*)"\s*>\s*(.*?)\s*</invoke>',
+    re.DOTALL,
+)
+_NATIVE_PARAMETER_PATTERN = re.compile(
+    r'<parameter\s+name="([^"]*)"\s*>(.*?)</parameter>',
+    re.DOTALL,
+)
+
 # Maximum number of tool calls we'll extract from a single response to
 # prevent runaway parsing on adversarial or malformed output.
 _MAX_TOOL_CALLS_PER_RESPONSE = 20
@@ -540,6 +568,72 @@ You can request multiple tools at once:
 # ---------------------------------------------------------------------------
 
 
+def _parse_native_invoke_blocks(text: str, text_hash: str) -> list[ToolCall]:
+    """Recover tool calls from the delegate's own native invocation XML.
+
+    Parses ``<invoke name="X"><parameter name="Y">value</parameter>
+    </invoke>`` blocks (Anthropic's own classic tool-invocation XML
+    shape, distinct from Missy's ``<tool_call>{json}</tool_call>``
+    protocol) into :class:`ToolCall` objects. Only called when the
+    response contains no ``<tool_call>`` tag at all -- see the module
+    comment on :data:`_NATIVE_INVOKE_PATTERN`.
+
+    Every ``<parameter>``'s value is kept as a raw string (this format
+    has no JSON typing) rather than attempting type coercion here --
+    built-in tools that need a non-string type (e.g. ``shell_exec``'s
+    ``timeout: int``) already cast their own arguments internally, so a
+    string value round-trips correctly through Python's own ``int()``/
+    ``float()`` on the tool's side.
+
+    Args:
+        text: The full response text from the agent.
+        text_hash: Short hash of the full response text, for
+            deterministic tool-call ID generation (see
+            :func:`_generate_tool_call_id`).
+
+    Returns:
+        A list of recovered :class:`ToolCall` objects, in the order
+        they appeared. Empty if no well-formed ``<invoke>`` block is
+        found.
+    """
+    tool_calls: list[ToolCall] = []
+    for call_index, match in enumerate(_NATIVE_INVOKE_PATTERN.finditer(text)):
+        if call_index >= _MAX_TOOL_CALLS_PER_RESPONSE:
+            logger.warning(
+                "Truncating native <invoke> tool calls at %d (max %d per response)",
+                call_index,
+                _MAX_TOOL_CALLS_PER_RESPONSE,
+            )
+            break
+
+        name = match.group(1).strip()
+        if not name:
+            continue
+
+        body = match.group(2)
+        arguments: dict[str, str] = {}
+        for param_match in _NATIVE_PARAMETER_PATTERN.finditer(body):
+            pname = param_match.group(1).strip()
+            if not pname:
+                continue
+            pvalue = param_match.group(2)
+            # A single leading/trailing newline is just the formatting
+            # convention of this XML shape (the value starts on its own
+            # line), not part of the value itself -- but internal
+            # whitespace/newlines (e.g. a multi-line shell script) are
+            # preserved verbatim.
+            if pvalue.startswith("\n"):
+                pvalue = pvalue[1:]
+            if pvalue.endswith("\n"):
+                pvalue = pvalue[:-1]
+            arguments[pname] = pvalue
+
+        tc_id = _generate_tool_call_id(name, call_index, text_hash)
+        tool_calls.append(ToolCall(id=tc_id, name=name, arguments=arguments))
+
+    return tool_calls
+
+
 def _parse_tool_calls_from_text(text: str) -> tuple[list[ToolCall], str]:
     """Extract tool call blocks from response text.
 
@@ -559,6 +653,13 @@ def _parse_tool_calls_from_text(text: str) -> tuple[list[ToolCall], str]:
       of ``</tool_call>`` (XT-006) — recovered via
       :data:`_TOOL_CALL_PATTERN_ALT_CLOSE` when the strict pattern finds
       no matches at all, so the intended call still dispatches.
+    - The delegate's entire native ``<function_calls><invoke name="X">
+      <parameter name="Y">value</parameter></invoke></function_calls>``
+      XML format used instead of ``<tool_call>`` from the start —
+      recovered via :func:`_parse_native_invoke_blocks` so the call
+      actually dispatches instead of leaking raw protocol syntax to the
+      user and leaving the agent loop waiting on a result nothing ever
+      produced.
 
     Args:
         text: The full response text from the agent.
@@ -568,6 +669,19 @@ def _parse_tool_calls_from_text(text: str) -> tuple[list[ToolCall], str]:
         has all ``<tool_call>`` blocks stripped out and whitespace cleaned.
     """
     if "<tool_call>" not in text:
+        if "<invoke" in text:
+            text_hash = hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()
+            native_calls = _parse_native_invoke_blocks(text, text_hash)
+            if native_calls:
+                logger.warning(
+                    "Recovered %d tool call(s) from the delegate's own native "
+                    "<invoke> XML format instead of Missy's <tool_call> protocol.",
+                    len(native_calls),
+                )
+                remaining = _NATIVE_INVOKE_PATTERN.sub("", text)
+                remaining = re.sub(r"</?function_calls>", "", remaining)
+                remaining = re.sub(r"\n{3,}", "\n\n", remaining).strip()
+                return native_calls, remaining
         return [], text
 
     # Hash the full text for deterministic ID generation
