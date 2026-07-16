@@ -941,6 +941,120 @@ class TestParseToolCallsFromText:
         assert "<tool_call>" in text
 
 
+class TestNativeInvokeXmlRecovery:
+    """Live-discovered (7th tool-specific validation run follow-up): the
+    delegate sometimes emits its own underlying coding assistant's
+    entire native tool-invocation XML format
+    (<function_calls><invoke name="X"><parameter name="Y">value
+    </parameter></invoke></function_calls>) with no "<tool_call>" tag
+    anywhere in the response. Previously this whole block -- including
+    a real, well-formed, evidently-intended call -- fell through
+    unparsed as plain text, leaking raw protocol XML directly into a
+    Discord message while the intended action never actually happened."""
+
+    def test_recovers_exact_reported_discord_leak(self):
+        """The exact (reconstructed, completed) scenario reported live:
+        a shell_exec call with a multi-line python3 heredoc command."""
+        response = (
+            "<function_calls>\n"
+            '<invoke name="shell_exec">\n'
+            "<parameter name=\"command\">python3 - <<'PY'\n"
+            "import json, urllib.request\n"
+            "obj=json.load(urllib.request.urlopen('http://127.0.0.1:8199/object_info', timeout=10))\n"
+            "for k in sorted(obj):\n"
+            "    if k.startswith('ADE_'):\n"
+            "        print(k, json.dumps(obj[k], indent=2)[:2000])\n"
+            "PY</parameter>\n"
+            "</invoke>\n"
+            "</function_calls>"
+        )
+        calls, text = _parse_tool_calls_from_text(response)
+
+        assert len(calls) == 1
+        assert calls[0].name == "shell_exec"
+        assert calls[0].arguments["command"].startswith("python3 - <<'PY'")
+        assert "ADE_" in calls[0].arguments["command"]
+        assert "<invoke" not in text
+        assert "<function_calls>" not in text
+
+    def test_recovers_simple_single_parameter_call(self):
+        response = '<invoke name="calculator"><parameter name="expression">2+2</parameter></invoke>'
+        calls, text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert calls[0].name == "calculator"
+        assert calls[0].arguments == {"expression": "2+2"}
+        assert text == ""
+
+    def test_recovers_multiple_parameters(self):
+        response = (
+            '<invoke name="file_write">'
+            '<parameter name="path">/tmp/x.txt</parameter>'
+            '<parameter name="content">hello world</parameter>'
+            "</invoke>"
+        )
+        calls, _text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert calls[0].arguments == {"path": "/tmp/x.txt", "content": "hello world"}
+
+    def test_recovers_multiple_invoke_blocks(self):
+        response = (
+            "<function_calls>\n"
+            '<invoke name="file_read"><parameter name="path">/etc/hostname</parameter></invoke>\n'
+            '<invoke name="shell_exec"><parameter name="command">whoami</parameter></invoke>\n'
+            "</function_calls>"
+        )
+        calls, _text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 2
+        assert calls[0].name == "file_read"
+        assert calls[1].name == "shell_exec"
+
+    def test_surrounding_text_preserved(self):
+        response = (
+            "Let me check that for you.\n\n"
+            '<invoke name="calculator"><parameter name="expression">1+1</parameter></invoke>\n\n'
+            "One moment please."
+        )
+        calls, text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert "Let me check that for you." in text
+        assert "One moment please." in text
+        assert "<invoke" not in text
+
+    def test_strict_tool_call_format_still_preferred_when_present(self):
+        """If the response actually uses Missy's own <tool_call> tag,
+        the native-invoke recovery path must never even be consulted."""
+        response = '<tool_call>{"name": "calculator", "arguments": {}}</tool_call>'
+        calls, text = _parse_tool_calls_from_text(response)
+        assert len(calls) == 1
+        assert calls[0].name == "calculator"
+        assert text == ""
+
+    def test_plain_text_with_no_invoke_at_all_untouched(self):
+        response = "Just a normal answer, no tool calls needed."
+        calls, text = _parse_tool_calls_from_text(response)
+        assert calls == []
+        assert text == response
+
+    def test_malformed_invoke_missing_name_skipped(self):
+        response = '<invoke name=""><parameter name="expression">2+2</parameter></invoke>'
+        calls, _text = _parse_tool_calls_from_text(response)
+        assert calls == []
+
+    def test_multiline_parameter_value_preserves_internal_whitespace(self):
+        response = (
+            '<invoke name="file_write">'
+            '<parameter name="path">/tmp/script.py</parameter>'
+            '<parameter name="content">\n'
+            "line one\n"
+            "\n"
+            "line three\n"
+            "</parameter>"
+            "</invoke>"
+        )
+        calls, _text = _parse_tool_calls_from_text(response)
+        assert calls[0].arguments["content"] == "line one\n\nline three"
+
+
 # ===========================================================================
 # Tool call validation
 # ===========================================================================
