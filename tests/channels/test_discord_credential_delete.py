@@ -231,18 +231,66 @@ class TestHandleMessageCredentialDetection:
 
         assert not ch._queue.empty()
 
-    def test_secrets_detection_error_does_not_drop_message(self) -> None:
-        """If SecretsDetector raises unexpectedly, the message is not silently dropped."""
+    def test_secrets_detection_error_fails_closed(self) -> None:
+        """Unscanned content must never be forwarded when the credential
+        protection itself is unavailable."""
         ch = _make_channel()
+        captured: list[dict] = []
 
-        with patch(
-            "missy.security.secrets.SecretsDetector.has_secrets",
-            side_effect=RuntimeError("unexpected"),
+        def _capture_audit(event_type, result, detail):
+            captured.append({"event_type": event_type, "result": result, "detail": detail})
+
+        with (
+            patch(
+                "missy.security.secrets.SecretsDetector.has_secrets",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            patch.object(ch._rest, "send_message", return_value={}) as mock_send,
+            patch.object(ch, "_emit_audit", side_effect=_capture_audit),
         ):
             self._run(ch._handle_message(_message_payload("normal message")))
 
-        # Message should still be enqueued (detection error logged, not re-raised).
-        assert not ch._queue.empty()
+        assert ch._queue.empty()
+        mock_send.assert_called_once()
+        assert "safely inspect" in mock_send.call_args.args[1]
+        scan_events = [
+            event
+            for event in captured
+            if event["event_type"] == "discord.channel.credential_scan_failed"
+        ]
+        assert scan_events == [
+            {
+                "event_type": "discord.channel.credential_scan_failed",
+                "result": "error",
+                "detail": {
+                    "author_id": "11111",
+                    "channel_id": "22222",
+                    "message_id": "33333",
+                    "source": "message_content",
+                },
+            }
+        ]
+        assert "normal message" not in repr(scan_events)
+        assert "unexpected" not in repr(scan_events)
+
+    def test_message_content_is_never_written_to_pre_scan_logs(self, caplog) -> None:
+        import logging
+
+        caplog.set_level(logging.INFO, logger="missy.channels.discord.channel")
+        ch = _make_channel()
+        marker = "SENSITIVE-CONTENT-MUST-NOT-APPEAR"
+
+        with (
+            patch(
+                "missy.security.secrets.SecretsDetector.has_secrets",
+                side_effect=RuntimeError("scanner unavailable"),
+            ),
+            patch.object(ch._rest, "send_message", return_value={}),
+        ):
+            self._run(ch._handle_message(_message_payload(marker)))
+
+        assert marker not in caplog.text
+        assert "content_length=" in caplog.text
 
     def test_own_bot_message_is_filtered_before_credential_check(self) -> None:
         """Own-bot messages are dropped before credential scanning."""

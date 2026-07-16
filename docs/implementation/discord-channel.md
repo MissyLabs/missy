@@ -198,6 +198,15 @@ client also rejects non-Discord CDN hosts.
 
 ---
 
+### Credential scanning failure behavior
+
+Discord text messages, `/ask` prompts, and voice transcripts are scanned for
+credentials before they can reach the agent runtime. Detection failures fail
+closed: the content is not forwarded, a neutral retry message is returned, and
+`discord.channel.credential_scan_failed` is emitted with safe identifiers and
+the input source. Message content and scanner exception text are never copied
+into that audit event.
+
 ## Audit events schema
 
 All events share the base `AuditEvent` fields:

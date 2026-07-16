@@ -146,6 +146,18 @@ workspace_path: "~/workspace"
 audit_log_path: "~/.missy/audit.jsonl"
 ```
 
+### DNS validation and availability
+
+In default-deny mode, an allowlisted hostname must resolve to at least one
+policy-validated address before Missy opens a connection. A DNS timeout,
+resolver failure, empty answer, or answer containing a non-public address that
+is not covered by `network.allowed_cidrs` is denied. This also applies to
+provider and Discord API traffic that uses `PolicyHTTPClient`, so a transient
+resolver outage can appear as provider or channel unavailability. Check the
+application log and `missy audit recent --limit 20 --category network` for a
+`network_check` denial before treating it as a provider outage. Restore DNS
+service and retry the operation; do not weaken the allowlist as a workaround.
+
 ### Environment variables
 
 | Variable | Purpose |

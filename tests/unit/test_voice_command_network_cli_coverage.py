@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from missy.core.exceptions import PolicyViolationError
+
 # ---------------------------------------------------------------------------
 # voice_commands.py: unrecognized request fallthrough
 # ---------------------------------------------------------------------------
@@ -121,11 +123,11 @@ class TestNetworkPolicyUnparseableIP:
             (2, 1, 6, "", ("not-an-ip", 443)),
         ]
 
-        with patch("socket.getaddrinfo", return_value=fake_infos):
-            result = engine.check_host("example.com")
-
-        # Should still be allowed by domain rule, even though IP parsing failed
-        assert result is True
+        with (
+            patch("socket.getaddrinfo", return_value=fake_infos),
+            pytest.raises(PolicyViolationError, match="no valid addresses"),
+        ):
+            engine.check_host("example.com")
 
     def test_getaddrinfo_mixed_valid_and_invalid_ips(self):
         """Mixed valid and invalid IPs — invalid ones are skipped."""

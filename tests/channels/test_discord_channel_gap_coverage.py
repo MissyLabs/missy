@@ -594,6 +594,60 @@ class TestMaybeHandleVoiceCommand:
         assert "credential" in result.lower() or "secret" in result.lower()
 
     @pytest.mark.asyncio
+    async def test_voice_agent_callback_scanner_error_fails_closed(self):
+        ch = _make_channel()
+        ch._voice = None
+        ch._agent_runtime = MagicMock()
+        ch._agent_runtime.run = MagicMock(return_value="should never run")
+
+        mock_vm = MagicMock()
+        mock_vm.start = AsyncMock()
+        mock_result = MagicMock(handled=True, reply=None)
+        captured_kwargs: dict = {}
+
+        def _capture_voice_manager(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_vm
+
+        with (
+            patch(
+                "missy.channels.discord.voice.DiscordVoiceManager",
+                side_effect=_capture_voice_manager,
+            ),
+            patch(
+                "missy.channels.discord.voice_commands.maybe_handle_voice_command",
+                AsyncMock(return_value=mock_result),
+            ),
+        ):
+            await ch._maybe_handle_voice_command(
+                guild_id="g1",
+                channel_id="c1",
+                author_id="u1",
+                content="join the general voice channel",
+            )
+
+        voice_binding.clear_voice_binding()
+        agent_callback = captured_kwargs["agent_callback"]
+        with (
+            patch(
+                "missy.security.secrets.SecretsDetector.has_secrets",
+                side_effect=RuntimeError("scanner offline"),
+            ),
+            patch.object(ch, "_emit_audit") as mock_audit,
+        ):
+            result = await agent_callback("ordinary transcript", "sess-1")
+
+        ch._agent_runtime.run.assert_not_called()
+        assert "safely inspect" in result
+        mock_audit.assert_called_once_with(
+            "discord.channel.credential_scan_failed",
+            "error",
+            {"session_id": "sess-1", "source": "voice_transcript"},
+        )
+        assert "ordinary transcript" not in repr(mock_audit.call_args)
+        assert "scanner offline" not in repr(mock_audit.call_args)
+
+    @pytest.mark.asyncio
     async def test_voice_agent_callback_forwards_normal_prompt(self):
         ch = _make_channel()
         ch._voice = None

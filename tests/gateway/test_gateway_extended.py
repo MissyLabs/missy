@@ -40,6 +40,8 @@ from missy.policy import engine as engine_module
 from missy.policy.engine import init_policy_engine
 from missy.policy.rest_policy import RestPolicy, RestRule
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Config / response helpers
 # ---------------------------------------------------------------------------

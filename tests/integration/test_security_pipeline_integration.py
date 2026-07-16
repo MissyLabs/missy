@@ -40,6 +40,8 @@ from missy.security.censor import censor_response
 from missy.security.sanitizer import InputSanitizer
 from missy.security.secrets import SecretsDetector
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

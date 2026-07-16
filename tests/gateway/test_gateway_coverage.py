@@ -390,6 +390,8 @@ class TestCheckUrlEdgeCases:
 # Import here so the fixture above does not interfere with watchdog internals.
 from missy.agent.watchdog import Watchdog  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 
 class TestWatchdogCheckAll:
     def _make_watchdog(self, threshold: int = 3) -> Watchdog:

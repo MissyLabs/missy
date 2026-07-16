@@ -112,8 +112,11 @@ All outbound HTTP requests are routed through `PolicyHTTPClient`, which:
 - Enforces connection pool limits (20 connections, 10 keepalive, 30s expiry)
   to prevent resource exhaustion.
 - Performs DNS rebinding protection: all resolved IPs are checked, and if
-  any address is private/reserved without explicit CIDR allowance, the
-  entire request is denied.
+  any address is private, reserved, multicast, local, or otherwise non-public
+  without explicit CIDR allowance, the entire request is denied.
+- Fails closed when an allowlisted hostname cannot be resolved or yields no
+  valid address, preventing the connection layer from performing a later,
+  unvalidated DNS lookup.
 
 ### Webhook Security
 

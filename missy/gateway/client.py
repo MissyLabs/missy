@@ -376,10 +376,10 @@ class PolicyHTTPClient:
 
         The policy check that led here raised before ever resolving/pinning
         an IP (that's what "denied" means) -- an explicit human override
-        doesn't get the policy-validated pin, but must still get *some* pin
-        so the transport doesn't fail-closed on a legitimately
-        operator-approved request. Resolution failure here just means
-        normal, unpinned connection behavior for this one request.
+        doesn't get the policy-validated pin, but must still get a concrete
+        pin so the transport doesn't perform a later, unvalidated DNS lookup.
+        Approval of a hostname is not approval of an unknown address it may
+        resolve to later, so resolution failure remains fail-closed.
         """
         from missy.gateway.pinned_transport import pin_host
         from missy.policy.network import NetworkPolicyEngine
@@ -388,7 +388,17 @@ class PolicyHTTPClient:
             resolved = NetworkPolicyEngine._resolve_best_effort(host)
         except Exception:
             resolved = []
-        pin_host(host, resolved[0][0] if resolved else None)
+        if not resolved:
+            raise PolicyViolationError(
+                f"Network access denied: operator-approved host {host!r} could not be "
+                "resolved to an address that can be pinned.",
+                category="network",
+                detail=(
+                    f"Hostname {host!r} could not be resolved after operator approval; "
+                    "the request was not allowed to fall back to unvalidated DNS."
+                ),
+            )
+        pin_host(host, resolved[0][0])
 
     def _check_url(self, url: str, method: str = "") -> None:
         """Extract the host from *url* and run network + REST policy checks.

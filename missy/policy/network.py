@@ -179,7 +179,7 @@ class NetworkPolicyEngine:
         if rule:
             resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True, (resolved[0][0] if resolved else None)
+            return True, resolved[0][0]
 
         # Step 4 – wildcard / suffix domain match. Same SR-1.9a rebinding
         # check as step 3.
@@ -187,7 +187,7 @@ class NetworkPolicyEngine:
         if rule:
             resolved = self._resolve_and_check_rebinding(host, session_id, task_id)
             self._emit_event(host, "allow", rule, session_id, task_id)
-            return True, (resolved[0][0] if resolved else None)
+            return True, resolved[0][0]
 
         # Step 5 – DNS resolution + CIDR re-check for hostnames not matched
         # by name at all.
@@ -233,7 +233,7 @@ class NetworkPolicyEngine:
         seen_ips: set[str] = set()
         resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
         for info in infos:
-            ip_str = info[4][0]
+            ip_str = str(info[4][0])
             if ip_str in seen_ips:
                 continue
             seen_ips.add(ip_str)
@@ -253,7 +253,7 @@ class NetworkPolicyEngine:
         host: str,
         session_id: str,
         task_id: str,
-    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] | None:
+    ) -> list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]]:
         """Resolve *host* and deny if any resolved IP is an unallowed private address.
 
         Applied uniformly to every hostname match — exact, domain, and the
@@ -276,24 +276,37 @@ class NetworkPolicyEngine:
 
         Returns:
             De-duplicated ``(ip_str, addr)`` pairs for every resolved
-            address, or ``None`` if DNS resolution failed (nothing to rebind
-            if the name doesn't resolve — the caller's own name-based match,
-            if any, still stands).
+            address. At least one validated address is always returned.
 
         Raises:
-            PolicyViolationError: When a resolved IP is private/reserved and
+            PolicyViolationError: When DNS resolution fails, produces no
+                usable addresses, or a resolved IP is private/reserved and
                 not covered by ``allowed_cidrs``.
         """
         try:
             infos = socket.getaddrinfo(host, None)
         except OSError:
-            logger.debug("NetworkPolicyEngine: DNS resolution failed for %r", host)
-            return None
+            logger.warning(
+                "NetworkPolicyEngine: DNS resolution failed for %r; denying because "
+                "the destination could not be validated",
+                host,
+            )
+            self._emit_event(host, "deny", None, session_id, task_id)
+            raise PolicyViolationError(
+                f"Network access denied: DNS resolution failed for {host!r} during "
+                "policy validation.",
+                category="network",
+                detail=(
+                    f"Hostname {host!r} could not be resolved to a policy-validated "
+                    "address. Default-deny mode does not permit a later unvalidated "
+                    "DNS lookup."
+                ),
+            ) from None
 
         seen_ips: set[str] = set()
         resolved: list[tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address]] = []
         for info in infos:
-            ip_str = info[4][0]
+            ip_str = str(info[4][0])
             if ip_str in seen_ips:
                 continue
             seen_ips.add(ip_str)
@@ -303,24 +316,55 @@ class NetworkPolicyEngine:
                 continue
             resolved.append((ip_str, addr))
 
+        if not resolved:
+            logger.warning(
+                "NetworkPolicyEngine: DNS resolution returned no usable addresses for %r; denying",
+                host,
+            )
+            self._emit_event(host, "deny", None, session_id, task_id)
+            raise PolicyViolationError(
+                f"Network access denied: DNS resolution returned no valid addresses for {host!r}.",
+                category="network",
+                detail=(
+                    f"Hostname {host!r} did not resolve to any valid IPv4 or IPv6 "
+                    "address that could be validated by policy."
+                ),
+            )
+
         for ip_str, addr in resolved:
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
+            # Hostname allowlists express trust in a DNS name, not blanket
+            # access to every address class that name might later target.
+            # ``is_private`` alone misses important SSRF destinations such
+            # as carrier-grade NAT (100.64.0.0/10) and multicast; require a
+            # globally routable unicast address unless the operator
+            # explicitly allowed the exact address range via allowed_cidrs.
+            disallowed = (
+                not addr.is_global
+                or addr.is_multicast
+                or addr.is_unspecified
+                or addr.is_reserved
+                or addr.is_loopback
+                or addr.is_link_local
+            )
+            if disallowed:
                 rule = self._check_cidr(ip_str)
                 if not rule:
                     logger.warning(
                         "NetworkPolicyEngine: DNS rebinding blocked — %r resolved to "
-                        "private address %s which is not in allowed_cidrs",
+                        "non-public address %s which is not in allowed_cidrs",
                         host,
                         ip_str,
                     )
                     self._emit_event(host, "deny", None, session_id, task_id)
                     raise PolicyViolationError(
-                        f"Network access denied: {host!r} resolved to private "
-                        f"address {ip_str} (possible DNS rebinding attack).",
+                        f"Network access denied: {host!r} resolved to private, reserved, "
+                        f"or otherwise non-public address {ip_str} "
+                        "(possible DNS rebinding attack).",
                         category="network",
                         detail=(
-                            f"Hostname {host!r} resolved to {ip_str} which is a "
-                            "private/reserved address not explicitly allowed by policy."
+                            f"Hostname {host!r} resolved to {ip_str}, a private, reserved, "
+                            "multicast, local, or otherwise non-public address not explicitly "
+                            "allowed by policy."
                         ),
                     )
 

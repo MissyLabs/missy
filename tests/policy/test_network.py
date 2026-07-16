@@ -13,6 +13,8 @@ from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.network import NetworkPolicyEngine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -262,6 +264,17 @@ class TestCheckHostResolved:
             allowed, ip = engine.check_host_resolved("api.example.com")
         assert allowed is True
         assert ip == "93.184.216.34"
+
+    def test_allowlisted_name_dns_failure_never_returns_unpinned_allow(self):
+        engine = make_engine(allowed_hosts=["api.example.com"])
+        with (
+            patch(
+                "missy.policy.network.socket.getaddrinfo",
+                side_effect=OSError("resolver unavailable"),
+            ),
+            pytest.raises(PolicyViolationError, match="DNS resolution failed"),
+        ):
+            engine.check_host_resolved("api.example.com")
 
     def test_domain_match_returns_resolved_ip(self):
         engine = make_engine(allowed_domains=["*.example.com"])

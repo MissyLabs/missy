@@ -554,12 +554,16 @@ class DiscordChannel(BaseChannel):
         content: str = str(data.get("content", ""))
         thread_id: str | None = data.get("thread_id") or None
 
+        # Never log message content before credential scanning. A pasted
+        # token frequently appears in the first 80 characters, and the old
+        # preview logged it before the scanner could delete the Discord
+        # message. Metadata is enough for lifecycle diagnostics.
         logger.info(
-            "Discord: MESSAGE_CREATE guild=%s channel=%s author=%s content=%r",
+            "Discord: MESSAGE_CREATE guild=%s channel=%s author=%s content_length=%d",
             guild_id,
             channel_id,
             author_id,
-            content[:80],
+            len(content),
         )
 
         # 1. Filter own-bot messages.
@@ -616,8 +620,32 @@ class DiscordChannel(BaseChannel):
                             )
                     # Do NOT enqueue this message — drop it after warning.
                     return
-            except Exception as _sec_exc:
-                logger.debug("Secrets detection error: %s", _sec_exc)
+            except Exception:
+                message_id = str(data.get("id", ""))
+                self._emit_audit(
+                    "discord.channel.credential_scan_failed",
+                    "error",
+                    {
+                        "author_id": author_id,
+                        "channel_id": channel_id,
+                        "message_id": message_id,
+                        "source": "message_content",
+                    },
+                )
+                logger.error(
+                    "Discord: credential scan failed for message %s in channel %s; "
+                    "refusing to process unscanned content",
+                    message_id,
+                    channel_id,
+                )
+                if self._rest is not None:
+                    with contextlib.suppress(Exception):
+                        self._rest.send_message(
+                            channel_id,
+                            f"<@{author_id}> I couldn't safely inspect that message, so it "
+                            "was not processed. Please try again.",
+                        )
+                return
 
         # 2. Filter other bots.
         if not self._allow_bot_author(author, content, guild_id):
@@ -975,7 +1003,20 @@ class DiscordChannel(BaseChannel):
                                     " any exposed keys immediately."
                                 )
                         except Exception:
-                            logger.debug("Secrets detection error in voice callback", exc_info=True)
+                            self._emit_audit(
+                                "discord.channel.credential_scan_failed",
+                                "error",
+                                {"session_id": session_id, "source": "voice_transcript"},
+                            )
+                            logger.error(
+                                "Discord: credential scan failed for voice transcript in session %s; "
+                                "refusing to process unscanned content",
+                                session_id,
+                            )
+                            return (
+                                "I couldn't safely inspect that message, so I didn't process it. "
+                                "Please try again."
+                            )
 
                         loop = asyncio.get_running_loop()
                         return await loop.run_in_executor(

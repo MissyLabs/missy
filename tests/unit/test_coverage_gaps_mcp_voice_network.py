@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from missy.core.events import event_bus
+from missy.core.exceptions import PolicyViolationError
 
 
 @pytest.fixture(autouse=True)
@@ -386,9 +387,8 @@ class TestNetworkPolicyInvalidIPSkipped:
 
         assert result is True
 
-    def test_all_invalid_ips_from_getaddrinfo_allows_via_domain(self) -> None:
-        """When every getaddrinfo entry has an unparseable IP the resolved list is
-        empty; the private-check loop is skipped and the domain-level allow stands."""
+    def test_all_invalid_ips_from_getaddrinfo_fails_closed(self) -> None:
+        """An allowlisted domain with no usable DNS answers is denied."""
         from missy.policy.network import NetworkPolicy, NetworkPolicyEngine
 
         policy = NetworkPolicy(
@@ -402,10 +402,11 @@ class TestNetworkPolicyInvalidIPSkipped:
             (2, 1, 6, "", ("garbage_ip_2", 0)),
         ]
 
-        with patch("missy.policy.network.socket.getaddrinfo", return_value=fake_infos):
-            result = engine.check_host("trusted.example.com", session_id="s", task_id="t")
-
-        assert result is True
+        with (
+            patch("missy.policy.network.socket.getaddrinfo", return_value=fake_infos),
+            pytest.raises(PolicyViolationError, match="no valid addresses"),
+        ):
+            engine.check_host("trusted.example.com", session_id="s", task_id="t")
 
 
 # ===========================================================================

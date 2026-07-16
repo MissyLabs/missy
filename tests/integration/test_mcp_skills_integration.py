@@ -40,6 +40,8 @@ from missy.skills.discovery import SkillDiscovery, SkillManifest
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 from missy.tools.registry import ToolRegistry
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

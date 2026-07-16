@@ -1,4 +1,8 @@
 # conftest.py — pytest configuration
+import contextlib
+import socket
+from unittest.mock import patch
+
 import pytest
 
 collect_ignore = ["tests/discord_live_test.py"]
@@ -39,7 +43,20 @@ def _stop_sleeptime_workers_after_test():
     finally:
         AgentRuntime._make_sleeptime_worker = original
         for worker in created:
-            try:
+            with contextlib.suppress(Exception):
                 worker.stop(timeout=1.0)
-            except Exception:
-                pass
+
+
+@pytest.fixture
+def deterministic_public_dns(request):
+    """Give hostname-policy tests a stable public DNS answer.
+
+    This is deliberately opt-in. Tests that need a fabricated hostname must
+    request the fixture explicitly, while DNS/rebinding tests remain isolated
+    and cannot silently inherit a global resolver mock. Modules opt in with
+    ``pytestmark = pytest.mark.usefixtures("deterministic_public_dns")``.
+    """
+    assert request.node.get_closest_marker("usefixtures") is not None
+    public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+    with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
+        yield

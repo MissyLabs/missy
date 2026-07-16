@@ -127,8 +127,18 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
                 "⚠️ Your prompt appeared to contain credentials or secrets and"
                 " was not sent. Please rotate any exposed keys immediately."
             )
-    except Exception as _sec_exc:
-        logger.debug("Secrets detection error in /ask: %s", _sec_exc)
+    except Exception:
+        channel._emit_audit(
+            "discord.channel.credential_scan_failed",
+            "error",
+            {"author_id": author_id, "source": "slash_command_ask"},
+        )
+        logger.error(
+            "Discord: credential scan failed for /ask from %s; refusing to process "
+            "unscanned content",
+            author_id,
+        )
+        return "I couldn't safely inspect that prompt, so it was not processed. Please try again."
 
     agent = channel._agent_runtime
     if agent is None:

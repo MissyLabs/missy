@@ -288,7 +288,8 @@ class TestNetworkDomainMatching:
         """
         assume(sub not in ("", domain))
         host = f"{sub}.{domain}"
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
             assert engine.check_host(host) is True
 
@@ -297,7 +298,8 @@ class TestNetworkDomainMatching:
     )
     def test_wildcard_also_matches_apex(self, domain: str) -> None:
         """*.example.com should also match the apex domain example.com itself."""
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(allowed_domains=[f"*.{domain}"])
             assert engine.check_host(domain) is True
 
@@ -320,7 +322,8 @@ class TestNetworkDomainMatching:
 
     @given(domain=st.builds(lambda a, b: f"{a}.{b}", _label, _label))
     def test_exact_domain_matches_itself(self, domain: str) -> None:
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(allowed_domains=[domain])
             assert engine.check_host(domain) is True
 
@@ -343,14 +346,16 @@ class TestNetworkAllowedHosts:
 
     @given(host=_hostname)
     def test_exact_host_entry_is_allowed(self, host: str) -> None:
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(allowed_hosts=[host])
             assert engine.check_host(host) is True
 
     @given(host=_hostname, port=st.integers(min_value=1, max_value=65535))
     def test_host_with_port_entry_matches_bare_host(self, host: str, port: int) -> None:
         """An entry like 'api.example.com:443' must allow 'api.example.com'."""
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", port))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(allowed_hosts=[f"{host}:{port}"])
             assert engine.check_host(host) is True
 
@@ -368,7 +373,8 @@ class TestNetworkAllowedHosts:
     def test_per_category_host_allows_matching_host(self, host: str, category: str) -> None:
         """A host in the per-category list must be allowed when that category is passed."""
         cat_key = f"{category}_allowed_hosts"
-        with patch.object(socket, "getaddrinfo", side_effect=OSError("no dns")):
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
+        with patch.object(socket, "getaddrinfo", return_value=public_ip):
             engine = _make_network_engine(**{cat_key: [host]})
             assert engine.check_host(host, category=category) is True
 

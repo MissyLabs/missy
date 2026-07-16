@@ -98,9 +98,16 @@ def _check_url(self, url: str) -> None:
 2. The hostname is extracted via `parsed.hostname` (which strips brackets
    from IPv6 literals and lowercases).
 3. If the hostname is empty or `None`, a `ValueError` is raised.
-4. `get_policy_engine().check_network(host, ...)` is called, which
-   delegates to `NetworkPolicyEngine.check_host()`.
-5. On deny, `PolicyViolationError` is raised before any network I/O.
+4. `get_policy_engine().check_network_resolved(host, ...)` is called,
+   which delegates to `NetworkPolicyEngine.check_host_resolved()`.
+5. In default-deny mode, even an allowlisted hostname must resolve to at
+   least one valid, policy-checked address. Resolution failure is denied;
+   it is never treated as permission for the HTTP stack to retry DNS later.
+   Private, reserved, multicast, local, and otherwise non-public answers
+   require an explicit matching `allowed_cidrs` entry.
+6. The validated address is pinned to the request transport while the
+   original hostname remains in the URL for TLS SNI and the Host header.
+7. On deny, `PolicyViolationError` is raised before any connection opens.
 
 ### CIDR Check Logic
 
