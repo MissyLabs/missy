@@ -96,11 +96,15 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
-# ComfyUI server defaults. A deployment can point every video_generate call at
-# a remote ComfyUI (e.g. a stronger GPU box on the LAN) by setting
-# MISSY_COMFYUI_HOST / MISSY_COMFYUI_PORT, without the model having to pass
-# comfyui_host on each call. An explicit comfyui_host kwarg still overrides.
-_DEFAULT_HOST = os.environ.get("MISSY_COMFYUI_HOST", "127.0.0.1").strip() or "127.0.0.1"
+# ComfyUI server selection. A deployment points video_generate at a remote
+# ComfyUI (e.g. a stronger GPU box on the LAN) via MISSY_COMFYUI_HOST, which may
+# be a single host or a comma-separated ordered list, each optionally
+# "host:port". The local server (127.0.0.1:8199) is always appended as a final
+# fallback, so generation degrades to the local box when a configured remote is
+# down. MISSY_COMFYUI_PORT sets the default port for entries without one. An
+# explicit comfyui_host kwarg overrides all of this with a single host (no
+# fallback), preserving explicit-target semantics for tests/policy checks.
+_LOCAL_FALLBACK = ("127.0.0.1", 8199)
 
 
 def _default_port() -> int:
@@ -110,7 +114,34 @@ def _default_port() -> int:
     return 8199
 
 
-_DEFAULT_PORT = _default_port()
+def _comfyui_candidates_from_env() -> list[tuple[str, int]]:
+    """Ordered ``(host, port)`` ComfyUI candidates from ``MISSY_COMFYUI_HOST``.
+
+    Parses the (possibly comma-separated, optionally ``host:port``) env value
+    and always appends the local fallback ``127.0.0.1:8199`` last unless a local
+    host is already present.
+    """
+    default_port = _default_port()
+    cands: list[tuple[str, int]] = []
+    for entry in os.environ.get("MISSY_COMFYUI_HOST", "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" in entry:
+            host, _, port = entry.partition(":")
+            cands.append((host.strip(), int(port) if port.strip().isdigit() else default_port))
+        else:
+            cands.append((entry, default_port))
+    if not cands:
+        cands.append(("127.0.0.1", default_port))
+    if not any(host in ("127.0.0.1", "localhost") for host, _ in cands):
+        cands.append(_LOCAL_FALLBACK)
+    return cands
+
+
+# First candidate's host/port, for the execute() signature default and display.
+_DEFAULT_HOST = _comfyui_candidates_from_env()[0][0]
+_DEFAULT_PORT = _comfyui_candidates_from_env()[0][1]
 _POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_OUTPUT_DIR = str(Path.home() / ".missy" / "videos")
 _MAX_RESPONSE_BYTES = 300 * 1024 * 1024  # 300 MB, for the /view download fallback
@@ -754,11 +785,15 @@ class VideoGenerateTool(BaseTool):
 
     def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
         """SR-1.4-class: this tool's real network target is the configured
-        ComfyUI host, not something the registry's static-only
-        ``allowed_hosts`` heuristic would otherwise see."""
-        host = kwargs.get("comfyui_host") or _DEFAULT_HOST
-        port = kwargs.get("comfyui_port") or _DEFAULT_PORT
-        return [f"{host}:{port}"]
+        ComfyUI host(s), not something the registry's static-only
+        ``allowed_hosts`` heuristic would otherwise see. Returns every candidate
+        (primary + fallbacks) so the policy engine allows the ones actually
+        tried."""
+        host = (kwargs.get("comfyui_host") or "").strip()
+        if host:
+            port = int(kwargs.get("comfyui_port") or 8199)
+            return [f"{host}:{port}"]
+        return [f"{h}:{p}" for h, p in _comfyui_candidates_from_env()]
 
     def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
         """This tool reads ``image_path``/``audio_path`` and writes the
@@ -803,8 +838,8 @@ class VideoGenerateTool(BaseTool):
         crf: int = 17,
         allow_cpu: bool = False,
         save_path: str = "",
-        comfyui_host: str = _DEFAULT_HOST,
-        comfyui_port: int = _DEFAULT_PORT,
+        comfyui_host: str = "",
+        comfyui_port: int = 0,
         timeout: int = 0,
         **_kwargs: Any,
     ) -> ToolResult:
@@ -870,10 +905,12 @@ class VideoGenerateTool(BaseTool):
                 Defaults to a timestamped file under ``~/.missy/videos/``.
                 Never overwrites an existing file (a numeric suffix is
                 appended instead).
-            comfyui_host: ComfyUI server host (default ``127.0.0.1``, or the
-                ``MISSY_COMFYUI_HOST`` env var if set).
-            comfyui_port: ComfyUI server port (default ``8199``, or the
-                ``MISSY_COMFYUI_PORT`` env var if set).
+            comfyui_host: Explicit single ComfyUI host override (no fallback).
+                When empty (the normal case), the server is selected from
+                ``MISSY_COMFYUI_HOST`` (a single host or comma-separated ordered
+                list), with ``127.0.0.1:8199`` always tried last as a fallback if
+                a configured remote is down.
+            comfyui_port: Port for an explicit ``comfyui_host`` (default 8199).
             timeout: Max seconds to wait. ``0`` = auto (3600 wan, 1200
                 others). On timeout the job is cancelled server-side.
 
@@ -962,7 +999,13 @@ class VideoGenerateTool(BaseTool):
         final_fps = fps * interpolate if interpolate > 1 else fps
         duration_seconds = round(final_frames / final_fps, 2)
 
-        base_url = f"http://{comfyui_host}:{comfyui_port}"
+        # Ordered ComfyUI candidates. An explicit comfyui_host kwarg is a single
+        # target (no fallback); otherwise use the env-configured list, which
+        # already ends in the local fallback.
+        if comfyui_host.strip():
+            comfyui_candidates = [(comfyui_host.strip(), int(comfyui_port or 8199))]
+        else:
+            comfyui_candidates = _comfyui_candidates_from_env()
         filename_prefix = f"missy_{backend}_{uuid.uuid4().hex[:8]}"
 
         try:
@@ -981,9 +1024,32 @@ class VideoGenerateTool(BaseTool):
                 category="tool",
                 max_response_bytes=_MAX_RESPONSE_BYTES,
             ) as http:
-                gpu = self._preflight_gpu(http, base_url, allow_cpu)
-                if isinstance(gpu, str):
-                    return ToolResult(success=False, output=None, error=gpu)
+                # Pick the first reachable, GPU-capable candidate, falling back
+                # to the local server when a configured remote is down.
+                base_url = ""
+                gpu: dict[str, Any] = {}
+                preflight_errors: list[str] = []
+                for idx, (cand_host, cand_port) in enumerate(comfyui_candidates):
+                    cand_url = f"http://{cand_host}:{cand_port}"
+                    probe = self._preflight_gpu(http, cand_url, allow_cpu)
+                    if isinstance(probe, dict):
+                        base_url, gpu = cand_url, probe
+                        if idx > 0:
+                            logger.warning(
+                                "video_generate: ComfyUI fell back to %s (earlier "
+                                "candidate(s) unavailable: %s)",
+                                cand_url,
+                                "; ".join(preflight_errors),
+                            )
+                            gpu["fallback_from"] = [f"{h}:{p}" for h, p in comfyui_candidates[:idx]]
+                        break
+                    preflight_errors.append(f"{cand_url}: {probe}")
+                if not base_url:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error="No usable ComfyUI server. " + " | ".join(preflight_errors),
+                    )
 
                 required_models = self._required_models(
                     backend=backend,
@@ -1167,6 +1233,7 @@ class VideoGenerateTool(BaseTool):
                     "steps": steps,
                     "audio": audio_info,
                     "gpu": gpu,
+                    "comfyui_host": base_url,
                     "size_bytes": out_file.stat().st_size if out_file.is_file() else 0,
                     "prompt_id": prompt_id,
                     "elapsed_seconds": round(time.monotonic() - started, 1),
@@ -1181,15 +1248,21 @@ class VideoGenerateTool(BaseTool):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _preflight_gpu(http: Any, base_url: str, allow_cpu: bool) -> dict[str, Any] | str:
+    def _preflight_gpu(
+        http: Any, base_url: str, allow_cpu: bool, probe_timeout: float = 8.0
+    ) -> dict[str, Any] | str:
         """Verify the ComfyUI server is reachable and GPU-accelerated.
+
+        Uses a short ``probe_timeout`` (not the full generation timeout) so an
+        unreachable candidate fails fast, letting the caller fall back to the
+        next ComfyUI without hanging.
 
         Returns:
             A gpu-info dict on success, or a human-readable error string
             (the caller distinguishes the two by type).
         """
         try:
-            resp = http.get(f"{base_url}/system_stats")
+            resp = http.get(f"{base_url}/system_stats", timeout=probe_timeout)
         except Exception as exc:
             return f"ComfyUI server unreachable at {base_url}: {exc}"
         if resp.status_code != 200:
