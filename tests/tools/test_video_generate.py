@@ -974,6 +974,28 @@ class TestVideoGenerateToolResolvers:
         hosts = tool.resolve_network_hosts({"comfyui_host": "10.0.0.5", "comfyui_port": 9000})
         assert hosts == ["10.0.0.5:9000"]
 
+    def test_default_host_port_from_env(self, monkeypatch) -> None:
+        """MISSY_COMFYUI_HOST/PORT set the default target so a deployment can
+        point every call at a remote ComfyUI without per-call kwargs."""
+        import importlib
+
+        import missy.tools.builtin.video_generate as vg
+
+        monkeypatch.setenv("MISSY_COMFYUI_HOST", "10.0.0.230")
+        monkeypatch.setenv("MISSY_COMFYUI_PORT", "8199")
+        importlib.reload(vg)
+        try:
+            tool = vg.VideoGenerateTool()
+            assert tool.resolve_network_hosts({}) == ["10.0.0.230:8199"]
+            # explicit kwargs still override the env default
+            assert tool.resolve_network_hosts(
+                {"comfyui_host": "1.2.3.4", "comfyui_port": 9000}
+            ) == ["1.2.3.4:9000"]
+        finally:
+            monkeypatch.delenv("MISSY_COMFYUI_HOST", raising=False)
+            monkeypatch.delenv("MISSY_COMFYUI_PORT", raising=False)
+            importlib.reload(vg)
+
     def test_resolve_filesystem_targets_with_all_paths(self) -> None:
         tool = VideoGenerateTool()
         read_paths, write_paths = tool.resolve_filesystem_targets(

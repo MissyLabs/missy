@@ -83,6 +83,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import random
 import shutil
 import time
@@ -95,8 +96,21 @@ from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_HOST = "127.0.0.1"
-_DEFAULT_PORT = 8199
+# ComfyUI server defaults. A deployment can point every video_generate call at
+# a remote ComfyUI (e.g. a stronger GPU box on the LAN) by setting
+# MISSY_COMFYUI_HOST / MISSY_COMFYUI_PORT, without the model having to pass
+# comfyui_host on each call. An explicit comfyui_host kwarg still overrides.
+_DEFAULT_HOST = os.environ.get("MISSY_COMFYUI_HOST", "127.0.0.1").strip() or "127.0.0.1"
+
+
+def _default_port() -> int:
+    raw = os.environ.get("MISSY_COMFYUI_PORT", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 8199
+
+
+_DEFAULT_PORT = _default_port()
 _POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_OUTPUT_DIR = str(Path.home() / ".missy" / "videos")
 _MAX_RESPONSE_BYTES = 300 * 1024 * 1024  # 300 MB, for the /view download fallback
@@ -856,8 +870,10 @@ class VideoGenerateTool(BaseTool):
                 Defaults to a timestamped file under ``~/.missy/videos/``.
                 Never overwrites an existing file (a numeric suffix is
                 appended instead).
-            comfyui_host: ComfyUI server host (default ``127.0.0.1``).
-            comfyui_port: ComfyUI server port (default ``8199``).
+            comfyui_host: ComfyUI server host (default ``127.0.0.1``, or the
+                ``MISSY_COMFYUI_HOST`` env var if set).
+            comfyui_port: ComfyUI server port (default ``8199``, or the
+                ``MISSY_COMFYUI_PORT`` env var if set).
             timeout: Max seconds to wait. ``0`` = auto (3600 wan, 1200
                 others). On timeout the job is cancelled server-side.
 
@@ -1579,14 +1595,12 @@ class VideoGenerateTool(BaseTool):
                             "are never overwritten."
                         ),
                     },
-                    "comfyui_host": {
-                        "type": "string",
-                        "description": "ComfyUI server host (default: 127.0.0.1).",
-                    },
-                    "comfyui_port": {
-                        "type": "integer",
-                        "description": "ComfyUI server port (default: 8199).",
-                    },
+                    # comfyui_host / comfyui_port are deliberately NOT advertised
+                    # to the model: which ComfyUI server to use is a deployment
+                    # concern set via MISSY_COMFYUI_HOST/PORT (or the execute()
+                    # kwargs for tests), not something the model should choose.
+                    # Exposing them invited the model to pass "127.0.0.1",
+                    # overriding a configured remote host.
                     "timeout": {
                         "type": "integer",
                         "description": (
