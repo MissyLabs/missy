@@ -181,6 +181,14 @@ VoiceChannel (channels/voice/):
 - Agent tools: `vision_capture`, `vision_burst`, `vision_analyze`, `vision_devices`, `vision_scene`
 - Voice integration: Auto-captures image when audio intent implies vision need
 
+**Video Generation (`missy/tools/builtin/video_generate.py`)** — `VideoGenerateTool` (agent tool name `video_generate`) talks to a separately-running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) server's HTTP API (default `127.0.0.1:8199`) to render short video clips, in two backends selected via a `backend` parameter:
+- `"svd"` — Stable Video Diffusion image-to-video. Animates a single input image (`image_path`) via `ImageOnlyCheckpointLoader` + `SVD_img2vid_Conditioning` + `VideoLinearCFGGuidance`, matching ComfyUI's own official SVD example graph. Requires `svd.safetensors`/`svd_xt.safetensors` in ComfyUI's `models/checkpoints/`.
+- `"animatediff"` — AnimateDiff Evolved text-to-video. Generates new frames from a `prompt` via `ADE_LoadAnimateDiffModel` + `ADE_ApplyAnimateDiffModelSimple` + `ADE_UseEvolvedSampling` (the `ComfyUI-AnimateDiff-Evolved` custom node pack) on top of a standard SD1.x checkpoint. Requires a motion module (e.g. `mm_sd_v15_v2.ckpt`) in `models/animatediff_models/`.
+
+Both backends finish through the `ComfyUI-VideoHelperSuite` custom node pack's `VHS_VideoCombine` node to mux frames into a real MP4, which the tool then copies to `~/.missy/videos/` (falling back to an HTTP `/view` download if ComfyUI runs on a different host than Missy). "Improving a video based on feedback" is just calling the tool again with adjusted parameters (prompt wording, `motion_bucket_id`/`augmentation_level` for more/less motion, a different seed, etc.) — there is no separate revise step. `resolve_network_hosts()`/`resolve_filesystem_targets()` declare the real ComfyUI host and `image_path`/`save_path` targets so the policy engine enforces against the actual values, not just static declarations.
+
+ComfyUI itself is external infrastructure, not part of the Missy codebase — installed at `~/comfyui` (venv at `~/comfyui-venv`), GPU-backed (tested against an RTX 3070), managed by a system-level systemd unit (`/etc/systemd/system/comfyui.service`, `User=missy`, `Restart=on-failure`, enabled for `multi-user.target` so it survives reboots). Manage via `sudo systemctl {status,restart} comfyui` / `sudo journalctl -u comfyui -f`. Not a Missy-managed subprocess — the tool only ever talks to it over HTTP and has no knowledge of how/where it's actually running.
+
 **Memory (`missy/memory/`)** — `SQLiteMemoryStore` at `~/.missy/memory.db` with FTS5 search. Stores conversation turns and learnings. `cleanup()` removes turns older than N days. Optional `VectorMemoryStore` with FAISS semantic search (`pip install -e ".[vector]"`). `GraphMemoryStore` provides SQLite-backed entity-relationship graph memory with rule-based pattern matching for structured knowledge retrieval.
 
 **Message Bus (`missy/core/message_bus.py`)** — Async event-driven routing with fnmatch topic wildcards (e.g. `channel.*`), priority queue, correlation IDs, worker thread. Standard topics in `missy/core/bus_topics.py`. Runtime publishes `AGENT_RUN_START/COMPLETE/ERROR`, `TOOL_REQUEST/RESULT`. Module-level singleton via `init_message_bus()` / `get_message_bus()`.
@@ -218,6 +226,7 @@ VoiceChannel (channels/voice/):
 | Hatching log | `~/.missy/hatching_log.jsonl` |
 | Skills directory | `~/.missy/skills/` |
 | Vision captures | `~/.missy/captures/` |
+| Video generation output | `~/.missy/videos/` |
 | Checkpoints DB | `~/.missy/checkpoints.db` |
 | Graph memory DB | `~/.missy/graph_memory.db` |
 | Code evolutions | `~/.missy/evolutions.json` |
