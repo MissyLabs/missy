@@ -20,6 +20,8 @@ from missy.gateway.client import create_client
 from missy.policy import engine as engine_module
 from missy.policy.engine import init_policy_engine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # MCP tool name validation tests
 # ---------------------------------------------------------------------------

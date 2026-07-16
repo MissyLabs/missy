@@ -50,6 +50,8 @@ from missy.policy.presets import PRESETS, resolve_presets
 from missy.policy.rest_policy import RestPolicy, RestRule
 from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Test-wide fixtures and helpers
 # ---------------------------------------------------------------------------

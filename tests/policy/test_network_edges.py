@@ -73,6 +73,8 @@ from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import PolicyViolationError
 from missy.policy.network import NetworkPolicyEngine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -107,14 +109,9 @@ def _addrinfo(ip: str, family: int = socket.AF_INET) -> list:
 
 @pytest.fixture(autouse=True)
 def clean_bus() -> Generator[None, None, None]:
-    """Isolate event state and provide deterministic public DNS by default.
-
-    Individual DNS behavior tests override this patch explicitly.
-    """
+    """Ensure each test starts with a clean event bus."""
     event_bus.clear()
-    public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
-    with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
-        yield
+    yield
     event_bus.clear()
 
 

@@ -20,6 +20,8 @@ import pytest
 
 from missy.core.exceptions import PolicyViolationError
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ── Piper TTS timeout ──────────────────────────────────────────────
 
 

@@ -48,6 +48,8 @@ from missy.security.secrets import SecretsDetector
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 from missy.tools.registry import ToolRegistry
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

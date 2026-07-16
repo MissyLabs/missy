@@ -28,6 +28,8 @@ from missy.policy.filesystem import FilesystemPolicyEngine
 from missy.policy.network import NetworkPolicyEngine
 from missy.policy.shell import ShellPolicyEngine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------

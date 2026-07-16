@@ -19,6 +19,8 @@ from missy.core.exceptions import PolicyViolationError
 from missy.policy import engine as engine_module
 from missy.policy.engine import PolicyEngine, get_policy_engine, init_policy_engine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

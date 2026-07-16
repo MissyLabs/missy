@@ -65,6 +65,8 @@ from missy.gateway.client import PolicyHTTPClient, create_client, set_interactiv
 from missy.policy import engine as engine_module
 from missy.policy.engine import init_policy_engine
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

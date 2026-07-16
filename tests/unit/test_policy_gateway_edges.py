@@ -42,6 +42,8 @@ from missy.policy.network import NetworkPolicyEngine
 from missy.policy.presets import PRESETS, resolve_presets
 from missy.policy.rest_policy import RestPolicy, RestRule
 
+pytestmark = pytest.mark.usefixtures("deterministic_public_dns")
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
