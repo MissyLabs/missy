@@ -22,6 +22,8 @@ import pytest
 
 from missy.api.server import ApiConfig, ApiResponse, ApiServer, _SessionRegistry
 from missy.api.web_console import console_script, render_console
+from missy.api.webui import PAGES, render_page
+from missy.api.webui import memory as webui_memory
 from missy.channels.discord.channel import DiscordChannel
 from missy.channels.discord.config import (
     DiscordAccountConfig,
@@ -224,14 +226,8 @@ class TestOperatorConsole:
         assert 'data-csrf="csrf&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in html
         assert 'data-csrf="csrf"><script>' not in html
         assert "Runtime posture" in html
-        assert "Audit Trail" in html
-        assert 'id="audit-result"' in html
-        assert 'id="controls"' in html
         assert "/api/v1' + path" in html
-        assert 'id="scheduler-jobs"' in html
-        assert 'id="scheduler-form"' in html
-        assert 'id="memory-query"' in html
-        assert 'id="memory-results"' in html
+        assert 'id="controls"' in html
         assert 'id="approvals"' in html
         assert 'id="approvals-health"' in html
         assert 'id="pairing"' in html
@@ -239,45 +235,100 @@ class TestOperatorConsole:
         assert "Approvals" in html
         assert "Discord Pairing" in html
 
+    def test_every_page_renders_shared_layout_with_nav_and_escaped_csrf(self) -> None:
+        for slug in PAGES:
+            html = render_page(slug, csrf_token='csrf"><script>alert(1)</script>')
+            assert 'data-csrf="csrf&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in html, slug
+            assert 'data-csrf="csrf"><script>' not in html, slug
+            assert 'class="console-nav"' in html, slug
+            assert 'aria-current="page"' in html, slug
+            assert 'id="inspector"' in html, slug
+            assert "function esc(value)" in html, slug
+            # Every nav destination is linked from every page.
+            for other in PAGES:
+                href = "/" if other == "dashboard" else f"/{other}"
+                assert f'href="{href}"' in html, (slug, other)
+
     def test_console_script_keeps_safe_client_side_escaping_and_control_post(self) -> None:
         script = console_script()
 
         assert "function esc(value)" in script
-        assert "textContent = event ? JSON.stringify(event, null, 2)" in script
         assert "X-CSRF-Token" in script
         assert "data-control-label" in script
         assert "data-target-label" in script
+        assert "JSON.stringify({target, confirm: confirmation})" in script
 
-    def test_memory_row_escapes_role_provider_timestamp_meta(self) -> None:
-        """Regression: every other composite "meta" string built from
-        server-supplied fields in this file is passed through esc() before
-        being inserted into innerHTML (e.g. the session row's provider,
-        the controls row's title, the diagnostics row's summary) --
-        memoryRow() was the one place that inserted its composed
-        role/provider/timestamp string raw via `${meta}` with no esc()
-        call at all, unlike turn.content (the actual free-text memory
-        content), which was already correctly escaped both here and in
-        the per-item inspector.
+    def test_memory_page_escapes_role_provider_timestamp_meta(self) -> None:
+        """Regression: every composite "meta" string built from
+        server-supplied fields must pass through esc() before being
+        inserted into innerHTML. memoryRow() historically inserted its
+        composed role/provider/timestamp string raw via `${meta}`.
         """
-        script = console_script()
+        script = webui_memory.script()
         assert ".filter(Boolean).map(esc).join(' &middot; ')" in script
 
-    def test_console_script_includes_scheduler_and_memory_wiring(self) -> None:
-        script = console_script()
+    def test_memory_page_includes_browse_search_edit_wiring(self) -> None:
+        page = render_page("memory", csrf_token="tok")
 
-        assert "/scheduler/jobs" in script
-        assert "job-remove" in script
-        assert "remove-job:" in script
-        assert "/memory/turns/" in script
-        assert "memory-pin" in script
-        assert "memory-delete" in script
+        assert 'id="memory-query"' in page
+        assert 'id="memory-results"' in page
+        assert 'id="memory-session"' in page
+        assert 'id="memory-prev"' in page
+        assert 'id="memory-next"' in page
+        assert "/memory/recent?" in page
+        assert "/memory/search?" in page
+        assert "api('/memory/sessions" in page
+        assert "memory-pin" in page
+        assert "memory-delete" in page
+        assert "method: 'PUT'" in page
+        assert "JSON.stringify({content: contentText})" in page
+        assert "memory-edit-save" in page
 
-    def test_console_script_renders_run_complete_summary(self) -> None:
-        script = console_script()
+    def test_audit_page_includes_filters_facets_pagination_export(self) -> None:
+        page = render_page("audit", csrf_token="tok")
 
-        assert "data.tools_used" in script
-        assert "data.cost" in script
-        assert "JSON.stringify({target, confirm: confirmation})" in script
+        assert 'id="audit-result"' in page
+        assert 'id="audit-severity"' in page
+        assert 'id="audit-subsystem"' in page
+        assert 'id="audit-facets"' in page
+        assert 'id="audit-prev"' in page
+        assert 'id="audit-next"' in page
+        assert 'id="audit-export"' in page
+        assert 'id="audit-autorefresh"' in page
+        assert "textContent = event ? JSON.stringify(event, null, 2)" in page
+        assert "data-facet-target" in page
+
+    def test_diagnostics_page_is_interactive(self) -> None:
+        page = render_page("diagnostics", csrf_token="tok")
+
+        assert 'id="diag-refresh"' in page
+        assert "data-status-filter" in page
+        assert "data-section-toggle" in page
+        assert "data-diag-expand" in page
+        assert "api('/diagnostics')" in page
+
+    def test_providers_page_includes_toggle_and_config_wiring(self) -> None:
+        page = render_page("providers", csrf_token="tok")
+
+        assert "provider-toggle" in page
+        assert "provider-default" in page
+        assert "'enable-provider:' + name" not in page  # confirmation built from action
+        assert "action + '-provider:' + name" in page
+        assert "'set-default:' + name" in page
+        assert "/providers/' + encodeURIComponent(name)" in page
+        assert "api_key_configured" in page
+
+    def test_scheduler_page_includes_job_lifecycle_wiring(self) -> None:
+        page = render_page("scheduler", csrf_token="tok")
+
+        assert 'id="scheduler-jobs"' in page
+        assert 'id="scheduler-form"' in page
+        assert "job-pause" in page
+        assert "job-resume" in page
+        assert "job-remove" in page
+        assert "'pause-job:' + jobId" in page
+        assert "'resume-job:' + jobId" in page
+        assert "'remove-job:' + jobId" in page
 
     def test_console_script_includes_approvals_and_pairing_wiring(self) -> None:
         """Web TUI browser page for /api/v1/approvals and
@@ -291,6 +342,8 @@ class TestOperatorConsole:
         assert "api('/discord/pairing')" in script
         assert "approval-action" in script
         assert "pairing-action" in script
+        assert "data.tools_used" in script
+        assert "data.cost" in script
         assert (
             "/approvals/${encodeURIComponent(approvalId)}/${approve ? 'approve' : 'deny'}" in script
         )
@@ -367,12 +420,32 @@ class TestOperatorConsole:
                 assert console.status_code == 200
                 assert "data-csrf=" in console.text
                 assert "Runtime posture" in console.text
-                assert "Audit Trail" in console.text
-                assert "audit-result" in console.text
-                assert "audit-severity" in console.text
-                assert "audit-detail" in console.text
                 assert "Controls" in console.text
                 assert "/api/v1' + path" in console.text
+
+                audit_page = client.get("/audit")
+                assert audit_page.status_code == 200
+                assert "Audit Trail" in audit_page.text
+                assert "audit-result" in audit_page.text
+                assert "audit-severity" in audit_page.text
+                assert "audit-detail" in audit_page.text
+
+                memory_page = client.get("/memory")
+                assert memory_page.status_code == 200
+                assert "Memory Browser" in memory_page.text
+
+                # Every operator page requires the browser session.
+                for path in (
+                    "/memory",
+                    "/audit",
+                    "/diagnostics",
+                    "/providers",
+                    "/scheduler",
+                    "/sessions",
+                ):
+                    anon = httpx.get(f"http://127.0.0.1:{port}{path}", follow_redirects=False)
+                    assert anon.status_code == 303, path
+                    assert anon.headers["location"] == "/login", path
         finally:
             srv.stop()
 

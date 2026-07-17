@@ -317,6 +317,12 @@ class SQLiteMemoryStore:
                 INSERT INTO turns_fts(turns_fts, rowid, id, session_id, content)
                 VALUES ('delete', old.rowid, old.id, old.session_id, old.content);
             END;
+            CREATE TRIGGER IF NOT EXISTS turns_au AFTER UPDATE ON turns BEGIN
+                INSERT INTO turns_fts(turns_fts, rowid, id, session_id, content)
+                VALUES ('delete', old.rowid, old.id, old.session_id, old.content);
+                INSERT INTO turns_fts(rowid, id, session_id, content)
+                VALUES (new.rowid, new.id, new.session_id, new.content);
+            END;
 
             CREATE TABLE IF NOT EXISTS learnings (
                 id         TEXT PRIMARY KEY,
@@ -515,9 +521,77 @@ class SQLiteMemoryStore:
         conn.commit()
         return True
 
+    def update_turn_content(self, turn_id: str, content: str) -> bool:
+        """Replace a turn's content in place (operator memory edit).
+
+        The ``turns_au`` trigger keeps the ``turns_fts`` index in sync —
+        an external-content FTS5 table silently desyncs on a plain
+        ``UPDATE``, leaving stale text searchable and the new text
+        unfindable. The edit timestamp is recorded in the turn's
+        metadata (``edited_at``) so an edited memory stays
+        distinguishable from the original transcript.
+
+        Args:
+            turn_id: The turn's unique id.
+            content: The new content text.
+
+        Returns:
+            ``True`` if the turn exists and was updated, ``False`` otherwise.
+        """
+        conn = self._conn()
+        row = conn.execute("SELECT metadata FROM turns WHERE id = ?", (turn_id,)).fetchone()
+        if row is None:
+            return False
+        metadata = json.loads(row["metadata"] or "{}")
+        metadata["edited_at"] = datetime.now(UTC).isoformat()
+        conn.execute(
+            "UPDATE turns SET content = ?, metadata = ? WHERE id = ?",
+            (content, json.dumps(metadata), turn_id),
+        )
+        conn.commit()
+        return True
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
+
+    def browse_turns(
+        self,
+        limit: int = 25,
+        offset: int = 0,
+        session_id: str | None = None,
+    ) -> tuple[list[ConversationTurn], int]:
+        """Page through stored turns newest-first, without a search query.
+
+        Backs the Web TUI memory browser's browse mode (no FTS query),
+        which :meth:`search` cannot serve since FTS5 requires a MATCH
+        expression.
+
+        Args:
+            limit: Maximum number of turns to return.
+            offset: Number of newest turns to skip (pagination).
+            session_id: When given, restrict results to this session.
+
+        Returns:
+            ``(turns, total)`` — the requested page in newest-first order
+            and the total number of turns matching the filter.
+        """
+        conn = self._conn()
+        if session_id:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
+            ).fetchone()[0]
+            rows = conn.execute(
+                "SELECT * FROM turns WHERE session_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+        else:
+            total = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+            rows = conn.execute(
+                "SELECT * FROM turns ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [self._row_to_turn(r) for r in rows], int(total)
 
     def get_session_turns(self, session_id: str, limit: int = 100) -> list[ConversationTurn]:
         """Return up to *limit* turns for *session_id* in chronological order.

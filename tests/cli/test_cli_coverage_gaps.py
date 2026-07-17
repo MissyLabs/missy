@@ -29,7 +29,7 @@ import pytest
 from click.testing import CliRunner
 
 from missy.cli.main import cli
-from tests.cli.conftest import _make_cli_runner
+from tests.cli.conftest import _make_cli_runner, combined_output
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -469,7 +469,7 @@ class TestProvidersSwitch:
             result = runner.invoke(cli, ["providers", "switch", "x"])
 
         assert result.exit_code == 1
-        assert "not registered" in result.output.lower()
+        assert "not registered" in combined_output(result).lower()
         mock_registry.set_default.assert_not_called()
 
 
