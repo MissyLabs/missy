@@ -59,6 +59,12 @@ class ProviderRegistry:
         self._key_indices: dict[str, int] = {}
         self._provider_configs: dict[str, ProviderConfig] = {}
         self._default_name: str | None = None
+        # Runtime operator toggle (Web TUI provider enable/disable).
+        # Distinct from ProviderConfig.enabled, which gates construction
+        # in from_config(): a name in this set stays registered (so it
+        # can be re-enabled without a restart) but is excluded from
+        # get_available() and refused by set_default().
+        self._runtime_disabled: set[str] = set()
         # Guards every mutation of the dicts above, and every read that
         # iterates them (rather than a single dict.get()/[] lookup,
         # which CPython already makes atomic). Found live via a
@@ -163,6 +169,40 @@ class ProviderRegistry:
             provider._api_key = next_key  # type: ignore[attr-defined]
         logger.info("rotate_key: provider %r rotated to key index %d.", provider_name, next_idx)
 
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        """Enable or disable a registered provider at runtime.
+
+        Disabling keeps the provider registered (so it can be re-enabled
+        without a restart) but excludes it from :meth:`get_available`
+        and makes :meth:`set_default` refuse it.
+
+        Args:
+            name: Registry key of the provider to toggle.
+            enabled: Desired enabled state.
+
+        Raises:
+            ValueError: If the name is not registered, or when disabling
+                the current default provider (switch the default first).
+        """
+        with self._lock:
+            if name not in self._providers:
+                raise ValueError(f"Provider {name!r} is not registered.")
+            if not enabled and name == self._default_name:
+                raise ValueError(
+                    f"Provider {name!r} is the current default; "
+                    "set a different default before disabling it."
+                )
+            if enabled:
+                self._runtime_disabled.discard(name)
+            else:
+                self._runtime_disabled.add(name)
+        logger.info("Provider %r %s at runtime.", name, "enabled" if enabled else "disabled")
+
+    def is_enabled(self, name: str) -> bool:
+        """Return ``False`` only when *name* has been runtime-disabled."""
+        with self._lock:
+            return name not in self._runtime_disabled
+
     def set_default(self, name: str) -> None:
         """Set the default provider by name.
 
@@ -170,12 +210,14 @@ class ProviderRegistry:
             name: Registry key of the provider to make default.
 
         Raises:
-            ValueError: If the name is not registered or the provider is
-                not available.
+            ValueError: If the name is not registered, runtime-disabled,
+                or the provider is not available.
         """
         provider = self._providers.get(name)
         if provider is None:
             raise ValueError(f"Provider {name!r} is not registered.")
+        if not self.is_enabled(name):
+            raise ValueError(f"Provider {name!r} is disabled; enable it first.")
         # is_available() may perform real I/O (e.g. an HTTP health check);
         # deliberately not held under self._lock so a slow/blocking check
         # for one provider can't stall unrelated register()/rotate_key()
@@ -261,7 +303,11 @@ class ProviderRegistry:
         # duration, blocking unrelated register()/rotate_key() calls
         # from other threads for no good reason.
         with self._lock:
-            snapshot = list(self._providers.values())
+            snapshot = [
+                provider
+                for name, provider in self._providers.items()
+                if name not in self._runtime_disabled
+            ]
         available: list[BaseProvider] = []
         for provider in snapshot:
             try:

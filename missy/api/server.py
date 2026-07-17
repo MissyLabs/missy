@@ -239,6 +239,9 @@ def _make_handler(
         def do_POST(self) -> None:
             self._handle("POST")
 
+        def do_PUT(self) -> None:
+            self._handle("PUT")
+
         def do_DELETE(self) -> None:
             self._handle("DELETE")
 
@@ -388,6 +391,10 @@ def _make_handler(
                 return self._handle_audit_events(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
                 return self._handle_memory_search(params)
+            if method == "GET" and path == f"{_API_PREFIX}/memory/recent":
+                return self._handle_memory_recent(params)
+            if method == "GET" and path == f"{_API_PREFIX}/memory/sessions":
+                return self._handle_memory_sessions(params)
             if method == "GET" and path == f"{_API_PREFIX}/scheduler/jobs":
                 return self._handle_list_scheduled_jobs()
             if method == "POST" and path == f"{_API_PREFIX}/scheduler/jobs":
@@ -488,11 +495,24 @@ def _make_handler(
                     return ApiResponse.error("Not found", 404)
                 if method == "DELETE" and sub == "":
                     return self._handle_delete_memory_turn(turn_id)
+                if method == "PUT" and sub == "":
+                    body = self._read_body()
+                    if body is None:
+                        return ApiResponse.error("Invalid JSON body", 400)
+                    return self._handle_update_memory_turn(turn_id, body)
                 if method == "POST" and sub == "pin":
                     body = self._read_body()
                     if body is None:
                         return ApiResponse.error("Invalid JSON body", 400)
                     return self._handle_pin_memory_turn(turn_id, body)
+
+            # Provider item route — redacted config detail
+            providers_prefix = f"{_API_PREFIX}/providers/"
+            if method == "GET" and path.startswith(providers_prefix):
+                provider_name = path[len(providers_prefix) :]
+                if not provider_name or "/" in provider_name:
+                    return ApiResponse.error("Not found", 404)
+                return self._handle_get_provider(provider_name)
 
             # Scheduler job item routes — extract {id} segment
             jobs_prefix = f"{_API_PREFIX}/scheduler/jobs/"
@@ -622,13 +642,17 @@ def _make_handler(
                 self._handle_web_logout()
                 return
 
-            if method == "GET" and path == "/":
-                session = self._current_web_session()
-                if session is None:
-                    self._redirect("/login")
+            if method == "GET":
+                from missy.api.webui import page_exists
+
+                page = "dashboard" if path == "/" else path.lstrip("/")
+                if page_exists(page):
+                    session = self._current_web_session()
+                    if session is None:
+                        self._redirect("/login")
+                        return
+                    self._send_html(200, self._render_page(page, session))
                     return
-                self._send_html(200, self._render_console(session))
-                return
 
             self._send_html(404, self._render_message("Not found", "No operator page exists here."))
 
@@ -761,6 +785,11 @@ def _make_handler(
         def _render_console(self, session: WebSession) -> str:
             return render_console(csrf_token=session.csrf_token)
 
+        def _render_page(self, page: str, session: WebSession) -> str:
+            from missy.api.webui import render_page
+
+            return render_page(page, csrf_token=session.csrf_token)
+
         # ----------------------------------------------------------------
         # Route handlers
         # ----------------------------------------------------------------
@@ -820,16 +849,78 @@ def _make_handler(
                     available = False
                     with contextlib.suppress(Exception):
                         available = provider.is_available() if provider else False
+                    enabled = True
+                    with contextlib.suppress(Exception):
+                        enabled = bool(reg.is_enabled(name))
+                    config = None
+                    with contextlib.suppress(Exception):
+                        config = reg.get_config(name)
                     result.append(
                         {
                             "name": name,
                             "available": available,
+                            "enabled": enabled,
                             "is_default": name == reg.get_default_name(),
+                            "model": str(getattr(config, "model", "") or ""),
                         }
                     )
             except Exception as exc:
                 logger.warning("Error listing providers: %s", exc)
             return ApiResponse.ok({"providers": result})
+
+        def _handle_get_provider(self, name: str) -> tuple[int, dict]:
+            """GET /api/v1/providers/{name} — redacted provider config detail.
+
+            Never returns key material: only whether a key is configured
+            and how many rotation keys exist.
+            """
+            reg = provider_registry
+            if reg is None:
+                return ApiResponse.error("Provider registry is not attached", 503)
+            try:
+                names = set(reg.list_providers())
+            except Exception as exc:
+                logger.warning("Error listing providers: %s", exc)
+                return ApiResponse.error("Provider registry is unavailable", 503)
+            if name not in names:
+                return ApiResponse.error(f"Provider '{name}' is not registered", 404)
+
+            provider = reg.get(name)
+            available = False
+            with contextlib.suppress(Exception):
+                available = bool(provider is not None and provider.is_available())
+            enabled = True
+            with contextlib.suppress(Exception):
+                enabled = bool(reg.is_enabled(name))
+            config = None
+            with contextlib.suppress(Exception):
+                config = reg.get_config(name)
+
+            detail: dict[str, Any] = {
+                "name": name,
+                "available": available,
+                "enabled": enabled,
+                "is_default": name == reg.get_default_name(),
+                "config": {
+                    "model": str(getattr(config, "model", "") or ""),
+                    "fast_model": str(getattr(config, "fast_model", "") or ""),
+                    "premium_model": str(getattr(config, "premium_model", "") or ""),
+                    "base_url": str(getattr(config, "base_url", "") or ""),
+                    "timeout": getattr(config, "timeout", None),
+                    "key_rotation_strategy": str(
+                        getattr(config, "key_rotation_strategy", "") or ""
+                    ),
+                    "api_key_configured": bool(getattr(config, "api_key", "") or ""),
+                    "api_keys_count": len(getattr(config, "api_keys", []) or []),
+                    "requests_per_minute": getattr(config, "requests_per_minute", None),
+                    "tokens_per_minute": getattr(config, "tokens_per_minute", None),
+                },
+            }
+            diagnostics = getattr(provider, "diagnostics", None)
+            if callable(diagnostics):
+                with contextlib.suppress(Exception):
+                    detail["diagnostics"] = redact_audit_value(diagnostics())
+            return ApiResponse.ok(detail)
 
         def _handle_list_tools(self) -> tuple[int, dict]:
             """GET /api/v1/tools — list registered tools with schemas."""
@@ -1432,22 +1523,93 @@ def _make_handler(
                 logger.warning("Memory search error: %s", exc)
                 return ApiResponse.error("Memory search failed", 503)
 
+            return ApiResponse.ok({"results": [_turn_to_dict(t) for t in turns]})
+
+        def _handle_memory_recent(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/memory/recent — page through turns without a query.
+
+            Query parameters:
+                limit (int, default 25): Maximum turns per page.
+                offset (int, default 0): Newest turns to skip.
+                session_id (str, optional): Scope browsing to a session.
+
+            Response data fields:
+                results (list[dict]): Turn records, newest first.
+                total (int): Total turns matching the filter.
+                has_more (bool): Whether another page exists.
+            """
+            if memory_store is None:
+                return ApiResponse.ok({"results": [], "total": 0, "has_more": False})
+            try:
+                limit = max(1, min(int(params.get("limit", 25)), 100))
+            except (ValueError, TypeError):
+                limit = 25
+            try:
+                offset = max(0, min(int(params.get("offset", 0)), 100_000))
+            except (ValueError, TypeError):
+                offset = 0
+            browse_session_id: str | None = params.get("session_id") or None
+            try:
+                turns, total = memory_store.browse_turns(
+                    limit=limit, offset=offset, session_id=browse_session_id
+                )
+            except Exception as exc:
+                logger.warning("Memory browse error: %s", exc)
+                return ApiResponse.error("Memory store unavailable", 503)
             return ApiResponse.ok(
                 {
-                    "results": [
-                        {
-                            "id": t.id,
-                            "role": t.role,
-                            "content": t.content,
-                            "timestamp": t.timestamp,
-                            "session_id": t.session_id,
-                            "provider": t.provider,
-                            "pinned": bool(t.metadata.get("pinned")),
-                        }
-                        for t in turns
-                    ]
+                    "results": [_turn_to_dict(t) for t in turns],
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + limit < total,
                 }
             )
+
+        def _handle_memory_sessions(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/memory/sessions — sessions recorded in memory."""
+            if memory_store is None:
+                return ApiResponse.ok({"sessions": []})
+            try:
+                limit = max(1, min(int(params.get("limit", 50)), 500))
+            except (ValueError, TypeError):
+                limit = 50
+            try:
+                sessions = memory_store.list_sessions(limit=limit)
+            except Exception as exc:
+                logger.warning("Memory session list error: %s", exc)
+                return ApiResponse.error("Memory store unavailable", 503)
+            return ApiResponse.ok({"sessions": sessions})
+
+        def _handle_update_memory_turn(self, turn_id: str, body: dict) -> tuple[int, dict]:
+            """PUT /api/v1/memory/turns/{id} — edit a turn's content.
+
+            Request body fields:
+                content (str, required): Replacement content text.
+            """
+            if memory_store is None:
+                return ApiResponse.error("Memory store unavailable", 503)
+            content = body.get("content")
+            if not isinstance(content, str) or not content.strip():
+                return ApiResponse.error("'content' field is required and must be non-empty", 400)
+            try:
+                updated = memory_store.update_turn_content(turn_id, content)
+            except Exception as exc:
+                logger.warning("Memory update error: %s", exc)
+                return ApiResponse.error("Memory store unavailable", 503)
+            result = "allow" if updated else "deny"
+            self._emit_web_audit(
+                event_type="web.memory",
+                result=result,
+                action="memory.update_turn",
+                subsystem="memory",
+                severity="info" if updated else "warning",
+                turn_id=turn_id,
+                content_chars=len(content),
+            )
+            if not updated:
+                return ApiResponse.error(f"Turn '{turn_id}' not found", 404)
+            return ApiResponse.ok({"turn_id": turn_id, "updated": True})
 
         def _handle_delete_memory_turn(self, turn_id: str) -> tuple[int, dict]:
             """DELETE /api/v1/memory/turns/{id} — permanently delete a turn."""
@@ -1607,6 +1769,21 @@ def _make_handler(
 # ---------------------------------------------------------------------------
 # Stale-IP eviction helper (called under rate_lock)
 # ---------------------------------------------------------------------------
+
+
+def _turn_to_dict(turn: Any) -> dict[str, Any]:
+    """Serialize a memory turn for API responses."""
+    metadata = getattr(turn, "metadata", None) or {}
+    return {
+        "id": turn.id,
+        "role": turn.role,
+        "content": turn.content,
+        "timestamp": turn.timestamp,
+        "session_id": turn.session_id,
+        "provider": turn.provider,
+        "pinned": bool(metadata.get("pinned")),
+        "edited_at": str(metadata.get("edited_at") or ""),
+    }
 
 
 def _job_fallback_dict(job: Any) -> dict[str, Any]:

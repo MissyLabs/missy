@@ -937,17 +937,23 @@ class TestThreadSafety:
 
         def add(n: int) -> None:
             try:
-                mc = _mock_client(name=f"srv{n}")
-                with patch("missy.mcp.manager.McpClient", return_value=mc):
-                    mgr.add_server(f"srv{n}", command=f"echo {n}")
+                mgr.add_server(f"srv{n}", command=f"echo {n}")
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+        # One patch shared by every thread: entering/exiting patch() on the
+        # same module global per-thread races -- one thread's __exit__ can
+        # restore the real McpClient while another is mid-add_server, which
+        # then spawns a real `echo` subprocess that exits immediately.
+        # _mock_client accepts the same (name, command, url) kwargs
+        # add_server constructs McpClient with, so side_effect builds a
+        # correctly-named mock per call.
+        with patch("missy.mcp.manager.McpClient", side_effect=_mock_client):
+            threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
         assert errors == []
         assert len(mgr.list_servers()) == 8
 
@@ -966,19 +972,19 @@ class TestThreadSafety:
 
         def add(n: int) -> None:
             try:
-                mc = _mock_client(name=f"t{n}")
-                with patch("missy.mcp.manager.McpClient", return_value=mc):
-                    mgr.add_server(f"t{n}", command=f"echo {n}")
+                mgr.add_server(f"t{n}", command=f"echo {n}")
             except Exception as exc:
                 errors.append(exc)
 
         lister = threading.Thread(target=list_loop)
         lister.start()
-        adders = [threading.Thread(target=add, args=(i,)) for i in range(6)]
-        for t in adders:
-            t.start()
-        for t in adders:
-            t.join(timeout=10)
+        # Single shared patch: see test_concurrent_add_servers_does_not_corrupt_state.
+        with patch("missy.mcp.manager.McpClient", side_effect=_mock_client):
+            adders = [threading.Thread(target=add, args=(i,)) for i in range(6)]
+            for t in adders:
+                t.start()
+            for t in adders:
+                t.join(timeout=10)
         stop.set()
         lister.join(timeout=5)
         assert errors == []

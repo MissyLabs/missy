@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 
 _CONTROL_PROVIDER_SET_DEFAULT = "provider.set_default"
+_CONTROL_PROVIDER_ENABLE = "provider.enable"
+_CONTROL_PROVIDER_DISABLE = "provider.disable"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
 _CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
@@ -32,6 +34,7 @@ def list_operator_controls(
 ) -> dict[str, Any]:
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
+    enable_targets, disable_targets = _provider_toggle_targets(provider_registry)
     pause_targets, resume_targets = _scheduler_targets(scheduler)
     remove_targets = _scheduler_remove_targets(scheduler)
     candidate_targets = _candidate_targets(candidate_store)
@@ -46,6 +49,29 @@ def list_operator_controls(
                 "confirmation_template": "set-default:{target}",
                 "enabled": bool(provider_registry is not None and providers),
                 "targets": providers,
+            },
+            {
+                "id": _CONTROL_PROVIDER_ENABLE,
+                "label": "Enable provider",
+                "description": "Re-enable a runtime-disabled provider for dispatch.",
+                "subsystem": "provider",
+                "requires_confirmation": True,
+                "confirmation_template": "enable-provider:{target}",
+                "enabled": bool(provider_registry is not None and enable_targets),
+                "targets": enable_targets,
+            },
+            {
+                "id": _CONTROL_PROVIDER_DISABLE,
+                "label": "Disable provider",
+                "description": (
+                    "Exclude a provider from dispatch until re-enabled. "
+                    "The current default provider cannot be disabled."
+                ),
+                "subsystem": "provider",
+                "requires_confirmation": True,
+                "confirmation_template": "disable-provider:{target}",
+                "enabled": bool(provider_registry is not None and disable_targets),
+                "targets": disable_targets,
             },
             {
                 "id": _CONTROL_SCHEDULER_PAUSE,
@@ -140,6 +166,8 @@ def execute_operator_control(
     """
     if control_id == _CONTROL_PROVIDER_SET_DEFAULT:
         return _execute_provider_set_default(body, provider_registry=provider_registry)
+    if control_id in {_CONTROL_PROVIDER_ENABLE, _CONTROL_PROVIDER_DISABLE}:
+        return _execute_provider_toggle(control_id, body, provider_registry=provider_registry)
     if control_id in {_CONTROL_SCHEDULER_PAUSE, _CONTROL_SCHEDULER_RESUME}:
         return _execute_scheduler_control(control_id, body, scheduler=scheduler)
     if control_id == _CONTROL_SCHEDULER_REMOVE:
@@ -253,6 +281,85 @@ def _execute_provider_set_default(
             "target": target,
             "previous": previous,
             "current": target,
+        },
+        detail,
+    )
+
+
+def _execute_provider_toggle(
+    control_id: str,
+    body: dict[str, Any],
+    *,
+    provider_registry: ProviderRegistry | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    enable = control_id == _CONTROL_PROVIDER_ENABLE
+    action = "enable" if enable else "disable"
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if provider_registry is None:
+        detail["reason"] = "provider_registry_unavailable"
+        return 503, {"message": "Provider registry is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid provider target"}, detail
+
+    expected_confirmation = f"{action}-provider:{target}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = f"{action}-provider:{{target}}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    try:
+        names = set(provider_registry.list_providers())
+    except Exception as exc:
+        detail["reason"] = "provider_list_failed"
+        detail["error"] = _safe_error(exc)
+        return 503, {"message": "Provider registry is unavailable"}, detail
+    if target not in names:
+        detail["reason"] = "unknown_provider"
+        return 404, {"message": f"Provider {target!r} is not registered"}, detail
+
+    try:
+        previous_enabled = bool(provider_registry.is_enabled(target))
+    except Exception:
+        previous_enabled = True
+    detail["previous_enabled"] = previous_enabled
+    if previous_enabled == enable:
+        detail["reason"] = "already_in_state"
+        return (
+            409,
+            {"message": f"Provider {target!r} is already {action}d"},
+            detail,
+        )
+
+    try:
+        provider_registry.set_enabled(target, enable)
+    except ValueError as exc:
+        detail["reason"] = "toggle_refused"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+    except Exception as exc:
+        detail["reason"] = "toggle_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    detail["reason"] = "confirmed"
+    detail["current_enabled"] = enable
+    return (
+        200,
+        {
+            "control": control_id,
+            "target": target,
+            "previous_enabled": previous_enabled,
+            "current_enabled": enable,
         },
         detail,
     )
@@ -610,15 +717,72 @@ def _provider_targets(provider_registry: ProviderRegistry | None) -> list[dict[s
             available = bool(provider is not None and provider.is_available())
         except Exception:
             available = False
+        enabled = True
+        try:
+            enabled = bool(provider_registry.is_enabled(name))
+        except Exception:
+            enabled = True
         targets.append(
             {
                 "name": name,
-                "available": available,
+                "available": available and enabled,
+                "enabled": enabled,
                 "is_current": name == default_name,
                 "confirmation": f"set-default:{name}",
             }
         )
     return targets
+
+
+def _provider_toggle_targets(
+    provider_registry: ProviderRegistry | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return ``(enable_targets, disable_targets)`` for provider toggles."""
+    if provider_registry is None:
+        return [], []
+    try:
+        names = provider_registry.list_providers()
+    except Exception:
+        return [], []
+    default_name = ""
+    try:
+        default_name = provider_registry.get_default_name() or ""
+    except Exception:
+        default_name = ""
+    enable_targets: list[dict[str, Any]] = []
+    disable_targets: list[dict[str, Any]] = []
+    for name in names:
+        enabled = True
+        try:
+            enabled = bool(provider_registry.is_enabled(name))
+        except Exception:
+            enabled = True
+        base = {
+            "name": name,
+            "state": "enabled" if enabled else "disabled",
+            "is_current": False,
+        }
+        enable_targets.append(
+            {
+                **base,
+                "available": not enabled,
+                "is_current": enabled,
+                "action_label": "Enable",
+                "confirmation": f"enable-provider:{name}",
+            }
+        )
+        disable_targets.append(
+            {
+                **base,
+                # The current default cannot be disabled; surface that
+                # in the target state instead of failing on execute.
+                "available": enabled and name != default_name,
+                "is_current": not enabled,
+                "action_label": "Disable",
+                "confirmation": f"disable-provider:{name}",
+            }
+        )
+    return enable_targets, disable_targets
 
 
 def _candidate_targets(candidate_store: CandidateStore | None) -> dict[str, list[dict[str, Any]]]:

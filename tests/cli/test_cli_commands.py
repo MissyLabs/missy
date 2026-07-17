@@ -32,7 +32,7 @@ from click.testing import CliRunner
 
 from missy.channels.voice.registry import EdgeNode
 from missy.cli.main import cli
-from tests.cli.conftest import _make_cli_runner
+from tests.cli.conftest import _make_cli_runner, combined_output
 
 # ---------------------------------------------------------------------------
 # Shared fixtures and helpers
@@ -330,7 +330,7 @@ class TestVaultDelete:
         # equivalent not-found handling, so a script checking only the exit
         # code isn't misled into believing the deletion succeeded.
         assert result.exit_code == 1
-        assert "not found" in result.output
+        assert "not found" in combined_output(result)
 
     def test_vault_delete_vault_error_exits_one(self, runner: CliRunner):
         from missy.security.vault import VaultError
@@ -1888,7 +1888,7 @@ class TestDevicesAndVoiceRealRegistryEndToEnd:
 
         result = runner.invoke(cli, ["devices", "unpair", "--yes", "real-node-5678"])
         assert result.exit_code == 1
-        assert "not found" in result.output.lower()
+        assert "not found" in combined_output(result).lower()
 
     def test_devices_status_and_policy_against_real_registry(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
