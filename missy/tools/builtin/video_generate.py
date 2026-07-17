@@ -146,7 +146,7 @@ _POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_OUTPUT_DIR = str(Path.home() / ".missy" / "videos")
 _MAX_RESPONSE_BYTES = 300 * 1024 * 1024  # 300 MB, for the /view download fallback
 
-_VALID_BACKENDS = frozenset({"wan", "svd", "animatediff"})
+_VALID_BACKENDS = frozenset({"wan", "wan14b", "svd", "animatediff"})
 
 # Tool-facing format name -> VHS_VideoCombine format value.
 _VIDEO_FORMATS = {
@@ -162,6 +162,13 @@ _ANIMATEDIFF_MOTION_MODULE = "mm_sd_v15_v2.ckpt"
 _WAN_DIFFUSION_MODEL = "wan2.2_ti2v_5B_fp16.safetensors"
 _WAN_TEXT_ENCODER = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
 _WAN_VAE = "wan2.2_vae.safetensors"
+# Wan 2.2 A14B MoE (the "14B" model): two experts (high/low noise) for the
+# text-to-video path, plus the wan 2.1 VAE (the A14B uses 2.1's VAE, not 2.2's).
+# Shares the umt5 text encoder with the 5B. fp8_scaled weights (~14 GB each);
+# the experts run sequentially so peak VRAM is ~one expert.
+_WAN14B_T2V_HIGH = "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+_WAN14B_T2V_LOW = "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+_WAN21_VAE = "wan_2.1_vae.safetensors"
 # Audio backends. Stable Audio 3.0 (medium base, open-weight, May 2026) is the
 # default/recommended text-to-audio model; Stable Audio Open 1.0 (2024) is kept
 # as a legacy fallback for ComfyUI installs that predate SA3 core-model support.
@@ -179,6 +186,9 @@ _MODEL_SOURCES = {
     _WAN_DIFFUSION_MODEL: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
     _WAN_TEXT_ENCODER: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
     _WAN_VAE: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    _WAN14B_T2V_HIGH: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged (split_files/diffusion_models/)",
+    _WAN14B_T2V_LOW: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged (split_files/diffusion_models/)",
+    _WAN21_VAE: "huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged (split_files/vae/)",
     _AUDIO3_CHECKPOINT: "huggingface.co/Comfy-Org/stable-audio-3 (checkpoints/)",
     _AUDIO3_TEXT_ENCODER: "huggingface.co/Comfy-Org/stable-audio-3 (text_encoders/)",
     _AUDIO_CHECKPOINT: "huggingface.co/Comfy-Org/stable-audio-open-1.0_repackaged",
@@ -211,6 +221,27 @@ _BACKEND_DEFAULTS: dict[str, dict[str, Any]] = {
         "steps": 20,
         "cfg": 5.0,
         "sampler": "uni_pc",
+        "scheduler": "simple",
+        "interpolate": 1,
+        "timeout": 3600,
+        "dim_step": 32,
+        "dim_max": 1280,
+        "frames_min": 5,
+        "frames_max": 121,
+    },
+    # Wan 2.2 A14B MoE, text-to-video. Higher quality than the 5B but ~14 GB
+    # per expert; the two experts run sequentially (high-noise then low-noise)
+    # so peak VRAM is ~one expert -- a tight but workable fit on 16 GB, slower
+    # on 8 GB (heavy offload). Sampler/steps/cfg from ComfyUI's official 14B
+    # example (euler/simple, 20 steps, cfg 3.5, mid-step high/low boundary).
+    "wan14b": {
+        "width": 832,
+        "height": 480,
+        "frames": 81,
+        "fps": 24,
+        "steps": 20,
+        "cfg": 3.5,
+        "sampler": "euler",
         "scheduler": "simple",
         "interpolate": 1,
         "timeout": 3600,
@@ -529,6 +560,104 @@ def _build_wan_workflow(
     return graph, ["9", 0]
 
 
+def _build_wan22_14b_workflow(
+    *,
+    diffusion_high: str,
+    diffusion_low: str,
+    text_encoder: str,
+    vae_name: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    video_frames: int,
+    steps: int,
+    cfg: float,
+    sampler: str,
+    scheduler: str,
+    seed: int,
+    weight_dtype: str = "default",
+) -> tuple[dict[str, Any], list[Any]]:
+    """Wan 2.2 A14B MoE text-to-video graph, mirroring ComfyUI's official
+    Wan 2.2 14B example: two expert UNETs -- the high-noise expert handles the
+    first half of sampling, the low-noise expert the second -- each wrapped in
+    ``ModelSamplingSD3(shift=8)`` and chained via two ``KSamplerAdvanced`` nodes
+    across a mid-step boundary. The high stage adds noise and returns leftover
+    noise; the low stage picks up from there without re-adding noise. Uses the
+    umt5 text encoder and the wan 2.1 VAE (the A14B uses the 2.1 VAE, not the
+    5B's 2.2 VAE) and ``EmptyHunyuanLatentVideo`` for the latent.
+
+    Text-to-video only -- A14B image-to-video is a separate (i2v-expert) graph.
+    """
+    boundary = max(1, steps // 2)
+    graph: dict[str, Any] = {
+        "hi": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": diffusion_high, "weight_dtype": weight_dtype},
+        },
+        "lo": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": diffusion_low, "weight_dtype": weight_dtype},
+        },
+        "hims": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["hi", 0], "shift": 8.0}},
+        "loms": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["lo", 0], "shift": 8.0}},
+        "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": text_encoder, "type": "wan"}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
+        "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["clip", 0]}},
+        "neg": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": negative_prompt, "clip": ["clip", 0]},
+        },
+        "lat": {
+            "class_type": "EmptyHunyuanLatentVideo",
+            "inputs": {
+                "width": width,
+                "height": height,
+                "length": video_frames,
+                "batch_size": 1,
+            },
+        },
+        "khigh": {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": ["hims", 0],
+                "positive": ["pos", 0],
+                "negative": ["neg", 0],
+                "latent_image": ["lat", 0],
+                "add_noise": "enable",
+                "noise_seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler,
+                "scheduler": scheduler,
+                "start_at_step": 0,
+                "end_at_step": boundary,
+                "return_with_leftover_noise": "enable",
+            },
+        },
+        "klow": {
+            "class_type": "KSamplerAdvanced",
+            "inputs": {
+                "model": ["loms", 0],
+                "positive": ["pos", 0],
+                "negative": ["neg", 0],
+                "latent_image": ["khigh", 0],
+                "add_noise": "disable",
+                "noise_seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler,
+                "scheduler": scheduler,
+                "start_at_step": boundary,
+                "end_at_step": 10000,
+                "return_with_leftover_noise": "disable",
+            },
+        },
+        "dec": {"class_type": "VAEDecode", "inputs": {"samples": ["klow", 0], "vae": ["vae", 0]}},
+    }
+    return graph, ["dec", 0]
+
+
 def _append_upscale(
     graph: dict[str, Any], image_ref: list[Any], model_name: str = _UPSCALE_MODEL
 ) -> list[Any]:
@@ -769,9 +898,11 @@ class VideoGenerateTool(BaseTool):
     name = "video_generate"
     description = (
         "Generate a short video via a local GPU-backed ComfyUI server. "
-        "backend='wan' (recommended, highest quality) generates 24fps video "
-        "from a text prompt, or animates an image if image_path is also "
-        "given. backend='svd' animates a single input image (image_path). "
+        "backend='wan' (recommended default, Wan 2.2 5B) generates 24fps video "
+        "from a text prompt, or animates an image if image_path is also given. "
+        "backend='wan14b' is the higher-quality Wan 2.2 A14B text-to-video model "
+        "(slower, needs more VRAM; text-to-video only). "
+        "backend='svd' animates a single input image (image_path). "
         "backend='animatediff' generates video from a text prompt (legacy). "
         "Pass audio_prompt to generate a matching soundtrack (music/sfx/"
         "ambience) muxed into the video, or audio_path to mux an existing "
@@ -955,7 +1086,7 @@ class VideoGenerateTool(BaseTool):
             return ToolResult(
                 success=False, output=None, error="backend='svd' requires image_path."
             )
-        if backend in ("wan", "animatediff") and not prompt:
+        if backend in ("wan", "wan14b", "animatediff") and not prompt:
             return ToolResult(
                 success=False, output=None, error=f"backend='{backend}' requires prompt."
             )
@@ -965,6 +1096,13 @@ class VideoGenerateTool(BaseTool):
                 output=None,
                 error="backend='animatediff' is text-to-video and does not take image_path; "
                 "use backend='wan' or 'svd' to animate an image.",
+            )
+        if backend == "wan14b" and image_path:
+            return ToolResult(
+                success=False,
+                output=None,
+                error="backend='wan14b' is text-to-video (A14B) only; use backend='wan' (the 5B "
+                "TI2V model) or 'svd' to animate an image.",
             )
         for label, path_str in (("image_path", image_path), ("audio_path", audio_path)):
             if path_str and not Path(path_str).expanduser().is_file():
@@ -976,7 +1114,7 @@ class VideoGenerateTool(BaseTool):
         width = _snap_dim(width or d["width"], d["dim_step"], 256, d["dim_max"])
         height = _snap_dim(height or d["height"], d["dim_step"], 256, d["dim_max"])
         video_frames = int(_clamp(video_frames or d["frames"], d["frames_min"], d["frames_max"]))
-        if backend == "wan":
+        if backend in ("wan", "wan14b"):
             # Wan latent lengths must be 4k+1 (node input step is 4 from a
             # default of 49); round to the nearest valid length.
             video_frames = int(round((video_frames - 1) / 4)) * 4 + 1
@@ -992,7 +1130,7 @@ class VideoGenerateTool(BaseTool):
         timeout = timeout or d["timeout"]
         seed = seed or random.randint(1, 2**32 - 1)
         negative_prompt = negative_prompt or (
-            _WAN_NEGATIVE_PROMPT if backend == "wan" else _SD_NEGATIVE_PROMPT
+            _WAN_NEGATIVE_PROMPT if backend in ("wan", "wan14b") else _SD_NEGATIVE_PROMPT
         )
 
         final_frames = (video_frames - 1) * interpolate + 1 if interpolate > 1 else video_frames
@@ -1106,6 +1244,23 @@ class VideoGenerateTool(BaseTool):
                         video_frames=video_frames,
                         context_length=context_length,
                         context_overlap=context_overlap,
+                        steps=steps,
+                        cfg=cfg,
+                        sampler=sampler,
+                        scheduler=scheduler,
+                        seed=seed,
+                    )
+                elif backend == "wan14b":
+                    graph, image_ref = _build_wan22_14b_workflow(
+                        diffusion_high=_WAN14B_T2V_HIGH,
+                        diffusion_low=_WAN14B_T2V_LOW,
+                        text_encoder=_WAN_TEXT_ENCODER,
+                        vae_name=_WAN21_VAE,
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        width=width,
+                        height=height,
+                        video_frames=video_frames,
                         steps=steps,
                         cfg=cfg,
                         sampler=sampler,
@@ -1300,6 +1455,11 @@ class VideoGenerateTool(BaseTool):
         elif backend == "animatediff":
             required.append(("checkpoints", checkpoint or _ANIMATEDIFF_CHECKPOINT))
             required.append(("animatediff_models", motion_module or _ANIMATEDIFF_MOTION_MODULE))
+        elif backend == "wan14b":
+            required.append(("diffusion_models", _WAN14B_T2V_HIGH))
+            required.append(("diffusion_models", _WAN14B_T2V_LOW))
+            required.append(("text_encoders", _WAN_TEXT_ENCODER))
+            required.append(("vae", _WAN21_VAE))
         else:
             required.append(("diffusion_models", checkpoint or _WAN_DIFFUSION_MODEL))
             required.append(("text_encoders", _WAN_TEXT_ENCODER))
