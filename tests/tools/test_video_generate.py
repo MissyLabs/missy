@@ -230,6 +230,64 @@ class TestBuildWanWorkflow:
         assert sampling["inputs"]["shift"] == 8.0
 
 
+class TestBuildWan22_14bWorkflow:
+    def _build(self, **overrides):
+        from missy.tools.builtin.video_generate import _build_wan22_14b_workflow
+
+        kwargs = {
+            "diffusion_high": "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+            "diffusion_low": "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+            "text_encoder": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "vae_name": "wan_2.1_vae.safetensors",
+            "prompt": "a fox",
+            "negative_prompt": "bad",
+            "width": 832,
+            "height": 480,
+            "video_frames": 81,
+            "steps": 20,
+            "cfg": 3.5,
+            "sampler": "euler",
+            "scheduler": "simple",
+            "seed": 42,
+        }
+        kwargs.update(overrides)
+        return _build_wan22_14b_workflow(**kwargs)
+
+    def test_two_expert_two_sampler_structure(self) -> None:
+        graph, image_ref = self._build()
+        assert _class_types(graph) == {
+            "UNETLoader",
+            "ModelSamplingSD3",
+            "CLIPLoader",
+            "VAELoader",
+            "CLIPTextEncode",
+            "EmptyHunyuanLatentVideo",
+            "KSamplerAdvanced",
+            "VAEDecode",
+        }
+        # two experts, two ModelSamplingSD3, two advanced samplers
+        assert sum(n["class_type"] == "UNETLoader" for n in graph.values()) == 2
+        assert sum(n["class_type"] == "KSamplerAdvanced" for n in graph.values()) == 2
+        assert graph[image_ref[0]]["class_type"] == "VAEDecode"
+        _assert_wiring_consistent(graph)
+
+    def test_high_low_noise_boundary_and_chaining(self) -> None:
+        graph, _ = self._build(steps=20)
+        high, low = graph["khigh"]["inputs"], graph["klow"]["inputs"]
+        # high expert: adds noise, first half, returns leftover noise
+        assert high["add_noise"] == "enable"
+        assert high["start_at_step"] == 0 and high["end_at_step"] == 10
+        assert high["return_with_leftover_noise"] == "enable"
+        # low expert: no fresh noise, picks up from the high stage's latent
+        assert low["add_noise"] == "disable"
+        assert low["start_at_step"] == 10
+        assert low["return_with_leftover_noise"] == "disable"
+        assert low["latent_image"] == ["khigh", 0]
+        # A14B uses the wan 2.1 VAE, not the 5B's 2.2 VAE
+        assert graph["vae"]["inputs"]["vae_name"] == "wan_2.1_vae.safetensors"
+        assert graph["clip"]["inputs"]["type"] == "wan"
+
+
 # ---------------------------------------------------------------------------
 # Post-processing / audio / mux composition
 # ---------------------------------------------------------------------------
@@ -1027,7 +1085,7 @@ class TestVideoGenerateToolResolvers:
         schema = VideoGenerateTool().get_schema()
         assert schema["name"] == "video_generate"
         props = schema["parameters"]["properties"]
-        assert set(props["backend"]["enum"]) == {"wan", "svd", "animatediff"}
+        assert set(props["backend"]["enum"]) == {"wan", "wan14b", "svd", "animatediff"}
         assert set(props["video_format"]["enum"]) == {"h264-mp4", "h265-mp4", "nvenc_h264-mp4"}
         assert "audio_prompt" in props
         assert "interpolate" in props
