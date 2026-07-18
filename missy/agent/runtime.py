@@ -391,6 +391,14 @@ class AgentConfig:
     #: back to the primary model when no tiered model is configured). Off by
     #: default: it changes which model serves a request, so it's explicit.
     model_routing_enabled: bool = False
+    #: F10 -- opt-in 4-stage CondenserPipeline pass over the built context
+    #: messages (observation masking, amortized forgetting, summarizing,
+    #: windowing) before a provider call, for long conversations. Off by
+    #: default; MemoryConsolidator/SleeptimeWorker remain the primary path.
+    condenser_pipeline_enabled: bool = False
+    #: Minimum message count before the condenser pass runs (avoids compressing
+    #: short conversations). Only consulted when condenser_pipeline_enabled.
+    condenser_min_messages: int = 30
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -2602,6 +2610,50 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     def _build_context_messages(
+        self,
+        user_input: str,
+        history: list[dict],
+        session_id: str = "",
+        attention_query: str = "",
+    ) -> tuple[str, list[dict]]:
+        """Build context messages, then optionally condense them (F10).
+
+        Thin wrapper over :meth:`_build_context_messages_raw` that applies the
+        4-stage CondenserPipeline when ``condenser_pipeline_enabled`` and the
+        message list is long enough. Default behaviour (flag off) is unchanged.
+        """
+        system, messages = self._build_context_messages_raw(
+            user_input, history, session_id=session_id, attention_query=attention_query
+        )
+        return self._maybe_condense_context(system, messages)
+
+    def _maybe_condense_context(self, system: str, messages: list[dict]) -> tuple[str, list[dict]]:
+        """F10: run the CondenserPipeline over *messages* when enabled + long.
+
+        Fully defensive — any failure returns the messages unchanged, so a
+        condenser bug can never break a turn. Uses the keyword-fallback
+        summarizer (no provider) to avoid extra LLM spend on the hot path.
+        """
+        if not bool(getattr(self.config, "condenser_pipeline_enabled", False)):
+            return system, messages
+        min_msgs = int(getattr(self.config, "condenser_min_messages", 30) or 30)
+        if len(messages) < min_msgs:
+            return system, messages
+        try:
+            from missy.agent.condensers import create_default_pipeline
+
+            budget = getattr(self._context_manager, "_budget", None)
+            max_tokens = int(getattr(budget, "total", 30_000) or 30_000)
+            pipeline = create_default_pipeline(provider=None, max_tokens=max_tokens)
+            result = pipeline.condense(messages, system)
+            condensed = result.messages if result and result.messages else messages
+            logger.debug("F10: condensed context %d -> %d messages.", len(messages), len(condensed))
+            return system, condensed
+        except Exception:
+            logger.debug("F10: condenser pass failed; using uncondensed context.", exc_info=True)
+            return system, messages
+
+    def _build_context_messages_raw(
         self,
         user_input: str,
         history: list[dict],

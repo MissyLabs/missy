@@ -36,7 +36,7 @@ hand-waving.
 | F07 | LandlockPolicy runtime bootstrap | Activate unwired | Implemented, **zero callers** |
 | F08 | ContainerSandbox activation path | Activate unwired | Implemented, no bootstrap path |
 | F09 | StructuredOutputRunner adoption | Activate unwired | ✅ DONE — structured benchmark judge (make_structured_llm_judge) |
-| F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | Implemented, **zero callers** |
+| F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | ✅ DONE — opt-in condenser pass in _build_context_messages |
 | F11 | TrustScorer inspection + gating | Activate unwired | ✅ DONE — persisted + `missy tools trust` CLI |
 | F12 | Semantic conversation memory (VectorMemoryStore) | Activate unwired | FAISS wired to vision only |
 | F13 | PromptPatchManager organic proposal trigger | Activate unwired | ✅ DONE — FailureTracker-driven ERROR_AVOIDANCE proposals (opt-in) |
