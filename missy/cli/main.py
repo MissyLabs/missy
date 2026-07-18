@@ -1300,6 +1300,87 @@ def audit_verify(ctx: click.Context, limit: int) -> None:
         sys.exit(1)
 
 
+@audit.command("export")
+@click.option("--out", "out_path", required=True, help="Path to write the bundle JSON.")
+@click.option("--since", default=None, help="Only include events at/after this ISO-8601 timestamp.")
+@click.option("--category", default=None, help="Only include events of this category.")
+@click.option("--limit", default=0, show_default=True, help="Keep at most N most-recent events.")
+@click.pass_context
+def audit_export(
+    ctx: click.Context,
+    out_path: str,
+    since: str | None,
+    category: str | None,
+    limit: int,
+) -> None:
+    """Export a signed, portable, self-verifiable audit bundle (F22).
+
+    Reads the audit log, verifies it, and writes a JSON bundle signed by the
+    agent identity (public JWK embedded) so an auditor can validate it with
+    `missy audit verify-bundle` on any machine — no host access required.
+    """
+    import json as _json
+
+    from missy.observability.audit_export import export_audit_bundle
+    from missy.security.identity import AgentIdentity
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    try:
+        identity = AgentIdentity.load_or_generate()
+    except Exception as exc:
+        _print_error(f"Could not load agent identity: {exc}")
+        sys.exit(1)
+
+    bundle = export_audit_bundle(
+        cfg.audit_log_path, identity, since=since, category=category, limit=limit
+    )
+    try:
+        with open(Path(out_path).expanduser(), "w", encoding="utf-8") as fh:
+            _json.dump(bundle, fh, indent=2)
+    except OSError as exc:
+        _print_error(f"Could not write bundle: {exc}")
+        sys.exit(1)
+
+    m = bundle["manifest"]
+    _print_success(
+        f"Exported {m['exported_event_count']} event(s) to {out_path} "
+        f"(fingerprint {m['identity_fingerprint'][:16]}...)."
+    )
+
+
+@audit.command("verify-bundle")
+@click.argument("bundle_path")
+def audit_verify_bundle(bundle_path: str) -> None:
+    """Verify a signed audit bundle produced by `missy audit export` (F22).
+
+    Uses only the public key embedded in the bundle, so it validates on any
+    machine without the original host or its private key.
+    """
+    import json as _json
+
+    from missy.observability.audit_export import verify_audit_bundle
+
+    try:
+        with open(Path(bundle_path).expanduser(), encoding="utf-8") as fh:
+            bundle = _json.load(fh)
+    except (OSError, ValueError) as exc:
+        _print_error(f"Could not read bundle: {exc}")
+        sys.exit(1)
+
+    result = verify_audit_bundle(bundle)
+    if result["signature_valid"] and result["events_hash_valid"]:
+        _print_success(
+            f"Bundle is authentic: signature valid and {result['exported_event_count']} "
+            "event(s) intact."
+        )
+        return
+    _print_error(
+        f"Bundle verification FAILED: signature_valid={result['signature_valid']}, "
+        f"events_hash_valid={result['events_hash_valid']} — {result['reason']}"
+    )
+    sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # missy logs
 # ---------------------------------------------------------------------------

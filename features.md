@@ -48,7 +48,7 @@ hand-waving.
 | F19 | Global + multi-session budget ceilings | Enhancement | Per-session cap only |
 | F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
 | F21 | LLM-judge benchmark dimension | Enhancement | Heuristic correctness scoring only |
-| F22 | Signed exportable audit bundles + SIEM sink | Enhancement | JSONL + OTLP spans only |
+| F22 | Signed exportable audit bundles + SIEM sink | Enhancement | ✅ DONE (export bundle) — `missy audit export`/`verify-bundle`; SIEM sink deferred |
 | F23 | Scheduled/continuous vision monitoring | Enhancement | On-demand capture only |
 | F24 | Persona A/B experiments + guardrail tuning | Enhancement | Single static persona |
 
