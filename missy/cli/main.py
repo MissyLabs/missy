@@ -2728,6 +2728,40 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
         logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
 
+    # Heartbeat (F06). HeartbeatRunner (missy/agent/heartbeat.py) — periodic
+    # HEARTBEAT.md-driven synthetic agent invocation with active-hours gating
+    # and a HEARTBEAT_OK suppression file — was fully built and its config
+    # block documented, but had zero construction sites: gateway_start() never
+    # built one, so editing heartbeat.enabled/interval_seconds had no effect on
+    # a running instance. Gated on heartbeat.enabled (default false). The run
+    # callback reuses the main _agent runtime so heartbeat runs get identical
+    # policy/budget/audit treatment as any other run.
+    heartbeat_runner = None
+    try:
+        hb = getattr(cfg, "heartbeat", None)
+        if hb is not None and getattr(hb, "enabled", False):
+            from missy.agent.heartbeat import HeartbeatRunner
+
+            def _heartbeat_run(prompt: str) -> str:
+                return str(_agent.run(prompt))
+
+            heartbeat_runner = HeartbeatRunner(
+                agent_run_fn=_heartbeat_run,
+                interval_seconds=getattr(hb, "interval_seconds", 1800),
+                workspace=getattr(hb, "workspace", "~/workspace"),
+                active_hours=getattr(hb, "active_hours", ""),
+            )
+            heartbeat_runner.start()
+            console.print(
+                f"[green]Heartbeat started[/] (every {getattr(hb, 'interval_seconds', 1800)}s"
+                f"{', ' + hb.active_hours if getattr(hb, 'active_hours', '') else ''})"
+            )
+        else:
+            console.print("[dim]Heartbeat disabled via config (heartbeat.enabled: false).[/]")
+    except Exception as _hb_exc:
+        console.print(f"[yellow]Heartbeat failed to start: {_hb_exc}[/]")
+        logger.warning("Heartbeat startup error: %s", _hb_exc, exc_info=True)
+
     # Config hot-reload. Fully built and tested (missy/config/hotreload.py,
     # including its symlink/ownership/permission safety checks before
     # reload), but had zero production callers anywhere -- editing
@@ -3178,6 +3212,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 console.print("[dim]Scheduler stopped.[/]")
             except Exception as _sched_stop_exc:
                 logger.debug("scheduler: stop error: %s", _sched_stop_exc)
+        if heartbeat_runner is not None:
+            try:
+                heartbeat_runner.stop()
+                console.print("[dim]Heartbeat stopped.[/]")
+            except Exception as _hb_stop_exc:
+                logger.debug("heartbeat: stop error: %s", _hb_stop_exc)
         try:
             config_watcher.stop()
         except Exception as _cw_stop_exc:
