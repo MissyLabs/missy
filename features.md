@@ -47,7 +47,7 @@ hand-waving.
 | F18 | Web TUI live log/audit streaming page | Enhancement | Static audit page; run console SSE exists |
 | F19 | Global + multi-session budget ceilings | Enhancement | ✅ DONE — GlobalBudget + `missy budget` + runtime enforcement |
 | F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
-| F21 | LLM-judge benchmark dimension | Enhancement | Heuristic correctness scoring only |
+| F21 | LLM-judge benchmark dimension | Enhancement | ✅ DONE — optional judge_fn in BenchmarkScorer + make_llm_judge |
 | F22 | Signed exportable audit bundles + SIEM sink | Enhancement | ✅ DONE (export bundle) — `missy audit export`/`verify-bundle`; SIEM sink deferred |
 | F23 | Scheduled/continuous vision monitoring | Enhancement | On-demand capture only |
 | F24 | Persona A/B experiments + guardrail tuning | Enhancement | Single static persona |
