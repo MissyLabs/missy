@@ -246,6 +246,12 @@ class CalculatorTool(BaseTool):
                             "Supports +, -, *, /, //, %, ** and bitwise operators. "
                             "No function calls or variable references are permitted."
                         ),
+                        # Must stay property-level, not a top-level `examples`
+                        # key: the schema adapter leaves top-level keys in the
+                        # Anthropic/OpenAI wire schema. The benchmark smoke-task
+                        # builder reads this so it doesn't fall back to the
+                        # literal "test" (a bare Name the AST evaluator rejects).
+                        "example": "(2 + 3) * 4",
                     }
                 },
                 "required": ["expression"],

@@ -80,7 +80,10 @@ logger = logging.getLogger(__name__)
 # Providers whose canonical name maps to a normalization strategy.
 _OPENAI_COMPATIBLE = frozenset({"openai", "ollama", "codex", "openai_compatible"})
 _GEMINI_DROP_KEYS = frozenset(
-    {"default", "examples", "$schema", "$id", "additionalProperties", "title"}
+    # Both the plural ``examples`` (JSON Schema) and the singular ``example``
+    # (OpenAPI annotation, used by e.g. CalculatorTool's expression param) are
+    # unsupported by Gemini's stricter Schema proto and must be scrubbed.
+    {"default", "example", "examples", "$schema", "$id", "additionalProperties", "title"}
 )
 
 
