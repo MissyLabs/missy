@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from missy.tools.benchmark.llm_judge import (
     _parse_score,
     make_llm_judge,
+    make_structured_llm_judge,
     provider_complete_fn,
 )
 from missy.tools.benchmark.scoring import BenchmarkResult, BenchmarkScorer
@@ -143,3 +144,52 @@ class TestProviderCompleteFn:
         scorer = BenchmarkScorer(judge_fn=judge)
         r = _result(actual="Paris is the capital of France", expected="Paris")
         assert scorer.score(r).correctness == 0.92
+
+
+class TestStructuredJudge:
+    """F09 — the schema-enforced judge backed by StructuredOutputRunner."""
+
+    def _provider(self, content: str) -> MagicMock:
+        from missy.providers.base import CompletionResponse
+
+        p = MagicMock()
+        p.complete.return_value = CompletionResponse(
+            content=content, model="m", provider="p", usage={}, raw={}, finish_reason="stop"
+        )
+        return p
+
+    def test_valid_structured_verdict(self) -> None:
+        judge = make_structured_llm_judge(self._provider('{"score": 92, "reason": "equivalent"}'))
+        assert judge("Paris", "the capital is Paris") == 0.92
+
+    def test_accepts_0_1_scale(self) -> None:
+        judge = make_structured_llm_judge(self._provider('{"score": 0.5, "reason": "half"}'))
+        assert judge("a", "b") == 0.5
+
+    def test_clamps(self) -> None:
+        judge = make_structured_llm_judge(self._provider('{"score": 250, "reason": "x"}'))
+        assert judge("a", "b") == 1.0
+
+    def test_invalid_json_raises_after_retries(self) -> None:
+        # Never returns valid JSON -> StructuredOutputRunner exhausts retries ->
+        # our judge raises so the scorer falls back to the heuristic.
+        judge = make_structured_llm_judge(self._provider("not json at all"), max_retries=0)
+        try:
+            judge("a", "b")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError when structured judge can't validate")
+
+    def test_integrates_with_scorer(self) -> None:
+        judge = make_structured_llm_judge(self._provider('{"score": 88, "reason": "close"}'))
+        scorer = BenchmarkScorer(judge_fn=judge)
+        r = _result(actual="The capital of France is Paris", expected="Paris")
+        assert scorer.score(r).correctness == 0.88
+
+    def test_scorer_falls_back_when_structured_judge_fails(self) -> None:
+        judge = make_structured_llm_judge(self._provider("garbage"), max_retries=0)
+        scorer = BenchmarkScorer(judge_fn=judge)
+        # Heuristic substring -> 0.8 despite the judge failing.
+        r = _result(actual="Paris, France", expected="Paris")
+        assert scorer.score(r).correctness == 0.8
