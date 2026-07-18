@@ -31,12 +31,14 @@ def _mock_client(
     url: str | None = None,
     tools: list[dict] | None = None,
     alive: bool = True,
+    headers: dict | None = None,
 ) -> MagicMock:
     """Return a fully configured MagicMock that satisfies McpClient's interface."""
     mc = MagicMock()
     mc.name = name
     mc._command = command
     mc._url = url
+    mc._headers = headers
     mc.tools = tools if tools is not None else []
     mc.is_alive.return_value = alive
     return mc
@@ -342,7 +344,7 @@ class TestConnectAllPermissions:
         mc = _mock_client(name="alpha")
         with patch.object(mgr, "add_server", return_value=mc) as mock_add:
             mgr.connect_all()
-        mock_add.assert_called_once_with("alpha", command="echo alpha", url=None)
+        mock_add.assert_called_once_with("alpha", command="echo alpha", url=None, headers=None)
 
     def test_empty_array_config_is_no_op(self, tmp_path):
         cfg = tmp_path / "mcp.json"
@@ -362,7 +364,7 @@ class TestConnectAllPermissions:
         mgr = McpManager(config_path=str(cfg))
         mc_good = _mock_client(name="good")
 
-        def fake_add(name, command=None, url=None):
+        def fake_add(name, command=None, url=None, headers=None):
             if name == "bad":
                 raise RuntimeError("connection refused")
             mgr._clients[name] = mc_good
@@ -913,7 +915,7 @@ class TestMultipleServersIndependent:
         mgr = McpManager(config_path=str(cfg))
         added_names: list[str] = []
 
-        def fake_add(name, command=None, url=None):
+        def fake_add(name, command=None, url=None, headers=None):
             added_names.append(name)
             mc = _mock_client(name=name)
             mgr._clients[name] = mc

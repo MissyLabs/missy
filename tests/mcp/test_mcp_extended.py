@@ -32,12 +32,14 @@ def _make_mock_client(
     alive: bool = True,
     command: str = "echo hello",
     url: str | None = None,
+    headers: dict | None = None,
 ) -> MagicMock:
     """Build a MagicMock that quacks like a connected McpClient."""
     c = MagicMock(spec=McpClient)
     c.name = name
     c._command = command
     c._url = url
+    c._headers = headers
     c.tools = tools if tools is not None else []
     c.is_alive.return_value = alive
     return c
@@ -389,7 +391,7 @@ class TestConfigLoading:
         mgr = _make_manager(tmp_path, servers=servers)
         calls = []
 
-        def fake_add(name, command=None, url=None):
+        def fake_add(name, command=None, url=None, headers=None):
             calls.append(name)
             mc = _make_mock_client(name=name)
             mgr._clients[name] = mc
@@ -468,7 +470,7 @@ class TestErrorHandling:
             servers=[{"name": "bad", "command": "fail"}, {"name": "good", "command": "ok"}],
         )
 
-        def fake_add(name, command=None, url=None):
+        def fake_add(name, command=None, url=None, headers=None):
             if name == "bad":
                 raise RuntimeError("fail")
             mc = _make_mock_client(name=name)
@@ -650,7 +652,9 @@ class TestDisconnectReconnect:
         with patch("missy.mcp.manager.McpClient", return_value=new_mc) as mock_cls:
             mgr.restart_server("srv")
         # Verify the new client was constructed with the same command
-        mock_cls.assert_called_once_with(name="srv", command="echo original", url=None)
+        mock_cls.assert_called_once_with(
+            name="srv", command="echo original", url=None, headers=None
+        )
 
     def test_call_tool_fails_after_remove(self, tmp_path):
         mgr = _make_manager(tmp_path)
@@ -794,7 +798,7 @@ class TestThreadSafety:
         mgr = _make_manager(tmp_path)
         errors: list[Exception] = []
 
-        def add_server(n):
+        def add_server(n, **_kw):
             try:
                 mc = _make_mock_client(name=f"srv{n}")
                 with patch("missy.mcp.manager.McpClient", return_value=mc):

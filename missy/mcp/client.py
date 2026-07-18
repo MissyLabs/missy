@@ -20,19 +20,33 @@ logger = logging.getLogger(__name__)
 class McpClient:
     """JSON-RPC client for a single MCP server.
 
-    Supports stdio (subprocess) transport.
+    Supports stdio (subprocess) and HTTP (JSON-RPC over HTTP POST, incl. the
+    ``text/event-stream`` response form) transports. HTTP servers may require
+    authentication (F17): an ``Authorization: Bearer <token>`` header (or
+    arbitrary custom headers) is sent with every request.
 
     Args:
         name: Human-readable server name.
         command: Shell command to launch the server (for stdio transport).
-        url: HTTP endpoint (for HTTP transport; not yet implemented).
+        url: HTTP endpoint (for HTTP transport).
+        headers: Extra HTTP headers (e.g. ``{"Authorization": "Bearer …"}``)
+            sent on every HTTP request. Ignored for stdio transport.
     """
 
-    def __init__(self, name: str, command: str | None = None, url: str | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        command: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.name = name
         self._command = command
         self._url = url
+        self._headers = dict(headers or {})
         self._proc: subprocess.Popen | None = None
+        self._http: Any = None  # lazily-built httpx.Client for HTTP transport
+        self._session_id: str | None = None  # MCP-Session-Id echoed by server
         self._lock = threading.Lock()
         self._tools: list[dict] = []
         self._tool_annotations: dict[str, ToolAnnotation] = {}
@@ -76,8 +90,20 @@ class McpClient:
                     f"MCP server process exited immediately with code {self._proc.returncode}: {stderr[:500]}"
                 )
             self._initialize()
+        elif self._url:
+            import httpx
+
+            self._http = httpx.Client(
+                timeout=30.0,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    **self._headers,
+                },
+            )
+            self._initialize()
         else:
-            raise NotImplementedError("HTTP MCP transport not yet implemented")
+            raise RuntimeError("MCP client requires either a command or a url")
 
     def _initialize(self) -> None:
         resp = self._rpc(
@@ -101,6 +127,8 @@ class McpClient:
         request = {"jsonrpc": "2.0", "id": req_id, "method": method}
         if params is not None:
             request["params"] = params
+        if self._url:
+            return self._http_rpc(request, req_id, timeout=timeout)
         line = json.dumps(request) + "\n"
         with self._lock:
             if not self._proc or self._proc.stdin is None:
@@ -143,6 +171,55 @@ class McpClient:
         if resp_id is not None and resp_id != req_id:
             raise RuntimeError(f"MCP response ID mismatch: expected {req_id}, got {resp_id}")
         return resp
+
+    def _http_rpc(self, request: dict, req_id: str, *, timeout: float = 30.0) -> dict:
+        """Send one JSON-RPC request over HTTP POST and return the response.
+
+        Handles both response forms the MCP Streamable HTTP transport permits:
+        a plain ``application/json`` body, or a ``text/event-stream`` (SSE)
+        body whose ``data:`` line carries the JSON-RPC response. Auth headers
+        (F17) were installed on the client at connect time. An ``MCP-Session-Id``
+        returned by the server is captured and echoed on subsequent requests.
+        """
+        with self._lock:
+            if self._http is None:
+                raise RuntimeError("MCP HTTP client not connected")
+            headers = {}
+            if self._session_id:
+                headers["MCP-Session-Id"] = self._session_id
+            resp = self._http.post(self._url, json=request, headers=headers, timeout=timeout)
+            if resp.status_code == 401 or resp.status_code == 403:
+                raise RuntimeError(
+                    f"MCP HTTP auth failed ({resp.status_code}) for {self.name!r} — "
+                    "check the server's bearer token / credentials."
+                )
+            resp.raise_for_status()
+            session = resp.headers.get("MCP-Session-Id")
+            if session:
+                self._session_id = session
+            body = self._parse_http_body(resp)
+        resp_id = body.get("id")
+        if resp_id is not None and resp_id != req_id:
+            raise RuntimeError(f"MCP response ID mismatch: expected {req_id}, got {resp_id}")
+        return body
+
+    @staticmethod
+    def _parse_http_body(resp: Any) -> dict:
+        """Extract a JSON-RPC object from a JSON or SSE HTTP response."""
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/event-stream" in content_type:
+            # Parse SSE: the JSON-RPC message is on a `data:` line.
+            for raw in resp.text.splitlines():
+                line = raw.strip()
+                if line.startswith("data:"):
+                    payload = line[len("data:") :].strip()
+                    if payload:
+                        try:
+                            return json.loads(payload)
+                        except (ValueError, TypeError):
+                            continue
+            raise RuntimeError("MCP HTTP SSE response contained no data payload")
+        return resp.json()
 
     def _read_line_with_deadline(self, timeout: float) -> bytes:
         """Read a single newline-terminated line from stdout without ever
@@ -221,6 +298,11 @@ class McpClient:
         note = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             note["params"] = params
+        if self._url and self._http is not None:
+            headers = {"MCP-Session-Id": self._session_id} if self._session_id else {}
+            with self._lock, contextlib.suppress(Exception):
+                self._http.post(self._url, json=note, headers=headers)
+            return
         if self._proc and self._proc.stdin:
             self._proc.stdin.write((json.dumps(note) + "\n").encode())
             self._proc.stdin.flush()
@@ -299,9 +381,18 @@ class McpClient:
         return dict(self._tool_annotations)
 
     def is_alive(self) -> bool:
+        # An HTTP transport has no local process; it's "alive" once its client
+        # is built (health is re-verified per-call by the manager).
+        if self._url:
+            return self._http is not None
         return self._proc is not None and self._proc.poll() is None
 
     def disconnect(self) -> None:
+        if self._http is not None:
+            with contextlib.suppress(Exception):
+                self._http.close()
+            self._http = None
+            self._session_id = None
         if self._proc:
             try:
                 self._proc.terminate()
