@@ -43,6 +43,7 @@ from missy.tools.builtin.discord_voice import (
 from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
+from missy.tools.builtin.graph_tools import GraphQueryTool
 from missy.tools.builtin.incus_tools import (
     IncusConfigTool,
     IncusCopyMoveTool,
@@ -129,6 +130,7 @@ __all__ = [
     "IncusStorageTool",
     "FileReadTool",
     "FileWriteTool",
+    "GraphQueryTool",
     "ListFilesTool",
     "MemoryDescribeTool",
     "MemoryExpandTool",
@@ -196,6 +198,7 @@ _ALL_TOOL_CLASSES = [
     IncusSnapshotTool,
     IncusStorageTool,
     FileWriteTool,
+    GraphQueryTool,
     ListFilesTool,
     MemoryDescribeTool,
     MemoryExpandTool,

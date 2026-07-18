@@ -374,6 +374,11 @@ class AgentConfig:
     #: confirmation infrastructure is available for this runtime instance;
     #: such calls then fail closed (denied) rather than running unconfirmed.
     mcp_approval_gate: Any | None = None
+    #: F04 -- opt-in knowledge-graph ingestion. When True, the background
+    #: SleeptimeWorker feeds processed turns into a GraphMemoryStore so the
+    #: `graph_query` tool / `missy graph` CLI have populated data. Off by
+    #: default (secure-by-default; adds background write load).
+    graph_memory_enabled: bool = False
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -485,8 +490,16 @@ class AgentRuntime:
         self._drift_detector = self._make_drift_detector()
         # Cryptographic agent identity (lazy load/generate)
         self._identity = self._make_identity()
-        # Trust scorer for providers, tools, and MCP servers
-        self._trust_scorer = TrustScorer()
+        # Trust scorer for providers, tools, and MCP servers. Persisted (F11)
+        # so scores survive restarts and are inspectable via `missy tools
+        # trust`; a persistence failure degrades to in-memory, never fatal.
+        try:
+            from missy.security.trust import DEFAULT_TRUST_PATH
+
+            self._trust_scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+        except Exception:
+            logger.debug("TrustScorer persistence unavailable; using in-memory", exc_info=True)
+            self._trust_scorer = TrustScorer()
         # SR-4.7: MCP manager (graceful degradation) -- connects to
         # configured servers and exposes their tools; _get_tools() syncs
         # them into the real ToolRegistry each turn so dispatch goes
@@ -3351,8 +3364,21 @@ class AgentRuntime:
                 provider_registry = get_registry()
             except Exception:
                 provider_registry = None
+            # F04: opt-in knowledge-graph ingestion. Only construct/pass a
+            # GraphMemoryStore when enabled, so the default deployment carries
+            # no extra background write load.
+            graph_store = None
+            if bool(getattr(self.config, "graph_memory_enabled", False)):
+                try:
+                    from missy.memory.graph_store import GraphMemoryStore
+
+                    graph_store = GraphMemoryStore()
+                except Exception:
+                    logger.debug("GraphMemoryStore unavailable; graph ingestion off", exc_info=True)
             worker = SleeptimeWorker(
-                memory_store=self._memory_store, provider_registry=provider_registry
+                memory_store=self._memory_store,
+                provider_registry=provider_registry,
+                graph_store=graph_store,
             )
             worker.start()
             return worker

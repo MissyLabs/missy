@@ -358,6 +358,66 @@ class TestProcessCycle:
         worker._process_cycle()
         assert worker.stats.last_cycle_at is not None
 
+
+# ---------------------------------------------------------------------------
+# F04: graph ingestion side of the sleeptime cycle
+# ---------------------------------------------------------------------------
+
+
+class TestGraphIngestion:
+    def test_no_graph_store_ingests_nothing(self):
+        worker = SleeptimeWorker(memory_store=None, graph_store=None)
+        batch = [_make_turn("t1", content="video_generate uses comfyui")]
+        assert worker._ingest_graph_entities("s1", batch) == 0
+
+    def test_ingests_each_turn_into_graph(self):
+        graph = MagicMock()
+        graph.ingest_turn.return_value = ([MagicMock(), MagicMock()], [MagicMock()])
+        worker = SleeptimeWorker(memory_store=None, graph_store=graph)
+        batch = [
+            _make_turn("t1", role="user", content="the deploy script uses ffmpeg"),
+            _make_turn("t2", role="assistant", content="ffmpeg depends on libav"),
+        ]
+        ingested = worker._ingest_graph_entities("s1", batch)
+        assert graph.ingest_turn.call_count == 2
+        # 2 entities per turn * 2 turns
+        assert ingested == 4
+        graph.ingest_turn.assert_any_call("the deploy script uses ffmpeg", "user", "s1")
+
+    def test_blank_turns_are_skipped(self):
+        graph = MagicMock()
+        graph.ingest_turn.return_value = ([], [])
+        worker = SleeptimeWorker(memory_store=None, graph_store=graph)
+        batch = [_make_turn("t1", content="   "), _make_turn("t2", content="")]
+        assert worker._ingest_graph_entities("s1", batch) == 0
+        graph.ingest_turn.assert_not_called()
+
+    def test_graph_failure_never_breaks_the_cycle(self):
+        graph = MagicMock()
+        graph.ingest_turn.side_effect = RuntimeError("graph db locked")
+        worker = SleeptimeWorker(memory_store=None, graph_store=graph)
+        batch = [_make_turn("t1", content="something meaningful")]
+        # Must swallow the error and return 0, not raise.
+        assert worker._ingest_graph_entities("s1", batch) == 0
+
+    def test_graph_store_without_ingest_method_is_ignored(self):
+        worker = SleeptimeWorker(memory_store=None, graph_store=object())
+        batch = [_make_turn("t1", content="x")]
+        assert worker._ingest_graph_entities("s1", batch) == 0
+
+    def test_process_cycle_calls_graph_ingestion(self):
+        graph = MagicMock()
+        graph.ingest_turn.return_value = ([MagicMock()], [])
+        turns = [_make_turn(f"t{i}", content=f"entity number {i}") for i in range(6)]
+        store = _make_store(sessions=[{"session_id": "s1"}], turns=turns, summaries=[])
+        worker = SleeptimeWorker(
+            config=SleeptimeConfig(min_unprocessed_turns=5, use_llm_summarization=False),
+            memory_store=store,
+            graph_store=graph,
+        )
+        worker._process_cycle()
+        assert graph.ingest_turn.called
+
     def test_turns_processed_count(self):
         turns = [_make_turn(f"t{i}", content=f"msg {i}") for i in range(6)]
         store = _make_store(

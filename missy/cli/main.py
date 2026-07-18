@@ -3805,6 +3805,187 @@ def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
         _print_error(f"Cannot rename session: {exc}")
 
 
+@sessions.command("clear")
+@click.argument("session_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt (for non-interactive use).",
+)
+@click.pass_context
+def sessions_clear(ctx: click.Context, session_id: str, yes: bool) -> None:
+    """Fully reset a session: delete its turns AND summaries.
+
+    This is the operator surface for
+    :meth:`SQLiteMemoryStore.clear_session_full` (F14) — the supported way
+    to recover a session stuck in the "over-refusal spiral," where a plain
+    history delete leaves the persisted ``summaries`` rows that keep
+    re-injecting the contamination via ``MemorySynthesizer``. Accepts a raw
+    session id or a friendly name (resolved like ``sessions rename``).
+
+    Note: this clears the *persisted* store. A gateway already holding the
+    session in memory should be restarted to drop in-process state.
+    """
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        # Resolve a friendly name to its id, matching `sessions rename`.
+        if len(session_id) < 32 and "-" not in session_id:
+            resolved = store.resolve_session_name(session_id)
+            if resolved:
+                session_id = resolved
+
+        if not store.session_exists(session_id):
+            _print_error(f"Session {session_id!r} not found (no turns or summaries).")
+            return
+
+        if not yes:
+            confirmed = click.confirm(
+                f"Permanently delete ALL turns and summaries for session "
+                f"{session_id[:12]}...? This cannot be undone.",
+                default=False,
+            )
+            if not confirmed:
+                console.print("[dim]Aborted; nothing was cleared.[/]")
+                return
+
+        removed = store.clear_session_full(session_id)
+        _print_success(
+            f"Cleared session {session_id[:12]}...: removed "
+            f"{removed['turns']} turn(s) and {removed['summaries']} summary/summaries. "
+            f"Restart the gateway to drop any in-memory copy of this session."
+        )
+    except Exception as exc:
+        _print_error(f"Cannot clear session: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# missy graph (F04) — operator surface for GraphMemoryStore
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def graph() -> None:
+    """Query and seed the entity-relationship knowledge graph.
+
+    Operator surface for ``GraphMemoryStore`` (the same store the agent's
+    ``graph_query`` tool reads). Previously the store had no CLI or tool
+    entry point at all.
+    """
+
+
+@graph.command("stats")
+@click.pass_context
+def graph_stats(ctx: click.Context) -> None:
+    """Show entity/relationship counts and type breakdowns."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        s = store.stats()
+    except Exception as exc:
+        _print_error(f"Cannot read graph: {exc}")
+        return
+
+    console.print(
+        f"[bold]Knowledge graph[/]: {s.get('entity_count', 0)} entit(y/ies), "
+        f"{s.get('relationship_count', 0)} relationship(s)."
+    )
+    etypes = s.get("entity_types") or {}
+    if etypes:
+        t = Table(title="Entity types")
+        t.add_column("Type")
+        t.add_column("Count", justify="right")
+        for k, v in sorted(etypes.items(), key=lambda kv: -kv[1]):
+            t.add_row(str(k), str(v))
+        console.print(t)
+    rtypes = s.get("relation_types") or {}
+    if rtypes:
+        t = Table(title="Relation types")
+        t.add_column("Type")
+        t.add_column("Count", justify="right")
+        for k, v in sorted(rtypes.items(), key=lambda kv: -kv[1]):
+            t.add_row(str(k), str(v))
+        console.print(t)
+
+
+@graph.command("query")
+@click.argument("text")
+@click.option("--limit", default=15, show_default=True, help="Max entities to include.")
+@click.pass_context
+def graph_query_cmd(ctx: click.Context, text: str, limit: int) -> None:
+    """Show entities and relationships related to TEXT."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        result = store.find_related(text, limit=max(1, limit))
+        subgraph = store.get_context_subgraph(text, max_entities=max(1, limit))
+    except Exception as exc:
+        _print_error(f"Graph query failed: {exc}")
+        return
+
+    if not result.entities:
+        console.print(f"[dim]No entities related to {text!r} found in the graph.[/]")
+        return
+    console.print(
+        f"[bold]{len(result.entities)}[/] entit(y/ies), "
+        f"[bold]{len(result.relationships)}[/] relationship(s) related to {text!r}:"
+    )
+    console.print(subgraph)
+
+
+@graph.command("entity")
+@click.argument("name")
+@click.pass_context
+def graph_entity(ctx: click.Context, name: str) -> None:
+    """Show a summary of the entity named NAME."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        summary = store.get_entity_summary(name)
+    except Exception as exc:
+        _print_error(f"Cannot read entity: {exc}")
+        return
+    if not summary or not summary.strip():
+        console.print(f"[dim]No entity named {name!r} found in the graph.[/]")
+        return
+    console.print(summary)
+
+
+@graph.command("add-entity")
+@click.argument("name")
+@click.option(
+    "--type",
+    "entity_type",
+    default="concept",
+    show_default=True,
+    help="Entity type (person/tool/file/project/concept/location/organization).",
+)
+@click.pass_context
+def graph_add_entity(ctx: click.Context, name: str, entity_type: str) -> None:
+    """Seed a single entity into the graph (operator-only)."""
+    from missy.memory.graph_store import Entity, GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        entity = Entity.new(name, entity_type)
+        store.add_entity(entity)
+    except Exception as exc:
+        _print_error(f"Cannot add entity: {exc}")
+        return
+    _print_success(f"Added entity [bold]{entity.name}[/] ({entity_type}) to the graph.")
+
+
 # ---------------------------------------------------------------------------
 # missy approvals
 # ---------------------------------------------------------------------------
@@ -5921,6 +6102,57 @@ def tools_group(ctx: click.Context) -> None:
     """Tool intelligence: candidates, request patterns, and benchmarks."""
     if ctx.invoked_subcommand is None:
         console.print(ctx.get_help())
+
+
+@tools_group.command("trust")
+@click.argument("name", required=False)
+@click.option(
+    "--threshold",
+    default=200,
+    show_default=True,
+    help="Score at/below which an entity is flagged as low-trust.",
+)
+@click.pass_context
+def tools_trust(ctx: click.Context, name: str | None, threshold: int) -> None:
+    """Show persisted trust scores (0-1000) for tools/providers (F11).
+
+    Reads the persisted score file the running gateway writes on every tool
+    call. With no NAME, lists every scored entity (low-trust ones flagged);
+    with a NAME, shows just that entity's score. New/unseen entities report
+    the default score of 500.
+    """
+    from missy.security.trust import DEFAULT_SCORE, DEFAULT_TRUST_PATH, TrustScorer
+
+    _load_subsystems(ctx.obj["config_path"])
+    scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+
+    if name:
+        s = scorer.score(name)
+        trusted = scorer.is_trusted(name, threshold=threshold)
+        seen = name in scorer.get_scores()
+        note = "" if seen else " [dim](never scored — default)[/]"
+        colour = "green" if trusted else "red"
+        console.print(f"[bold]{name}[/]: [{colour}]{s}[/]/1000{note}")
+        return
+
+    scores = scorer.get_scores()
+    if not scores:
+        console.print(
+            "[dim]No trust scores recorded yet. Scores are written by a running "
+            "gateway as tools execute; new entities default to "
+            f"{DEFAULT_SCORE}.[/]"
+        )
+        return
+
+    t = Table(title="Trust scores (0-1000)")
+    t.add_column("Entity")
+    t.add_column("Score", justify="right")
+    t.add_column("Status")
+    for entity, s in sorted(scores.items(), key=lambda kv: kv[1]):
+        low = s <= threshold
+        status = "[red]LOW TRUST[/]" if low else "[green]ok[/]"
+        t.add_row(entity, f"[{'red' if low else 'green'}]{s}[/]", status)
+    console.print(t)
 
 
 @tools_group.group("candidates", invoke_without_command=True)

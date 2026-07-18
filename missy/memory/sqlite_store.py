@@ -457,7 +457,7 @@ class SQLiteMemoryStore:
         conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
         conn.commit()
 
-    def clear_session_full(self, session_id: str) -> None:
+    def clear_session_full(self, session_id: str) -> dict[str, int]:
         """Delete all turns AND all summaries for *session_id*.
 
         4th tool-specific validation run (2026-07-14/15) found that
@@ -471,11 +471,47 @@ class SQLiteMemoryStore:
 
         Args:
             session_id: The session to fully reset.
+
+        Returns:
+            A ``{"turns": n, "summaries": m}`` dict counting the rows
+            actually removed, so an operator (or the ``missy sessions
+            clear`` CLI) gets real feedback rather than a silent success.
+            The dict return is backward compatible: prior callers ignored
+            the ``None`` this method used to return.
         """
         conn = self._conn()
-        conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
-        conn.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
+        turns_cur = conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+        turns_removed = turns_cur.rowcount if turns_cur.rowcount is not None else 0
+        summaries_cur = conn.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
+        summaries_removed = summaries_cur.rowcount if summaries_cur.rowcount is not None else 0
         conn.commit()
+        return {"turns": max(0, turns_removed), "summaries": max(0, summaries_removed)}
+
+    def count_session_turns(self, session_id: str) -> int:
+        """Return the number of stored turns for *session_id*."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def session_exists(self, session_id: str) -> bool:
+        """Return True if *session_id* has any turns OR any summaries.
+
+        Checks both tables so a session that has been summarized but whose
+        raw turns were pruned still reports as existing — relevant for the
+        ``missy sessions clear`` full-reset path, which targets both tables.
+        """
+        conn = self._conn()
+        turn = conn.execute(
+            "SELECT 1 FROM turns WHERE session_id = ? LIMIT 1", (session_id,)
+        ).fetchone()
+        if turn is not None:
+            return True
+        summary = conn.execute(
+            "SELECT 1 FROM summaries WHERE session_id = ? LIMIT 1", (session_id,)
+        ).fetchone()
+        return summary is not None
 
     def delete_turn(self, turn_id: str) -> bool:
         """Delete a single conversation turn by id.

@@ -160,8 +160,11 @@ class SleeptimeWorker:
         provider_registry: A :class:`~missy.providers.registry.ProviderRegistry`
             used to obtain a fast LLM for summarisation.  Optional; falls
             back to keyword extraction when absent or unavailable.
-        graph_store: Reserved for future graph-memory entity consolidation.
-            Currently unused.
+        graph_store: Optional :class:`~missy.memory.graph_store.GraphMemoryStore`
+            (F04). When provided, each processed turn is fed into the graph via
+            :meth:`_ingest_graph_entities` so the ``graph_query`` tool / ``missy
+            graph`` CLI have populated data. ``None`` (the default) disables
+            ingestion entirely — no extra write load.
     """
 
     def __init__(
@@ -391,6 +394,8 @@ class SleeptimeWorker:
                 except Exception:
                     logger.warning("SleeptimeWorker: failed to save learning — skipping.")
 
+            self._ingest_graph_entities(session_id, batch)
+
             cycle_turns += len(batch)
 
         self._stats.cycles_completed += 1
@@ -406,6 +411,46 @@ class SleeptimeWorker:
             cycle_learnings,
         )
         self._publish_bus(SLEEPTIME_CYCLE_COMPLETE, self._stats_payload())
+
+    def _ingest_graph_entities(self, session_id: str, batch: list) -> int:
+        """Feed a batch of turns into the knowledge graph (F04 ingestion side).
+
+        No-ops when no ``graph_store`` was injected (the default), so existing
+        deployments are unaffected. Fully defensive: a graph failure must never
+        break the sleeptime cycle. Returns the number of entities ingested
+        (for observability/testing).
+
+        Args:
+            session_id: The session the turns belong to.
+            batch: Turn objects with ``content``/``role`` attributes.
+
+        Returns:
+            Count of entities the graph reported ingesting across the batch.
+        """
+        if self._graph_store is None:
+            return 0
+        ingest = getattr(self._graph_store, "ingest_turn", None)
+        if not callable(ingest):
+            return 0
+
+        ingested = 0
+        for turn in batch:
+            content = getattr(turn, "content", "") or ""
+            role = getattr(turn, "role", "") or "user"
+            if not content.strip():
+                continue
+            try:
+                entities, _rels = ingest(content, role, session_id)
+                ingested += len(entities or [])
+            except Exception:
+                logger.debug("SleeptimeWorker: graph ingest_turn failed — skipping.", exc_info=True)
+        if ingested:
+            logger.info(
+                "SleeptimeWorker: ingested %d graph entit(y/ies) for session %s.",
+                ingested,
+                session_id,
+            )
+        return ingested
 
     # ------------------------------------------------------------------
     # Session discovery
