@@ -385,6 +385,12 @@ class AgentConfig:
     #: Proposals never change behaviour until an operator approves them, so
     #: this is safe, but it is off by default to keep the feature explicit.
     prompt_patch_proposals_enabled: bool = False
+    #: F05 -- opt-in complexity-based model-tier routing. When True, a
+    #: single-turn provider call routes through ModelRouter to pick the
+    #: provider's fast/primary/premium model by prompt complexity (falling
+    #: back to the primary model when no tiered model is configured). Off by
+    #: default: it changes which model serves a request, so it's explicit.
+    model_routing_enabled: bool = False
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -1943,8 +1949,20 @@ class AgentRuntime:
         msg_objects = self._dicts_to_messages(system_prompt, messages)
         primary_name = provider.name
 
+        # F05: complexity-based model-tier routing (no-op / == self.config.model
+        # unless model_routing_enabled). Scored from the last user message +
+        # conversation depth; single-turn has no tools in play (tool_count=0).
+        _last_user_text = ""
+        for _m in reversed(messages):
+            if isinstance(_m, dict) and _m.get("role") == "user":
+                _last_user_text = str(_m.get("content") or "")
+                break
+        _effective_model = self._route_model(
+            _last_user_text, history_length=len(messages), tool_count=0
+        )
+
         # SR-4.8: model/tool compatibility across a fallback transition --
-        # self.config.model names a model on the *originally configured*
+        # the effective model names a model on the *originally configured*
         # provider (e.g. an Anthropic model id) and must never be forwarded
         # to an unrelated fallback provider. Only the originally-resolved
         # provider gets the explicit override; any fallback candidate uses
@@ -1955,8 +1973,8 @@ class AgentRuntime:
                 "task_id": task_id,
                 "temperature": self.config.temperature,
             }
-            if target.name == primary_name and self.config.model:
-                complete_kwargs["model"] = self.config.model
+            if target.name == primary_name and _effective_model:
+                complete_kwargs["model"] = _effective_model
 
             def _call() -> CompletionResponse:
                 self._acquire_rate_limit()
@@ -2177,6 +2195,54 @@ class AgentRuntime:
                 tool_name,
                 _trust.score(tool_name),
             )
+
+    def _route_model(
+        self, user_input: str, history_length: int = 0, tool_count: int = 0
+    ) -> str | None:
+        """F05: pick the model tier for a call via ModelRouter, or the default.
+
+        Returns ``self.config.model`` unchanged when routing is disabled (the
+        default) or on any error, so this is a safe drop-in for the existing
+        explicit-model override. When enabled, scores the prompt's complexity
+        and selects the primary provider's fast/primary/premium model; when no
+        tiered model is configured, ``ModelRouter.select_model`` already falls
+        back to the primary model, so behaviour is unchanged in that case too.
+
+        Args:
+            user_input: The prompt text to score.
+            history_length: Number of prior turns (raises complexity).
+            tool_count: Number of tools in play (raises complexity).
+
+        Returns:
+            The model id to use, or ``None`` to let the provider use its own
+            default (mirroring ``self.config.model`` being unset).
+        """
+        default = self.config.model
+        if not bool(getattr(self.config, "model_routing_enabled", False)):
+            return default
+        try:
+            from missy.providers.registry import ModelRouter, get_registry
+
+            registry = get_registry()
+            pconfig = registry.get_config(self.config.provider)
+            if pconfig is None:
+                return default
+            router = ModelRouter()
+            tier = router.score_complexity(
+                user_input or "", history_length=history_length, tool_count=tool_count
+            )
+            routed = router.select_model(pconfig, tier)
+            if routed:
+                logger.debug(
+                    "F05: routed to %r tier -> model %r for provider %r.",
+                    tier,
+                    routed,
+                    self.config.provider,
+                )
+            return routed or default
+        except Exception:
+            logger.debug("F05: model routing failed; using default model.", exc_info=True)
+            return default
 
     def _maybe_propose_error_patch(self, tool_name: str, error: str) -> Any | None:
         """F13: propose an ERROR_AVOIDANCE prompt patch for a recurring failure.
