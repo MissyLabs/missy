@@ -39,14 +39,14 @@ hand-waving.
 | F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | Implemented, **zero callers** |
 | F11 | TrustScorer inspection + gating | Activate unwired | ✅ DONE — persisted + `missy tools trust` CLI |
 | F12 | Semantic conversation memory (VectorMemoryStore) | Activate unwired | FAISS wired to vision only |
-| F13 | PromptPatchManager organic proposal trigger | Activate unwired | Approve/reject wired; `propose()` never called |
+| F13 | PromptPatchManager organic proposal trigger | Activate unwired | ✅ DONE — FailureTracker-driven ERROR_AVOIDANCE proposals (opt-in) |
 | F14 | `missy sessions clear` operator CLI | Enhancement | ✅ DONE — CLI + store helpers |
 | F15 | Round-robin rotation for all providers | Enhancement | OpenAI-only today |
 | F16 | Storyboard video orchestration tool | Enhancement | Manual multi-call chaining today |
 | F17 | MCP server authentication (OAuth/bearer) | Enhancement | Digest pinning only; no auth |
 | F18 | Web TUI live log/audit streaming page | Enhancement | Static audit page; run console SSE exists |
 | F19 | Global + multi-session budget ceilings | Enhancement | Per-session cap only |
-| F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | Stops at "flagged promotable" |
+| F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
 | F21 | LLM-judge benchmark dimension | Enhancement | Heuristic correctness scoring only |
 | F22 | Signed exportable audit bundles + SIEM sink | Enhancement | JSONL + OTLP spans only |
 | F23 | Scheduled/continuous vision monitoring | Enhancement | On-demand capture only |

@@ -258,6 +258,121 @@ class Playbook:
         except Exception:
             logger.debug("Failed to save playbook to %s", self._path, exc_info=True)
 
+    # ------------------------------------------------------------------
+    # F20: materialize promotable patterns into SKILL.md proposals
+    # ------------------------------------------------------------------
+
+    def write_skill_proposal(self, entry: PlaybookEntry, proposals_dir: str | None = None) -> str:
+        """Write a discoverable SKILL.md draft for a promotable *entry*.
+
+        Turns a proven playbook pattern into a real, parseable SKILL.md file
+        (valid YAML frontmatter with the required ``name`` field) under a
+        ``proposals`` directory. The file is a *draft for operator review* —
+        SKILL.md discovery is read-only documentation, so an operator promotes
+        it by moving it into the active skills directory. This closes the
+        Playbook->Skill loop that previously stopped at "flagged promotable".
+
+        Args:
+            entry: The promotable pattern to materialize.
+            proposals_dir: Target directory. Defaults to
+                ``~/.missy/skills/proposals``.
+
+        Returns:
+            The path of the written SKILL.md file.
+        """
+        base = proposals_dir or os.path.expanduser("~/.missy/skills/proposals")
+        # One subdirectory per proposal (SKILL.md discovery is rglob-based).
+        safe_id = "".join(c for c in entry.pattern_id if c.isalnum() or c in "-_")[:32]
+        skill_dir = os.path.join(base, f"playbook-{safe_id}")
+        os.makedirs(skill_dir, exist_ok=True, mode=0o700)
+
+        name = f"playbook-{entry.task_type}-{safe_id[:8]}"
+        description = (
+            entry.description
+            or f"Proven {entry.task_type} pattern using {', '.join(entry.tool_sequence)}"
+        )
+        # Escape any double-quotes in free text so the frontmatter stays valid.
+        desc_q = description.replace('"', "'").replace("\n", " ").strip()
+        tools_list = ", ".join(entry.tool_sequence)
+        content = (
+            "---\n"
+            f"name: {name}\n"
+            f'description: "{desc_q}"\n'
+            "version: 0.1.0\n"
+            f"tools: [{tools_list}]\n"
+            "status: proposed\n"
+            "source: playbook-auto-promotion\n"
+            "---\n\n"
+            f"# {name}\n\n"
+            f"Auto-generated skill proposal from a playbook pattern that "
+            f"succeeded {entry.success_count} time(s).\n\n"
+            f"- **Task type:** {entry.task_type}\n"
+            f"- **Tool sequence:** {tools_list}\n"
+            f"- **Pattern id:** {entry.pattern_id}\n\n"
+            "## Review\n\n"
+            "This is a *proposal draft*. To adopt it, review the steps below "
+            "and move this file into your active skills directory "
+            "(`~/.missy/skills`). The `tools` list is documentation, not a "
+            "capability grant.\n\n"
+            "## Steps\n\n"
+            f"When performing a **{entry.task_type}** task, the proven approach "
+            f"is to use these tools in order: {tools_list}.\n"
+        )
+        skill_path = os.path.join(skill_dir, "SKILL.md")
+        fd, tmp = tempfile.mkstemp(dir=skill_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            os.replace(tmp, skill_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        return skill_path
+
+    def promote_to_skills(
+        self,
+        threshold: int = 3,
+        proposals_dir: str | None = None,
+        dry_run: bool = False,
+    ) -> list[dict]:
+        """Materialize every promotable pattern into a SKILL.md proposal.
+
+        For each pattern with ``success_count >= threshold`` that has not yet
+        been promoted, writes a SKILL.md draft (unless *dry_run*) and marks it
+        promoted so it is not re-materialized on the next call.
+
+        Args:
+            threshold: Minimum success count for promotion.
+            proposals_dir: Where to write proposals (default
+                ``~/.missy/skills/proposals``).
+            dry_run: When True, report what *would* be promoted without
+                writing files or marking anything promoted.
+
+        Returns:
+            A list of ``{"pattern_id", "task_type", "success_count", "path"}``
+            dicts (``path`` is ``None`` on a dry run).
+        """
+        results: list[dict] = []
+        for entry in self.get_promotable(threshold=threshold):
+            record = {
+                "pattern_id": entry.pattern_id,
+                "task_type": entry.task_type,
+                "success_count": entry.success_count,
+                "path": None,
+            }
+            if not dry_run:
+                try:
+                    record["path"] = self.write_skill_proposal(entry, proposals_dir)
+                    self.mark_promoted(entry.pattern_id)
+                except Exception:
+                    logger.debug(
+                        "Playbook: failed to promote pattern %s", entry.pattern_id, exc_info=True
+                    )
+                    continue
+            results.append(record)
+        return results
+
     def load(self) -> None:
         """Load entries from the JSON file.  No-op if file doesn't exist."""
         if not os.path.exists(self._path):

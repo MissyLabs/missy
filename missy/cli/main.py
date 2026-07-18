@@ -1744,6 +1744,68 @@ def skills_scan_cmd(ctx: click.Context, path: str) -> None:
     console.print(table)
 
 
+@skills_group.command("promote")
+@click.option(
+    "--threshold",
+    default=3,
+    show_default=True,
+    help="Minimum success count for a playbook pattern to be promoted.",
+)
+@click.option(
+    "--proposals-dir",
+    default=None,
+    help="Where to write SKILL.md proposals (default ~/.missy/skills/proposals).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would be promoted without writing files.",
+)
+@click.pass_context
+def skills_promote_cmd(
+    ctx: click.Context, threshold: int, proposals_dir: str | None, dry_run: bool
+) -> None:
+    """Materialize promotable playbook patterns into SKILL.md proposals (F20).
+
+    Patterns that have succeeded ``--threshold`` times are written as SKILL.md
+    proposal drafts an operator can review and move into the active skills
+    directory. Without ``--dry-run`` the promoted patterns are marked so they
+    are not re-materialized on the next run.
+    """
+    from missy.agent.playbook import Playbook
+
+    _load_subsystems(ctx.obj["config_path"])
+    playbook = Playbook()
+    results = playbook.promote_to_skills(
+        threshold=threshold, proposals_dir=proposals_dir, dry_run=dry_run
+    )
+
+    if not results:
+        console.print(
+            f"[dim]No playbook patterns with success_count >= {threshold} await promotion.[/]"
+        )
+        return
+
+    verb = "Would promote" if dry_run else "Promoted"
+    t = Table(title=f"{verb} {len(results)} pattern(s)")
+    t.add_column("Task type")
+    t.add_column("Successes", justify="right")
+    t.add_column("Proposal path" if not dry_run else "Pattern id")
+    for r in results:
+        t.add_row(
+            r["task_type"],
+            str(r["success_count"]),
+            r["path"] or r["pattern_id"],
+        )
+    console.print(t)
+    if not dry_run:
+        console.print(
+            "[dim]Review each SKILL.md and move approved ones into "
+            "~/.missy/skills to activate them.[/]"
+        )
+
+
 # ---------------------------------------------------------------------------
 # missy plugins
 # ---------------------------------------------------------------------------
