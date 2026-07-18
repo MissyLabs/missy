@@ -5605,6 +5605,126 @@ def persona_log(limit: int) -> None:
     console.print(table)
 
 
+@persona.group("experiment")
+def persona_experiment() -> None:
+    """Persona A/B experiment: variants, assignment, and results (F24)."""
+
+
+@persona_experiment.command("add-variant")
+@click.argument("name")
+@click.option("--tone", default=None, help="Comma-separated tone override for this variant.")
+@click.option("--from-current/--blank", default=True, help="Base on the current persona.")
+def persona_exp_add(name: str, tone: str | None, from_current: bool) -> None:
+    """Register a persona variant (copied from the current persona by default)."""
+    from missy.agent.persona import PersonaConfig
+    from missy.agent.persona_experiment import (
+        PersonaExperiment,
+        variant_persona_from_current,
+    )
+
+    overrides: dict = {}
+    if tone:
+        overrides["tone"] = [t.strip() for t in tone.split(",") if t.strip()]
+    persona = (
+        variant_persona_from_current(**overrides) if from_current else PersonaConfig(**overrides)
+    )
+    PersonaExperiment().add_variant(name, persona)
+    _print_success(f"Registered persona variant [bold]{name}[/].")
+
+
+@persona_experiment.command("list")
+def persona_exp_list() -> None:
+    """List registered variants and whether the experiment is enabled."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    exp = PersonaExperiment()
+    variants = exp.list_variants()
+    state = "[green]enabled[/]" if exp.enabled else "[dim]disabled[/]"
+    if not variants:
+        console.print(f"Persona experiment: {state}. [dim]No variants registered.[/]")
+        return
+    console.print(f"Persona experiment: {state}. Variants: {', '.join(variants)}")
+
+
+@persona_experiment.command("enable")
+def persona_exp_enable() -> None:
+    """Enable the persona experiment (sessions get assigned a variant)."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    exp = PersonaExperiment()
+    if not exp.list_variants():
+        _print_error("Register at least one variant first (persona experiment add-variant).")
+        return
+    exp.set_enabled(True)
+    _print_success("Persona experiment enabled.")
+
+
+@persona_experiment.command("disable")
+def persona_exp_disable() -> None:
+    """Disable the experiment (safe rollback to the base persona.yaml)."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    PersonaExperiment().set_enabled(False)
+    _print_success("Persona experiment disabled; base persona restored.")
+
+
+@persona_experiment.command("assign")
+@click.argument("key")
+def persona_exp_assign(key: str) -> None:
+    """Show which variant KEY (a session/channel id) is assigned to."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    variant = PersonaExperiment().assign(key)
+    if variant is None:
+        console.print("[dim]No variants registered.[/]")
+        return
+    console.print(f"{key} -> variant [bold]{variant}[/]")
+
+
+@persona_experiment.command("record")
+@click.argument("variant")
+@click.option("--success/--failure", default=True, help="Whether the outcome succeeded.")
+@click.option("--refused", is_flag=True, default=False, help="Mark the turn as a refusal.")
+def persona_exp_record(variant: str, success: bool, refused: bool) -> None:
+    """Record an outcome for VARIANT (feeds the A/B results)."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    PersonaExperiment().record_outcome(variant, success=success, refused=refused)
+    _print_success(f"Recorded outcome for variant {variant}.")
+
+
+@persona_experiment.command("results")
+def persona_exp_results() -> None:
+    """Show per-variant success and refusal rates."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    results = PersonaExperiment().results()
+    if not results:
+        console.print("[dim]No variants registered.[/]")
+        return
+    t = Table(title="Persona A/B results")
+    t.add_column("Variant")
+    t.add_column("n", justify="right")
+    t.add_column("Success rate", justify="right")
+    t.add_column("Refusal rate", justify="right")
+    for name, r in results.items():
+        t.add_row(name, str(r["n"]), f"{r['success_rate']:.0%}", f"{r['refusal_rate']:.0%}")
+    console.print(t)
+
+
+@persona_experiment.command("clear")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
+def persona_exp_clear(yes: bool) -> None:
+    """Remove all variants + outcomes and disable the experiment."""
+    from missy.agent.persona_experiment import PersonaExperiment
+
+    if not yes and not click.confirm("Clear all persona variants and outcomes?", default=False):
+        console.print("[dim]Aborted.[/]")
+        return
+    PersonaExperiment().clear()
+    _print_success("Persona experiment cleared.")
+
+
 # ---------------------------------------------------------------------------
 # missy vision
 # ---------------------------------------------------------------------------

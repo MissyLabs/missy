@@ -932,7 +932,7 @@ class AgentRuntime:
         # Apply response shaping (humanistic behavior layer)
         if self._response_shaper is not None:
             try:
-                persona = self._persona_manager.get_persona() if self._persona_manager else None
+                persona = self._persona_for_session(sid)
                 shape_ctx = {
                     "turn_count": len(history),
                     "has_tool_results": bool(all_tool_names_used),
@@ -3632,6 +3632,29 @@ class AgentRuntime:
         except Exception:
             logger.debug("PersonaManager unavailable", exc_info=True)
             return None
+
+    def _persona_for_session(self, session_id: str) -> Any:
+        """F24: return the persona for *session_id*, honoring an active A/B test.
+
+        When a PersonaExperiment is enabled and has variants, the session is
+        deterministically assigned one and that variant's persona is used;
+        otherwise the base persona from PersonaManager is returned. Fully
+        defensive — any error falls back to the base persona.
+        """
+        base = self._persona_manager.get_persona() if self._persona_manager else None
+        if not session_id:
+            return base
+        try:
+            from missy.agent.persona_experiment import PersonaExperiment
+
+            experiment = PersonaExperiment()
+            if experiment.enabled:
+                variant = experiment.persona_for(session_id)
+                if variant is not None:
+                    return variant
+        except Exception:
+            logger.debug("Persona experiment lookup failed; using base persona.", exc_info=True)
+        return base
 
     def _make_behavior_layer(self):
         """Create a :class:`~missy.agent.behavior.BehaviorLayer`."""
