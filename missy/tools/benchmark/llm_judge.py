@@ -96,3 +96,61 @@ def provider_complete_fn(provider: Any, model: str | None = None) -> Callable[[s
         return str(getattr(resp, "content", "") or "")
 
     return _complete
+
+
+def make_structured_llm_judge(
+    provider: Any,
+    *,
+    model: str | None = None,
+    task_description: str = "",
+    max_retries: int = 1,
+) -> Callable[[Any, Any], float]:
+    """Return a schema-enforced ``judge_fn`` backed by ``StructuredOutputRunner``.
+
+    This is the robust variant of :func:`make_llm_judge` and a real adopter of
+    the previously-unwired ``StructuredOutputRunner`` (F09): the judge model must
+    return JSON validating against a ``{score: float, reason: str}`` schema, with
+    automatic retry-on-invalid-JSON (error fed back to the model). A number is no
+    longer scraped from free text — an invalid verdict is retried, then raises so
+    the scorer falls back to its heuristic.
+
+    Args:
+        provider: A ``BaseProvider`` used for the judgment call.
+        model: Optional model override for the judge.
+        task_description: Optional context for the judge prompt.
+        max_retries: Extra attempts on schema-validation failure.
+
+    Returns:
+        A ``judge_fn(expected, actual) -> float`` for ``BenchmarkScorer``.
+    """
+    from pydantic import BaseModel, Field
+
+    from missy.agent.structured_output import OutputSchema, StructuredOutputRunner
+    from missy.providers.base import Message
+
+    class JudgeVerdict(BaseModel):
+        score: float = Field(description="Correctness 0-100 (100 = equivalent).")
+        reason: str = Field(default="", description="Brief justification.")
+
+    schema = OutputSchema(JudgeVerdict, max_retries=max_retries)
+    runner = StructuredOutputRunner(provider)
+
+    def _judge(expected: Any, actual: Any) -> float:
+        prompt = _build_prompt(expected, actual, task_description)
+        kwargs: dict = {}
+        if model:
+            kwargs["model"] = model
+        result = runner.complete_structured(
+            [Message(role="user", content=prompt)], schema, **kwargs
+        )
+        if not result.success or result.data is None:
+            raise ValueError(
+                f"structured judge failed after {result.attempts} attempt(s): "
+                f"{result.validation_errors}"
+            )
+        raw = float(result.data.score)
+        if raw > 1.0:
+            raw /= 100.0
+        return max(0.0, min(1.0, raw))
+
+    return _judge
