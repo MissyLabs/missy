@@ -38,7 +38,7 @@ hand-waving.
 | F09 | StructuredOutputRunner adoption | Activate unwired | ✅ DONE — structured benchmark judge (make_structured_llm_judge) |
 | F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | ✅ DONE — opt-in condenser pass in _build_context_messages |
 | F11 | TrustScorer inspection + gating | Activate unwired | ✅ DONE — persisted + `missy tools trust` CLI |
-| F12 | Semantic conversation memory (VectorMemoryStore) | Activate unwired | FAISS wired to vision only |
+| F12 | Semantic conversation memory (VectorMemoryStore) | Activate unwired | ✅ DONE — ConversationSemanticIndex + SleeptimeWorker indexing + `missy memory` CLI |
 | F13 | PromptPatchManager organic proposal trigger | Activate unwired | ✅ DONE — FailureTracker-driven ERROR_AVOIDANCE proposals (opt-in) |
 | F14 | `missy sessions clear` operator CLI | Enhancement | ✅ DONE — CLI + store helpers |
 | F15 | Round-robin rotation for all providers | Enhancement | OpenAI-only today |
