@@ -3864,6 +3864,129 @@ def sessions_clear(ctx: click.Context, session_id: str, yes: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy graph (F04) — operator surface for GraphMemoryStore
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def graph() -> None:
+    """Query and seed the entity-relationship knowledge graph.
+
+    Operator surface for ``GraphMemoryStore`` (the same store the agent's
+    ``graph_query`` tool reads). Previously the store had no CLI or tool
+    entry point at all.
+    """
+
+
+@graph.command("stats")
+@click.pass_context
+def graph_stats(ctx: click.Context) -> None:
+    """Show entity/relationship counts and type breakdowns."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        s = store.stats()
+    except Exception as exc:
+        _print_error(f"Cannot read graph: {exc}")
+        return
+
+    console.print(
+        f"[bold]Knowledge graph[/]: {s.get('entity_count', 0)} entit(y/ies), "
+        f"{s.get('relationship_count', 0)} relationship(s)."
+    )
+    etypes = s.get("entity_types") or {}
+    if etypes:
+        t = Table(title="Entity types")
+        t.add_column("Type")
+        t.add_column("Count", justify="right")
+        for k, v in sorted(etypes.items(), key=lambda kv: -kv[1]):
+            t.add_row(str(k), str(v))
+        console.print(t)
+    rtypes = s.get("relation_types") or {}
+    if rtypes:
+        t = Table(title="Relation types")
+        t.add_column("Type")
+        t.add_column("Count", justify="right")
+        for k, v in sorted(rtypes.items(), key=lambda kv: -kv[1]):
+            t.add_row(str(k), str(v))
+        console.print(t)
+
+
+@graph.command("query")
+@click.argument("text")
+@click.option("--limit", default=15, show_default=True, help="Max entities to include.")
+@click.pass_context
+def graph_query_cmd(ctx: click.Context, text: str, limit: int) -> None:
+    """Show entities and relationships related to TEXT."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        result = store.find_related(text, limit=max(1, limit))
+        subgraph = store.get_context_subgraph(text, max_entities=max(1, limit))
+    except Exception as exc:
+        _print_error(f"Graph query failed: {exc}")
+        return
+
+    if not result.entities:
+        console.print(f"[dim]No entities related to {text!r} found in the graph.[/]")
+        return
+    console.print(
+        f"[bold]{len(result.entities)}[/] entit(y/ies), "
+        f"[bold]{len(result.relationships)}[/] relationship(s) related to {text!r}:"
+    )
+    console.print(subgraph)
+
+
+@graph.command("entity")
+@click.argument("name")
+@click.pass_context
+def graph_entity(ctx: click.Context, name: str) -> None:
+    """Show a summary of the entity named NAME."""
+    from missy.memory.graph_store import GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        summary = store.get_entity_summary(name)
+    except Exception as exc:
+        _print_error(f"Cannot read entity: {exc}")
+        return
+    if not summary or not summary.strip():
+        console.print(f"[dim]No entity named {name!r} found in the graph.[/]")
+        return
+    console.print(summary)
+
+
+@graph.command("add-entity")
+@click.argument("name")
+@click.option(
+    "--type",
+    "entity_type",
+    default="concept",
+    show_default=True,
+    help="Entity type (person/tool/file/project/concept/location/organization).",
+)
+@click.pass_context
+def graph_add_entity(ctx: click.Context, name: str, entity_type: str) -> None:
+    """Seed a single entity into the graph (operator-only)."""
+    from missy.memory.graph_store import Entity, GraphMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = GraphMemoryStore()
+        entity = Entity.new(name, entity_type)
+        store.add_entity(entity)
+    except Exception as exc:
+        _print_error(f"Cannot add entity: {exc}")
+        return
+    _print_success(f"Added entity [bold]{entity.name}[/] ({entity_type}) to the graph.")
+
+
+# ---------------------------------------------------------------------------
 # missy approvals
 # ---------------------------------------------------------------------------
 
