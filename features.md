@@ -31,8 +31,8 @@ hand-waving.
 | F02 | Neuro-Symbolic Planning Kernel | New core tech | Not present (linear tool loop today) |
 | F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | FTS5 keyword search only for chat memory |
 | F04 | GraphMemoryStore query surface | Activate unwired | ✅ DONE — graph_query tool + `missy graph` CLI + opt-in ingestion |
-| F05 | ModelRouter live wiring | Activate unwired | Implemented, **never invoked** in request path |
-| F06 | HeartbeatRunner production wiring | Activate unwired | Implemented + documented, **inert** |
+| F05 | ModelRouter live wiring | Activate unwired | ✅ DONE — routed in single-turn path (opt-in) |
+| F06 | HeartbeatRunner production wiring | Activate unwired | ✅ DONE — constructed+started in gateway_start (gated) |
 | F07 | LandlockPolicy runtime bootstrap | Activate unwired | Implemented, **zero callers** |
 | F08 | ContainerSandbox activation path | Activate unwired | Implemented, no bootstrap path |
 | F09 | StructuredOutputRunner adoption | Activate unwired | Implemented, **zero callers** |
