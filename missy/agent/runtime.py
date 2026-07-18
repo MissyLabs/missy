@@ -379,6 +379,11 @@ class AgentConfig:
     #: `graph_query` tool / `missy graph` CLI have populated data. Off by
     #: default (secure-by-default; adds background write load).
     graph_memory_enabled: bool = False
+    #: F12 -- opt-in semantic conversation memory. When True, the background
+    #: SleeptimeWorker indexes processed turns into a FAISS
+    #: ConversationSemanticIndex for paraphrase recall (`missy memory
+    #: semantic-search`). Requires the [vector] extra; off by default.
+    semantic_memory_enabled: bool = False
     #: F13 -- opt-in organic prompt-patch proposals. When True, a tool that
     #: fails repeatedly (crossing FailureTracker's threshold) proposes an
     #: ERROR_AVOIDANCE PromptPatch for human review via `missy patches`.
@@ -3559,10 +3564,22 @@ class AgentRuntime:
                     graph_store = GraphMemoryStore()
                 except Exception:
                     logger.debug("GraphMemoryStore unavailable; graph ingestion off", exc_info=True)
+            # F12: opt-in semantic conversation indexing.
+            semantic_index = None
+            if bool(getattr(self.config, "semantic_memory_enabled", False)):
+                try:
+                    from missy.memory.semantic_index import ConversationSemanticIndex
+
+                    idx = ConversationSemanticIndex()
+                    if idx.available:
+                        semantic_index = idx
+                except Exception:
+                    logger.debug("Semantic index unavailable; disabled", exc_info=True)
             worker = SleeptimeWorker(
                 memory_store=self._memory_store,
                 provider_registry=provider_registry,
                 graph_store=graph_store,
+                semantic_index=semantic_index,
             )
             worker.start()
             return worker

@@ -3971,6 +3971,73 @@ def vault_delete(ctx: click.Context, key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# missy memory (F12 — semantic conversation memory)
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def memory() -> None:
+    """Semantic conversation memory (FAISS) commands."""
+
+
+@memory.command("reindex")
+@click.option("--session", default=None, help="Only index this session (default: recent turns).")
+@click.option("--limit", default=1000, show_default=True, help="Max turns to index.")
+@click.pass_context
+def memory_reindex(ctx: click.Context, session: str | None, limit: int) -> None:
+    """Build/refresh the FAISS semantic index from stored conversation turns (F12)."""
+    from missy.memory.semantic_index import ConversationSemanticIndex
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    idx = ConversationSemanticIndex()
+    if not idx.available:
+        _print_error(
+            "Semantic memory needs the [vector] extra (faiss). "
+            'Install with: pip install -e ".[vector]"'
+        )
+        return
+    count = idx.reindex(SQLiteMemoryStore(), session_id=session, limit=limit)
+    _print_success(f"Indexed {count} turn(s) into the semantic memory index.")
+
+
+@memory.command("semantic-search")
+@click.argument("query")
+@click.option("--session", default=None, help="Restrict to a session id.")
+@click.option("--top-k", default=5, show_default=True, help="Max results.")
+@click.pass_context
+def memory_semantic_search(ctx: click.Context, query: str, session: str | None, top_k: int) -> None:
+    """Semantic (paraphrase) search over indexed conversation turns (F12)."""
+    from missy.memory.semantic_index import ConversationSemanticIndex
+
+    _load_subsystems(ctx.obj["config_path"])
+    idx = ConversationSemanticIndex()
+    if not idx.available:
+        _print_error(
+            'Semantic memory needs the [vector] extra. Install: pip install -e ".[vector]"'
+        )
+        return
+    results = idx.search(query, top_k=top_k, session_id=session)
+    if not results:
+        console.print(
+            "[dim]No semantic matches (index may be empty — run 'missy memory reindex').[/]"
+        )
+        return
+    t = Table(title=f"Semantic matches for {query!r}")
+    t.add_column("Score", justify="right")
+    t.add_column("Role")
+    t.add_column("Text")
+    for r in results:
+        meta = r.get("metadata") or {}
+        t.add_row(
+            f"{r.get('score', 0):.3f}",
+            str(meta.get("role", "?")),
+            str(r.get("text", ""))[:80],
+        )
+    console.print(t)
+
+
+# ---------------------------------------------------------------------------
 # missy sessions
 # ---------------------------------------------------------------------------
 

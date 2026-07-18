@@ -173,11 +173,16 @@ class SleeptimeWorker:
         memory_store: SQLiteMemoryStore | None = None,
         provider_registry: ProviderRegistry | None = None,
         graph_store: object | None = None,
+        semantic_index: object | None = None,
     ) -> None:
         self._config = config or SleeptimeConfig()
         self._memory_store = memory_store
         self._provider_registry = provider_registry
         self._graph_store = graph_store
+        # F12: optional ConversationSemanticIndex — when set, processed turns are
+        # indexed into FAISS so memory_search / `missy memory semantic-search`
+        # can do paraphrase recall. None (default) disables it (no write load).
+        self._semantic_index = semantic_index
 
         self._last_activity: float = time.monotonic()
         self._thread: threading.Thread | None = None
@@ -395,6 +400,7 @@ class SleeptimeWorker:
                     logger.warning("SleeptimeWorker: failed to save learning — skipping.")
 
             self._ingest_graph_entities(session_id, batch)
+            self._index_semantic(batch)
 
             cycle_turns += len(batch)
 
@@ -451,6 +457,36 @@ class SleeptimeWorker:
                 session_id,
             )
         return ingested
+
+    def _index_semantic(self, batch: list) -> int:
+        """Feed a batch of turns into the semantic index (F12 ingestion side).
+
+        No-op when no ``semantic_index`` was injected. Fully defensive — an
+        indexing failure never breaks the sleeptime cycle. Returns the number
+        of turns indexed (for observability/testing).
+        """
+        if self._semantic_index is None:
+            return 0
+        index_turn = getattr(self._semantic_index, "index_turn", None)
+        if not callable(index_turn):
+            return 0
+        indexed = 0
+        for turn in batch:
+            try:
+                if index_turn(turn):
+                    indexed += 1
+            except Exception:
+                logger.debug("SleeptimeWorker: semantic index_turn failed.", exc_info=True)
+        if indexed:
+            # Persist the batch so a separate reader process sees it.
+            flush = getattr(self._semantic_index, "flush", None)
+            if callable(flush):
+                try:
+                    flush()
+                except Exception:
+                    logger.debug("SleeptimeWorker: semantic flush failed.", exc_info=True)
+            logger.info("SleeptimeWorker: semantically indexed %d turn(s).", indexed)
+        return indexed
 
     # ------------------------------------------------------------------
     # Session discovery
