@@ -379,6 +379,12 @@ class AgentConfig:
     #: `graph_query` tool / `missy graph` CLI have populated data. Off by
     #: default (secure-by-default; adds background write load).
     graph_memory_enabled: bool = False
+    #: F13 -- opt-in organic prompt-patch proposals. When True, a tool that
+    #: fails repeatedly (crossing FailureTracker's threshold) proposes an
+    #: ERROR_AVOIDANCE PromptPatch for human review via `missy patches`.
+    #: Proposals never change behaviour until an operator approves them, so
+    #: this is safe, but it is off by default to keep the feature explicit.
+    prompt_patch_proposals_enabled: bool = False
 
 
 #: System prompt for Discord channel — no desktop/X11/browser references.
@@ -500,6 +506,11 @@ class AgentRuntime:
         except Exception:
             logger.debug("TrustScorer persistence unavailable; using in-memory", exc_info=True)
             self._trust_scorer = TrustScorer()
+        # F13: lazily-built prompt-patch manager + per-runtime dedup of
+        # already-proposed (tool, error-signature) fingerprints so a single
+        # recurring failure proposes at most one patch per runtime.
+        self._patch_manager: Any | None = None
+        self._proposed_error_patch_fps: set[str] = set()
         # SR-4.7: MCP manager (graceful degradation) -- connects to
         # configured servers and exposes their tools; _get_tools() syncs
         # them into the real ToolRegistry each turn so dispatch goes
@@ -1395,6 +1406,9 @@ class AgentRuntime:
                             if tr.is_error:
                                 if failure_tracker.record_failure(tc.name, tr.content):
                                     strategy_rotation_targets.append((tc.name, tr.content))
+                                    # F13: recurring failure -> propose an
+                                    # ERROR_AVOIDANCE patch for human review.
+                                    self._maybe_propose_error_patch(tc.name, tr.content)
                             else:
                                 failure_tracker.record_success(tc.name)
 
@@ -2163,6 +2177,58 @@ class AgentRuntime:
                 tool_name,
                 _trust.score(tool_name),
             )
+
+    def _maybe_propose_error_patch(self, tool_name: str, error: str) -> Any | None:
+        """F13: propose an ERROR_AVOIDANCE prompt patch for a recurring failure.
+
+        Called when :class:`FailureTracker` reports a tool has crossed its
+        consecutive-failure threshold. Proposes a patch (status PROPOSED, so it
+        never changes behaviour until an operator approves it via ``missy
+        patches``) capturing the failure so a human can turn it into lasting
+        guidance. Fully gated (opt-in), deduplicated per (tool, error-signature)
+        within this runtime, and never raises — a proposal failure must not
+        break the tool loop.
+
+        Args:
+            tool_name: The repeatedly-failing tool.
+            error: The most recent error text from that tool.
+
+        Returns:
+            The created ``PromptPatch``, or ``None`` when disabled, deduped,
+            at capacity, or on any error.
+        """
+        if not bool(getattr(self.config, "prompt_patch_proposals_enabled", False)):
+            return None
+        # Fingerprint on tool + a short, normalized error prefix so distinct
+        # failure modes each get one proposal, but identical ones don't spam.
+        sig = (error or "").strip().lower()[:80]
+        fp = f"{tool_name}|{sig}"
+        if fp in self._proposed_error_patch_fps:
+            return None
+        self._proposed_error_patch_fps.add(fp)
+        try:
+            from missy.agent.prompt_patches import PatchType, PromptPatchManager
+
+            if self._patch_manager is None:
+                self._patch_manager = PromptPatchManager()
+            short_err = (error or "unknown error").strip().splitlines()[0][:160]
+            content = (
+                f"The tool '{tool_name}' has failed repeatedly (error: {short_err}). "
+                f"Before calling '{tool_name}' again, re-check its arguments and "
+                f"preconditions, or choose a different approach rather than "
+                f"retrying the identical call."
+            )
+            patch = self._patch_manager.propose(PatchType.ERROR_AVOIDANCE, content, confidence=0.6)
+            if patch is not None:
+                logger.info(
+                    "F13: proposed ERROR_AVOIDANCE patch %s for recurring failure of %r.",
+                    patch.id,
+                    tool_name,
+                )
+            return patch
+        except Exception:
+            logger.debug("F13: prompt-patch proposal failed — skipping.", exc_info=True)
+            return None
 
     def _execute_tool(
         self,

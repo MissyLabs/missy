@@ -3,7 +3,29 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-## ✅ Implemented this pass (branch `feat/features-md-batch-1`)
+**Done so far: F04, F11, F13, F14, F20** (5 of 24).
+
+## ✅ Implemented — batch 2 (branch `feat/features-md-batch-2`)
+
+### F13 — PromptPatchManager organic proposal trigger
+- `AgentRuntime._maybe_propose_error_patch()` proposes an ERROR_AVOIDANCE
+  PromptPatch (status PROPOSED → human review via `missy patches`) when a tool
+  crosses `FailureTracker`'s consecutive-failure threshold. Opt-in
+  (`AgentConfig.prompt_patch_proposals_enabled`, default off), deduped per
+  (tool, error-signature), never raises. Wired at the real failure-threshold
+  site in the tool loop.
+- **Tests:** `tests/agent/test_prompt_patch_proposals.py` — 8 tests.
+
+### F20 — Playbook → Skill auto-promotion (end-to-end)
+- `Playbook.write_skill_proposal()` materializes a promotable pattern into a
+  real, discoverable SKILL.md draft; `Playbook.promote_to_skills()` promotes all
+  eligible patterns and marks them (idempotent; `dry_run` supported).
+- New `missy skills promote [--threshold] [--proposals-dir] [--dry-run]` CLI.
+- Verified end-to-end: generated SKILL.md is parsed by the real `SkillDiscovery`.
+- **Tests:** `tests/agent/test_playbook_promotion.py`,
+  `tests/cli/test_skills_promote_cli.py` — 11 tests.
+
+## ✅ Implemented — batch 1 (merged, PR #65)
 
 ### F14 — `missy sessions clear` operator CLI
 - `SQLiteMemoryStore.clear_session_full()` now returns removed-row counts;
