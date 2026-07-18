@@ -6104,6 +6104,57 @@ def tools_group(ctx: click.Context) -> None:
         console.print(ctx.get_help())
 
 
+@tools_group.command("trust")
+@click.argument("name", required=False)
+@click.option(
+    "--threshold",
+    default=200,
+    show_default=True,
+    help="Score at/below which an entity is flagged as low-trust.",
+)
+@click.pass_context
+def tools_trust(ctx: click.Context, name: str | None, threshold: int) -> None:
+    """Show persisted trust scores (0-1000) for tools/providers (F11).
+
+    Reads the persisted score file the running gateway writes on every tool
+    call. With no NAME, lists every scored entity (low-trust ones flagged);
+    with a NAME, shows just that entity's score. New/unseen entities report
+    the default score of 500.
+    """
+    from missy.security.trust import DEFAULT_SCORE, DEFAULT_TRUST_PATH, TrustScorer
+
+    _load_subsystems(ctx.obj["config_path"])
+    scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+
+    if name:
+        s = scorer.score(name)
+        trusted = scorer.is_trusted(name, threshold=threshold)
+        seen = name in scorer.get_scores()
+        note = "" if seen else " [dim](never scored — default)[/]"
+        colour = "green" if trusted else "red"
+        console.print(f"[bold]{name}[/]: [{colour}]{s}[/]/1000{note}")
+        return
+
+    scores = scorer.get_scores()
+    if not scores:
+        console.print(
+            "[dim]No trust scores recorded yet. Scores are written by a running "
+            "gateway as tools execute; new entities default to "
+            f"{DEFAULT_SCORE}.[/]"
+        )
+        return
+
+    t = Table(title="Trust scores (0-1000)")
+    t.add_column("Entity")
+    t.add_column("Score", justify="right")
+    t.add_column("Status")
+    for entity, s in sorted(scores.items(), key=lambda kv: kv[1]):
+        low = s <= threshold
+        status = "[red]LOW TRUST[/]" if low else "[green]ok[/]"
+        t.add_row(entity, f"[{'red' if low else 'green'}]{s}[/]", status)
+    console.print(t)
+
+
 @tools_group.group("candidates", invoke_without_command=True)
 @click.pass_context
 def tools_candidates(ctx: click.Context) -> None:

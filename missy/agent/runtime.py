@@ -490,8 +490,16 @@ class AgentRuntime:
         self._drift_detector = self._make_drift_detector()
         # Cryptographic agent identity (lazy load/generate)
         self._identity = self._make_identity()
-        # Trust scorer for providers, tools, and MCP servers
-        self._trust_scorer = TrustScorer()
+        # Trust scorer for providers, tools, and MCP servers. Persisted (F11)
+        # so scores survive restarts and are inspectable via `missy tools
+        # trust`; a persistence failure degrades to in-memory, never fatal.
+        try:
+            from missy.security.trust import DEFAULT_TRUST_PATH
+
+            self._trust_scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+        except Exception:
+            logger.debug("TrustScorer persistence unavailable; using in-memory", exc_info=True)
+            self._trust_scorer = TrustScorer()
         # SR-4.7: MCP manager (graceful degradation) -- connects to
         # configured servers and exposes their tools; _get_tools() syncs
         # them into the real ToolRegistry each turn so dispatch goes
