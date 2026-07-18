@@ -100,9 +100,7 @@ def export_audit_bundle(
             return False
         if since is not None and str(rec.get("timestamp", "")) < since:
             return False
-        if category is not None and rec.get("category") != category:
-            return False
-        return True
+        return not (category is not None and rec.get("category") != category)
 
     selected = [r for r in records if _keep(r)]
     if limit and limit > 0:
