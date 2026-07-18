@@ -389,6 +389,8 @@ def _make_handler(
                 return self._handle_list_tool_candidates(params)
             if method == "GET" and path == f"{_API_PREFIX}/audit":
                 return self._handle_audit_events(params)
+            if method == "GET" and path == f"{_API_PREFIX}/logs/tail":
+                return self._handle_logs_tail(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
                 return self._handle_memory_search(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/recent":
@@ -958,6 +960,36 @@ def _make_handler(
         def _handle_audit_events(self, params: dict) -> tuple[int, dict]:
             """GET /api/v1/audit — browse redacted audit events with filters."""
             return ApiResponse.ok(query_audit_events(params))
+
+        def _handle_logs_tail(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/logs/tail — redacted tail of the application log (F18).
+
+            Returns the last ``lines`` (default 200, capped 2000) of the
+            application log, each run through the same secret censor as agent
+            output, so a leaked credential in a log line never reaches the
+            browser. Backs the live-tailing ``/logs`` operator page.
+            """
+            import os
+            from collections import deque
+
+            from missy.security.censor import censor_response
+
+            try:
+                lines = min(max(int(params.get("lines", 200)), 1), 2000)
+            except (TypeError, ValueError):
+                lines = 200
+
+            log_path = os.path.expanduser(os.environ.get("MISSY_APP_LOG", "~/.missy/missy.log"))
+            if not os.path.exists(log_path):
+                return ApiResponse.ok({"path": None, "lines": []})
+            try:
+                with open(log_path, encoding="utf-8", errors="replace") as fh:
+                    tail = deque(fh, maxlen=lines)
+            except OSError as exc:
+                return ApiResponse.error(f"Could not read application log: {exc}", 500)
+
+            censored = [censor_response(line.rstrip("\n")) for line in tail]
+            return ApiResponse.ok({"path": log_path, "lines": censored})
 
         def _handle_diagnostics(self) -> tuple[int, dict]:
             """GET /api/v1/diagnostics — local operator doctor summary."""

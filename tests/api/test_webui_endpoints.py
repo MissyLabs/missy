@@ -271,3 +271,45 @@ class TestProviderToggleControls:
         # The default provider is never offered as a disable target.
         assert disable_targets["alpha"]["available"] is False
         assert disable_targets["beta"]["available"] is True
+
+
+class TestLogsTail:
+    """F18 — GET /api/v1/logs/tail (redacted application-log tail)."""
+
+    def test_returns_tail_lines(self, client, tmp_path, monkeypatch):
+        log = tmp_path / "app.log"
+        log.write_text("\n".join(f"line {i}" for i in range(50)) + "\n")
+        monkeypatch.setenv("MISSY_APP_LOG", str(log))
+        data = client.get("/logs/tail", params={"lines": 10}).json()["data"]
+        assert data["path"] == str(log)
+        assert len(data["lines"]) == 10
+        assert data["lines"][-1] == "line 49"
+
+    def test_lines_capped(self, client, tmp_path, monkeypatch):
+        log = tmp_path / "app.log"
+        log.write_text("\n".join(f"l{i}" for i in range(20)) + "\n")
+        monkeypatch.setenv("MISSY_APP_LOG", str(log))
+        # Requesting more lines than exist just returns what's there.
+        data = client.get("/logs/tail", params={"lines": 5000}).json()["data"]
+        assert len(data["lines"]) == 20
+
+    def test_redacts_secrets(self, client, tmp_path, monkeypatch):
+        log = tmp_path / "app.log"
+        # A GitHub PAT-shaped token must be censored, not returned verbatim.
+        secret = "ghp_" + "a" * 36
+        log.write_text(f"INFO connecting with token {secret}\nINFO done\n")
+        monkeypatch.setenv("MISSY_APP_LOG", str(log))
+        data = client.get("/logs/tail").json()["data"]
+        joined = "\n".join(data["lines"])
+        assert secret not in joined
+
+    def test_missing_log_returns_empty(self, client, tmp_path, monkeypatch):
+        monkeypatch.setenv("MISSY_APP_LOG", str(tmp_path / "does-not-exist.log"))
+        data = client.get("/logs/tail").json()["data"]
+        assert data["path"] is None
+        assert data["lines"] == []
+
+    def test_requires_auth(self, server, tmp_path, monkeypatch):
+        monkeypatch.setenv("MISSY_APP_LOG", str(tmp_path / "app.log"))
+        resp = httpx.get(f"http://127.0.0.1:{server.config.port}/api/v1/logs/tail", timeout=5.0)
+        assert resp.status_code == 401

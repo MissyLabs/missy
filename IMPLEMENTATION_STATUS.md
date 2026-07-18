@@ -3,7 +3,7 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-**Done so far: F04, F05, F06, F09, F10, F11, F12, F13, F14, F16, F19, F20, F21, F22, F23, F24** (16 of 24).
+**Done so far: F04, F05, F06, F09, F10, F11, F12, F13, F14, F16, F18, F19, F20, F21, F22, F23, F24** (17 of 24).
 
 ## ✅ Implemented — batch 2 (branch `feat/features-md-batch-2`)
 
