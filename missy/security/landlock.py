@@ -661,7 +661,11 @@ def apply_landlock_if_enabled(config: MissyConfig) -> dict[str, object]:  # type
     Returns:
         A status dict describing the outcome.
     """
-    if not bool(getattr(config, "landlock_enabled", False)):
+    # Use `is True` (not bool()): the real config field is a bool, and this
+    # guards against a MagicMock config in tests whose `.landlock_enabled`
+    # attribute is a truthy Mock — which would otherwise apply an irreversible,
+    # process-wide Landlock sandbox to the test runner itself.
+    if getattr(config, "landlock_enabled", False) is not True:
         return {"applied": False, "reason": "disabled"}
     if not LandlockPolicy.is_available():
         logger.info("Landlock enabled in config but not supported on this kernel.")

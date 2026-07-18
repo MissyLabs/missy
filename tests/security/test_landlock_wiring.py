@@ -61,6 +61,17 @@ class TestApplyIfEnabled:
         assert result["applied"] is False
         assert result["reason"] == "not_applied"
 
+    def test_magicmock_config_does_not_apply(self) -> None:
+        # Critical regression guard: a MagicMock config (as gateway_start tests
+        # use) must NOT trigger a real, irreversible Landlock apply — a truthy
+        # Mock attribute would otherwise sandbox the whole test runner.
+        from unittest.mock import MagicMock
+
+        with patch.object(ll, "apply_landlock_from_config") as m:
+            result = ll.apply_landlock_if_enabled(MagicMock())
+        assert result == {"applied": False, "reason": "disabled"}
+        m.assert_not_called()
+
     def test_apply_exception_never_fatal(self) -> None:
         with (
             patch.object(ll.LandlockPolicy, "is_available", return_value=True),
