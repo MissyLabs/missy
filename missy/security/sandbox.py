@@ -103,6 +103,11 @@ class SandboxConfig:
     workspace_path: str = "/workspace"
     require_isolation: bool = True
     tools: dict[str, Any] = field(default_factory=dict)
+    #: F08 -- when True, use a single long-lived per-session ContainerSandbox
+    #: (``docker exec`` into one container) instead of an ephemeral container
+    #: per command. More efficient for multi-command sessions; falls back to
+    #: the ephemeral DockerSandbox path when the persistent container can't start.
+    persistent: bool = False
 
 
 @dataclass
@@ -463,13 +468,92 @@ def parse_sandbox_config(data: dict[str, Any]) -> SandboxConfig:
         timeout=int(data.get("timeout", 30)),
         workspace_path=str(data.get("workspace_path", "/workspace")),
         require_isolation=_coerce_bool(data.get("require_isolation"), True),
+        persistent=_coerce_bool(data.get("persistent"), False),
         tools=dict(data.get("tools") or {}),
     )
 
 
+class PersistentContainerSandbox:
+    """Adapter exposing the persistent ``ContainerSandbox`` (F08) via the same
+    ``execute(command, cwd, timeout) -> SandboxResult`` interface as the other
+    sandboxes.
+
+    Wraps :class:`missy.security.container.ContainerSandbox` — a single
+    long-lived container the session ``docker exec``s into — which was fully
+    implemented but had no production entry point (SEC-090). The container is
+    started lazily on first execute; ``ContainerSandbox.execute`` returns
+    ``(output, exit_code)``, mapped here to a :class:`SandboxResult`.
+    """
+
+    def __init__(self, config: SandboxConfig | None = None) -> None:
+        self._config = config or SandboxConfig()
+        self._container: Any = None
+        self._started = False
+
+    @classmethod
+    def is_available(cls) -> bool:
+        try:
+            from missy.security.container import ContainerSandbox
+
+            return bool(ContainerSandbox.is_available())
+        except Exception:
+            return False
+
+    def _ensure_started(self) -> bool:
+        if self._started:
+            return self._container is not None
+        self._started = True
+        try:
+            from missy.security.container import ContainerSandbox
+
+            self._container = ContainerSandbox(
+                image=self._config.image,
+                workspace=self._config.workspace_path,
+                memory_limit=self._config.memory_limit,
+                cpu_quota=self._config.cpu_limit,
+                network_mode="none" if self._config.network_disabled else "bridge",
+            )
+            self._container.start()
+            return True
+        except Exception:
+            logger.warning("PersistentContainerSandbox: failed to start container", exc_info=True)
+            self._container = None
+            return False
+
+    def execute(
+        self, command: str, cwd: str | None = None, timeout: int | None = None
+    ) -> SandboxResult:
+        if not self._ensure_started() or self._container is None:
+            return SandboxResult(
+                success=False,
+                output=None,
+                error="persistent container sandbox unavailable",
+                sandboxed=False,
+            )
+        try:
+            output, exit_code = self._container.execute(
+                command, timeout=timeout or self._config.timeout
+            )
+        except Exception as exc:
+            return SandboxResult(success=False, output=None, error=str(exc), sandboxed=True)
+        return SandboxResult(
+            success=(exit_code == 0),
+            output=output,
+            error=None if exit_code == 0 else f"command exited with {exit_code}",
+            sandboxed=True,
+        )
+
+    def stop(self) -> None:
+        if self._container is not None:
+            try:
+                self._container.stop()
+            except Exception:
+                logger.debug("PersistentContainerSandbox: stop failed", exc_info=True)
+
+
 def get_sandbox(
     config: SandboxConfig | None = None,
-) -> DockerSandbox | FallbackSandbox | RefusingSandbox:
+) -> DockerSandbox | FallbackSandbox | RefusingSandbox | PersistentContainerSandbox:
     """Return the best available sandbox implementation.
 
     Returns a :class:`DockerSandbox` when Docker is accessible and sandbox
@@ -487,6 +571,12 @@ def get_sandbox(
     """
     cfg = config or SandboxConfig()
     if cfg.enabled:
+        # F08: prefer the persistent per-session ContainerSandbox when opted in
+        # and available; otherwise fall through to the ephemeral DockerSandbox
+        # path (and its require_isolation fail-closed handling).
+        if getattr(cfg, "persistent", False) is True and PersistentContainerSandbox.is_available():
+            logger.info("Persistent ContainerSandbox available — using per-session container")
+            return PersistentContainerSandbox(cfg)
         sandbox = DockerSandbox(cfg)
         if sandbox.is_available():
             logger.info("Docker sandbox available — using containerized execution")
