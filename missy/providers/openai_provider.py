@@ -25,7 +25,6 @@ import os
 import re
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -34,6 +33,7 @@ from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
 from .rate_limiter import RateLimiter
+from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
 
@@ -76,24 +76,10 @@ except ImportError:  # pragma: no cover
     _OPENAI_AVAILABLE = False
 
 
-@dataclass
-class _OpenAIAccount:
-    """One configured OpenAI credential this provider round-robins across.
-
-    Built once per entry in ``config.api_keys`` when
-    ``key_rotation_strategy == "round_robin"`` and at least 2 keys are
-    configured (e.g. two separate OpenAI accounts/organizations). Each
-    account gets its own lazily-built SDK client and its own
-    :class:`~missy.providers.rate_limiter.RateLimiter` sized from the
-    provider's configured RPM/TPM budget -- this is what makes adding a
-    second account actually double effective throughput rather than both
-    accounts sharing one combined budget the way plain key rotation would.
-    """
-
-    index: int
-    api_key: str
-    rate_limiter: RateLimiter
-    client: Any | None = None
+#: F15 -- the per-account record is now the shared, provider-agnostic
+#: ``round_robin.Account`` (same fields: index/api_key/rate_limiter/client).
+#: Aliased here so the rest of this module reads unchanged.
+_OpenAIAccount = Account
 
 
 class OpenAIProvider(BaseProvider):
@@ -138,24 +124,24 @@ class OpenAIProvider(BaseProvider):
         # calls on different threads can never race over which account's
         # client/rate limiter is "currently active" -- each call is pinned
         # to its own account slot for its own duration.
-        self._accounts: list[_OpenAIAccount] = []
-        self._account_index = 0
-        self._account_lock = threading.Lock()
+        # F15: account-list + round-robin selection are now the shared
+        # RoundRobinAccounts helper; the thread-local "current account" and
+        # client-building stay here (a client is SDK-specific). Behaviour is
+        # unchanged: round-robin activates only with round_robin strategy + 2+
+        # keys, each account getting its own independently-budgeted rate limiter.
         self._account_local = threading.local()
-        keys = list(config.api_keys or [])
-        if config.key_rotation_strategy == "round_robin" and len(keys) >= 2:
-            self._accounts = [
-                _OpenAIAccount(
-                    index=i,
-                    api_key=key,
-                    rate_limiter=RateLimiter(
-                        requests_per_minute=self._requests_per_minute,
-                        tokens_per_minute=self._tokens_per_minute,
-                        max_wait_seconds=self._max_wait_seconds,
-                    ),
-                )
-                for i, key in enumerate(keys)
-            ]
+        _rr_keys = (
+            list(config.api_keys or []) if config.key_rotation_strategy == "round_robin" else []
+        )
+        self._rr = RoundRobinAccounts(
+            _rr_keys,
+            make_rate_limiter=lambda: RateLimiter(
+                requests_per_minute=self._requests_per_minute,
+                tokens_per_minute=self._tokens_per_minute,
+                max_wait_seconds=self._max_wait_seconds,
+            ),
+        )
+        self._accounts: list[Account] = self._rr.accounts
 
     @property
     def is_multi_account(self) -> bool:
@@ -177,12 +163,7 @@ class OpenAIProvider(BaseProvider):
         concurrent callers are assigned accounts round-robin with no lost
         or duplicated turns.
         """
-        if not self._accounts:
-            return None
-        with self._account_lock:
-            idx = self._account_index
-            self._account_index = (idx + 1) % len(self._accounts)
-        return self._accounts[idx]
+        return self._rr.select()
 
     def _current_rate_limiter(self) -> RateLimiter | None:
         """Return the rate limiter for the account active on this thread, if any."""
