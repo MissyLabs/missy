@@ -34,7 +34,7 @@ hand-waving.
 | F05 | ModelRouter live wiring | Activate unwired | ✅ DONE — routed in single-turn path (opt-in) |
 | F06 | HeartbeatRunner production wiring | Activate unwired | ✅ DONE — constructed+started in gateway_start (gated) |
 | F07 | LandlockPolicy runtime bootstrap | Activate unwired | ✅ DONE — apply_landlock_if_enabled in gateway_start + `missy security landlock` |
-| F08 | ContainerSandbox activation path | Activate unwired | Implemented, no bootstrap path |
+| F08 | ContainerSandbox activation path | Activate unwired | ✅ DONE — PersistentContainerSandbox via get_sandbox (sandbox.persistent) |
 | F09 | StructuredOutputRunner adoption | Activate unwired | ✅ DONE — structured benchmark judge (make_structured_llm_judge) |
 | F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | ✅ DONE — opt-in condenser pass in _build_context_messages |
 | F11 | TrustScorer inspection + gating | Activate unwired | ✅ DONE — persisted + `missy tools trust` CLI |
