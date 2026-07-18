@@ -44,7 +44,7 @@ hand-waving.
 | F15 | Round-robin rotation for all providers | Enhancement | OpenAI-only today |
 | F16 | Storyboard video orchestration tool | Enhancement | ✅ DONE — video_storyboard tool (generate→trim→concat→title) |
 | F17 | MCP server authentication (OAuth/bearer) | Enhancement | Digest pinning only; no auth |
-| F18 | Web TUI live log/audit streaming page | Enhancement | Static audit page; run console SSE exists |
+| F18 | Web TUI live log/audit streaming page | Enhancement | ✅ DONE — `/logs` page + `/api/v1/logs/tail` (redacted, live) |
 | F19 | Global + multi-session budget ceilings | Enhancement | ✅ DONE — GlobalBudget + `missy budget` + runtime enforcement |
 | F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
 | F21 | LLM-judge benchmark dimension | Enhancement | ✅ DONE — optional judge_fn in BenchmarkScorer + make_llm_judge |
