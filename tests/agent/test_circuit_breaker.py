@@ -363,8 +363,17 @@ class TestHalfOpenFailure:
 
 class TestExponentialBackoff:
     def _cycle_open_halfopen_fail(self, breaker: CircuitBreaker) -> None:
-        """Drive one OPEN → HALF_OPEN → OPEN cycle via a failed probe."""
-        assert breaker.state == CircuitState.OPEN
+        """Drive one OPEN → HALF_OPEN → OPEN cycle via a failed probe.
+
+        The initial "still OPEN" assertion is intentionally forgiving of a
+        loaded CI runner: with a small ``base_timeout`` the OPEN→HALF_OPEN
+        window can elapse between tripping the breaker and this check (the
+        state property advances on wall-clock), which previously made
+        ``test_first_backoff_doubles_base`` flaky. HALF_OPEN here is an
+        acceptable already-advanced state; what the test actually verifies is
+        the recovery-timeout doubling math below.
+        """
+        assert breaker.state in (CircuitState.OPEN, CircuitState.HALF_OPEN)
         time.sleep(breaker._recovery_timeout * 1.1)
         assert breaker.state == CircuitState.HALF_OPEN
         with pytest.raises(RuntimeError):
@@ -372,33 +381,33 @@ class TestExponentialBackoff:
         assert breaker.state == CircuitState.OPEN
 
     def test_first_backoff_doubles_base(self):
-        breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=1.0)
+        breaker = _make_breaker(threshold=1, base_timeout=0.05, max_timeout=1.0)
         _trip(breaker, n=1)
         self._cycle_open_halfopen_fail(breaker)
-        assert breaker._recovery_timeout == pytest.approx(0.02)
+        assert breaker._recovery_timeout == pytest.approx(0.1)
 
     def test_second_backoff_doubles_again(self):
-        breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=1.0)
+        breaker = _make_breaker(threshold=1, base_timeout=0.05, max_timeout=1.0)
         _trip(breaker, n=1)
         self._cycle_open_halfopen_fail(breaker)
         self._cycle_open_halfopen_fail(breaker)
-        assert breaker._recovery_timeout == pytest.approx(0.04)
+        assert breaker._recovery_timeout == pytest.approx(0.2)
 
     def test_backoff_caps_at_max_timeout(self):
-        breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=0.03)
+        breaker = _make_breaker(threshold=1, base_timeout=0.05, max_timeout=0.15)
         _trip(breaker, n=1)
-        # First fail: 0.01 * 2 = 0.02
+        # First fail: 0.05 * 2 = 0.1
         self._cycle_open_halfopen_fail(breaker)
-        # Second fail: 0.02 * 2 = 0.04, capped to 0.03
+        # Second fail: 0.1 * 2 = 0.2, capped to 0.15
         self._cycle_open_halfopen_fail(breaker)
-        assert breaker._recovery_timeout == pytest.approx(0.03)
+        assert breaker._recovery_timeout == pytest.approx(0.15)
 
     def test_backoff_does_not_exceed_max_timeout_after_many_cycles(self):
-        breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=0.05)
+        breaker = _make_breaker(threshold=1, base_timeout=0.05, max_timeout=0.15)
         _trip(breaker, n=1)
         for _ in range(10):
             self._cycle_open_halfopen_fail(breaker)
-        assert breaker._recovery_timeout <= 0.05
+        assert breaker._recovery_timeout <= 0.15
 
     def test_success_resets_backoff_to_base(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=1.0)
