@@ -56,7 +56,10 @@ class VisionMonitor:
         self.min_alert_gap_seconds = max(0.0, min_alert_gap_seconds)
         self._session = session
         self._prev_frame: Any = None
-        self._last_alert_at: float = 0.0
+        # None = "never alerted". Must not be 0.0: time.monotonic() can be small
+        # on a freshly-booted host, so `now - 0.0 < cooldown` would wrongly
+        # suppress the very first alert.
+        self._last_alert_at: float | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self.checks = 0
@@ -109,7 +112,11 @@ class VisionMonitor:
             return None
 
         now = time.monotonic()
-        if self.min_alert_gap_seconds and (now - self._last_alert_at) < self.min_alert_gap_seconds:
+        if (
+            self.min_alert_gap_seconds
+            and self._last_alert_at is not None
+            and (now - self._last_alert_at) < self.min_alert_gap_seconds
+        ):
             logger.debug("VisionMonitor: change %.3f within cooldown; suppressing.", score)
             return None
 

@@ -65,6 +65,20 @@ class TestCooldown:
         assert mon.check_once() is None  # within cooldown -> suppressed
         assert len(alerts) == 1
 
+    def test_first_alert_fires_on_freshly_booted_host(self) -> None:
+        # Regression: with _last_alert_at initialized to 0.0, a small
+        # time.monotonic() (fresh boot) made `now - 0 < cooldown` suppress the
+        # FIRST alert. The first alert must always fire regardless of cooldown.
+        from unittest.mock import patch
+
+        alerts: list = []
+        mon = _monitor([_black(), _white()], alerts, min_alert_gap_seconds=999)
+        mon.check_once()  # prime
+        with patch("missy.vision.monitor.time.monotonic", return_value=5.0):  # tiny uptime
+            change = mon.check_once()
+        assert change is not None
+        assert len(alerts) == 1
+
     def test_zero_cooldown_allows_repeated(self) -> None:
         alerts: list = []
         mon = _monitor([_black(), _white(), _black(), _white()], alerts, min_alert_gap_seconds=0)
