@@ -1438,11 +1438,12 @@ class TestMcpRealManagerEndToEnd:
     subprocess) -- the only way to catch a bug like this.
     """
 
-    def _mock_client_factory(self, name, command=None, url=None):
+    def _mock_client_factory(self, name, command=None, url=None, headers=None):
         client = MagicMock()
         client.name = name
         client._command = command
         client._url = url
+        client._headers = headers
         client.tools = []
         client.alive = True
         return client

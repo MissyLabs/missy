@@ -383,17 +383,21 @@ class McpClient:
     def is_alive(self) -> bool:
         # An HTTP transport has no local process; it's "alive" once its client
         # is built (health is re-verified per-call by the manager).
-        if self._url:
-            return self._http is not None
-        return self._proc is not None and self._proc.poll() is None
+        if getattr(self, "_url", None):
+            return getattr(self, "_http", None) is not None
+        proc = getattr(self, "_proc", None)
+        return proc is not None and proc.poll() is None
 
     def disconnect(self) -> None:
-        if self._http is not None:
+        # Defensive getattr: some callers/tests build the client via
+        # ``McpClient.__new__`` and set only ``_proc`` without running __init__.
+        http = getattr(self, "_http", None)
+        if http is not None:
             with contextlib.suppress(Exception):
-                self._http.close()
+                http.close()
             self._http = None
             self._session_id = None
-        if self._proc:
+        if getattr(self, "_proc", None):
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout=5)
