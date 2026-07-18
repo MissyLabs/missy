@@ -21,9 +21,13 @@ The composite is a weighted average controlled by
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -180,10 +184,17 @@ class BenchmarkScorer:
         weights: ScoreWeights | None = None,
         max_latency_ms: float = 10_000.0,
         max_cost_usd: float = 0.01,
+        judge_fn: Callable[[Any, Any], float] | None = None,
     ) -> None:
         self.weights = weights or ScoreWeights()
         self.max_latency_ms = max(max_latency_ms, 1.0)
         self.max_cost_usd = max(max_cost_usd, 1e-9)
+        # F21: optional LLM-judge for the correctness dimension. When set, an
+        # open-ended result (one with a ground-truth ``expected_output`` that
+        # the heuristic can't confidently match) is scored semantically by the
+        # judge instead. Any judge error falls back to the heuristic, so a flaky
+        # judge never corrupts a benchmark run.
+        self._judge_fn = judge_fn
 
     def score(self, result: BenchmarkResult) -> ScoredResult:
         """Compute all dimension scores and composite for *result*."""
@@ -256,6 +267,13 @@ class BenchmarkScorer:
             return 1.0 if result.success else 0.0
         if actual == expected:
             return 1.0
+        # F21: when a judge is configured, defer semantic scoring to it for the
+        # inexact case (an exact match above is trivially correct and needs no
+        # judge). A judge failure falls through to the heuristics below.
+        if self._judge_fn is not None:
+            score = self._judge_correctness(expected, actual)
+            if score is not None:
+                return score
         # Partial string match.
         a_str = str(actual).lower().strip()
         e_str = str(expected).lower().strip()
@@ -277,6 +295,25 @@ class BenchmarkScorer:
         if not e_tokens:
             return 0.0
         return len(a_tokens & e_tokens) / len(e_tokens)
+
+    def _judge_correctness(self, expected: Any, actual: Any) -> float | None:
+        """Score correctness via the configured judge, clamped to [0, 1].
+
+        Returns ``None`` (so the caller falls back to the heuristic) when no
+        judge is set, the judge raises, or it returns a non-numeric value — a
+        judge must never be able to crash or corrupt a benchmark run.
+        """
+        if self._judge_fn is None:
+            return None
+        try:
+            raw = self._judge_fn(expected, actual)
+            score = float(raw)
+        except Exception:  # noqa: BLE001 - an untrusted judge must never crash a run
+            logger.debug("LLM judge failed; falling back to heuristic correctness.", exc_info=True)
+            return None
+        if score != score:  # NaN guard
+            return None
+        return max(0.0, min(1.0, score))
 
     def _latency_score(self, latency_ms: float) -> float:
         if latency_ms <= 0:
