@@ -3805,6 +3805,64 @@ def sessions_rename(ctx: click.Context, session_id: str, name: str) -> None:
         _print_error(f"Cannot rename session: {exc}")
 
 
+@sessions.command("clear")
+@click.argument("session_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt (for non-interactive use).",
+)
+@click.pass_context
+def sessions_clear(ctx: click.Context, session_id: str, yes: bool) -> None:
+    """Fully reset a session: delete its turns AND summaries.
+
+    This is the operator surface for
+    :meth:`SQLiteMemoryStore.clear_session_full` (F14) — the supported way
+    to recover a session stuck in the "over-refusal spiral," where a plain
+    history delete leaves the persisted ``summaries`` rows that keep
+    re-injecting the contamination via ``MemorySynthesizer``. Accepts a raw
+    session id or a friendly name (resolved like ``sessions rename``).
+
+    Note: this clears the *persisted* store. A gateway already holding the
+    session in memory should be restarted to drop in-process state.
+    """
+    from missy.memory.sqlite_store import SQLiteMemoryStore
+
+    _load_subsystems(ctx.obj["config_path"])
+    try:
+        store = SQLiteMemoryStore()
+        # Resolve a friendly name to its id, matching `sessions rename`.
+        if len(session_id) < 32 and "-" not in session_id:
+            resolved = store.resolve_session_name(session_id)
+            if resolved:
+                session_id = resolved
+
+        if not store.session_exists(session_id):
+            _print_error(f"Session {session_id!r} not found (no turns or summaries).")
+            return
+
+        if not yes:
+            confirmed = click.confirm(
+                f"Permanently delete ALL turns and summaries for session "
+                f"{session_id[:12]}...? This cannot be undone.",
+                default=False,
+            )
+            if not confirmed:
+                console.print("[dim]Aborted; nothing was cleared.[/]")
+                return
+
+        removed = store.clear_session_full(session_id)
+        _print_success(
+            f"Cleared session {session_id[:12]}...: removed "
+            f"{removed['turns']} turn(s) and {removed['summaries']} summary/summaries. "
+            f"Restart the gateway to drop any in-memory copy of this session."
+        )
+    except Exception as exc:
+        _print_error(f"Cannot clear session: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # missy approvals
 # ---------------------------------------------------------------------------

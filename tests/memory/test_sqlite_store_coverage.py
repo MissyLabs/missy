@@ -175,6 +175,71 @@ class TestClearSessionFull:
 
 
 # ---------------------------------------------------------------------------
+# F14: clear_session_full return counts + session_exists / count_session_turns
+# ---------------------------------------------------------------------------
+
+
+class TestClearSessionFullReturnCounts:
+    def test_returns_removed_counts(self, store: SQLiteMemoryStore) -> None:
+        from missy.memory.sqlite_store import SummaryRecord
+
+        store.add_turn(ConversationTurn.new("s-count", "user", "a"))
+        store.add_turn(ConversationTurn.new("s-count", "assistant", "b"))
+        store.add_summary(SummaryRecord(id="sc-1", session_id="s-count", depth=1, content="x"))
+        removed = store.clear_session_full("s-count")
+        assert removed == {"turns": 2, "summaries": 1}
+
+    def test_returns_zero_counts_for_absent_session(self, store: SQLiteMemoryStore) -> None:
+        removed = store.clear_session_full("ghost")
+        assert removed == {"turns": 0, "summaries": 0}
+
+    def test_return_is_a_plain_dict_of_ints(self, store: SQLiteMemoryStore) -> None:
+        store.add_turn(ConversationTurn.new("s-int", "user", "hi"))
+        removed = store.clear_session_full("s-int")
+        assert isinstance(removed, dict)
+        assert all(isinstance(v, int) for v in removed.values())
+
+
+class TestSessionExists:
+    def test_true_when_turns_present(self, store: SQLiteMemoryStore) -> None:
+        store.add_turn(ConversationTurn.new("s-e1", "user", "hi"))
+        assert store.session_exists("s-e1") is True
+
+    def test_true_when_only_summaries_present(self, store: SQLiteMemoryStore) -> None:
+        from missy.memory.sqlite_store import SummaryRecord
+
+        # A session whose raw turns were pruned but whose summary survives
+        # must still count as existing (the reason session_exists checks both).
+        store.add_summary(
+            SummaryRecord(id="se-2", session_id="s-e2", depth=1, content="only summary")
+        )
+        assert store.session_exists("s-e2") is True
+
+    def test_false_for_unknown_session(self, store: SQLiteMemoryStore) -> None:
+        assert store.session_exists("nope") is False
+
+    def test_false_after_full_clear(self, store: SQLiteMemoryStore) -> None:
+        from missy.memory.sqlite_store import SummaryRecord
+
+        store.add_turn(ConversationTurn.new("s-e3", "user", "hi"))
+        store.add_summary(SummaryRecord(id="se-3", session_id="s-e3", depth=1, content="s"))
+        store.clear_session_full("s-e3")
+        assert store.session_exists("s-e3") is False
+
+
+class TestCountSessionTurns:
+    def test_counts_only_this_session(self, store: SQLiteMemoryStore) -> None:
+        store.add_turn(ConversationTurn.new("s-c1", "user", "a"))
+        store.add_turn(ConversationTurn.new("s-c1", "assistant", "b"))
+        store.add_turn(ConversationTurn.new("s-c2", "user", "other"))
+        assert store.count_session_turns("s-c1") == 2
+        assert store.count_session_turns("s-c2") == 1
+
+    def test_zero_for_unknown(self, store: SQLiteMemoryStore) -> None:
+        assert store.count_session_turns("void") == 0
+
+
+# ---------------------------------------------------------------------------
 # get_recent_turns — lines 263-270
 # ---------------------------------------------------------------------------
 
