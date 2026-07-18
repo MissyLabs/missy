@@ -231,6 +231,15 @@ class TestScrubGeminiKeys:
         result = _scrub_gemini_keys(obj)
         assert "default" not in result["properties"]["x"]
 
+    def test_removes_singular_example_key(self):
+        # OpenAPI-style singular ``example`` (as used by CalculatorTool's
+        # expression param) is unsupported by Gemini and must be scrubbed too,
+        # not just the plural JSON Schema ``examples``.
+        obj = {"properties": {"x": {"example": "(2 + 3) * 4", "type": "string"}}}
+        result = _scrub_gemini_keys(obj)
+        assert "example" not in result["properties"]["x"]
+        assert result["properties"]["x"]["type"] == "string"
+
     def test_handles_lists(self):
         obj = [{"default": "x"}, {"type": "string"}]
         result = _scrub_gemini_keys(obj)
