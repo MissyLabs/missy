@@ -2509,6 +2509,23 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     import signal
 
     cfg = _load_subsystems(ctx.obj["config_path"])
+
+    # F07: apply the Landlock filesystem sandbox if enabled (irreversible,
+    # process-wide). Gated on landlock_enabled; degrades gracefully on kernels
+    # without Landlock. Never fatal.
+    try:
+        from missy.security.landlock import apply_landlock_if_enabled
+
+        _ll = apply_landlock_if_enabled(cfg)
+        if _ll.get("applied"):
+            console.print("[green]Landlock sandbox applied[/] (kernel-enforced filesystem policy).")
+        elif _ll.get("reason") == "unsupported":
+            console.print("[yellow]Landlock enabled but unsupported on this kernel; skipped.[/]")
+        elif _ll.get("reason") == "error":
+            console.print(f"[yellow]Landlock apply failed: {_ll.get('error')}[/]")
+    except Exception as _ll_exc:
+        logger.warning("Landlock bootstrap error: %s", _ll_exc, exc_info=True)
+
     console.print(
         Panel(
             f"[bold cyan]Missy Gateway[/] starting\n\n"
@@ -5290,6 +5307,40 @@ def config_plan(ctx: click.Context) -> None:
 @cli.group("security")
 def security_group() -> None:
     """Security tools and auditing."""
+
+
+@security_group.command("landlock")
+@click.pass_context
+def security_landlock(ctx: click.Context) -> None:
+    """Show Landlock LSM support and whether the sandbox is configured (F07).
+
+    Landlock (kernel-enforced filesystem confinement) is applied by
+    `missy gateway start` when `landlock_enabled: true` is set in config and
+    the kernel supports it (>= 5.13). This reports both.
+    """
+    from missy.security.landlock import landlock_status
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    status = landlock_status()
+    enabled = bool(getattr(cfg, "landlock_enabled", False))
+    supported = bool(status.get("available", status.get("supported", False)))
+
+    t = Table(title="Landlock filesystem sandbox")
+    t.add_column("Property")
+    t.add_column("Value")
+    t.add_row("Kernel supports Landlock", "[green]yes[/]" if supported else "[yellow]no[/]")
+    t.add_row("Enabled in config", "[green]yes[/]" if enabled else "[dim]no[/]")
+    for k, v in status.items():
+        if k not in ("available", "supported"):
+            t.add_row(str(k), str(v))
+    console.print(t)
+    if enabled and not supported:
+        console.print("[yellow]landlock_enabled is set but this kernel doesn't support it.[/]")
+    elif not enabled and supported:
+        console.print(
+            "[dim]This kernel supports Landlock. Set [bold]landlock_enabled: true[/] in "
+            "config.yaml to have `missy gateway start` sandbox the process.[/]"
+        )
 
 
 @security_group.command("scan")

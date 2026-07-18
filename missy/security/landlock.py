@@ -641,6 +641,42 @@ def apply_landlock_from_config(config: MissyConfig) -> bool:  # type: ignore[nam
     return policy.apply()
 
 
+def apply_landlock_if_enabled(config: MissyConfig) -> dict[str, object]:  # type: ignore[name-defined]
+    """F07: apply the Landlock sandbox when ``config.landlock_enabled`` is set.
+
+    The single bootstrap entry point (called by ``missy gateway start``) that
+    activates the previously-unwired ``apply_landlock_from_config``. Reports what
+    happened without ever raising — a Landlock failure must not stop the gateway:
+
+    * ``{"applied": False, "reason": "disabled"}`` when the flag is off.
+    * ``{"applied": False, "reason": "unsupported"}`` when the kernel lacks
+      Landlock (< 5.13) — graceful degradation, matching ``SEC-094``'s honesty.
+    * ``{"applied": True}`` when a ruleset was successfully installed
+      (irreversible for the life of the process).
+    * ``{"applied": False, "reason": "error", "error": ...}`` on any exception.
+
+    Args:
+        config: The fully-populated :class:`MissyConfig`.
+
+    Returns:
+        A status dict describing the outcome.
+    """
+    if not bool(getattr(config, "landlock_enabled", False)):
+        return {"applied": False, "reason": "disabled"}
+    if not LandlockPolicy.is_available():
+        logger.info("Landlock enabled in config but not supported on this kernel.")
+        return {"applied": False, "reason": "unsupported"}
+    try:
+        applied = apply_landlock_from_config(config)
+    except Exception as exc:  # noqa: BLE001 - never fatal
+        logger.warning("Landlock apply failed: %s", exc, exc_info=True)
+        return {"applied": False, "reason": "error", "error": str(exc)}
+    if applied:
+        logger.info("Landlock filesystem sandbox applied (process-wide, irreversible).")
+        return {"applied": True}
+    return {"applied": False, "reason": "not_applied"}
+
+
 # ---------------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------------

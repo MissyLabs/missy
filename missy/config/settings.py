@@ -466,6 +466,11 @@ class MissyConfig:
     # every session/job/proactive run; period is "total" | "daily" | "monthly".
     global_max_spend_usd: float = 0.0
     global_budget_period: str = "total"
+    # F07: opt-in kernel-enforced Landlock filesystem sandbox. When True and the
+    # kernel supports it (>= 5.13), `missy gateway start` applies an
+    # irreversible, process-wide Landlock ruleset derived from the filesystem
+    # policy. Off by default (irreversible; needs a supporting kernel).
+    landlock_enabled: bool = False
     config_version: int = 0  # schema version stamp (0 = pre-migration)
     tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
     agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
@@ -1038,6 +1043,7 @@ def load_config(path: str) -> MissyConfig:
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
             global_budget_period=str(data.get("global_budget_period", "total") or "total"),
+            landlock_enabled=bool(data.get("landlock_enabled", False)),
             config_version=int(data.get("config_version", 0)),
         )
     except ConfigurationError:
