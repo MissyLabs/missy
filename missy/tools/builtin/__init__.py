@@ -72,6 +72,7 @@ from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
 from missy.tools.builtin.video_edit import VideoEditTool
 from missy.tools.builtin.video_generate import VideoGenerateTool
+from missy.tools.builtin.video_storyboard import VideoStoryboardTool
 from missy.tools.builtin.vision_tools import (
     VisionAnalyzeTool,
     VisionBurstCaptureTool,
@@ -139,6 +140,7 @@ __all__ = [
     "ShellExecTool",
     "VideoEditTool",
     "VideoGenerateTool",
+    "VideoStoryboardTool",
     "WebFetchTool",
     "X11ClickTool",
     "X11LaunchTool",
@@ -210,6 +212,7 @@ _ALL_TOOL_CLASSES = [
     AudioSetVolumeTool,
     VideoEditTool,
     VideoGenerateTool,
+    VideoStoryboardTool,
     WebFetchTool,
     X11ClickTool,
     X11KeyTool,
