@@ -1,5 +1,12 @@
 # Missy — Feature Roadmap (24 candidates)
 
+> **Implementation status (updated):** ✅ **F04**, **F11**, **F14** are fully
+> implemented, tested, and documented on branch `feat/features-md-batch-1`
+> (see `IMPLEMENTATION_STATUS.md`). The remaining 21 are scoped below; the
+> Tier-1 new-core-technologies (F01–F03) are multi-week efforts and are
+> intentionally not stubbed.
+
+
 A grounded feature slate for Missy, derived from a full architecture pass over
 `missy/` plus the validation-suite findings. Features are split into three
 tiers:
@@ -23,17 +30,17 @@ hand-waving.
 | F01 | Leyline P2P Agent Mesh | New core tech | Named in docs only; no code |
 | F02 | Neuro-Symbolic Planning Kernel | New core tech | Not present (linear tool loop today) |
 | F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | FTS5 keyword search only for chat memory |
-| F04 | GraphMemoryStore query surface | Activate unwired | Implemented, **zero callers** |
+| F04 | GraphMemoryStore query surface | Activate unwired | ✅ DONE — graph_query tool + `missy graph` CLI + opt-in ingestion |
 | F05 | ModelRouter live wiring | Activate unwired | Implemented, **never invoked** in request path |
 | F06 | HeartbeatRunner production wiring | Activate unwired | Implemented + documented, **inert** |
 | F07 | LandlockPolicy runtime bootstrap | Activate unwired | Implemented, **zero callers** |
 | F08 | ContainerSandbox activation path | Activate unwired | Implemented, no bootstrap path |
 | F09 | StructuredOutputRunner adoption | Activate unwired | Implemented, **zero callers** |
 | F10 | CondenserPipeline/CompactionManager wiring | Activate unwired | Implemented, **zero callers** |
-| F11 | TrustScorer inspection + gating | Activate unwired | Scored live, **not queryable/actionable** |
+| F11 | TrustScorer inspection + gating | Activate unwired | ✅ DONE — persisted + `missy tools trust` CLI |
 | F12 | Semantic conversation memory (VectorMemoryStore) | Activate unwired | FAISS wired to vision only |
 | F13 | PromptPatchManager organic proposal trigger | Activate unwired | Approve/reject wired; `propose()` never called |
-| F14 | `missy sessions clear` operator CLI | Enhancement | Library method exists; no CLI surface |
+| F14 | `missy sessions clear` operator CLI | Enhancement | ✅ DONE — CLI + store helpers |
 | F15 | Round-robin rotation for all providers | Enhancement | OpenAI-only today |
 | F16 | Storyboard video orchestration tool | Enhancement | Manual multi-call chaining today |
 | F17 | MCP server authentication (OAuth/bearer) | Enhancement | Digest pinning only; no auth |
