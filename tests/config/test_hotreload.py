@@ -181,11 +181,30 @@ class TestApplyConfigAuditLoggerRealReinit:
 
     @pytest.fixture(autouse=True)
     def _reset_audit_logger_state(self):
+        import contextlib
+
         import missy.observability.audit_logger as audit_mod
+        import missy.observability.otel as otel_mod
         from missy.core.events import event_bus
 
         original_publish = event_bus.publish
         original_logger = audit_mod._audit_logger
+
+        # Start from a clean slate regardless of what earlier tests (in any
+        # collection order) left behind. A prior test can leave event_bus.publish
+        # wrapped by a stale AuditLogger/OtelExporter whose write target is gone;
+        # since init_audit_logger() reconfigures the *existing* _audit_logger in
+        # place, a leaked-but-broken instance would never re-establish a working
+        # wrapper and this test's events would silently not be written. Dropping
+        # the singleton + unsubscribing any active exporter forces _apply_config
+        # to build a fresh, correctly-subscribed logger.
+        active = otel_mod.get_active_exporter()
+        if active is not None:
+            with contextlib.suppress(Exception):
+                active.unsubscribe()
+            otel_mod._active_exporter = None
+        audit_mod._audit_logger = None
+
         yield
         event_bus.publish = original_publish
         audit_mod._audit_logger = original_logger

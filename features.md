@@ -45,7 +45,7 @@ hand-waving.
 | F16 | Storyboard video orchestration tool | Enhancement | Manual multi-call chaining today |
 | F17 | MCP server authentication (OAuth/bearer) | Enhancement | Digest pinning only; no auth |
 | F18 | Web TUI live log/audit streaming page | Enhancement | Static audit page; run console SSE exists |
-| F19 | Global + multi-session budget ceilings | Enhancement | Per-session cap only |
+| F19 | Global + multi-session budget ceilings | Enhancement | ✅ DONE — GlobalBudget + `missy budget` + runtime enforcement |
 | F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
 | F21 | LLM-judge benchmark dimension | Enhancement | Heuristic correctness scoring only |
 | F22 | Signed exportable audit bundles + SIEM sink | Enhancement | ✅ DONE (export bundle) — `missy audit export`/`verify-bundle`; SIEM sink deferred |

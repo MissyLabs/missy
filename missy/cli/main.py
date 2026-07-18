@@ -2728,6 +2728,26 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
         logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
 
+    # Global budget ceiling (F19). Install the process-wide cross-session
+    # spend cap from config so every session/job/proactive run records into
+    # (and is bounded by) one shared total. No-op when global_max_spend_usd<=0.
+    try:
+        from missy.agent.global_budget import init_global_budget
+
+        _gmax = float(getattr(cfg, "global_max_spend_usd", 0.0) or 0.0)
+        if _gmax > 0:
+            init_global_budget(
+                _gmax,
+                period=str(getattr(cfg, "global_budget_period", "total") or "total"),
+                alert_fn=lambda msg: console.print(f"[yellow]BUDGET ALERT:[/] {msg}"),
+            )
+            console.print(
+                f"[green]Global budget[/] ${_gmax:.2f} "
+                f"({getattr(cfg, 'global_budget_period', 'total')})"
+            )
+    except Exception as _gb_exc:
+        logger.warning("Global budget init error: %s", _gb_exc, exc_info=True)
+
     # Heartbeat (F06). HeartbeatRunner (missy/agent/heartbeat.py) — periodic
     # HEARTBEAT.md-driven synthetic agent invocation with active-hours gating
     # and a HEARTBEAT_OK suppression file — was fully built and its config
@@ -3670,6 +3690,76 @@ def cost(ctx: click.Context, session: str | None) -> None:
         "\n[dim]To set a budget, add to config.yaml:[/]\n"
         "  [bold]max_spend_usd: 5.00[/]  # dollars per session\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# missy budget (F19 — global cross-session ceiling)
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def budget() -> None:
+    """Inspect and reset the global (cross-session) spend ceiling."""
+
+
+@budget.command("status")
+@click.pass_context
+def budget_status(ctx: click.Context) -> None:
+    """Show the process-wide global budget total and remaining amount.
+
+    Reads the persisted running total the gateway writes as every session,
+    scheduled job, and proactive run records cost (F19). Distinct from
+    ``missy cost``, which is per-session.
+    """
+    from missy.agent.global_budget import (
+        DEFAULT_GLOBAL_BUDGET_PATH,
+        GlobalBudget,
+    )
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    max_usd = float(getattr(cfg, "global_max_spend_usd", 0.0) or 0.0)
+    period = str(getattr(cfg, "global_budget_period", "total") or "total")
+    b = GlobalBudget(max_usd, period=period, path=DEFAULT_GLOBAL_BUDGET_PATH)
+    s = b.summary()
+
+    if not s["enabled"]:
+        console.print(
+            "[dim]No global budget configured. Set [bold]global_max_spend_usd[/] "
+            "(and optionally [bold]global_budget_period: daily|monthly|total[/]) "
+            "in config.yaml to enable a cross-session ceiling.[/]"
+        )
+        return
+
+    frac = s["usage_fraction"]
+    colour = "green" if frac < 0.8 else ("yellow" if frac < 1.0 else "red")
+    t = Table(title=f"Global budget ({s['period']})")
+    t.add_column("Metric")
+    t.add_column("Value", justify="right")
+    t.add_row("Ceiling (USD)", f"{s['max_spend_usd']:.4f}")
+    t.add_row("Spent (USD)", f"[{colour}]{s['total_spent_usd']:.4f}[/]")
+    t.add_row("Remaining (USD)", f"{s['remaining_usd']:.4f}")
+    t.add_row("Usage", f"[{colour}]{frac:.0%}[/]")
+    console.print(t)
+
+
+@budget.command("reset")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
+@click.pass_context
+def budget_reset(ctx: click.Context, yes: bool) -> None:
+    """Reset the persisted global spend total to zero (operator override)."""
+    from missy.agent.global_budget import (
+        DEFAULT_GLOBAL_BUDGET_PATH,
+        GlobalBudget,
+    )
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    max_usd = float(getattr(cfg, "global_max_spend_usd", 0.0) or 0.0)
+    period = str(getattr(cfg, "global_budget_period", "total") or "total")
+    if not yes and not click.confirm("Reset the global spend total to zero?", default=False):
+        console.print("[dim]Aborted.[/]")
+        return
+    GlobalBudget(max_usd or 1.0, period=period, path=DEFAULT_GLOBAL_BUDGET_PATH).reset()
+    _print_success("Global budget total reset to zero.")
 
 
 # ---------------------------------------------------------------------------

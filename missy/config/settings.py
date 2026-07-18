@@ -462,6 +462,10 @@ class MissyConfig:
     container: ContainerConfig | None = None
     vision: VisionConfig = field(default_factory=VisionConfig)
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
+    # F19: global cross-session spend ceiling (0 = unlimited). Aggregates
+    # every session/job/proactive run; period is "total" | "daily" | "monthly".
+    global_max_spend_usd: float = 0.0
+    global_budget_period: str = "total"
     config_version: int = 0  # schema version stamp (0 = pre-migration)
     tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
     agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
@@ -1032,6 +1036,8 @@ def load_config(path: str) -> MissyConfig:
             container=_parse_container(data.get("container") or {}),
             vision=_parse_vision(data.get("vision") or {}),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
+            global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
+            global_budget_period=str(data.get("global_budget_period", "total") or "total"),
             config_version=int(data.get("config_version", 0)),
         )
     except ConfigurationError:

@@ -3830,6 +3830,15 @@ class AgentRuntime:
             return
         try:
             rec = tracker.record_from_response(response)
+            # F19: also feed the process-wide cross-session ceiling. No-op
+            # unless a global budget was initialized (default: disabled).
+            if rec is not None and rec.cost_usd:
+                try:
+                    from missy.agent.global_budget import get_global_budget
+
+                    get_global_budget().record(rec.cost_usd)
+                except Exception:
+                    logger.debug("Global budget record failed", exc_info=True)
             # Persist to SQLite for historical cost queries
             if rec is not None and session_id and self._memory_store is not None:
                 try:
@@ -3869,6 +3878,29 @@ class AgentRuntime:
         even when they share this runtime instance. An audit event is
         emitted before the exception propagates.
         """
+        # F19: enforce the process-wide cross-session ceiling first (no-op
+        # unless a global budget was initialized). A global breach stops the
+        # run regardless of the per-session budget.
+        try:
+            from missy.agent.global_budget import get_global_budget
+
+            gb = get_global_budget()
+            if gb.enabled:
+                try:
+                    gb.check()
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.budget.exceeded",
+                            result="deny",
+                            detail={"scope": "global", **gb.summary()},
+                        )
+                    raise
+        except ImportError:
+            pass
+
         tracker = self._get_cost_tracker(session_id)
         if tracker is None:
             return
