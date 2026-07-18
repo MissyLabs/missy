@@ -42,7 +42,7 @@ hand-waving.
 | F13 | PromptPatchManager organic proposal trigger | Activate unwired | ✅ DONE — FailureTracker-driven ERROR_AVOIDANCE proposals (opt-in) |
 | F14 | `missy sessions clear` operator CLI | Enhancement | ✅ DONE — CLI + store helpers |
 | F15 | Round-robin rotation for all providers | Enhancement | OpenAI-only today |
-| F16 | Storyboard video orchestration tool | Enhancement | Manual multi-call chaining today |
+| F16 | Storyboard video orchestration tool | Enhancement | ✅ DONE — video_storyboard tool (generate→trim→concat→title) |
 | F17 | MCP server authentication (OAuth/bearer) | Enhancement | Digest pinning only; no auth |
 | F18 | Web TUI live log/audit streaming page | Enhancement | Static audit page; run console SSE exists |
 | F19 | Global + multi-session budget ceilings | Enhancement | ✅ DONE — GlobalBudget + `missy budget` + runtime enforcement |
