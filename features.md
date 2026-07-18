@@ -49,7 +49,7 @@ hand-waving.
 | F20 | Playbook → Skill auto-promotion (end-to-end) | Enhancement | ✅ DONE — write_skill_proposal + `missy skills promote` |
 | F21 | LLM-judge benchmark dimension | Enhancement | ✅ DONE — optional judge_fn in BenchmarkScorer + make_llm_judge |
 | F22 | Signed exportable audit bundles + SIEM sink | Enhancement | ✅ DONE (export bundle) — `missy audit export`/`verify-bundle`; SIEM sink deferred |
-| F23 | Scheduled/continuous vision monitoring | Enhancement | On-demand capture only |
+| F23 | Scheduled/continuous vision monitoring | Enhancement | ✅ DONE — VisionMonitor (capture→change-detect→alert w/ cooldown) |
 | F24 | Persona A/B experiments + guardrail tuning | Enhancement | ✅ DONE — PersonaExperiment + `missy persona experiment` + runtime variant selection |
 
 ---
