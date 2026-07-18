@@ -131,9 +131,7 @@ class OpenAIProvider(BaseProvider):
         # keys, each account getting its own independently-budgeted rate limiter.
         self._account_local = threading.local()
         _rr_keys = (
-            list(config.api_keys or [])
-            if config.key_rotation_strategy == "round_robin"
-            else []
+            list(config.api_keys or []) if config.key_rotation_strategy == "round_robin" else []
         )
         self._rr = RoundRobinAccounts(
             _rr_keys,
