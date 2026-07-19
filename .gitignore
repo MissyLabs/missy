@@ -33,3 +33,6 @@ discord-configs.yaml
 *.crt
 *.cert
 secrets.yaml
+
+# Stray artifacts from tests that use an unpatched MagicMock config path
+MagicMock/
