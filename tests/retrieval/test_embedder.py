@@ -85,3 +85,40 @@ class TestDefaultEmbedder:
         emb = get_default_embedder(dimension=96)
         assert isinstance(emb, HashingEmbedder)
         assert emb.dimension == 96
+
+
+class TestSentenceTransformerForwardCompat:
+    """The sbert dimension probe must handle the >=5.x method rename."""
+
+    def _fake_st_module(self, model):
+        import types
+
+        mod = types.ModuleType("sentence_transformers")
+        mod.SentenceTransformer = lambda name: model
+        return mod
+
+    def test_uses_new_get_embedding_dimension(self, monkeypatch) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        model = MagicMock(spec=["get_embedding_dimension", "encode"])
+        model.get_embedding_dimension.return_value = 384
+        monkeypatch.setitem(sys.modules, "sentence_transformers", self._fake_st_module(model))
+        from missy.retrieval.embedder import SentenceTransformerEmbedder
+
+        emb = SentenceTransformerEmbedder("fake-model")
+        assert emb.dimension == 384
+        model.get_embedding_dimension.assert_called_once()
+
+    def test_falls_back_to_old_method_name(self, monkeypatch) -> None:
+        import sys
+        from unittest.mock import MagicMock
+
+        # Only the deprecated name exists (older sentence-transformers).
+        model = MagicMock(spec=["get_sentence_embedding_dimension", "encode"])
+        model.get_sentence_embedding_dimension.return_value = 768
+        monkeypatch.setitem(sys.modules, "sentence_transformers", self._fake_st_module(model))
+        from missy.retrieval.embedder import SentenceTransformerEmbedder
+
+        emb = SentenceTransformerEmbedder("fake-model")
+        assert emb.dimension == 768
