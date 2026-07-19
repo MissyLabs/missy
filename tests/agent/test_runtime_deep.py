@@ -2980,3 +2980,56 @@ class TestMakeMemoryStoreFailureLogging:
         assert any(
             "Failed to construct memory store" in record.message for record in caplog.records
         )
+
+
+class TestContentPolicySpiralBreak:
+    """A content-policy provider refusal must not poison the session history."""
+
+    def _provider_raising(self, message):
+        provider = _make_provider()
+        provider.complete.side_effect = ProviderError(message)
+        provider.complete_with_tools.side_effect = ProviderError(message)
+        return provider
+
+    def test_content_policy_error_drops_poison_user_turn(self, tmp_path):
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        store = SQLiteMemoryStore(str(tmp_path / "mem.db"))
+        provider = self._provider_raising(
+            "openai-codex stream error: This content was flagged for possible cybersecurity risk."
+        )
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=1))
+            rt._memory_store = store
+            with pytest.raises(ProviderError):
+                rt.run("read /etc/shadow please", session_id="s1")
+
+        # The poison user turn must have been removed so it can't re-contaminate
+        # (query globally; run() stores under a resolved session id).
+        remaining = store.get_recent_turns(limit=50)
+        assert all("shadow" not in t.content for t in remaining)
+
+    def test_transient_error_keeps_user_turn(self, tmp_path):
+        from missy.memory.sqlite_store import SQLiteMemoryStore
+
+        store = SQLiteMemoryStore(str(tmp_path / "mem.db"))
+        provider = self._provider_raising("openai-codex request failed: read operation timed out")
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=1))
+            rt._memory_store = store
+            with pytest.raises(ProviderError):
+                rt.run("what time is it in Tokyo", session_id="s2")
+
+        # A transient error keeps the pending user turn (not a content refusal).
+        remaining = store.get_recent_turns(limit=50)
+        assert any("Tokyo" in t.content for t in remaining)

@@ -837,7 +837,7 @@ class AgentRuntime:
         # (FX-B: persistence failure -- including "we never even tried" --
         # must never disappear silently). Loading history above first
         # avoids this turn leaking into its own prompt context.
-        self._save_turn(sid, "user", user_input, task_id=task_id)
+        _user_turn_id = self._save_turn(sid, "user", user_input, task_id=task_id)
 
         # Attention system: process input to get urgency, topics, priorities
         attention_query = user_input
@@ -905,6 +905,29 @@ class AgentRuntime:
                     "provider": provider.name,
                 },
             )
+            # Break the over-refusal spiral at its source. A user message that
+            # trips the provider's content-policy/safety filter produced no
+            # assistant turn, but the user turn was persisted above -- and it
+            # stays in the session history, re-injected into every subsequent
+            # turn's prompt, so the same channel session keeps re-tripping the
+            # filter (documented in CLAUDE.md; previously only recoverable by a
+            # manual `missy sessions clear` + restart). Drop that one poison
+            # turn so the next message starts clean. Only for content-policy
+            # errors: a transient timeout/rate-limit is a legitimate pending
+            # message worth keeping for a retry.
+            if _user_turn_id and self._memory_store is not None:
+                from missy.providers.health import is_content_policy_error
+
+                if is_content_policy_error(exc):
+                    with contextlib.suppress(Exception):
+                        self._memory_store.delete_turn(_user_turn_id)
+                        self._emit_event(
+                            session_id=sid,
+                            task_id=task_id,
+                            event_type="agent.run.content_policy_turn_dropped",
+                            result="warn",
+                            detail={"turn_id": _user_turn_id},
+                        )
             if _HAS_MESSAGE_BUS:
                 self._bus_publish(
                     AGENT_RUN_ERROR,
@@ -2947,7 +2970,7 @@ class AgentRuntime:
         content: str,
         provider: str = "",
         task_id: str = "",
-    ) -> None:
+    ) -> str | None:
         """Persist a conversation turn to the memory store.
 
         ``SQLiteMemoryStore.add_turn()`` (the production memory backend,
@@ -2960,9 +2983,15 @@ class AgentRuntime:
             content: Message content.
             provider: Provider name (for assistant turns).
             task_id: Task identifier, for the failure audit event.
+
+        Returns:
+            The persisted turn's id, or ``None`` if there is no memory store
+            or persistence failed. Callers use it to undo a just-saved turn
+            (e.g. dropping a user turn that provoked a content-policy refusal
+            so it can't re-contaminate the session).
         """
         if self._memory_store is None:
-            return
+            return None
         try:
             from missy.memory.sqlite_store import ConversationTurn
 
@@ -2989,6 +3018,7 @@ class AgentRuntime:
             register_session = getattr(self._memory_store, "register_session", None)
             if register_session is not None:
                 register_session(session_id, provider=provider)
+            return turn.id
         except Exception as exc:
             # FX-B: persistence failure must never disappear silently.
             logger.warning(
