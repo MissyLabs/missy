@@ -3,7 +3,43 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-**Done so far: F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (21 of 24).
+**Done so far: F03, F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (22 of 24).
+
+## ✅ Implemented — batch F03 (branch `feat/features-md-f03-retrieval`)
+
+### F03 — On-Device Retrieval Engine (local embeddings + hybrid RAG)
+A first-class, fully-offline retrieval core in the new `missy/retrieval/`
+package — a genuine new subsystem, not a tweak of the vision-only
+`VectorMemoryStore`:
+- **Chunking** (`chunking.py`) — span-preserving splitter that biases cuts to
+  paragraph/sentence boundaries (hard-splits oversized runs), with overlap, so
+  every chunk carries the exact `(start, end)` offsets it occupies in its
+  source document. This is what makes citations precise.
+- **Embedders** (`embedder.py`) — pluggable `Embedder` protocol. Default
+  `HashingEmbedder` is dependency-free (word uni/bi-grams + char 3–5 grams,
+  signed feature hashing, sublinear TF, L2-normalized) so the base install
+  stays offline and lean; `SentenceTransformerEmbedder` is used automatically
+  when the `[retrieval]` extra is installed. `get_default_embedder()` degrades
+  gracefully.
+- **Hybrid index** (`hybrid_index.py`) — `DenseIndex` (FAISS `IndexFlatIP`
+  when available, NumPy brute-force fallback otherwise; cosine via normalized
+  inner product) + `BM25SparseIndex` (pure-Python Okapi BM25) fused with
+  scale-free **reciprocal-rank fusion**, so dense paraphrase recall and sparse
+  rare-keyword matching complement each other.
+- **Engine** (`engine.py`) — `RetrievalEngine`: index/re-index (incremental —
+  re-indexing a `doc_id` replaces its chunks), remove, query returning
+  `RetrievalResult`s with a `source_span` citation, JSON+`.npy` persistence
+  (durable across restarts; stale-dimension indexes ignored), and `stats()`.
+- **Agent tool** (`missy/tools/builtin/rag_query.py`) — `rag_query` with
+  `query`/`index_text`/`index_file`/`stats` actions, citation-grounded output,
+  registered into the built-in tool set (`resolve_filesystem_targets` declares
+  `index_file` paths to the filesystem policy engine).
+- **CLI** — `missy retrieval index|query|stats|remove`.
+- **Packaging** — new optional `[retrieval]` extra (FAISS +
+  sentence-transformers); the core needs neither.
+- **Tests:** `tests/retrieval/` (chunking, embedder, hybrid index, engine,
+  rag_query tool) + `tests/cli/test_retrieval_cli.py` — 64 tests, ~95% package
+  coverage. `tests/retrieval` added to CI shard 3.
 
 ## ✅ Implemented — batch 17 (branch `feat/features-md-batch-17`)
 

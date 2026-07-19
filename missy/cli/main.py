@@ -7458,6 +7458,94 @@ def _build_suite_from_tool(tool: Any, provider_label: str) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Retrieval engine (F03) — on-device RAG index management
+# ---------------------------------------------------------------------------
+
+
+@cli.group("retrieval", invoke_without_command=True)
+@click.pass_context
+def retrieval_group(ctx: click.Context) -> None:
+    """On-device retrieval index (index, query, stats, remove)."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(retrieval_stats_cmd)
+
+
+def _open_engine(index_dir: str):
+    from missy.retrieval import RetrievalEngine
+
+    return RetrievalEngine(index_dir=index_dir)
+
+
+_RETRIEVAL_DIR_OPT = click.option(
+    "--index-dir",
+    default="~/.missy/retrieval",
+    show_default=True,
+    help="Directory holding the persisted retrieval index.",
+)
+
+
+@retrieval_group.command("index")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--doc-id", default=None, help="Document id (defaults to the file path).")
+@_RETRIEVAL_DIR_OPT
+def retrieval_index_cmd(path: str, doc_id: str | None, index_dir: str) -> None:
+    """Index a local text file into the retrieval engine."""
+    engine = _open_engine(index_dir)
+    n = engine.index_file(path, doc_id=doc_id)
+    console.print(f"[green]Indexed[/] {path} → {n} chunk(s).")
+
+
+@retrieval_group.command("query")
+@click.argument("text")
+@click.option("--top-k", default=5, show_default=True, help="Max results to return.")
+@_RETRIEVAL_DIR_OPT
+def retrieval_query_cmd(text: str, top_k: int, index_dir: str) -> None:
+    """Query the retrieval index and print citation-grounded results."""
+    engine = _open_engine(index_dir)
+    results = engine.query(text, top_k=top_k)
+    if not results:
+        console.print("[dim]No results (index empty or no match).[/]")
+        return
+    table = Table(title=f"Retrieval results for {text!r}")
+    table.add_column("Score", justify="right")
+    table.add_column("Citation", style="bold")
+    table.add_column("Text")
+    for r in results:
+        excerpt = r.text.replace("\n", " ")
+        table.add_row(
+            f"{r.score:.4f}",
+            r.citation(),
+            excerpt[:80] + ("…" if len(excerpt) > 80 else ""),
+        )
+    console.print(table)
+
+
+@retrieval_group.command("stats")
+@_RETRIEVAL_DIR_OPT
+def retrieval_stats_cmd(index_dir: str) -> None:
+    """Show retrieval index statistics."""
+    stats = _open_engine(index_dir).stats()
+    table = Table(title="Retrieval Index")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    for key in ("embedder", "dimension", "documents", "chunks", "index_dir"):
+        table.add_row(key, str(stats.get(key)))
+    console.print(table)
+
+
+@retrieval_group.command("remove")
+@click.argument("doc_id")
+@_RETRIEVAL_DIR_OPT
+def retrieval_remove_cmd(doc_id: str, index_dir: str) -> None:
+    """Remove a document's chunks from the retrieval index."""
+    removed = _open_engine(index_dir).remove_document(doc_id)
+    if removed:
+        console.print(f"[green]Removed[/] {removed} chunk(s) for {doc_id!r}.")
+    else:
+        console.print(f"[dim]No chunks found for {doc_id!r}.[/]")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
