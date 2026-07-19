@@ -67,6 +67,7 @@ from missy.tools.builtin.memory_tools import (
     MemoryExpandTool,
     MemorySearchTool,
 )
+from missy.tools.builtin.rag_query import RagQueryTool
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
@@ -136,6 +137,7 @@ __all__ = [
     "MemoryDescribeTool",
     "MemoryExpandTool",
     "MemorySearchTool",
+    "RagQueryTool",
     "SelfCreateTool",
     "ShellExecTool",
     "VideoEditTool",
@@ -205,6 +207,7 @@ _ALL_TOOL_CLASSES = [
     MemoryDescribeTool,
     MemoryExpandTool,
     MemorySearchTool,
+    RagQueryTool,
     SelfCreateTool,
     ShellExecTool,
     TTSSpeakTool,

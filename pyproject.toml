@@ -53,6 +53,14 @@ discord_voice = [
 vector = [
     "faiss-cpu>=1.7",
 ]
+# On-device retrieval engine (F03). The core (HashingEmbedder + BM25 +
+# NumPy dense fallback) needs nothing extra; this extra adds FAISS for a
+# faster dense index and sentence-transformers for semantic embeddings.
+retrieval = [
+    "faiss-cpu>=1.7",
+    "numpy>=1.24",
+    "sentence-transformers>=2.2",
+]
 vision = [
     "opencv-python-headless>=4.8",
     "numpy>=1.24",

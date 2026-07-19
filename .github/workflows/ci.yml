@@ -63,7 +63,7 @@ jobs:
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
-            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
             dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:
@@ -112,7 +112,7 @@ jobs:
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
-            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
             dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:
@@ -161,7 +161,7 @@ jobs:
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
-            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
             dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:
@@ -220,7 +220,7 @@ jobs:
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
-            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins"
+            dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
             dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
     steps:

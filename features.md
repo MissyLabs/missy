@@ -1,10 +1,11 @@
 # Missy — Feature Roadmap (24 candidates)
 
-> **Implementation status (updated):** ✅ **F04**, **F11**, **F14** are fully
-> implemented, tested, and documented on branch `feat/features-md-batch-1`
-> (see `IMPLEMENTATION_STATUS.md`). The remaining 21 are scoped below; the
-> Tier-1 new-core-technologies (F01–F03) are multi-week efforts and are
-> intentionally not stubbed.
+> **Implementation status (updated):** **22 of 24 implemented, tested, and
+> documented** (see `IMPLEMENTATION_STATUS.md` for the authoritative list and
+> per-feature detail). This includes the Tier-1 new core **F03 (On-Device
+> Retrieval Engine)**, built as a real working subsystem in `missy/retrieval/`.
+> Remaining: **F01 (Leyline P2P Agent Mesh)** and **F02 (Neuro-Symbolic
+> Planning Kernel)** — the two largest new-core efforts.
 
 
 A grounded feature slate for Missy, derived from a full architecture pass over
@@ -29,7 +30,7 @@ hand-waving.
 |---|---------|------|---------------|
 | F01 | Leyline P2P Agent Mesh | New core tech | Named in docs only; no code |
 | F02 | Neuro-Symbolic Planning Kernel | New core tech | Not present (linear tool loop today) |
-| F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | FTS5 keyword search only for chat memory |
+| F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | ✅ Done (missy/retrieval/ + rag_query + CLI) |
 | F04 | GraphMemoryStore query surface | Activate unwired | ✅ DONE — graph_query tool + `missy graph` CLI + opt-in ingestion |
 | F05 | ModelRouter live wiring | Activate unwired | ✅ DONE — routed in single-turn path (opt-in) |
 | F06 | HeartbeatRunner production wiring | Activate unwired | ✅ DONE — constructed+started in gateway_start (gated) |
@@ -93,7 +94,14 @@ constrained schema, enforced by `StructuredOutputRunner` — see F09),
 pre/post assertions), and checkpoint integration so a partially-executed plan
 resumes via `missy recover`.
 
-### F03. On-Device Retrieval Engine (local embeddings + RAG)
+### F03. On-Device Retrieval Engine (local embeddings + RAG) ✅ (implemented)
+**Status.** Built in `missy/retrieval/` (chunking with citation spans, a
+pluggable dependency-free `HashingEmbedder` + optional sentence-transformers,
+a FAISS/NumPy dense + BM25 sparse `HybridIndex` fused via reciprocal-rank
+fusion, incremental re-indexing with persistence), the `rag_query` agent tool,
+a `missy retrieval` CLI, and a `[retrieval]` extra. 64 tests. See
+`IMPLEMENTATION_STATUS.md`.
+
 **What.** A first-class local retrieval core: embed the workspace, uploaded
 docs, and conversation history with an on-device embedding model, and serve
 semantic recall + citation-grounded RAG to the agent — no cloud embedding
