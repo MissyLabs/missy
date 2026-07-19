@@ -3,7 +3,45 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-**Done so far: F02, F03, F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (23 of 24). Remaining: **F01** (Leyline P2P Agent Mesh).
+**Done: F01–F24 — all 24 of 24 implemented, tested, and documented.**
+
+## ✅ Implemented — batch F01 (branch `feat/features-md-f01-mesh`)
+
+### F01 — Leyline P2P Agent Mesh
+The last Tier-1 new core, built as a real, hermetically-testable P2P
+federation subsystem in the new `missy/mesh/` package (the docs referenced a
+"Leyline P2P network" that had no code — now it does):
+- **`identity.py`** — `PeerIdentity`: a peer's verify-only Ed25519 identity
+  reconstructed from its raw public key; `peer_id` is the key's SHA-256
+  fingerprint (identity is the key, not a self-asserted name). Reuses the
+  existing `AgentIdentity` for local signing.
+- **`peer_registry.py`** — `PeerRegistry`: the trust anchor. Peers +
+  per-peer **capability grants** (`memory.read/write`, `delegate`, `gossip`,
+  `policy.vote`), **fail-closed** (unknown peer or ungranted capability →
+  denied), thread-safe, JSON-persisted. Grants are local operator state,
+  never asserted by the peer over the wire.
+- **`envelope.py`** — `SignedEnvelope`: every cross-node message is Ed25519-
+  signed over a canonical (sorted-key) serialization and verified against the
+  registry; tampering (incl. payload key reorder), unknown senders, and
+  impostor signatures are all rejected.
+- **`crdt.py`** — `LWWMap`: a last-writer-wins CRDT for shared memory with a
+  `(timestamp, peer_id)` stamp, so replicas merge **deterministically**
+  (commutative/associative/idempotent, tested) with no coordinator; tombstones
+  prevent delete resurrection.
+- **`quorum.py`** — `PolicyQuorum`: capability-widening actions need a
+  threshold of **distinct, authenticated, trusted** signed votes (forged /
+  unknown-peer / uncapable / duplicate / low-trust votes are discarded), so
+  one compromised node can't widen the mesh.
+- **`transport.py`** — `GossipTransport` protocol with an `InMemoryTransport`
+  (tests / single-process simulation) and an `HttpGossipTransport` that POSTs
+  signed envelopes through an injected HTTP client (production passes
+  `PolicyHTTPClient`, keeping gossip policy-gated).
+- **`node.py`** — `MeshNode`: publishes signed memory updates, ingests and
+  **verifies** peers' updates before merging (rejecting unsigned / unknown /
+  uncapable), and routes capability-gated `delegate`, all as audit events.
+- **Tests:** `tests/mesh/` (identity, registry, envelope, crdt, quorum,
+  transport, node integration) with **real Ed25519 keys** — 72 tests, ~98%
+  package coverage. Added to CI shard 4.
 
 ## ✅ Implemented — batch F02 (branch `feat/features-md-f02-planning`)
 

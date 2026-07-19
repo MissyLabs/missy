@@ -1,12 +1,11 @@
 # Missy — Feature Roadmap (24 candidates)
 
-> **Implementation status (updated):** **23 of 24 implemented, tested, and
+> **Implementation status (updated):** **All 24 of 24 implemented, tested, and
 > documented** (see `IMPLEMENTATION_STATUS.md` for the authoritative list and
-> per-feature detail). This includes two of the three Tier-1 new cores —
-> **F03 (On-Device Retrieval Engine)** in `missy/retrieval/` and **F02
-> (Neuro-Symbolic Planning Kernel)** in `missy/planning/` — both built as real
-> working subsystems. Remaining: **F01 (Leyline P2P Agent Mesh)**, the largest
-> new-core effort (a full networking/identity/consensus subsystem).
+> per-feature detail). All three Tier-1 new cores are real working subsystems:
+> **F01 (Leyline P2P Agent Mesh)** in `missy/mesh/`, **F02 (Neuro-Symbolic
+> Planning Kernel)** in `missy/planning/`, and **F03 (On-Device Retrieval
+> Engine)** in `missy/retrieval/`.
 
 
 A grounded feature slate for Missy, derived from a full architecture pass over
@@ -29,7 +28,7 @@ hand-waving.
 
 | # | Feature | Tier | Current state |
 |---|---------|------|---------------|
-| F01 | Leyline P2P Agent Mesh | New core tech | Named in docs only; no code |
+| F01 | Leyline P2P Agent Mesh | New core tech | ✅ Done (missy/mesh/: Ed25519 peers + capability grants + signed gossip + CRDT + quorum) |
 | F02 | Neuro-Symbolic Planning Kernel | New core tech | ✅ Done (missy/planning/: DAG compile + verified speculative execution) |
 | F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | ✅ Done (missy/retrieval/ + rag_query + CLI) |
 | F04 | GraphMemoryStore query surface | Activate unwired | ✅ DONE — graph_query tool + `missy graph` CLI + opt-in ingestion |
@@ -58,7 +57,16 @@ hand-waving.
 
 ## Tier 1 — New Core Technologies
 
-### F01. Leyline P2P Agent Mesh
+### F01. Leyline P2P Agent Mesh ✅ (implemented)
+**Status.** Built in `missy/mesh/`: `PeerIdentity` (Ed25519, peer_id = key
+fingerprint), `PeerRegistry` (fail-closed capability grants), `SignedEnvelope`
+(canonical-serialized, signature-verified gossip), `LWWMap` (deterministic
+CRDT shared memory), `PolicyQuorum` (authenticated threshold voting so one
+compromised node can't widen the mesh), pluggable `GossipTransport`
+(in-memory + `PolicyHTTPClient`-gated HTTP), and `MeshNode` (publish/verify/
+merge + capability-gated delegation, all audited). 72 tests with real Ed25519
+keys. See `IMPLEMENTATION_STATUS.md`.
+
 **What.** A peer-to-peer federation layer letting multiple Missy instances form
 a trust-scoped mesh that shares memory, skills, playbooks, and policy verdicts
 without a central server. A node can delegate a subtask to a peer better

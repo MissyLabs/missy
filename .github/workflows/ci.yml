@@ -65,7 +65,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
     steps:
       - uses: actions/checkout@v4
 
@@ -114,7 +114,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
     steps:
       - uses: actions/checkout@v4
 
@@ -163,7 +163,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
     steps:
       - uses: actions/checkout@v4
 
@@ -222,7 +222,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
     steps:
       - uses: actions/checkout@v4
 
