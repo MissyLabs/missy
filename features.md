@@ -1,11 +1,12 @@
 # Missy — Feature Roadmap (24 candidates)
 
-> **Implementation status (updated):** **22 of 24 implemented, tested, and
+> **Implementation status (updated):** **23 of 24 implemented, tested, and
 > documented** (see `IMPLEMENTATION_STATUS.md` for the authoritative list and
-> per-feature detail). This includes the Tier-1 new core **F03 (On-Device
-> Retrieval Engine)**, built as a real working subsystem in `missy/retrieval/`.
-> Remaining: **F01 (Leyline P2P Agent Mesh)** and **F02 (Neuro-Symbolic
-> Planning Kernel)** — the two largest new-core efforts.
+> per-feature detail). This includes two of the three Tier-1 new cores —
+> **F03 (On-Device Retrieval Engine)** in `missy/retrieval/` and **F02
+> (Neuro-Symbolic Planning Kernel)** in `missy/planning/` — both built as real
+> working subsystems. Remaining: **F01 (Leyline P2P Agent Mesh)**, the largest
+> new-core effort (a full networking/identity/consensus subsystem).
 
 
 A grounded feature slate for Missy, derived from a full architecture pass over
@@ -29,7 +30,7 @@ hand-waving.
 | # | Feature | Tier | Current state |
 |---|---------|------|---------------|
 | F01 | Leyline P2P Agent Mesh | New core tech | Named in docs only; no code |
-| F02 | Neuro-Symbolic Planning Kernel | New core tech | Not present (linear tool loop today) |
+| F02 | Neuro-Symbolic Planning Kernel | New core tech | ✅ Done (missy/planning/: DAG compile + verified speculative execution) |
 | F03 | On-Device Retrieval Engine (local embeddings + RAG) | New core tech | ✅ Done (missy/retrieval/ + rag_query + CLI) |
 | F04 | GraphMemoryStore query surface | Activate unwired | ✅ DONE — graph_query tool + `missy graph` CLI + opt-in ingestion |
 | F05 | ModelRouter live wiring | Activate unwired | ✅ DONE — routed in single-turn path (opt-in) |
@@ -74,7 +75,15 @@ exists — the docs reference a "Leyline P2P network" but there is no code.
 that routes through `SubAgentRunner` semantics to a remote peer. Every
 cross-node action is a signed audit event chained into the same tamper-evident log.
 
-### F02. Neuro-Symbolic Planning Kernel
+### F02. Neuro-Symbolic Planning Kernel ✅ (implemented)
+**Status.** Built in `missy/planning/`: a typed tool-call DAG (`plan.py` with
+full validation + Kahn topological ordering + `${node.output}` ref
+resolution), a `ConditionChecker` verifier (`conditions.py`), a `PlanExecutor`
+with speculative parallel execution + pre/post-condition verification + failure
+propagation + `resume_state` (`executor.py`), and a `PlanCompiler` validation
+gate with a structured-output schema (`compiler.py`). 56 tests. See
+`IMPLEMENTATION_STATUS.md`.
+
 **What.** Replace the current linear "call tool → observe → call tool" loop with
 a planner that compiles a task into a **typed tool-call DAG**: nodes are tool
 invocations with declared pre/post-conditions, edges are data/ordering
