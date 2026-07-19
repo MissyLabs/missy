@@ -63,11 +63,13 @@ def _make_mock_client(
     command: str = "echo",
     url: str | None = None,
     alive: bool = True,
+    headers: dict | None = None,
 ) -> MagicMock:
     c = MagicMock()
     c.tools = tools if tools is not None else []
     c._command = command
     c._url = url
+    c._headers = headers
     c.is_alive.return_value = alive
     return c
 
@@ -354,7 +356,7 @@ class TestMcpHealthCheckAndRestart:
             mcp_mgr.health_check()
 
         # McpClient should have been called with the original command.
-        mock_cls.assert_called_once_with(name="srv", command="original-cmd", url=None)
+        mock_cls.assert_called_once_with(name="srv", command="original-cmd", url=None, headers=None)
 
     def test_health_check_all_alive_no_restarts(self, mcp_mgr: McpManager) -> None:
         alive1 = _make_mock_client(alive=True)

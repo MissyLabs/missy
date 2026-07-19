@@ -23,6 +23,49 @@ MCP_CONFIG_PATH = "~/.missy/mcp.json"
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
+def _resolve_secret(value: str) -> str:
+    """Resolve a ``vault://KEY`` or ``$ENV`` reference to its secret value.
+
+    A plain string is returned unchanged. Used so an MCP server's bearer token
+    / header value can be stored as a ``vault://`` reference rather than in
+    plaintext in ``mcp.json``. Falls back to the literal on any resolution error.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        from missy.security.vault import Vault
+
+        return Vault().resolve(value)
+    except Exception:
+        return value
+
+
+def _resolve_mcp_auth_headers(entry: dict) -> dict[str, str] | None:
+    """Build HTTP auth headers for an MCP server entry (F17).
+
+    Supported config keys (HTTP servers only):
+
+    * ``bearer_token``: value (``vault://…``-resolvable) sent as
+      ``Authorization: Bearer <token>``.
+    * ``headers``: a dict of extra headers; each value is ``vault://``/``$ENV``
+      resolved so credentials can live in the vault, not ``mcp.json``.
+
+    Returns ``None`` when no auth is configured (so a plain HTTP/stdio server is
+    unaffected).
+    """
+    if not isinstance(entry, dict) or not entry.get("url"):
+        return None
+    headers: dict[str, str] = {}
+    token = entry.get("bearer_token")
+    if token:
+        headers["Authorization"] = f"Bearer {_resolve_secret(str(token))}"
+    raw_headers = entry.get("headers")
+    if isinstance(raw_headers, dict):
+        for key, val in raw_headers.items():
+            headers[str(key)] = _resolve_secret(str(val))
+    return headers or None
+
+
 class McpManager:
     """Manages MCP server connections and exposes their tools to the agent.
 
@@ -106,7 +149,12 @@ class McpManager:
         for entry in servers:
             name = entry.get("name", "unknown")
             try:
-                self.add_server(name, command=entry.get("command"), url=entry.get("url"))
+                self.add_server(
+                    name,
+                    command=entry.get("command"),
+                    url=entry.get("url"),
+                    headers=_resolve_mcp_auth_headers(entry),
+                )
             except Exception as exc:
                 logger.warning("MCP: failed to connect %r: %s", name, exc)
 
@@ -140,19 +188,33 @@ class McpManager:
             if name in known:
                 continue
             try:
-                self.add_server(name, command=entry.get("command"), url=entry.get("url"))
+                self.add_server(
+                    name,
+                    command=entry.get("command"),
+                    url=entry.get("url"),
+                    headers=_resolve_mcp_auth_headers(entry),
+                )
                 logger.info("MCP: connected newly-configured server %r via health_check", name)
             except Exception as exc:
                 logger.warning("MCP: failed to connect newly-configured server %r: %s", name, exc)
 
     def add_server(
-        self, name: str, command: str | None = None, url: str | None = None
+        self,
+        name: str,
+        command: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> McpClient:
         """Connect to a new MCP server and persist the config.
 
         If the config entry for this server has a ``"digest"`` key, the
         tool manifest digest is verified after connection.  A mismatch
         causes the server to be disconnected and an error to be raised.
+
+        Args:
+            headers: Extra HTTP headers for an authenticated HTTP MCP server
+                (F17), e.g. ``{"Authorization": "Bearer …"}``. Ignored for
+                stdio (command) servers.
         """
         if not _SAFE_NAME_RE.match(name):
             raise ValueError(
@@ -161,7 +223,7 @@ class McpManager:
             )
         if "__" in name:
             raise ValueError(f"Invalid MCP server name: {name!r} (must not contain '__')")
-        client = McpClient(name=name, command=command, url=url)
+        client = McpClient(name=name, command=command, url=url, headers=headers)
         client.connect()
 
         # Digest verification (Feature 3)
@@ -297,10 +359,11 @@ class McpManager:
         if client:
             cmd = client._command
             url = client._url
+            headers = getattr(client, "_headers", None)
             client.disconnect()
             with self._lock:
                 self._clients.pop(name, None)
-            self.add_server(name, command=cmd, url=url)
+            self.add_server(name, command=cmd, url=url, headers=headers)
 
     def health_check(self) -> None:
         """Restart any dead MCP servers, and connect any newly-configured ones.

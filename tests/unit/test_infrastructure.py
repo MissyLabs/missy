@@ -486,9 +486,11 @@ class TestMcpClientIsAlive:
 
 
 class TestMcpClientConnect:
-    def test_connect_without_command_raises_not_implemented(self):
-        client = McpClient(name="x", url="http://localhost:8080")
-        with pytest.raises(NotImplementedError, match="HTTP MCP transport"):
+    def test_connect_without_transport_raises(self):
+        # HTTP transport is implemented (F17); a client with neither a command
+        # nor a url is the only remaining "no transport" error case.
+        client = McpClient(name="x")
+        with pytest.raises(RuntimeError, match="requires either a command or a url"):
             client.connect()
 
     def test_connect_with_command_starts_process(self):
@@ -662,7 +664,7 @@ class TestMcpClientNotify:
 # ---------------------------------------------------------------------------
 
 
-def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
+def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None, headers=None):
     client = MagicMock(
         spec=[
             "name",
@@ -672,6 +674,7 @@ def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
             "disconnect",
             "_command",
             "_url",
+            "_headers",
             "call_tool",
             "tool_annotations",
         ]
@@ -682,6 +685,7 @@ def _mock_client(name="srv", tools=None, alive=True, command="echo", url=None):
     client.is_alive.return_value = alive
     client._command = command
     client._url = url
+    client._headers = headers
     return client
 
 
@@ -742,7 +746,7 @@ class TestMcpManagerConnectAll:
         bad_client = MagicMock()
         bad_client.connect.side_effect = RuntimeError("cannot connect")
 
-        def client_factory(name, command, url):
+        def client_factory(name, command, url, headers=None):
             if name == "bad":
                 return bad_client
             return good_client

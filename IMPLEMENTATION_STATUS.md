@@ -3,7 +3,30 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-**Done so far: F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F18, F19, F20, F21, F22, F23, F24** (20 of 24).
+**Done so far: F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (21 of 24).
+
+## ✅ Implemented — batch 17 (branch `feat/features-md-batch-17`)
+
+### F17 — MCP server authentication + HTTP(S) transport
+- `McpClient` gains a real **Streamable-HTTP transport** alongside the existing
+  stdio one: `McpClient(name, url=..., headers=...)` initializes an `httpx.Client`
+  and performs the JSON-RPC `initialize`/`tools/list`/`tools/call` handshake over
+  HTTP POST. Handles both `application/json` and `text/event-stream` (SSE)
+  response bodies, captures and echoes the `MCP-Session-Id` header on subsequent
+  requests, and surfaces `401`/`403` as a clear `RuntimeError("MCP HTTP auth
+  failed …")`. `is_alive()`/`disconnect()` cover the HTTP client.
+- **Authentication:** `manager._resolve_mcp_auth_headers(entry)` builds the auth
+  header set from an `mcp.json` entry — `bearer_token` → `Authorization: Bearer …`,
+  plus arbitrary `headers` — with every value passed through
+  `_resolve_secret()` so `vault://KEY` / `$ENV` references resolve at connect
+  time (plain values pass through unchanged; never raises on the hot path).
+  Wired into both `connect_all()` and `_connect_new_servers_from_config()`, and
+  preserved across `restart_server()` (a restarted HTTP server keeps its auth).
+- **Tests:** `tests/mcp/test_http_transport.py` — 16 tests (HTTP connect/list/call,
+  session-id capture+echo, auth-header install, 401→error, SSE parsing, disconnect,
+  missing-transport error, auth resolution incl. vault, manager wiring). Existing
+  MCP suite updated for the new `headers=` constructor/`add_server` contract
+  (409 passing total).
 
 ## ✅ Implemented — batch 2 (branch `feat/features-md-batch-2`)
 

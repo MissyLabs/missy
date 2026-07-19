@@ -77,10 +77,36 @@ class TestMcpClientConnect:
         assert "ANTHROPIC_API_KEY" not in call_kwargs["env"]
         assert "PATH" in call_kwargs["env"]
 
-    def test_connect_without_command_raises(self):
-        c = McpClient(name="test", url="http://localhost:3000")
-        with pytest.raises(NotImplementedError, match="HTTP MCP transport"):
+    def test_connect_with_neither_command_nor_url_raises(self):
+        c = McpClient(name="test")
+        with pytest.raises(RuntimeError, match="requires either a command or a url"):
             c.connect()
+
+    def test_connect_url_uses_http_transport(self):
+        # HTTP transport is now implemented (F17): a url client initializes an
+        # httpx client and performs the JSON-RPC `initialize` handshake rather
+        # than raising NotImplementedError.
+        from unittest.mock import MagicMock
+
+        fake_http = MagicMock()
+
+        def _post(url, json=None, headers=None, timeout=None):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.headers = {"Content-Type": "application/json"}
+            resp.raise_for_status = MagicMock()
+            resp.json.return_value = {
+                "jsonrpc": "2.0",
+                "id": json.get("id"),
+                "result": {"protocolVersion": "2024-11-05"},
+            }
+            return resp
+
+        fake_http.post.side_effect = _post
+        with patch("httpx.Client", return_value=fake_http):
+            c = McpClient(name="test", url="http://localhost:3000")
+            c.connect()
+        assert c.is_alive() is True
 
 
 class TestMcpClientRpc:
