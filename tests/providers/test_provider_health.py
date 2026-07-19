@@ -113,3 +113,45 @@ class TestClassifyProviderErrorAcpxBlindSpot:
         # confirms this is a genuine classification gap, not a hypothetical.
         assert "not logged in" in str(real_exc)
         assert classify_provider_error(real_exc) == ProviderFailureClass.UNKNOWN
+
+
+class TestUserFacingProviderError:
+    """A provider error shown to a chat user must never leak the raw text."""
+
+    def test_content_policy_error_detected(self):
+        from missy.providers.health import is_content_policy_error
+
+        exc = ProviderError(
+            "openai-codex stream error: This content was flagged for possible "
+            "cybersecurity risk. ... join the Trusted Access for Cyber program: "
+            "https://chatgpt.com/cyber"
+        )
+        assert is_content_policy_error(exc) is True
+
+    def test_operational_error_not_content_policy(self):
+        from missy.providers.health import is_content_policy_error
+
+        assert is_content_policy_error(ProviderError("request timed out")) is False
+
+    def test_content_policy_message_is_clean_refusal(self):
+        from missy.providers.health import user_facing_provider_error
+
+        exc = ProviderError(
+            "openai-codex stream error: flagged for possible cybersecurity risk; "
+            "Trusted Access for Cyber: https://chatgpt.com/cyber"
+        )
+        msg = user_facing_provider_error(exc)
+        # No leak of provider name, URL, or raw error text.
+        assert "openai" not in msg.lower()
+        assert "http" not in msg.lower()
+        assert "cyber" not in msg.lower()
+        assert "not able to help" in msg.lower()
+
+    def test_operational_message_is_generic_and_leak_free(self):
+        from missy.providers.health import user_facing_provider_error
+
+        exc = ProviderError("openai-codex request failed: The read operation timed out")
+        msg = user_facing_provider_error(exc)
+        assert "openai" not in msg.lower()
+        assert "timed out" not in msg.lower()
+        assert "trouble reaching my model" in msg.lower()

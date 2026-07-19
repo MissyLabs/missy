@@ -3120,10 +3120,18 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             None, _discord_agent.run, enriched_prompt, session_id
                         )
                     except ProviderError as exc:
-                        response = f"Sorry, I encountered a provider error: {exc}"
+                        # Never forward the raw provider exception to Discord --
+                        # it can name the backend, embed a third party's
+                        # marketing URL (e.g. openai-codex's cyber-program
+                        # link), or leak internal error detail. Log the full
+                        # error for operators; show the user a clean message.
+                        from missy.providers.health import user_facing_provider_error
+
+                        logger.warning("Discord provider error: %s", exc)
+                        response = user_facing_provider_error(exc)
                     except Exception as exc:
                         logger.exception("Discord agent error: %s", exc)
-                        response = f"Sorry, an error occurred: {exc}"
+                        response = "Sorry, an unexpected error occurred. Please try again."
                     finally:
                         typing_stop.set()
                         with contextlib.suppress(Exception):
