@@ -85,7 +85,47 @@ _MAX_TOOL_RESULT_CHARS = 200_000
 # tool-loop task is left genuinely incomplete when this happens. See the
 # tool-specific validation harness's SH-003/SELF-004/INCUS-005/INCUS-006
 # findings (both acpx and openai-codex).
-_PLACEHOLDER_ARTIFACT_RE = re.compile(r"^\[(?:Called tool: [^\]]*|Tool call|No response text)\]$")
+# NOTE: ``Called tool:`` uses ``.*`` under re.DOTALL, NOT ``[^\]]*``. A
+# provider (openai-codex/gpt-5.5) narrates a call as
+# ``[Called tool: shell_exec with args: {...}]`` where the args JSON very
+# commonly contains a ``]`` (list slicing ``[:50]``, indexing, a regex char
+# class, ...) and newlines. With the old ``[^\]]*`` the match stopped at the
+# first inner ``]`` so the anchored full-string match failed and the whole
+# raw narration was treated as a legitimate reply and forwarded to the
+# channel (Discord). ``.*`` + DOTALL + the ``\]$`` end-anchor matches the
+# entire artifact regardless of inner brackets/newlines.
+_PLACEHOLDER_ARTIFACT_RE = re.compile(
+    r"^\[(?:Called tool:.*|Tool call|No response text)\]$", re.DOTALL
+)
+
+# Defense-in-depth sanitizer (applied to the final user-facing text in
+# run()): even after the placeholder/leaked-tag *retry* guards below are
+# exhausted, the runtime must NEVER forward raw tool-call narration to a
+# channel. This strips ``[Called tool: <name> with args: {<json>}]`` (json may
+# contain ``]``/newlines), the args-less ``[Called tool: <names>]`` form, and
+# ``[Tool call]`` -- whether the artifact is the entire message or embedded in
+# a larger one -- while leaving genuine prose that merely contains brackets
+# (e.g. "the slice a[:50]") untouched.
+_LEAKED_TOOL_CALL_NARRATION_RE = re.compile(
+    r"\[Called tool:.*?\}\s*\]"  # with-args form: ends at the first "}]"
+    r"|\[Called tool:[^\]{}]*\]"  # names-only form (no braces/brackets inside)
+    r"|\[Tool call\]",
+    re.DOTALL,
+)
+
+
+def _strip_leaked_tool_call_narration(text: str) -> str:
+    """Remove leaked tool-call narration artifacts from user-facing text.
+
+    Last line of defense so a raw ``[Called tool: ... with args: {...}]`` (or
+    the args-less / ``[Tool call]`` variants) can never reach a channel, even
+    if every upstream retry guard was exhausted. Idempotent; a no-op for text
+    that contains no such artifact.
+    """
+    if "[Called tool:" not in text and "[Tool call]" not in text:
+        return text
+    return _LEAKED_TOOL_CALL_NARRATION_RE.sub("", text).strip()
+
 
 _MAX_PLACEHOLDER_RETRIES = 1
 
@@ -890,6 +930,26 @@ class AgentRuntime:
                 )
             logger.exception("Unexpected error during completion")
             raise ProviderError(f"Unexpected error during completion: {exc}") from exc
+
+        # Last line of defense against a provider narrating a tool call as
+        # plain text (e.g. openai-codex emitting
+        # ``[Called tool: shell_exec with args: {...}]``). The tool loop's
+        # placeholder/leaked-tag retry guards try to elicit a real answer, but
+        # once those are exhausted they return the raw text as-is -- so strip
+        # any residual narration here, before it is saved to history, fed to
+        # learnings/shaping, or forwarded to a channel. Applied unconditionally
+        # so it protects every channel (Discord/CLI/voice), not just one.
+        if final_response:
+            _cleaned = _strip_leaked_tool_call_narration(final_response)
+            if not _cleaned:
+                # The entire reply was leaked narration and every retry guard
+                # was already exhausted; forward a safe fallback rather than ""
+                # or the raw leak.
+                _cleaned = (
+                    "I ran a tool but didn't produce any text to show for it. "
+                    "Could you rephrase or tell me what you'd like me to do next?"
+                )
+            final_response = _cleaned
 
         # Record turn to request tracker for pattern detection.
         self._track_request(user_input, sid, all_tool_names_used, provider.name)
