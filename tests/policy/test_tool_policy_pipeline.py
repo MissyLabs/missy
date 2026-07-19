@@ -224,3 +224,32 @@ def test_new_agent_tools_are_reachable_over_discord():
     assert set(decision.tools) == {"rag_query", "graph_query", "video_storyboard"}
     # A GUI tool is still excluded from discord mode (fix didn't widen scope).
     assert "x11_screenshot" not in decision.tools
+
+
+def test_mcp_namespaced_tools_reachable_in_discord_mode():
+    """Regression: operator-configured MCP tools (server__tool) must survive
+    the Discord/messaging capability-mode filter.
+
+    The strict MISSY_DISCORD_TOOLS allowlist previously dropped any namespaced
+    MCP tool, so over Discord the agent reported it had no such tool and the
+    MCPDEEP-*/MCPHTTP-004 surface was unreachable. The messaging profile now
+    allows the ``*__*`` namespace glob (MCP tools carry their own reference
+    monitor: digest pinning + approval gate + injection scanning).
+    """
+    layers = build_configured_tool_policy_layers(capability_mode="discord")
+    decision = resolve_tool_policy(
+        ["httptest__echo", "server__do_thing", "calculator", "x11_screenshot"], layers
+    )
+    assert "httptest__echo" in decision.tools
+    assert "server__do_thing" in decision.tools
+    assert "calculator" in decision.tools  # built-ins still allowed
+    assert "x11_screenshot" not in decision.tools  # host-GUI still excluded
+
+
+def test_missy_discord_tools_tuple_has_no_glob_entries():
+    """MISSY_DISCORD_TOOLS is passed elsewhere as an available-tools list
+    (diagnostics/cli), so it must stay a clean list of real tool names — the
+    MCP glob lives in the messaging *profile spec*, not this tuple."""
+    from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
+
+    assert all("*" not in name for name in MISSY_DISCORD_TOOLS)
