@@ -138,7 +138,18 @@ class SentenceTransformerEmbedder:
             ) from exc
         self._model_name = model_name
         self._model = SentenceTransformer(model_name)
-        self._dimension = int(self._model.get_sentence_embedding_dimension())
+        # sentence-transformers >=5.x renamed get_sentence_embedding_dimension()
+        # to get_embedding_dimension(); prefer the new name, fall back for
+        # older installs, and derive from a probe encode as a last resort.
+        get_dim = getattr(self._model, "get_embedding_dimension", None) or getattr(
+            self._model, "get_sentence_embedding_dimension", None
+        )
+        if get_dim is not None:
+            self._dimension = int(get_dim())
+        else:  # pragma: no cover - defensive
+            self._dimension = int(
+                np.asarray(self._model.encode(["x"], convert_to_numpy=True)).shape[-1]
+            )
 
     @property
     def dimension(self) -> int:

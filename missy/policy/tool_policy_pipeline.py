@@ -97,12 +97,25 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     # surface unreachable and drove the model to fabricate results by hand.
     "video_generate",
     "video_edit",
+    # video_storyboard (F16) orchestrates video_generate/video_edit under the
+    # hood (generate -> crossfade -> title -> mux); it is strictly the
+    # composition of two tools already exposed here, grants no new capability,
+    # and its absence made the STORY-* Discord surface unreachable.
+    "video_storyboard",
     # Read-only / policy-inheriting agent tools that a Discord user legitimately
     # needs: memory retrieval is read-only, and delegate_task sub-agents inherit
     # (never widen) the parent's capability_mode/policy.
     "memory_search",
     "memory_describe",
     "memory_expand",
+    # rag_query (F03) is an on-device retrieval tool and graph_query (F04) is a
+    # read-only knowledge-graph query -- both analogous in scope to the memory_*
+    # tools above (retrieval/read, filesystem policy still gates any file the
+    # rag index reads). Registered as built-ins but previously absent here, so
+    # the RAG-*/GRAPH-* Discord surface was unreachable and the model correctly
+    # reported it had no such tool.
+    "rag_query",
+    "graph_query",
     "delegate_task",
 )
 

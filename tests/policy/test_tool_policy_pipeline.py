@@ -199,3 +199,28 @@ def test_collect_tool_policy_groups_extends_builtin_groups():
 
     assert groups["project"] == ("file_read",)
     assert decision.tools == ("file_read",)
+
+
+def test_new_agent_tools_are_reachable_over_discord():
+    """Regression: F03/F04/F16 tools must be in the Discord allowlist.
+
+    rag_query (F03), graph_query (F04), and video_storyboard (F16) are
+    registered as built-in tools, but the ``discord`` capability_mode only
+    exposes tools listed in MISSY_DISCORD_TOOLS. They were originally omitted,
+    so the agent correctly reported "I don't have a rag_query tool" over
+    Discord and the RAG-*/GRAPH-*/STORY-* validation surface was unreachable.
+    Guard the exposure so it can't silently regress.
+    """
+    from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
+
+    for name in ("rag_query", "graph_query", "video_storyboard"):
+        assert name in MISSY_DISCORD_TOOLS, f"{name} missing from MISSY_DISCORD_TOOLS"
+
+    # And they actually survive the discord capability-mode policy resolution.
+    layers = build_configured_tool_policy_layers(capability_mode="discord")
+    decision = resolve_tool_policy(
+        ["rag_query", "graph_query", "video_storyboard", "x11_screenshot"], layers
+    )
+    assert set(decision.tools) == {"rag_query", "graph_query", "video_storyboard"}
+    # A GUI tool is still excluded from discord mode (fix didn't widen scope).
+    assert "x11_screenshot" not in decision.tools
