@@ -861,7 +861,9 @@ class TestPlaceholderArtifactRetry:
         assert provider.complete_with_tools.call_count == 3
         assert result == "The answer is 4."
 
-    def test_placeholder_exhausted_retries_returns_placeholder_with_warning(self):
+    def test_placeholder_exhausted_retries_does_not_leak_placeholder(self):
+        """On exhausted retries the runtime warns AND never forwards the raw
+        placeholder artifact to the caller/channel (it is sanitized away)."""
         provider = _make_provider()
         calc_tool = _make_mock_tool("calculator")
         tool_reg = _make_tool_registry([calc_tool])
@@ -887,7 +889,9 @@ class TestPlaceholderArtifactRetry:
         ]
         assert len(unresolved) == 1
         assert provider.complete_with_tools.call_count == 3
-        assert result == "[Tool call]"
+        # The raw internal artifact must NOT reach the caller/channel.
+        assert "[Tool call]" not in result
+        assert "Called tool" not in result
 
     def test_real_response_never_triggers_placeholder_retry(self):
         """A genuine reply that merely mentions tool-call-like text mid
@@ -916,6 +920,58 @@ class TestPlaceholderArtifactRetry:
         assert retry_events == []
         assert provider.complete_with_tools.call_count == 2
         assert result == "I called tool: calculator and got 4."
+
+    def test_narrated_tool_call_with_bracket_in_args_never_leaks_to_channel(self):
+        """The reported Discord leak: openai-codex narrates a call as
+        ``[Called tool: shell_exec with args: {...}]`` where the args JSON
+        contains a ``]`` (e.g. ``[:50]``). The old ``[^\\]]*`` placeholder
+        regex stopped at that inner bracket, so the whole raw narration was
+        treated as a real reply and forwarded. It must not reach the caller.
+        """
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        leak = (
+            '[Called tool: shell_exec with args: {"cmd": "python3 - <<\'PY\'\\n'
+            "for p in glob.glob('/home/missy/*/'+pat, recursive=True)[:50]:\\n"
+            '    print(p)\\nPY", "timeout": 120}]'
+        )
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator"),
+            _make_stop_response(leak),
+            _make_stop_response(leak),  # retry also leaks -> exhausted
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            result = rt.run("find the EVE SDE files")
+
+        assert "Called tool" not in result
+        assert "shell_exec" not in result
+        assert "with args" not in result
+
+    def test_embedded_narration_stripped_but_real_prose_kept(self):
+        """A leaked narration trailing genuine prose is removed while the prose
+        (including innocent brackets) survives."""
+        from missy.agent.runtime import _strip_leaked_tool_call_narration
+
+        text = (
+            "Here are the first 50 matches from the slice a[:50].\n\n"
+            '[Called tool: shell_exec with args: {"cmd": "ls [x]"}]'
+        )
+        cleaned = _strip_leaked_tool_call_narration(text)
+        assert cleaned == "Here are the first 50 matches from the slice a[:50]."
+
+    def test_strip_narration_is_noop_for_clean_text(self):
+        from missy.agent.runtime import _strip_leaked_tool_call_narration
+
+        clean = "The list slice a[:50] returns the first 50 items."
+        assert _strip_leaked_tool_call_narration(clean) == clean
 
 
 class TestFabricationRetryOnZeroToolObservation:
