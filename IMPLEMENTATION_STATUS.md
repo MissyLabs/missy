@@ -3,7 +3,40 @@
 Tracks which of the 24 candidates in `features.md` are actually implemented in
 the tree (with tests + docs, no placeholders) versus scoped-only.
 
-**Done so far: F03, F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (22 of 24).
+**Done so far: F02, F03, F04, F05, F06, F07, F08, F09, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24** (23 of 24). Remaining: **F01** (Leyline P2P Agent Mesh).
+
+## ✅ Implemented — batch F02 (branch `feat/features-md-f02-planning`)
+
+### F02 — Neuro-Symbolic Planning Kernel
+A symbolic planner + verifier above the LLM, in the new `missy/planning/`
+package — a genuinely new execution model, not the linear
+call-tool→observe→call-tool loop:
+- **`plan.py`** — the typed tool-call DAG model. `ToolNode` (tool + args +
+  `depends_on` + pre/post `Condition`s), `Plan` with full validation (unique
+  ids, resolvable deps, condition targets, **acyclicity** via Kahn's
+  algorithm) and topological ordering. `${node.output[.key]}` argument
+  references imply dependencies and resolve against upstream results
+  (`resolve_args`, type-preserving for whole-value refs).
+- **`conditions.py`** — `ConditionChecker`, the verifier half: typed
+  assertions (`success`, `output_contains/equals/not_empty/matches/is_number`,
+  with `node` targeting and `negate`), each returning `(ok, reason)`.
+- **`executor.py`** — `PlanExecutor`: dependency-ordered execution over the
+  real `ToolRegistry` with **speculative parallelism** (independent ready
+  nodes run concurrently, capped at `MAX_CONCURRENT=3` like `SubAgentRunner`).
+  Each node checks pre-conditions → runs the tool → verifies post-conditions
+  before dependents become eligible; a failed/raising/violating node fails and
+  its dependents are skipped as unreachable rather than run on bad inputs. A
+  raising tool is contained. `resume_state` seeds already-completed nodes so an
+  interrupted plan resumes without re-running them (the checkpoint hook).
+- **`compiler.py`** — `PlanCompiler`: the single validation gate. Compiles a
+  plan dict (deterministic path) or an injected `planner` callable's proposal
+  (LLM in production, ideally via F09's `StructuredOutputRunner`), verifying
+  every node's `tool` against the registered tool set and all DAG invariants
+  up front. `plan_schema()` returns the constrained JSON schema a
+  structured-output planner should target.
+- **Tests:** `tests/planning/` (plan/validation/refs, conditions, executor
+  incl. real concurrency + failure propagation + resume, compiler) — 56 tests,
+  ~99% package coverage. Added to CI shard 1.
 
 ## ✅ Implemented — batch F03 (branch `feat/features-md-f03-retrieval`)
 

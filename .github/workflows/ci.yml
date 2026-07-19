@@ -59,7 +59,7 @@ jobs:
       matrix:
         shard:
           - id: 1
-            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability tests/planning"
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
@@ -108,7 +108,7 @@ jobs:
       matrix:
         shard:
           - id: 1
-            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability tests/planning"
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
@@ -157,7 +157,7 @@ jobs:
       matrix:
         shard:
           - id: 1
-            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability tests/planning"
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
@@ -216,7 +216,7 @@ jobs:
       matrix:
         shard:
           - id: 1
-            dirs: "tests/agent tests/integration tests/scheduler tests/observability"
+            dirs: "tests/agent tests/integration tests/scheduler tests/observability tests/planning"
           - id: 2
             dirs: "tests/vision tests/cli tests/memory tests/config tests/core"
           - id: 3
