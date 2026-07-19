@@ -66,3 +66,40 @@ def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
     if any(marker in message for marker in _TIMEOUT_MARKERS):
         return ProviderFailureClass.TIMEOUT
     return ProviderFailureClass.UNKNOWN
+
+
+# Markers for a provider *content-policy / safety* refusal (as opposed to an
+# operational failure). These are message fragments the active backends emit
+# when the model declines on content grounds -- e.g. openai-codex/gpt-5.5's
+# "This content was flagged for possible cybersecurity risk ... Trusted Access
+# for Cyber program".
+_CONTENT_POLICY_MARKERS = (
+    "flagged for possible",
+    "cybersecurity risk",
+    "content policy",
+    "content_policy",
+    "trusted access",
+    "usage policies",
+    "safety system",
+    "content management policy",
+)
+
+
+def is_content_policy_error(exc: BaseException) -> bool:
+    """True if *exc* is a provider content-policy/safety refusal."""
+    message = str(exc).lower()
+    return any(marker in message for marker in _CONTENT_POLICY_MARKERS)
+
+
+def user_facing_provider_error(exc: BaseException) -> str:
+    """Return a clean, channel-safe message for a provider error.
+
+    The raw provider exception must never reach an end user on a chat channel:
+    it can name the underlying provider, embed a third party's marketing URL
+    (openai-codex's cyber-program link), or expose internal error detail. The
+    full error is still logged/audited for operators; this only governs what a
+    Discord/voice user sees.
+    """
+    if is_content_policy_error(exc):
+        return "I'm not able to help with that particular request."
+    return "Sorry — I'm having trouble reaching my model right now. Please try again in a moment."
