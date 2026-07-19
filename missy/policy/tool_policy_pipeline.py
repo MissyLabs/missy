@@ -159,10 +159,23 @@ DEFAULT_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Namespaced MCP tools use a ``server__tool`` (double-underscore) naming
+# convention (McpManager) that no built-in tool uses. The ``messaging``
+# (Discord) profile allows them via this glob so operator-configured MCP
+# servers are actually reachable over Discord: unlike the browser_*/x11_*/
+# atspi_* host-GUI tools the curated allowlist deliberately excludes, an MCP
+# tool grants no host desktop control, is something the operator explicitly
+# connected (`missy mcp add`), and still passes through the same reference
+# monitor as any tool — digest pinning, the requires_approval ApprovalGate for
+# destructive tools, and output injection scanning. Without this, a namespaced
+# MCP tool was filtered out of the Discord tool set and the agent (correctly,
+# given the filter) reported it had no such tool.
+_MCP_NAMESPACED_GLOB = "*__*"
+
 PROFILE_SPECS: dict[ToolPolicyProfile, tuple[str, ...]] = {
     "minimal": MISSY_SAFE_CHAT_TOOLS,
     "coding": ("group:coding", "browser_*", "x11_*", "atspi_*"),
-    "messaging": MISSY_DISCORD_TOOLS,
+    "messaging": (*MISSY_DISCORD_TOOLS, _MCP_NAMESPACED_GLOB),
     "full": ("*",),
 }
 
