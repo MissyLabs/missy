@@ -24,14 +24,57 @@ Example::
 
 from __future__ import annotations
 
+import copy
 import logging
+import re
 import threading
+from typing import Any
 
 from missy.core.events import AuditEvent, event_bus
 
-from .base import BaseSkill, SkillResult
+from .base import BaseSkill, SkillPermissions, SkillResult
 
 logger = logging.getLogger(__name__)
+
+_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_VERSION_RE = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+_MAX_DESCRIPTION_CHARS = 500
+_GENERIC_SKILL_ERROR = "Skill execution failed; sensitive details were withheld."
+
+
+def _safe_text(value: object) -> str:
+    """Return bounded censored text, failing closed if censoring malfunctions."""
+    try:
+        from missy.security.censor import censor_response
+
+        result = censor_response(str(value))
+        if not isinstance(result, str):
+            raise TypeError("censor returned a non-string")
+        return result[:2_000]
+    except Exception:
+        return _GENERIC_SKILL_ERROR
+
+
+def _validate_metadata(skill: BaseSkill) -> None:
+    name = getattr(skill, "name", None)
+    if not isinstance(name, str) or not _SKILL_NAME_RE.fullmatch(name):
+        raise ValueError("Skill name must match ^[a-z][a-z0-9_]{0,63}$ (lowercase ASCII identity)")
+    description = getattr(skill, "description", None)
+    if (
+        not isinstance(description, str)
+        or len(description) > _MAX_DESCRIPTION_CHARS
+        or any(
+            ord(ch) < 32 or ch in "\x7f\u202a\u202b\u202d\u202e\u2066\u2067\u2068\u2069"
+            for ch in description
+        )
+    ):
+        raise ValueError("Skill description must be bounded, single-line, inert text")
+    version = getattr(skill, "version", None)
+    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+        raise ValueError("Skill version must be a canonical MAJOR.MINOR.PATCH value")
+    permissions = getattr(skill, "permissions", None)
+    if not isinstance(permissions, SkillPermissions):
+        raise TypeError("Skill permissions must be a SkillPermissions value")
 
 
 class SkillRegistry:
@@ -43,6 +86,9 @@ class SkillRegistry:
 
     def __init__(self) -> None:
         self._skills: dict[str, BaseSkill] = {}
+        self._active: dict[str, int] = {}
+        self._lock = threading.RLock()
+        self._execution_local = threading.local()
 
     # ------------------------------------------------------------------
     # Registration
@@ -51,13 +97,32 @@ class SkillRegistry:
     def register(self, skill: BaseSkill) -> None:
         """Add *skill* to the registry keyed by :attr:`~.base.BaseSkill.name`.
 
-        A previous registration under the same name is silently replaced.
+        A previous registration under the same name is rejected. Re-registering
+        the same object is an idempotent no-op.
 
         Args:
             skill: The skill instance to register.
         """
-        self._skills[skill.name] = skill
+        if not isinstance(skill, BaseSkill):
+            raise TypeError("skill must be a BaseSkill instance")
+        _validate_metadata(skill)
+        with self._lock:
+            existing = self._skills.get(skill.name)
+            if existing is skill:
+                return
+            if existing is not None:
+                raise ValueError(f"Skill {skill.name!r} is already registered")
+            self._skills[skill.name] = skill
         logger.debug("Registered skill %r (%s).", skill.name, type(skill).__name__)
+
+    def unregister(self, name: str) -> None:
+        """Remove an idle skill atomically; active executions must quiesce first."""
+        with self._lock:
+            if name not in self._skills:
+                raise KeyError(f"No skill registered under the name {name!r}.")
+            if self._active.get(name, 0):
+                raise RuntimeError(f"Skill {name!r} has active executions")
+            del self._skills[name]
 
     # ------------------------------------------------------------------
     # Queries
@@ -72,7 +137,8 @@ class SkillRegistry:
         Returns:
             The :class:`~.base.BaseSkill` instance, or ``None`` if not found.
         """
-        return self._skills.get(name)
+        with self._lock:
+            return self._skills.get(name)
 
     def list_skills(self) -> list[str]:
         """Return a sorted list of all registered skill names.
@@ -80,7 +146,8 @@ class SkillRegistry:
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
-        return sorted(self._skills)
+        with self._lock:
+            return sorted(self._skills)
 
     # ------------------------------------------------------------------
     # Execution
@@ -106,7 +173,18 @@ class SkillRegistry:
             A :class:`~.base.SkillResult` from the skill, or a failure result
             when the skill is not found or raises an unhandled exception.
         """
-        skill = self._skills.get(name)
+        stack = list(getattr(self._execution_local, "stack", ()))
+        if name in stack or len(stack) >= 16:
+            error_msg = f"Recursive skill execution denied for {name!r}."
+            self._emit_event(name, session_id, task_id, "error", error_msg)
+            return SkillResult(success=False, output=None, error=error_msg)
+        stack.append(name)
+        self._execution_local.stack = stack
+
+        with self._lock:
+            skill = self._skills.get(name)
+            if skill is not None:
+                self._active[name] = self._active.get(name, 0) + 1
         if skill is None:
             error_msg = f"No skill registered under the name {name!r}."
             logger.warning(error_msg)
@@ -117,13 +195,23 @@ class SkillRegistry:
                 result="error",
                 detail_msg=error_msg,
             )
+            stack.pop()
+            self._execution_local.stack = stack
             return SkillResult(success=False, output=None, error=error_msg)
 
         try:
-            skill_result = skill.execute(**kwargs)
+            try:
+                call_kwargs: dict[str, Any] = copy.deepcopy(kwargs)
+            except Exception:
+                error_msg = "Skill arguments could not be safely snapshotted."
+                self._emit_event(name, session_id, task_id, "error", error_msg, skill=skill)
+                return SkillResult(success=False, output=None, error=error_msg)
+            skill_result = skill.execute(**call_kwargs)
+            if not isinstance(skill_result, SkillResult):
+                raise TypeError("Skill returned an invalid result type")
         except Exception as exc:
-            error_msg = str(exc)
-            logger.exception("Skill %r raised an unhandled exception.", name)
+            error_msg = _safe_text(exc)
+            logger.error("Skill %r raised an exception; details withheld.", name)
             self._emit_event(
                 skill_name=name,
                 session_id=session_id,
@@ -132,14 +220,33 @@ class SkillRegistry:
                 detail_msg=error_msg,
             )
             return SkillResult(success=False, output=None, error=error_msg)
+        finally:
+            stack.pop()
+            self._execution_local.stack = stack
+            with self._lock:
+                remaining = self._active.get(name, 1) - 1
+                if remaining > 0:
+                    self._active[name] = remaining
+                else:
+                    self._active.pop(name, None)
 
         event_result = "allow" if skill_result.success else "error"
+        if not skill_result.success:
+            # Failure output is not a second public error channel. Built-ins
+            # may use it internally for diagnostics, but registry publication
+            # normalises it away and censors the bounded error string.
+            skill_result = SkillResult(
+                success=False,
+                output=None,
+                error=_safe_text(skill_result.error or "Skill returned failure."),
+            )
         self._emit_event(
             skill_name=name,
             session_id=session_id,
             task_id=task_id,
             result=event_result,
             detail_msg=skill_result.error or "",
+            skill=skill,
         )
         return skill_result
 
@@ -154,6 +261,7 @@ class SkillRegistry:
         task_id: str,
         result: str,
         detail_msg: str,
+        skill: BaseSkill | None = None,
     ) -> None:
         """Publish a skill audit event to the global event bus.
 
@@ -165,13 +273,23 @@ class SkillRegistry:
             detail_msg: Human-readable description.
         """
         try:
+            safe_msg = _safe_text(detail_msg) if detail_msg else ""
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
                 event_type="skill.execute",
-                category="plugin",
+                category="skill",
                 result=result,  # type: ignore[arg-type]
-                detail={"skill": skill_name, "message": detail_msg},
+                detail={
+                    "skill": skill_name,
+                    "message": safe_msg,
+                    "subsystem": "skill",
+                    "implementation": type(skill).__qualname__ if skill is not None else None,
+                    "version": getattr(skill, "version", None),
+                    "origin": getattr(type(skill), "__module__", None)
+                    if skill is not None
+                    else None,
+                },
             )
             event_bus.publish(event)
         except Exception:

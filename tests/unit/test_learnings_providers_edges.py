@@ -403,13 +403,14 @@ class TestProviderRegistryRegisterResolve:
         registry = ProviderRegistry()
         assert registry.get("does-not-exist") is None
 
-    def test_register_replaces_previous(self):
+    def test_register_rejects_shadowing(self):
         registry = ProviderRegistry()
         old = _fake_provider("v1")
         new = _fake_provider("v2")
         registry.register("slot", old)
-        registry.register("slot", new)
-        assert registry.get("slot") is new
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register("slot", new)
+        assert registry.get("slot") is old
 
     def test_resolve_with_fallback_pattern(self):
         """Callers may implement fallback by trying get() then falling back to
@@ -461,8 +462,9 @@ class TestProviderRegistrySwitchDefault:
         p = _fake_provider("flaky")
         p.is_available.side_effect = ConnectionError("network unreachable")
         registry.register("flaky", p)
-        with pytest.raises(ValueError, match="availability check failed"):
+        with pytest.raises(ValueError, match="probe timed out") as caught:
             registry.set_default("flaky")
+        assert "network unreachable" not in str(caught.value)
 
     def test_switching_default_provider(self):
         registry = ProviderRegistry()
@@ -631,9 +633,9 @@ class TestFromConfig:
                 )
             }
         )
-        ProviderRegistry.from_config(config)
-        # The hostname from base_url must appear in provider_allowed_hosts
-        assert "my-ollama-host" in config.network.provider_allowed_hosts
+        registry = ProviderRegistry.from_config(config)
+        assert "my-ollama-host" in registry.effective_provider_hosts
+        assert "my-ollama-host" not in config.network.provider_allowed_hosts
 
     def test_base_url_host_not_duplicated(self):
         host = "ollama.local"
@@ -648,8 +650,8 @@ class TestFromConfig:
             }
         )
         config.network.provider_allowed_hosts = [host]
-        ProviderRegistry.from_config(config)
-        count = config.network.provider_allowed_hosts.count(host)
+        registry = ProviderRegistry.from_config(config)
+        count = registry.effective_provider_hosts.count(host)
         assert count == 1, f"Host duplicated: found {count} times"
 
 

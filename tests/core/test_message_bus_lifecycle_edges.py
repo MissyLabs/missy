@@ -24,6 +24,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from missy.core.bus_topics import AGENT_RUN_START
 from missy.core.message_bus import (
     BusMessage,
@@ -372,35 +374,15 @@ class TestBusMessageFieldContract:
 
         assert received[0] is msg
 
-    def test_priority_above_documented_max_sorts_before_lower_values(self) -> None:
-        """Priority values above 2 (e.g. 10) are sorted before lower priorities."""
+    def test_priority_above_documented_max_is_rejected(self) -> None:
         bus = MessageBus()
-        order: list[int] = []
-        bus.subscribe("test.topic", lambda m: order.append(m.priority))
+        with pytest.raises(ValueError, match="priority"):
+            bus.publish_async(_msg(priority=10))
 
-        bus.publish_async(_msg(priority=0))
-        bus.publish_async(_msg(priority=10))  # undocumented high value
-        bus.publish_async(_msg(priority=2))
-
-        bus.drain()
-
-        assert order[0] == 10, "Priority 10 must lead over 2 and 0"
-        assert order[1] == 2
-        assert order[2] == 0
-
-    def test_negative_priority_sorts_after_zero(self) -> None:
-        """A negative priority value sorts after the normal priority=0 tier."""
+    def test_negative_priority_is_rejected(self) -> None:
         bus = MessageBus()
-        order: list[int] = []
-        bus.subscribe("test.topic", lambda m: order.append(m.priority))
-
-        bus.publish_async(_msg(priority=-1))  # below normal
-        bus.publish_async(_msg(priority=0))  # normal
-
-        bus.drain()
-
-        assert order[0] == 0, "priority=0 must drain before priority=-1"
-        assert order[1] == -1
+        with pytest.raises(ValueError, match="priority"):
+            bus.publish_async(_msg(priority=-1))
 
 
 # ---------------------------------------------------------------------------

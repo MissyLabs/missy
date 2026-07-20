@@ -11,6 +11,7 @@ import them from a single, stable location::
         ConfigShowSkill,
         HealthCheckSkill,
         SummarizeSessionSkill,
+        WorkspaceListSkill,
     )
 """
 
@@ -19,6 +20,7 @@ from missy.skills.builtin.datetime_info import DateTimeSkill
 from missy.skills.builtin.health_check import HealthCheckSkill
 from missy.skills.builtin.summarize_session import SummarizeSessionSkill
 from missy.skills.builtin.system_info import SystemInfoSkill
+from missy.skills.builtin.workspace_list import WorkspaceListSkill
 
 __all__ = [
     "ConfigShowSkill",
@@ -26,4 +28,5 @@ __all__ = [
     "HealthCheckSkill",
     "SummarizeSessionSkill",
     "SystemInfoSkill",
+    "WorkspaceListSkill",
 ]

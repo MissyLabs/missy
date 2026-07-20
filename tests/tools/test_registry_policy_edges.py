@@ -182,15 +182,15 @@ class TestRegistrationEdgeCases:
         result = reg.register(EchoTool())
         assert result is None
 
-    def test_overwrite_preserves_new_instance_identity(self):
-        """After overwriting, get() returns the exact new object, not a copy."""
+    def test_collision_preserves_original_instance_identity(self):
+        """A collision is rejected without mutating the original registration."""
         reg = ToolRegistry()
         first = EchoTool()
         second = EchoTool()
         reg.register(first)
-        reg.register(second)
-        assert reg.get("echo") is second
-        assert reg.get("echo") is not first
+        with pytest.raises(ValueError, match="already registered"):
+            reg.register(second)
+        assert reg.get("echo") is first
 
     def test_re_register_same_object_is_idempotent(self):
         """Registering the same object twice is safe; the same object is stored."""
@@ -291,11 +291,12 @@ class TestListToolsIsolation:
 
         assert reg.list_tools() == sorted(["zebra", "alpha", "mango", "beta"])
 
-    def test_list_tools_reflects_overwrite(self):
-        """After overwriting a tool the name appears exactly once in list."""
+    def test_list_tools_reflects_rejected_collision(self):
+        """A rejected collision does not duplicate or remove the name."""
         reg = ToolRegistry()
         reg.register(EchoTool())
-        reg.register(EchoTool())  # overwrite
+        with pytest.raises(ValueError, match="already registered"):
+            reg.register(EchoTool())
         names = reg.list_tools()
         assert names.count("echo") == 1
 

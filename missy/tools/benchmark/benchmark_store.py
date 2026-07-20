@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import uuid
@@ -166,6 +167,30 @@ class BenchmarkStore:
         Returns:
             List of row dicts ordered by ``recorded_at`` descending.
         """
+        tool_name = _query_identifier("tool_name", tool_name)
+        provider = _query_identifier("provider", provider)
+        if min_composite is not None:
+            if (
+                isinstance(min_composite, bool)
+                or not isinstance(min_composite, (int, float))
+                or not math.isfinite(float(min_composite))
+                or not 0 <= float(min_composite) <= 1
+            ):
+                raise ValueError("min_composite must be finite and between 0 and 1.")
+            min_composite = float(min_composite)
+        if since_iso is not None:
+            if not isinstance(since_iso, str) or len(since_iso) > 64:
+                raise ValueError("since_iso must be a bounded ISO-8601 timestamp.")
+            try:
+                parsed_since = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("since_iso must be a valid ISO-8601 timestamp.") from exc
+            if parsed_since.tzinfo is None:
+                raise ValueError("since_iso must include a timezone offset.")
+            since_iso = parsed_since.astimezone(UTC).isoformat()
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("limit must be an integer between 1 and 500.")
+
         clauses: list[str] = []
         params: list[Any] = []
         if tool_name is not None:
@@ -186,7 +211,8 @@ class BenchmarkStore:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    f"SELECT * FROM benchmark_results {where} ORDER BY recorded_at DESC LIMIT ?",
+                    f"SELECT * FROM benchmark_results {where} "
+                    "ORDER BY recorded_at DESC, id DESC LIMIT ?",
                     params,
                 ).fetchall()
                 return [dict(r) for r in rows]
@@ -383,8 +409,8 @@ class BenchmarkStore:
                         ON benchmark_results (tool_name);
                     CREATE INDEX IF NOT EXISTS idx_br_provider
                         ON benchmark_results (provider);
-                    CREATE INDEX IF NOT EXISTS idx_br_recorded
-                        ON benchmark_results (recorded_at);
+                    CREATE INDEX IF NOT EXISTS idx_br_recorded_id
+                        ON benchmark_results (recorded_at, id);
                     """
                 )
                 conn.commit()
@@ -398,6 +424,19 @@ class BenchmarkStore:
 
 _store: BenchmarkStore | None = None
 _store_lock = threading.Lock()
+
+
+def _query_identifier(name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 256
+        or value.strip() != value
+        or any(not char.isprintable() or char in "\r\n\x00" for char in value)
+    ):
+        raise ValueError(f"{name} must be a bounded printable identifier.")
+    return value
 
 
 def get_benchmark_store(db_path: Path | str | None = None) -> BenchmarkStore:

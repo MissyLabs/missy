@@ -72,7 +72,12 @@ def _run_incus(
                 output = json.loads(output)
 
         success = proc.returncode == 0
-        error = f"Exit code {proc.returncode}" if not success else None
+        error = None
+        if not success:
+            diagnostic = str(output).strip().replace("\x00", "")[:500]
+            error = f"Exit code {proc.returncode}"
+            if diagnostic:
+                error = f"{error}: {diagnostic}"
         return ToolResult(success=success, output=output, error=error)
     except subprocess.TimeoutExpired:
         return ToolResult(
@@ -157,7 +162,11 @@ class IncusListTool(_IncusHostCommandMixin, BaseTool):
         elif project:
             args.extend(["--project", project])
         if instance_type:
-            args.extend(["--type", instance_type])
+            # `incus list` accepts instance type as a positional filter
+            # (`type=container`), not a `--type` flag. The latter is rejected
+            # by current Incus releases even though several other subcommands
+            # do expose their own `--type` option.
+            args.append(f"type={instance_type}")
         return _run_incus(args)
 
     def get_schema(self) -> dict[str, Any]:

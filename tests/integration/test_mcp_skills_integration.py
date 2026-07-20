@@ -984,7 +984,7 @@ class TestToolRegistryWithMcpTools:
         assert result.output == "rows"
         mcp_adapter.execute.assert_called_once_with(sql="SELECT 1")
 
-    def test_registry_replaces_duplicate_name(self, registry: ToolRegistry) -> None:
+    def test_registry_rejects_duplicate_name(self, registry: ToolRegistry) -> None:
         first = MagicMock(spec=BaseTool)
         first.name = "worker"
         first.permissions = ToolPermissions()
@@ -996,10 +996,11 @@ class TestToolRegistryWithMcpTools:
         second.execute.return_value = ToolResult(success=True, output="second")
 
         registry.register(first)
-        registry.register(second)
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(second)
 
         result = registry.execute("worker")
-        assert result.output == "second"
+        assert result.output == "first"
 
     def test_execute_unknown_tool_raises_key_error(self, registry: ToolRegistry) -> None:
         with pytest.raises(KeyError, match="no-such-tool"):
@@ -1163,12 +1164,12 @@ class TestToolExecutionAuditTrail:
         events = event_bus.get_events(event_type="tool_execute")
         assert len(events) == 5
 
-    def test_audit_event_category_is_plugin(self, registry: ToolRegistry) -> None:
+    def test_audit_event_category_is_tool(self, registry: ToolRegistry) -> None:
         registry.register(_EchoTool())
         registry.execute("echo", text="audit-check")
 
         events = event_bus.get_events(event_type="tool_execute")
-        assert all(e.category == "plugin" for e in events)
+        assert all(e.category == "tool" for e in events)
 
     def test_audit_event_detail_contains_tool_name(self, registry: ToolRegistry) -> None:
         registry.register(_EchoTool())

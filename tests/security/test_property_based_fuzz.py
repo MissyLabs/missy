@@ -328,9 +328,13 @@ class TestNetworkPolicyEngineFuzz:
             engine.check_host(hostname)
 
     @given(hostname=_unicode_text)
-    @settings(max_examples=100)
+    @settings(max_examples=100, deadline=None)
     def test_check_host_never_crashes_on_arbitrary_unicode(self, hostname: str) -> None:
-        """check_host() must not raise unexpected exceptions on unicode strings."""
+        """check_host() must not raise unexpected exceptions on unicode strings.
+
+        DNS resolution is intentionally part of default-deny rebinding checks
+        and is not governed by Hypothesis's 200 ms CPU-style deadline.
+        """
         engine = self._make_engine(default_deny=True)
         with contextlib.suppress(PolicyViolationError, ValueError, OSError, UnicodeError):
             engine.check_host(hostname)

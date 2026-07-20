@@ -17,7 +17,9 @@ Example::
 
 from __future__ import annotations
 
+import copy
 import logging
+import queue
 import threading
 
 from missy.core.events import AuditEvent, event_bus
@@ -27,6 +29,23 @@ from missy.policy.engine import get_policy_engine
 from .base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
+
+_GENERIC_TOOL_ERROR = "Tool execution failed; sensitive details were withheld."
+_RESOLVER_TIMEOUT_SECONDS = 0.5
+_MAX_RESOLVED_TARGETS = 64
+
+
+def _safe_text(value: object) -> str:
+    """Return bounded censored text, failing closed on censor malfunction."""
+    try:
+        from missy.security.censor import censor_response
+
+        result = censor_response(str(value))
+        if not isinstance(result, str):
+            raise TypeError("censor returned a non-string")
+        return result[:2_000]
+    except Exception:
+        return _GENERIC_TOOL_ERROR
 
 
 class ToolRegistry:
@@ -41,6 +60,9 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
         self._disabled: set[str] = set()
+        self._lock = threading.RLock()
+        self._retired = False
+        self._active_calls = 0
 
     # ------------------------------------------------------------------
     # Mutation
@@ -49,12 +71,25 @@ class ToolRegistry:
     def register(self, tool: BaseTool) -> None:
         """Add *tool* to the registry keyed by :attr:`~.base.BaseTool.name`.
 
-        A previous registration under the same name is silently replaced.
+        A previous registration under the same name is rejected. Re-registering
+        the same object is an idempotent no-op.
 
         Args:
             tool: The tool instance to register.
         """
-        self._tools[tool.name] = tool
+        if not isinstance(tool, BaseTool):
+            raise TypeError("tool must be a BaseTool instance")
+        if not isinstance(tool.name, str) or not tool.name:
+            raise ValueError("tool name must be a non-empty string")
+        with self._lock:
+            if self._retired:
+                raise RuntimeError("Cannot register tools on a retired registry.")
+            existing = self._tools.get(tool.name)
+            if existing is tool:
+                return
+            if existing is not None:
+                raise ValueError(f"Tool {tool.name!r} is already registered")
+            self._tools[tool.name] = tool
         logger.debug("Registered tool %r (%s).", tool.name, type(tool).__name__)
 
     # ------------------------------------------------------------------
@@ -70,7 +105,8 @@ class ToolRegistry:
         Returns:
             The :class:`~.base.BaseTool` instance, or ``None``.
         """
-        return self._tools.get(name)
+        with self._lock:
+            return self._tools.get(name)
 
     def list_tools(self) -> list[str]:
         """Return a sorted list of all registered tool names.
@@ -80,7 +116,8 @@ class ToolRegistry:
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
-        return sorted(self._tools)
+        with self._lock:
+            return sorted(self._tools)
 
     def list_disabled_tools(self) -> list[str]:
         """Return a sorted list of tool names currently disabled by an operator.
@@ -88,14 +125,13 @@ class ToolRegistry:
         Returns:
             A new list of string keys in ascending alphabetical order.
         """
-        return sorted(self._disabled)
+        with self._lock:
+            return sorted(self._disabled)
 
     def is_enabled(self, name: str) -> bool:
         """Return whether *name* is currently enabled for exposure/execution.
 
-        Unregistered names are reported as enabled (there is nothing to
-        disable); callers should check :meth:`get` separately if they need
-        to distinguish "unknown" from "enabled".
+        Unregistered names are never reported as enabled.
 
         Args:
             name: Registry key to check.
@@ -103,7 +139,8 @@ class ToolRegistry:
         Returns:
             ``False`` if an operator has disabled the tool, ``True`` otherwise.
         """
-        return name not in self._disabled
+        with self._lock:
+            return name in self._tools and name not in self._disabled
 
     # ------------------------------------------------------------------
     # Operator enable/disable
@@ -124,9 +161,12 @@ class ToolRegistry:
         Raises:
             KeyError: When *name* is not registered.
         """
-        if name not in self._tools:
-            raise KeyError(f"No tool registered under the name {name!r}.")
-        self._disabled.add(name)
+        with self._lock:
+            if self._retired:
+                raise RuntimeError("Cannot disable tools on a retired registry.")
+            if name not in self._tools:
+                raise KeyError(f"No tool registered under the name {name!r}.")
+            self._disabled.add(name)
         logger.info("Tool %r disabled by operator.", name)
 
     def enable(self, name: str) -> None:
@@ -138,9 +178,12 @@ class ToolRegistry:
         Raises:
             KeyError: When *name* is not registered.
         """
-        if name not in self._tools:
-            raise KeyError(f"No tool registered under the name {name!r}.")
-        self._disabled.discard(name)
+        with self._lock:
+            if self._retired:
+                raise RuntimeError("Cannot enable tools on a retired registry.")
+            if name not in self._tools:
+                raise KeyError(f"No tool registered under the name {name!r}.")
+            self._disabled.discard(name)
         logger.info("Tool %r re-enabled by operator.", name)
 
     # ------------------------------------------------------------------
@@ -148,6 +191,39 @@ class ToolRegistry:
     # ------------------------------------------------------------------
 
     def execute(
+        self,
+        tool_name: str,
+        /,
+        session_id: str = "",
+        task_id: str = "",
+        **kwargs,
+    ) -> ToolResult:
+        """Execute through this registry unless it has been superseded."""
+        with self._lock:
+            if self._retired:
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error="Tool registry was replaced; retry against the current registry.",
+                )
+            self._active_calls += 1
+        try:
+            return self._execute_active(
+                tool_name,
+                session_id=session_id,
+                task_id=task_id,
+                **kwargs,
+            )
+        finally:
+            with self._lock:
+                self._active_calls -= 1
+
+    def retire(self) -> None:
+        """Revoke new execution and mutation while allowing active calls to finish."""
+        with self._lock:
+            self._retired = True
+
+    def _execute_active(
         self,
         tool_name: str,
         /,
@@ -205,11 +281,13 @@ class ToolRegistry:
         Raises:
             KeyError: When *tool_name* is not registered.
         """
-        tool = self._tools.get(tool_name)
+        with self._lock:
+            tool = self._tools.get(tool_name)
+            disabled = tool_name in self._disabled
         if tool is None:
             raise KeyError(f"No tool registered under the name {tool_name!r}.")
 
-        if tool_name in self._disabled:
+        if disabled:
             logger.warning("Execution denied for disabled tool %r.", tool_name)
             self._emit_event(tool_name, session_id, task_id, "deny", "Tool disabled by operator")
             return ToolResult(
@@ -218,25 +296,58 @@ class ToolRegistry:
                 error=f"Tool {tool_name!r} is disabled by operator.",
             )
 
+        # The policy resolvers, audit, and implementation must consume one
+        # immutable snapshot. Mutable provider objects cannot swap a checked
+        # benign target for a different target after authorization.
+        try:
+            argument_snapshot = {
+                key: value if key.startswith("_") else copy.deepcopy(value)
+                for key, value in kwargs.items()
+            }
+        except Exception:
+            error = "Tool arguments could not be safely snapshotted."
+            self._emit_event(tool_name, session_id, task_id, "error", error)
+            return ToolResult(success=False, output=None, error=error)
+
         # Policy checks - failures surface as ToolResult(success=False)
         # rather than raised exceptions so the agent can handle them gracefully.
         try:
-            self._check_permissions(tool, session_id, task_id, kwargs)
+            self._check_permissions(tool, session_id, task_id, argument_snapshot)
         except PolicyViolationError as exc:
             logger.warning("Policy denied execution of tool %r: %s", tool_name, exc)
-            self._emit_event(tool_name, session_id, task_id, "deny", str(exc))
-            return ToolResult(success=False, output=None, error=str(exc), policy_denied=True)
+            safe_error = _safe_text(exc)
+            self._emit_event(tool_name, session_id, task_id, "deny", safe_error)
+            return ToolResult(success=False, output=None, error=safe_error, policy_denied=True)
+        except Exception as exc:
+            safe_error = _safe_text(exc)
+            logger.warning("Policy resolution failed for tool %r; execution denied.", tool_name)
+            self._emit_event(tool_name, session_id, task_id, "error", safe_error)
+            return ToolResult(success=False, output=None, error=safe_error)
 
         # Strip registry-internal keys that tools don't accept.
-        tool_kwargs = {k: v for k, v in kwargs.items() if k not in ("session_id", "task_id")}
+        tool_kwargs = {
+            k: v for k, v in argument_snapshot.items() if k not in ("session_id", "task_id")
+        }
         try:
             result = tool.execute(**tool_kwargs)
         except Exception as exc:
-            logger.exception("Tool %r raised an unhandled exception.", tool_name)
-            self._emit_event(tool_name, session_id, task_id, "error", str(exc))
-            return ToolResult(success=False, output=None, error=str(exc))
+            safe_error = _safe_text(exc)
+            logger.error("Tool %r raised an exception; details withheld.", tool_name)
+            self._emit_event(tool_name, session_id, task_id, "error", safe_error)
+            return ToolResult(success=False, output=None, error=safe_error)
+        if not isinstance(result, ToolResult):
+            error = "Tool returned an invalid result type."
+            self._emit_event(tool_name, session_id, task_id, "error", error)
+            return ToolResult(success=False, output=None, error=error)
 
         event_result = "allow" if result.success else "error"
+        if not result.success and result.error:
+            result = ToolResult(
+                success=False,
+                output=None,
+                error=_safe_text(result.error),
+                policy_denied=result.policy_denied,
+            )
         self._emit_event(tool_name, session_id, task_id, event_result, result.error or "")
         return result
 
@@ -297,7 +408,11 @@ class ToolRegistry:
             for host in perms.allowed_hosts:
                 engine.check_network(host, session_id=session_id, task_id=task_id)
             if type(tool).resolve_network_hosts is not BaseTool.resolve_network_hosts:
-                for host in tool.resolve_network_hosts(_kw):
+                hosts = _validate_target_list(
+                    _call_policy_resolver(tool.resolve_network_hosts, _kw),
+                    kind="network host",
+                )
+                for host in hosts:
                     engine.check_network(host, session_id=session_id, task_id=task_id)
 
         resolves_fs_targets = (
@@ -306,7 +421,13 @@ class ToolRegistry:
         resolved_read_paths: list[str] = []
         resolved_write_paths: list[str] = []
         if resolves_fs_targets and (perms.filesystem_read or perms.filesystem_write):
-            resolved_read_paths, resolved_write_paths = tool.resolve_filesystem_targets(_kw)
+            resolved = _call_policy_resolver(tool.resolve_filesystem_targets, _kw)
+            if not isinstance(resolved, (tuple, list)) or len(resolved) != 2:
+                raise ValueError(
+                    "Filesystem resolver must return a (read_paths, write_paths) pair."
+                )
+            resolved_read_paths = _validate_target_list(resolved[0], kind="read path")
+            resolved_write_paths = _validate_target_list(resolved[1], kind="write path")
 
         if perms.filesystem_read:
             # Check statically declared allowed_paths …
@@ -343,7 +464,21 @@ class ToolRegistry:
                 # instead of guessing from a generic "command" kwarg that may
                 # not exist, or may refer to something other than the host
                 # program actually executed (e.g. a sandboxed guest command).
-                resolved_command = tool.resolve_shell_command(_kw)
+                resolved_command = _call_policy_resolver(tool.resolve_shell_command, _kw)
+                if resolved_command is not None and not isinstance(
+                    resolved_command, (str, list, tuple)
+                ):
+                    raise ValueError("Shell resolver must return text, an argv list, or None.")
+                if isinstance(resolved_command, (list, tuple)):
+                    if not 1 <= len(resolved_command) <= 256 or any(
+                        not _safe_resolver_text(item) for item in resolved_command
+                    ):
+                        raise ValueError("Shell resolver returned invalid or unbounded argv.")
+                    resolved_command = list(resolved_command)
+                elif isinstance(resolved_command, str) and not _safe_resolver_text(
+                    resolved_command
+                ):
+                    raise ValueError("Shell resolver returned invalid or unbounded command text.")
                 command = resolved_command if resolved_command is not None else "shell"
             else:
                 # Pass the actual command so the policy engine can check it.
@@ -372,24 +507,68 @@ class ToolRegistry:
         """
         try:
             # Redact potential secrets from audit event detail messages.
-            safe_msg = detail_msg
-            try:
-                from missy.security.censor import censor_response
-
-                safe_msg = censor_response(detail_msg)
-            except Exception:
-                logger.debug("Censor import failed; using raw detail message")
+            safe_msg = _safe_text(detail_msg) if detail_msg else ""
             event = AuditEvent.now(
                 session_id=session_id,
                 task_id=task_id,
                 event_type="tool_execute",
-                category="plugin",
+                category="tool",
                 result=result,  # type: ignore[arg-type]
                 detail={"tool": tool_name, "message": safe_msg},
             )
             event_bus.publish(event)
         except Exception:
             logger.exception("Failed to emit audit event for tool %r", tool_name)
+
+
+def _safe_resolver_text(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 4096
+        and all(char.isprintable() and char not in "\r\n\x00" for char in value)
+    )
+
+
+def _validate_target_list(value: object, *, kind: str) -> list[str]:
+    if not isinstance(value, (list, tuple)) or len(value) > _MAX_RESOLVED_TARGETS:
+        raise ValueError(f"Policy resolver returned invalid or unbounded {kind} targets.")
+    targets = list(value)
+    if any(not _safe_resolver_text(item) for item in targets) or len(set(targets)) != len(targets):
+        raise ValueError(f"Policy resolver returned invalid or duplicate {kind} targets.")
+    return targets
+
+
+def _call_policy_resolver(resolver: object, kwargs: dict) -> object:
+    """Run one resolver against an isolated snapshot with a hard caller deadline."""
+    resolver_args = {
+        key: copy.deepcopy(value) for key, value in kwargs.items() if not key.startswith("_")
+    }
+    before = copy.deepcopy(resolver_args)
+    completed: queue.Queue[tuple[bool, object, bool]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            value = resolver(resolver_args)  # type: ignore[operator]
+            try:
+                mutated = resolver_args != before
+            except Exception:
+                mutated = True
+            completed.put((True, value, mutated))
+        except BaseException as exc:  # noqa: BLE001 - marshal to caller
+            completed.put((False, exc, False))
+
+    threading.Thread(target=invoke, daemon=True, name="missy-policy-resolver").start()
+    try:
+        ok, value, mutated = completed.get(timeout=_RESOLVER_TIMEOUT_SECONDS)
+    except queue.Empty as exc:
+        raise TimeoutError("Policy resolver exceeded its bounded execution deadline.") from exc
+    if not ok:
+        if isinstance(value, Exception):
+            raise value
+        raise RuntimeError("Policy resolver terminated abnormally.")
+    if mutated:
+        raise ValueError("Policy resolver mutated its argument snapshot.")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +591,10 @@ def init_tool_registry() -> ToolRegistry:
     global _registry
     registry = ToolRegistry()
     with _lock:
+        previous = _registry
         _registry = registry
+    if previous is not None:
+        previous.retire()
     return registry
 
 

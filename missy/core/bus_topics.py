@@ -74,3 +74,27 @@ SLEEPTIME_CYCLE_COMPLETE = "sleeptime.cycle.complete"
 
 #: An error occurred during a sleeptime processing cycle.
 SLEEPTIME_ERROR = "sleeptime.error"
+
+
+# Authoritative production topic inventory used by strict MessageBus
+# validation. Subscription patterns remain separate and may contain
+# wildcards; published messages must name one concrete topic from this set.
+ALL_TOPICS = frozenset(
+    {
+        CHANNEL_INBOUND,
+        CHANNEL_OUTBOUND,
+        AGENT_RUN_START,
+        AGENT_RUN_COMPLETE,
+        AGENT_RUN_ERROR,
+        TOOL_REQUEST,
+        TOOL_RESULT,
+        SYSTEM_STARTUP,
+        SYSTEM_SHUTDOWN,
+        SECURITY_VIOLATION,
+        SECURITY_APPROVAL_NEEDED,
+        SECURITY_APPROVAL_RESPONSE,
+        SLEEPTIME_CYCLE_START,
+        SLEEPTIME_CYCLE_COMPLETE,
+        SLEEPTIME_ERROR,
+    }
+)

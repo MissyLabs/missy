@@ -20,10 +20,49 @@ Example::
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def parse_retry_after(
+    value: Any,
+    *,
+    default: float = 5.0,
+    maximum: float = 300.0,
+    now: datetime | None = None,
+) -> float:
+    """Parse Retry-After seconds or an HTTP-date into a finite bounded delay."""
+    safe_default = min(max(float(default), 0.0), max(float(maximum), 0.0))
+    bound = max(float(maximum), 0.0)
+    if value is None:
+        return safe_default
+    text = str(value).strip()
+    if not text:
+        return safe_default
+    try:
+        seconds = float(text)
+        if not math.isfinite(seconds) or seconds < 0:
+            return safe_default
+        return min(seconds, bound)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        current = now or datetime.now(UTC)
+        seconds = (parsed.astimezone(UTC) - current.astimezone(UTC)).total_seconds()
+        if not math.isfinite(seconds):
+            return safe_default
+        return min(max(seconds, 0.0), bound)
+    except (TypeError, ValueError, OverflowError):
+        return safe_default
 
 
 class RateLimitExceeded(Exception):

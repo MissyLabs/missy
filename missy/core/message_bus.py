@@ -22,8 +22,11 @@ Usage::
 from __future__ import annotations
 
 import contextlib
+import heapq
+import json
 import logging
 import queue
+import re
 import threading
 import uuid
 from collections.abc import Callable
@@ -31,10 +34,31 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from fnmatch import fnmatch
 
+from missy.core.bus_topics import ALL_TOPICS
+
 logger = logging.getLogger(__name__)
 
 # Callback type for subscribers.
 BusHandler = Callable[["BusMessage"], None]
+
+_TOPIC_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+_ENDPOINT_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,128}$")
+_MAX_PAYLOAD_BYTES = 256 * 1024
+_MAX_PRIORITY_BURST = 8
+_REQUIRED_PAYLOAD_FIELDS: dict[str, dict[str, type | tuple[type, ...]]] = {
+    "agent.run.start": {"session_id": str, "task_id": str, "user_input_length": int},
+    "agent.run.complete": {
+        "session_id": str,
+        "task_id": str,
+        "provider": str,
+        "tools_used": list,
+        "cost": dict,
+    },
+    "agent.run.error": {"session_id": str, "task_id": str, "error": str},
+    "tool.request": {"tool": str, "session_id": str, "task_id": str},
+    "tool.result": {"tool": str, "is_error": bool, "session_id": str, "task_id": str},
+    "sleeptime.error": {"detail": str},
+}
 
 
 @dataclass
@@ -81,8 +105,14 @@ class MessageBus:
     propagate to the publisher.
     """
 
-    def __init__(self, max_queue_size: int = 1000) -> None:
+    def __init__(self, max_queue_size: int = 1000, *, strict_topics: bool = False) -> None:
+        if isinstance(max_queue_size, bool) or not isinstance(max_queue_size, int):
+            raise TypeError("max_queue_size must be an integer")
+        if not 1 <= max_queue_size <= 100_000:
+            raise ValueError("max_queue_size must be between 1 and 100000")
         self._lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
+        self._strict_topics = strict_topics
         # Mapping of topic pattern → list of handlers.
         self._subscribers: dict[str, list[BusHandler]] = {}
         # Priority queue for async dispatch.  Items are
@@ -94,6 +124,12 @@ class MessageBus:
         self._seq = 0  # monotonic counter for stable sort within same priority
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._accepting = True
+        self._accepted = 0
+        self._dropped = 0
+        self._delivered = 0
+        self._handler_errors = 0
+        self._priority_burst = 0
 
     # ------------------------------------------------------------------
     # Subscription management
@@ -109,6 +145,9 @@ class MessageBus:
             topic: Topic pattern to match.
             handler: Callable receiving a :class:`BusMessage`.
         """
+        _validate_subscription_pattern(topic, strict=self._strict_topics)
+        if not callable(handler):
+            raise TypeError("handler must be callable")
         with self._lock:
             self._subscribers.setdefault(topic, []).append(handler)
 
@@ -142,16 +181,21 @@ class MessageBus:
         Args:
             message: The message to dispatch.
         """
+        self._validate_message(message)
         handlers = self._resolve_handlers(message.topic)
         for handler in handlers:
             try:
                 handler(message)
             except Exception:
+                with self._lock:
+                    self._handler_errors += 1
                 logger.exception(
                     "Unhandled exception in MessageBus handler %r for topic %r",
                     handler,
                     message.topic,
                 )
+        with self._lock:
+            self._delivered += 1
 
     def publish_async(self, message: BusMessage) -> None:
         """Enqueue *message* for asynchronous dispatch.
@@ -166,11 +210,21 @@ class MessageBus:
         Raises:
             queue.Full: If the internal queue has reached ``max_queue_size``.
         """
+        self._validate_message(message)
         with self._lock:
+            if not self._accepting:
+                raise RuntimeError("MessageBus is stopping and no longer accepts messages.")
             seq = self._seq
             self._seq += 1
         # Negate priority so higher values sort first in the min-heap.
-        self._queue.put((-message.priority, seq, message))
+        try:
+            self._queue.put_nowait((-message.priority, seq, message))
+        except queue.Full:
+            with self._lock:
+                self._dropped += 1
+            raise
+        with self._lock:
+            self._accepted += 1
 
     # ------------------------------------------------------------------
     # Async worker lifecycle
@@ -185,6 +239,8 @@ class MessageBus:
         if self._worker is not None and self._worker.is_alive():
             return
         self._stop_event.clear()
+        with self._lock:
+            self._accepting = True
         self._worker = threading.Thread(
             target=self._dispatch_loop,
             name="missy-message-bus",
@@ -200,10 +256,16 @@ class MessageBus:
                 finish after the stop signal is set.
         """
         self._stop_event.set()
-        # Drain remaining messages synchronously.
+        with self._lock:
+            self._accepting = False
+            worker = self._worker
+        if worker is not None:
+            worker.join(timeout=timeout)
+            if worker.is_alive():
+                logger.warning("MessageBus worker did not stop within %.3fs", timeout)
+                return
         self.drain()
-        if self._worker is not None:
-            self._worker.join(timeout=timeout)
+        with self._lock:
             self._worker = None
 
     def drain(self) -> None:
@@ -211,16 +273,32 @@ class MessageBus:
 
         Useful for testing and for ensuring delivery during shutdown.
         """
-        while True:
-            try:
-                _neg_pri, _seq, message = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            self.publish(message)
+        with self._dispatch_lock:
+            while True:
+                try:
+                    _neg_pri, _seq, message = self._next_queued_message()
+                except queue.Empty:
+                    break
+                try:
+                    self.publish(message)
+                finally:
+                    self._queue.task_done()
 
     def pending_count(self) -> int:
         """Return the number of messages waiting in the async queue."""
         return self._queue.qsize()
+
+    def stats(self) -> dict[str, int | bool]:
+        """Return bounded queue/delivery counters for diagnostics."""
+        with self._lock:
+            return {
+                "accepted": self._accepted,
+                "dropped": self._dropped,
+                "delivered": self._delivered,
+                "handler_errors": self._handler_errors,
+                "pending": self._queue.qsize(),
+                "accepting": self._accepting,
+            }
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -235,14 +313,99 @@ class MessageBus:
                     matched.extend(handlers)
         return matched
 
+    def _validate_message(self, message: BusMessage) -> None:
+        if not isinstance(message, BusMessage):
+            raise TypeError("message must be a BusMessage")
+        if (
+            not isinstance(message.topic, str)
+            or not 0 <= len(message.topic) <= 256
+            or (self._strict_topics and not message.topic)
+            or any(char in message.topic for char in "*?[]")
+            or any(not char.isprintable() or char in "\r\n\x00" for char in message.topic)
+        ):
+            raise ValueError("Published topic must be a bounded concrete topic name.")
+        if self._strict_topics and not _TOPIC_RE.fullmatch(message.topic):
+            raise ValueError("Production topics must use the dotted topic grammar.")
+        if self._strict_topics and message.topic not in ALL_TOPICS:
+            raise ValueError(f"Unknown production message topic {message.topic!r}.")
+        if not isinstance(message.source, str) or not _ENDPOINT_RE.fullmatch(message.source):
+            raise ValueError("Message source must be a bounded endpoint identifier.")
+        if message.target is not None and (
+            not isinstance(message.target, str) or not _ENDPOINT_RE.fullmatch(message.target)
+        ):
+            raise ValueError("Message target must be a bounded endpoint identifier.")
+        if (
+            isinstance(message.priority, bool)
+            or not isinstance(message.priority, int)
+            or not 0 <= message.priority <= 2
+        ):
+            raise ValueError("Message priority must be one of 0, 1, or 2.")
+        if not isinstance(message.payload, dict):
+            raise TypeError("Message payload must be a dict.")
+        try:
+            encoded = json.dumps(message.payload, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Message payload must be finite JSON data.") from exc
+        if len(encoded.encode("utf-8")) > _MAX_PAYLOAD_BYTES:
+            raise ValueError("Message payload exceeds the 256 KiB limit.")
+        required = _REQUIRED_PAYLOAD_FIELDS.get(message.topic, {}) if self._strict_topics else {}
+        for field_name, field_type in required.items():
+            value = message.payload.get(field_name)
+            if isinstance(value, bool) and field_type is int:
+                valid = False
+            else:
+                valid = isinstance(value, field_type)
+            if not valid:
+                raise ValueError(
+                    f"Message payload field {field_name!r} has the wrong contract type."
+                )
+
     def _dispatch_loop(self) -> None:
         """Background worker loop: pull from queue and dispatch."""
         while not self._stop_event.is_set():
-            try:
-                _neg_pri, _seq, message = self._queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            self.publish(message)
+            with self._dispatch_lock:
+                try:
+                    _neg_pri, _seq, message = self._next_queued_message(timeout=0.1)
+                except queue.Empty:
+                    continue
+                try:
+                    self.publish(message)
+                finally:
+                    self._queue.task_done()
+
+    def _next_queued_message(self, timeout: float | None = None) -> tuple[int, int, BusMessage]:
+        """Dequeue with FIFO priority and bounded starvation."""
+        if self._priority_burst < _MAX_PRIORITY_BURST:
+            item = (
+                self._queue.get(timeout=timeout)
+                if timeout is not None
+                else self._queue.get_nowait()
+            )
+        else:
+            # PriorityQueue has no aging primitive. Under its own mutex,
+            # select the oldest message from the lowest currently queued
+            # priority once per burst, then restore heap order. This keeps
+            # urgent traffic preemptive without letting a continuous urgent
+            # producer starve normal accepted work forever.
+            with self._queue.not_empty:
+                if not self._queue.queue:
+                    self._priority_burst = 0
+                    raise queue.Empty
+                index = max(
+                    range(len(self._queue.queue)),
+                    key=lambda idx: (
+                        self._queue.queue[idx][0],
+                        -self._queue.queue[idx][1],
+                    ),
+                )
+                item = self._queue.queue.pop(index)
+                heapq.heapify(self._queue.queue)
+                self._queue.not_full.notify()
+        if item[0] < 0:
+            self._priority_burst += 1
+        else:
+            self._priority_burst = 0
+        return item
 
     # ------------------------------------------------------------------
     # Repr
@@ -274,7 +437,7 @@ def init_message_bus(max_queue_size: int = 1000) -> MessageBus:
     global _bus
     with _bus_lock:
         if _bus is None:
-            _bus = MessageBus(max_queue_size=max_queue_size)
+            _bus = MessageBus(max_queue_size=max_queue_size, strict_topics=True)
         return _bus
 
 
@@ -299,3 +462,14 @@ def reset_message_bus() -> None:
         if _bus is not None:
             _bus.stop()
         _bus = None
+
+
+def _validate_subscription_pattern(topic: str, *, strict: bool) -> None:
+    if (
+        not isinstance(topic, str)
+        or not 0 <= len(topic) <= 256
+        or topic.strip() != topic
+        or any(not char.isprintable() or char in "\r\n\x00" for char in topic)
+        or (strict and not topic)
+    ):
+        raise ValueError("Subscription topic must be bounded printable text.")

@@ -62,13 +62,14 @@ class TestRegisterAndGet:
         registry = ToolRegistry()
         assert registry.get("nonexistent") is None
 
-    def test_register_replaces_existing(self):
+    def test_register_rejects_existing_name(self):
         registry = ToolRegistry()
         first = _make_tool("echo")
         second = _make_tool("echo")
         registry.register(first)
-        registry.register(second)
-        assert registry.get("echo") is second
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(second)
+        assert registry.get("echo") is first
 
 
 # ---------------------------------------------------------------------------

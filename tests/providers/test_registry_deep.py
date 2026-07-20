@@ -134,13 +134,14 @@ class TestRegisterAndGet:
         registry.register("anthropic", provider, config=cfg)
         assert registry.get("anthropic") is provider
 
-    def test_register_replaces_existing(self):
+    def test_register_rejects_shadowing(self):
         registry = ProviderRegistry()
         first = _make_provider("alpha")
         second = _make_provider("alpha")
         registry.register("alpha", first)
-        registry.register("alpha", second)
-        assert registry.get("alpha") is second
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register("alpha", second)
+        assert registry.get("alpha") is first
 
     def test_get_unknown_name_returns_none(self):
         registry = ProviderRegistry()
@@ -242,22 +243,22 @@ class TestSetDefault:
         with pytest.raises(ValueError, match="not available"):
             registry.set_default("slow")
 
-    def test_set_default_is_available_raises_non_value_error_wrapped(self):
+    def test_set_default_probe_failure_is_safely_reported(self):
         registry = ProviderRegistry()
         provider = _make_provider("boom")
         provider.is_available.side_effect = ConnectionError("timeout")
         registry.register("boom", provider)
-        with pytest.raises(ValueError, match="availability check failed"):
+        with pytest.raises(ValueError, match="probe timed out"):
             registry.set_default("boom")
 
-    def test_set_default_is_available_raises_value_error_propagates_unchanged(self):
-        """A ValueError from is_available propagates directly without wrapping."""
+    def test_set_default_probe_value_error_does_not_leak_detail(self):
         registry = ProviderRegistry()
         provider = _make_provider("tricky")
         provider.is_available.side_effect = ValueError("original message")
         registry.register("tricky", provider)
-        with pytest.raises(ValueError, match="original message"):
+        with pytest.raises(ValueError, match="probe timed out") as caught:
             registry.set_default("tricky")
+        assert "original message" not in str(caught.value)
 
     def test_get_default_name_returns_none_initially(self):
         registry = ProviderRegistry()
@@ -463,8 +464,9 @@ class TestFromConfig:
                 ),
             }
         )
-        ProviderRegistry.from_config(config)
-        assert "myhost.internal" in config.network.provider_allowed_hosts
+        registry = ProviderRegistry.from_config(config)
+        assert "myhost.internal" in registry.effective_provider_hosts
+        assert "myhost.internal" not in config.network.provider_allowed_hosts
 
     def test_from_config_base_url_widening_emits_audit_event(self):
         """Availability/transparency hardening: base_url auto-widening
@@ -494,7 +496,7 @@ class TestFromConfig:
         assert event.category == "network"
         assert event.result == "allow"
         assert event.detail["host"] == "audited-host.internal"
-        assert event.detail["base_url"] == "http://audited-host.internal:11434"
+        assert "base_url" not in event.detail
 
     def test_from_config_base_url_widening_logs_at_warning_not_debug(self, caplog):
         """The old logger.debug() call was invisible at default log
@@ -549,8 +551,8 @@ class TestFromConfig:
             }
         )
         config.network.provider_allowed_hosts.append("myhost.internal")
-        ProviderRegistry.from_config(config)
-        count = config.network.provider_allowed_hosts.count("myhost.internal")
+        registry = ProviderRegistry.from_config(config)
+        count = registry.effective_provider_hosts.count("myhost.internal")
         assert count == 1
 
     def test_from_config_skips_base_url_for_disabled_providers(self):
@@ -564,8 +566,8 @@ class TestFromConfig:
                 ),
             }
         )
-        ProviderRegistry.from_config(config)
-        assert "should-not-appear.test" not in config.network.provider_allowed_hosts
+        registry = ProviderRegistry.from_config(config)
+        assert "should-not-appear.test" not in registry.effective_provider_hosts
 
     def test_from_config_multiple_providers_registers_all_enabled(self):
         config = _make_config(

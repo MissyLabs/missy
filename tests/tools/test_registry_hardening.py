@@ -108,13 +108,14 @@ class TestRegistryBasics:
         assert "echo" in names
         assert "shell" in names
 
-    def test_register_replaces_existing(self):
+    def test_register_rejects_existing_name(self):
         reg = ToolRegistry()
         tool1 = EchoTool()
         tool2 = EchoTool()
         reg.register(tool1)
-        reg.register(tool2)
-        assert reg.get("echo") is tool2
+        with pytest.raises(ValueError, match="already registered"):
+            reg.register(tool2)
+        assert reg.get("echo") is tool1
 
     def test_list_tools_empty(self):
         reg = ToolRegistry()

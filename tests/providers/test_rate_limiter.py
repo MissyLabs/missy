@@ -2,10 +2,28 @@
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded
+from missy.providers.rate_limiter import RateLimiter, RateLimitExceeded, parse_retry_after
+
+
+class TestRetryAfterParsing:
+    @pytest.mark.parametrize("value", ["-1", "nan", "inf", "bogus", "1, 2"])
+    def test_invalid_values_use_bounded_default(self, value):
+        assert parse_retry_after(value, default=5, maximum=30) == 5
+
+    def test_fractional_and_huge_values_are_supported_and_bounded(self):
+        assert parse_retry_after(" 1.25 ") == 1.25
+        assert parse_retry_after("999999", maximum=60) == 60
+
+    def test_http_date_uses_utc_and_clamps_past(self):
+        now = datetime(2026, 7, 20, 12, 0, tzinfo=UTC)
+        future = (now + timedelta(seconds=20)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        past = (now - timedelta(seconds=20)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        assert parse_retry_after(future, now=now) == 20
+        assert parse_retry_after(past, now=now) == 0
 
 
 class TestRateLimiterInit:

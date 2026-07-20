@@ -200,7 +200,7 @@ class TestToolRegistryDoubleRegister:
         _Tool.permissions = ToolPermissions()
         return _Tool()
 
-    def test_second_registration_replaces_first(self) -> None:
+    def test_second_registration_is_rejected_without_replacing_first(self) -> None:
         from missy.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -208,14 +208,14 @@ class TestToolRegistryDoubleRegister:
         tool_v2 = self._make_tool("dupe_tool", "v2")
 
         registry.register(tool_v1)
-        registry.register(tool_v2)
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(tool_v2)
 
         # Only one tool under that name.
         assert registry.list_tools() == ["dupe_tool"]
-        # The retrieved instance is the second one.
-        assert registry.get("dupe_tool") is tool_v2
+        assert registry.get("dupe_tool") is tool_v1
 
-    def test_double_register_then_execute_uses_latest(self) -> None:
+    def test_rejected_double_register_executes_original(self) -> None:
         from missy.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -223,11 +223,12 @@ class TestToolRegistryDoubleRegister:
         tool_v2 = self._make_tool("calc", "second")
 
         registry.register(tool_v1)
-        registry.register(tool_v2)
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(tool_v2)
 
         result = registry.execute("calc")
         assert result.success is True
-        assert result.output == "second"
+        assert result.output == "first"
 
 
 # ===========================================================================

@@ -290,9 +290,8 @@ class TestToolRegistryEmitEventCensorFallback:
     """_emit_event lines 242-243: when the inner censor import raises the raw
     detail_msg is used and no exception propagates to the caller."""
 
-    def test_censor_import_error_falls_back_to_raw_message(self) -> None:
-        """An ImportError from censor_response is silently swallowed and the
-        raw detail_msg appears in the published audit event."""
+    def test_censor_import_error_fails_closed_without_raw_message(self) -> None:
+        """An unavailable censor must never publish raw audit detail."""
         from missy.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -312,8 +311,7 @@ class TestToolRegistryEmitEventCensorFallback:
         assert len(captured_events) == 1
         detail = captured_events[0].detail
         assert detail["tool"] == "test_tool"
-        # Raw message used when censor fails
-        assert detail["message"] == "raw_message"
+        assert detail["message"] == "Tool execution failed; sensitive details were withheld."
 
     def test_censor_exception_does_not_propagate(self) -> None:
         """Even when censor is unavailable the emit method does not raise."""

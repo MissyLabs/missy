@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -34,7 +35,14 @@ class HeartbeatRunner:
         report_fn: Callable[[str], None] | None = None,
     ):
         self._run = agent_run_fn
-        self._interval = interval_seconds
+        try:
+            interval = float(interval_seconds)
+            if not math.isfinite(interval) or interval < 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            logger.warning("Invalid heartbeat interval; using the 1800-second safe default")
+            interval = 1800.0
+        self._interval = interval
         self._workspace = Path(workspace).expanduser()
         self._active_hours = active_hours
         self._report = report_fn

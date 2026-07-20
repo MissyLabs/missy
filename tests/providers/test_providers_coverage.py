@@ -1993,8 +1993,9 @@ class TestProviderRegistryFromConfigExtended:
                 )
             }
         )
-        ProviderRegistry.from_config(config)
-        assert "my-ollama-host.local" in config.network.provider_allowed_hosts
+        registry = ProviderRegistry.from_config(config)
+        assert "my-ollama-host.local" in registry.effective_provider_hosts
+        assert "my-ollama-host.local" not in config.network.provider_allowed_hosts
 
     def test_base_url_not_duplicated_if_already_in_allowed_hosts(self):
         from missy.providers.registry import ProviderRegistry
@@ -2009,8 +2010,8 @@ class TestProviderRegistryFromConfigExtended:
             }
         )
         config.network.provider_allowed_hosts.append("myhost.local")
-        ProviderRegistry.from_config(config)
-        assert config.network.provider_allowed_hosts.count("myhost.local") == 1
+        registry = ProviderRegistry.from_config(config)
+        assert registry.effective_provider_hosts.count("myhost.local") == 1
 
     def test_provider_key_used_when_name_field_is_empty(self):
         from missy.providers.registry import ProviderRegistry

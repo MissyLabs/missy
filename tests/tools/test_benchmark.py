@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -118,11 +120,11 @@ class TestBenchmarkScorer:
         sr = scorer.score(r)
         assert sr.correctness == 1.0
 
-    def test_correctness_partial_string_match(self):
+    def test_correctness_partial_string_does_not_smuggle_single_token_or_number(self):
         scorer = BenchmarkScorer()
         r = _make_result(actual="The answer is 4 items", expected="4")
         sr = scorer.score(r)
-        assert sr.correctness > 0.0
+        assert sr.correctness == 0.0
 
     def test_correctness_numeric_tolerance(self):
         scorer = BenchmarkScorer()
@@ -130,11 +132,16 @@ class TestBenchmarkScorer:
         sr = scorer.score(r)
         assert sr.correctness > 0.9
 
-    def test_no_expected_output_gives_full_correctness_on_success(self):
+    def test_bench_050_no_expected_output_is_unscored_not_perfect(self):
         scorer = BenchmarkScorer()
         r = _make_result(expected=None)
         sr = scorer.score(r)
-        assert sr.correctness == 1.0
+        assert sr.correctness == 0.0
+
+    def test_bench_052_substring_and_number_smuggling_get_no_correctness_credit(self):
+        scorer = BenchmarkScorer()
+        assert scorer.score(_make_result(actual="unsafe", expected="safe")).correctness == 0.0
+        assert scorer.score(_make_result(actual="wrong 4", expected="4")).correctness == 0.0
 
     def test_aggregate_empty_returns_empty(self):
         scorer = BenchmarkScorer()
@@ -212,10 +219,32 @@ class TestBenchmarkStore:
 
     def test_query_min_composite(self, bench_store):
         bench_store.save(_make_scored())
-        # composite of a perfect run is ~0.999; use 1.1 so rows_high is empty
-        rows_high = bench_store.query(min_composite=1.1)
+        # Composite of this fixture is below 1.0.
+        rows_high = bench_store.query(min_composite=1.0)
         rows_low = bench_store.query(min_composite=0.0)
         assert len(rows_low) > len(rows_high)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"limit": 0}, "limit"),
+            ({"limit": 501}, "limit"),
+            ({"min_composite": float("nan")}, "min_composite"),
+            ({"min_composite": 1.01}, "min_composite"),
+            ({"since_iso": "2026-07-20T12:00:00"}, "timezone"),
+            ({"since_iso": "not-a-time"}, "ISO-8601"),
+            ({"tool_name": "bad\nname"}, "tool_name"),
+            ({"provider": ""}, "provider"),
+        ],
+    )
+    def test_bench_057_query_arguments_are_bounded(self, bench_store, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            bench_store.query(**kwargs)
+
+    def test_bench_057_query_normalizes_timestamp_and_has_stable_tie_breaker(self, bench_store):
+        bench_store.save(_make_scored())
+        rows = bench_store.query(since_iso="2000-01-01T00:00:00-05:00", limit=1)
+        assert len(rows) == 1
 
     def test_provider_summary(self, bench_store):
         for _ in range(3):
@@ -294,6 +323,32 @@ class TestBenchmarkSuite:
         suite.add_task(t)
         assert suite.task_count() == 1
 
+    def test_bench_048_rejects_cross_tool_and_duplicate_task_drift(self):
+        suite = BenchmarkSuite(name="identity", tool_name="calc")
+        task = BenchmarkTask(
+            id="stable-task",
+            tool_name="calc",
+            input_args={"expression": "1+1"},
+        )
+        suite.add_task(task)
+        with pytest.raises(ValueError, match="Duplicate benchmark task"):
+            suite.add_task(task)
+        with pytest.raises(ValueError, match="not suite tool"):
+            suite.add_task(BenchmarkTask(id="other-task", tool_name="shell", input_args={}))
+
+        suite.tasks[0].input_args["expression"] = "2+2"
+        with pytest.raises(ValueError, match="mutated"):
+            suite.validated_snapshot()
+
+    def test_bench_048_snapshots_caller_owned_task(self):
+        suite = BenchmarkSuite(name="identity", tool_name="calc")
+        task = BenchmarkTask.create("calc", {"expression": "1+1"})
+        suite.add_task(task)
+        task.input_args["expression"] = "attacker mutation"
+        tasks, identity = suite.validated_snapshot()
+        assert tasks[0].input_args == {"expression": "1+1"}
+        assert len(identity) == 64
+
 
 # ---------------------------------------------------------------------------
 # BenchmarkRunner (direct execution against a real tool)
@@ -337,6 +392,43 @@ def bench_runner(tmp_path: Path) -> BenchmarkRunner:
 
 
 class TestBenchmarkRunner:
+    def test_bench_046_direct_runner_dispatches_through_registry_reference_monitor(
+        self, bench_runner
+    ):
+        tool = EchoTool()
+        tool.execute = MagicMock(side_effect=AssertionError("direct execute bypass"))
+        registry = MagicMock()
+        registry.get.return_value = tool
+        registry.execute.return_value = ToolResult(
+            success=False, output=None, error="policy denied", policy_denied=True
+        )
+        task = BenchmarkTask.create("echo_tool", {"text": "hello"}, expected_output="hello")
+        result = bench_runner.run_task(task, registry=registry, persist=False)
+        registry.execute.assert_called_once_with("echo_tool", text="hello")
+        tool.execute.assert_not_called()
+        assert not result.result.success
+
+    def test_bench_047_per_task_timeout_is_bounded_and_outcome_unknown(self, bench_runner):
+        class SlowTool(BaseTool):
+            name = "slow_tool"
+            description = "Slow"
+            permissions = ToolPermissions()
+
+            def execute(self, **kwargs):
+                time.sleep(0.2)
+                return ToolResult(success=True, output="late")
+
+        from missy.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        registry.register(SlowTool())
+        task = BenchmarkTask.create("slow_tool", {}, expected_output="late", timeout_s=0.01)
+        started = time.monotonic()
+        result = bench_runner.run_task(task, registry=registry, persist=False)
+        assert time.monotonic() - started < 0.15
+        assert not result.result.success
+        assert "outcome is unknown" in result.result.error
+
     def test_run_task_success(self, bench_runner, mini_registry):
         task = BenchmarkTask.create("echo_tool", {"text": "hello"}, expected_output="hello")
         sr = bench_runner.run_task(task, registry=mini_registry, persist=False)
@@ -349,10 +441,11 @@ class TestBenchmarkRunner:
         assert not sr.result.success
         assert sr.reliability == 0.0
 
-    def test_run_task_missing_tool(self, bench_runner, mini_registry):
+    def test_bench_049_run_task_missing_tool_is_not_a_tool_call(self, bench_runner, mini_registry):
         task = BenchmarkTask.create("nonexistent_tool", {})
         sr = bench_runner.run_task(task, registry=mini_registry, persist=False)
         assert not sr.result.success
+        assert not sr.result.tool_call_made
 
     def test_run_suite(self, bench_runner, mini_registry):
         suite = BenchmarkSuite(name="echo_suite", tool_name="echo_tool")

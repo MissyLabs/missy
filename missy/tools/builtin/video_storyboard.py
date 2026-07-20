@@ -30,6 +30,7 @@ testing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -76,22 +77,55 @@ class VideoStoryboardTool(BaseTool):
         network=True, shell=True, filesystem_read=True, filesystem_write=True
     )
 
-    def __init__(self, generate_tool: Any = None, edit_tool: Any = None) -> None:
+    def __init__(
+        self,
+        generate_tool: Any = None,
+        edit_tool: Any = None,
+        child_executor: Callable[..., ToolResult] | None = None,
+    ) -> None:
         self._generate_tool = generate_tool
         self._edit_tool = edit_tool
+        if child_executor is not None:
+            self._child_executor = child_executor
+        elif generate_tool is not None or edit_tool is not None:
+            # Explicit dependency injection is a library/test seam. Production
+            # construction supplies neither object and always uses the live
+            # registry reference monitor below.
+            injected = {"video_generate": generate_tool, "video_edit": edit_tool}
+
+            def execute_injected(name: str, **kwargs: Any) -> ToolResult:
+                tool = injected.get(name)
+                if tool is None:
+                    raise RuntimeError(f"No injected child tool for {name!r}")
+                method = getattr(tool, "execute")  # noqa: B009 - deliberate injection seam
+                return method(**kwargs)
+
+            self._child_executor = execute_injected
+        else:
+            self._child_executor = self._execute_registered_child
+
+    @staticmethod
+    def _execute_registered_child(name: str, **kwargs: Any) -> ToolResult:
+        from missy.tools.registry import get_tool_registry
+
+        return get_tool_registry().execute(name, **kwargs)
 
     def _gen(self) -> Any:
         if self._generate_tool is None:
-            from missy.tools.builtin.video_generate import VideoGenerateTool
+            from missy.tools.registry import get_tool_registry
 
-            self._generate_tool = VideoGenerateTool()
+            self._generate_tool = get_tool_registry().get("video_generate")
+            if self._generate_tool is None:
+                raise RuntimeError("video_generate is not registered")
         return self._generate_tool
 
     def _edit(self) -> Any:
         if self._edit_tool is None:
-            from missy.tools.builtin.video_edit import VideoEditTool
+            from missy.tools.registry import get_tool_registry
 
-            self._edit_tool = VideoEditTool()
+            self._edit_tool = get_tool_registry().get("video_edit")
+            if self._edit_tool is None:
+                raise RuntimeError("video_edit is not registered")
         return self._edit_tool
 
     # -- policy declarations delegate to the underlying tools ---------------
@@ -105,11 +139,12 @@ class VideoStoryboardTool(BaseTool):
     def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
         return "ffmpeg && ffprobe"
 
-    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> dict[str, list[str]]:
-        try:
-            return self._edit().resolve_filesystem_targets(kwargs)
-        except Exception:
-            return {}
+    def resolve_filesystem_targets(self, kwargs: dict[str, Any]) -> tuple[list[str], list[str]]:
+        # Resolver failures must propagate to ToolRegistry's fail-closed
+        # policy path.  Returning an empty mapping previously both violated
+        # the resolver contract and could make an unresolved composite look
+        # like it touched no files.
+        return self._edit().resolve_filesystem_targets(kwargs)
 
     # -- orchestration helpers ----------------------------------------------
 
@@ -126,12 +161,14 @@ class VideoStoryboardTool(BaseTool):
         mixed joins left-fold pairwise so each join gets its own
         transition.
         """
-        edit = self._edit()
         if len(set(joins)) == 1:
-            return edit.execute(operation="concat", inputs=list(clips), transition=joins[0])
+            return self._child_executor(
+                "video_edit", operation="concat", inputs=list(clips), transition=joins[0]
+            )
         result = ToolResult(success=True, output={"path": clips[0]})
         for idx, join in enumerate(joins):
-            result = edit.execute(
+            result = self._child_executor(
+                "video_edit",
                 operation="concat",
                 inputs=[result.output["path"], clips[idx + 1]],
                 transition=join,
@@ -228,8 +265,6 @@ class VideoStoryboardTool(BaseTool):
                 "(svd always animates from an image).",
             )
 
-        gen = self._gen()
-        edit = self._edit()
         clips: list[str] = []
         progress: list[dict] = []
         chained_image = ""  # continuity: last frame of the previous scene
@@ -242,7 +277,9 @@ class VideoStoryboardTool(BaseTool):
                     scene_kwargs[key] = scene[key]
             if continuity and chained_image and not scene.get("image_path"):
                 scene_kwargs["image_path"] = chained_image
-            g = gen.execute(backend=backend, prompt=str(scene["prompt"]), **scene_kwargs)
+            g = self._child_executor(
+                "video_generate", backend=backend, prompt=str(scene["prompt"]), **scene_kwargs
+            )
             if not g.success or not isinstance(g.output, dict) or not g.output.get("path"):
                 return ToolResult(
                     success=False,
@@ -252,21 +289,33 @@ class VideoStoryboardTool(BaseTool):
             clip_path = g.output["path"]
             duration = scene.get("duration")
             if duration:
-                t = edit.execute(
-                    operation="trim", input=clip_path, start=0.0, duration=float(duration)
+                t = self._child_executor(
+                    "video_edit",
+                    operation="trim",
+                    input=clip_path,
+                    start=0.0,
+                    duration=float(duration),
                 )
                 if t.success and isinstance(t.output, dict) and t.output.get("path"):
                     clip_path = t.output["path"]
             caption = str(scene.get("caption") or "").strip()
             if caption:
-                c = edit.execute(operation="text", input=clip_path, text=caption, position="bottom")
+                c = self._child_executor(
+                    "video_edit",
+                    operation="text",
+                    input=clip_path,
+                    text=caption,
+                    position="bottom",
+                )
                 if c.success and isinstance(c.output, dict) and c.output.get("path"):
                     clip_path = c.output["path"]
             if continuity and i < len(scenes) - 1:
                 # Chain from the exact frame the viewer sees before the cut
                 # (post-trim/caption). A failure here is a hard error --
                 # silently dropping continuity mid-story defeats its purpose.
-                f = edit.execute(operation="extract_frame", input=clip_path, at=-1.0)
+                f = self._child_executor(
+                    "video_edit", operation="extract_frame", input=clip_path, at=-1.0
+                )
                 if not f.success or not isinstance(f.output, dict) or not f.output.get("path"):
                     return ToolResult(
                         success=False,
@@ -302,7 +351,8 @@ class VideoStoryboardTool(BaseTool):
 
         # 3. Optional title overlay on the opening.
         if title:
-            tx = edit.execute(
+            tx = self._child_executor(
+                "video_edit",
                 operation="text",
                 input=final_path,
                 text=title,
@@ -315,7 +365,8 @@ class VideoStoryboardTool(BaseTool):
 
         # 4. Optional continuous soundtrack over the whole assembly.
         if audio_path:
-            a = edit.execute(
+            a = self._child_executor(
+                "video_edit",
                 operation="audio",
                 input=final_path,
                 audio_file=audio_path,

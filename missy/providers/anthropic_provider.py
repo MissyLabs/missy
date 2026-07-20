@@ -25,6 +25,7 @@ from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
+from .rate_limiter import parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class AnthropicProvider(BaseProvider):
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout
         self._client: Any | None = None
+        self._client_error: str | None = None
 
     @property
     def api_key(self) -> str | None:
@@ -88,6 +90,7 @@ class AnthropicProvider(BaseProvider):
         """
         self._api_key = value
         self._client = None
+        self._client_error = None
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -100,7 +103,7 @@ class AnthropicProvider(BaseProvider):
             ``True`` if the ``anthropic`` package is importable and an API
             key is present.
         """
-        return _ANTHROPIC_AVAILABLE and bool(self._api_key)
+        return _ANTHROPIC_AVAILABLE and bool(self._api_key) and self._client_error is None
 
     def _make_client(self) -> Any:
         """Return a cached Anthropic client, creating one on first call.
@@ -120,9 +123,13 @@ class AnthropicProvider(BaseProvider):
                 client_kwargs["http_client"] = build_policy_http_client(
                     timeout=float(self._timeout)
                 )
-            except Exception:  # pragma: no cover - defensive; never block startup
-                logger.debug("Could not build policy-aware http client", exc_info=True)
-            self._client = _anthropic_sdk.Anthropic(**client_kwargs)
+                self._client = _anthropic_sdk.Anthropic(**client_kwargs)
+                self._client_error = None
+            except Exception as exc:
+                self._client_error = "policy-aware transport construction failed"
+                raise ProviderError(
+                    "Anthropic provider unavailable: policy-aware transport construction failed"
+                ) from exc
         return self._client
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
@@ -194,7 +201,7 @@ class AnthropicProvider(BaseProvider):
         except _anthropic_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             if getattr(exc, "status_code", 0) == 429:
-                retry_after = float(
+                retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
                 if self.rate_limiter is not None:
@@ -335,7 +342,7 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
         except _anthropic_sdk.APIError as exc:
             if getattr(exc, "status_code", 0) == 429:
-                retry_after = float(
+                retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
                 if self.rate_limiter is not None:
