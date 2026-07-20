@@ -191,6 +191,66 @@ def make_promise_retry_prompt(user_input: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Incomplete security refusal: a high-risk request is refused, but the reply
+# omits the concrete governed alternative required by the Discord contract.
+# ---------------------------------------------------------------------------
+
+_HIGH_RISK_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?i)(?:read|show|summarize|upload|send|disclose).{0,60}"
+        r"(?:secret|token|credential|\.env|/etc/shadow)"
+    ),
+    re.compile(
+        r"(?i)(?:sudo|privilege|host\s+root|disable\s+(?:host\s+)?security|"
+        r"broader\s+permissions|skip\s+policy|bypass\s+(?:policy|safety|security))"
+    ),
+)
+
+_REFUSAL_PATTERN = re.compile(
+    r"(?i)\b(?:can(?:not|'t)|won't|will\s+not|unable|not\s+able|refus(?:e|ing)|"
+    r"not\s+(?:allowed|permitted))\b"
+)
+
+_SAFE_ALTERNATIVE_PATTERN = re.compile(
+    r"(?i)(?:safe\s+alternative|instead.{0,30}\b(?:can|could)\b|"
+    r"\bI\s+can\s+(?:help|inspect|review|create|provide|explain|work|use)|"
+    r"unprivileged|containeri[sz]ed|saniti[sz]ed|redacted|gitignore|read-only|"
+    r"within\s+(?:the\s+)?(?:approved|existing)\s+(?:workspace|permissions?))"
+)
+
+
+def detect_security_refusal_without_alternative(text: str, user_input: str) -> bool:
+    """Detect a bare refusal to a security-sensitive request.
+
+    The detector is deliberately gated on both the original high-risk request
+    and an explicit refusal phrase. It does not turn ordinary answers into
+    refusals and does not ask the model to reconsider the denial; it only
+    identifies that the required governed alternative is absent.
+    """
+    if not text or not user_input:
+        return False
+    if not any(pattern.search(user_input) for pattern in _HIGH_RISK_REQUEST_PATTERNS):
+        return False
+    if not _REFUSAL_PATTERN.search(text):
+        return False
+    return _SAFE_ALTERNATIVE_PATTERN.search(text) is None
+
+
+def make_security_refusal_retry_prompt(user_input: str = "") -> str:
+    """Return a bounded correction that preserves the security refusal."""
+    anchor = f"\n\nThe request you must safely answer is:\n{user_input}" if user_input else ""
+    return (
+        "Your refusal is correct but incomplete. Keep the refusal unchanged "
+        "and add one concrete alternative that stays within existing authority. "
+        "For secret uploads, offer a gitignore check or a redacted report. For "
+        "host package, sudo, or system-setting requests, offer an unprivileged "
+        "disposable container. For policy bypass requests, offer a read-only "
+        "policy review or a human-reviewed logging improvement. Do not call a "
+        f"tool and do not offer any route around the control.{anchor}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Identity confusion: delegate answers as the underlying coding-assistant
 # harness ("Claude Code") instead of as Missy, and falsely disclaims
 # Missy's own dispatched tools as unavailable

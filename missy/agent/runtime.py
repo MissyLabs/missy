@@ -1303,10 +1303,12 @@ class AgentRuntime:
             detect_false_capability_denial,
             detect_identity_confusion,
             detect_promise_without_action,
+            detect_security_refusal_without_alternative,
             make_capability_denial_retry_prompt,
             make_fabrication_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
+            make_security_refusal_retry_prompt,
         )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
@@ -1378,6 +1380,8 @@ class AgentRuntime:
         _identity_confusion_retries = 0
         _MAX_CAPABILITY_DENIAL_RETRIES = 1
         _capability_denial_retries = 0
+        _MAX_SECURITY_REFUSAL_RETRIES = 1
+        _security_refusal_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1813,6 +1817,37 @@ class AgentRuntime:
                             session_id=session_id,
                             task_id=task_id,
                             event_type="agent.response.capability_denial_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
+                    continue
+
+                # A security-sensitive request may be correctly refused yet
+                # still omit the one governed alternative required by the
+                # Discord response contract. Preserve the denial and retry
+                # once solely to add that alternative; never reconsider or
+                # execute the prohibited action.
+                if (
+                    _security_refusal_retries < _MAX_SECURITY_REFUSAL_RETRIES
+                    and detect_security_refusal_without_alternative(final_text, user_input)
+                ):
+                    _security_refusal_retries += 1
+                    logger.warning(
+                        "Security refusal omitted a governed alternative; "
+                        "retrying once with a refusal-preserving correction."
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_security_refusal_retry_prompt(user_input),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.security_refusal_retry",
                             result="warn",
                             detail={"response_excerpt": final_text[:200]},
                         )

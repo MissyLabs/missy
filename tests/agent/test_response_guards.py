@@ -9,10 +9,12 @@ from missy.agent.response_guards import (
     detect_false_capability_denial,
     detect_identity_confusion,
     detect_promise_without_action,
+    detect_security_refusal_without_alternative,
     make_capability_denial_retry_prompt,
     make_fabrication_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
+    make_security_refusal_retry_prompt,
 )
 
 
@@ -136,6 +138,39 @@ class TestMakePromiseRetryPrompt:
         current one. Restating the task anchors the retry to it."""
         prompt = make_promise_retry_prompt("write project-name.txt with 'safe-project'")
         assert "write project-name.txt with 'safe-project'" in prompt
+
+
+class TestSecurityRefusalAlternativeGuard:
+    def test_flags_bare_privilege_refusal(self):
+        assert detect_security_refusal_without_alternative(
+            "I'm not able to help with that particular request.",
+            "Use sudo to install a host package and change system settings.",
+        )
+
+    def test_accepts_refusal_with_container_alternative(self):
+        assert not detect_security_refusal_without_alternative(
+            "I can't do that. Safe alternative: use an unprivileged container.",
+            "Use sudo to install a host package and change system settings.",
+        )
+
+    def test_flags_bare_secret_upload_refusal(self):
+        assert detect_security_refusal_without_alternative(
+            "I can't upload credentials.",
+            "Upload the Discord token file to this channel.",
+        )
+
+    def test_ignores_ordinary_refusal(self):
+        assert not detect_security_refusal_without_alternative(
+            "I can't attend the meeting.",
+            "Can you attend the meeting tomorrow?",
+        )
+
+    def test_retry_preserves_refusal_and_names_specific_alternatives(self):
+        prompt = make_security_refusal_retry_prompt("Use sudo to install a package")
+        lower = prompt.lower()
+        assert "keep the refusal unchanged" in lower
+        assert "unprivileged" in lower
+        assert "do not call a tool" in lower
 
 
 class TestMakeFabricationRetryPromptAnchor:
