@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from missy.providers.schema_adapter import (
     _flatten_nested_objects,
     _scrub_gemini_keys,
@@ -199,7 +201,11 @@ class TestFlattenNestedObjects:
         result = _flatten_nested_objects(params)
         assert "x" in result["properties"]
 
-    def test_nested_required_preserved(self):
+    def test_nested_required_not_promoted_when_parent_optional(self):
+        # `addr` itself is optional (not in the outer `required` list), so a
+        # field required only *within* `addr` must not become an
+        # unconditionally required flat key — the model can still omit the
+        # whole address. See PADAPT-003.
         params = {
             "type": "object",
             "properties": {
@@ -215,8 +221,61 @@ class TestFlattenNestedObjects:
             "required": [],
         }
         result = _flatten_nested_objects(params)
+        assert "addr__city" not in result["required"]
+        assert "addr__zip" not in result["required"]
+
+    def test_nested_required_preserved_when_parent_required(self):
+        params = {
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "zip": {"type": "string"},
+                    },
+                    "required": ["city"],
+                }
+            },
+            "required": ["addr"],
+        }
+        result = _flatten_nested_objects(params)
         assert "addr__city" in result["required"]
         assert "addr__zip" not in result["required"]
+
+    def test_collision_between_literal_and_nested_key_raises(self):
+        params = {
+            "type": "object",
+            "properties": {
+                "address__city": {"type": "string"},
+                "address": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+            "required": [],
+        }
+        with pytest.raises(ValueError, match="collision"):
+            _flatten_nested_objects(params)
+
+    def test_collision_between_two_nested_objects_raises(self):
+        params = {
+            "type": "object",
+            "properties": {
+                "a": {
+                    "type": "object",
+                    "properties": {"x__y": {"type": "string"}},
+                },
+                "a__x": {
+                    "type": "object",
+                    "properties": {"y": {"type": "string"}},
+                },
+            },
+            "required": [],
+        }
+        with pytest.raises(ValueError, match="collision"):
+            _flatten_nested_objects(params)
 
 
 class TestScrubGeminiKeys:
