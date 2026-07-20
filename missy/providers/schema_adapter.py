@@ -235,21 +235,48 @@ def _flatten_nested_objects(params: dict[str, Any]) -> dict[str, Any]:
         }
 
     Non-object properties are left unchanged.
+
+    Two invariants that the naive one-pass flatten silently violated are
+    enforced here (PADAPT-002/003):
+
+    - **Collision detection.** A literal property already named
+      ``"<key>__<sub_key>"`` and a nested ``<key>.<sub_key>`` flatten to the
+      same key. Rather than letting whichever is processed second silently
+      clobber the other in the output dict, a collision raises so the
+      corruption can't reach a provider unnoticed.
+    - **Optionality.** A field that's only required *within* an optional
+      parent object (the parent itself isn't in the outer ``required`` list)
+      must not become unconditionally required once flattened — the model
+      could still legitimately omit the whole parent. Flattened sub-keys are
+      only marked required when both the parent and the sub-key were
+      required.
     """
     props = params.get("properties", {})
-    required = list(params.get("required", []))
+    required = set(params.get("required", []))
     new_props: dict[str, Any] = {}
     new_required: list[str] = []
 
     for key, val in props.items():
         if val.get("type") == "object" and "properties" in val:
             nested_req = set(val.get("required", []))
+            parent_required = key in required
             for sub_key, sub_val in val["properties"].items():
                 flat_key = f"{key}__{sub_key}"
+                if flat_key in new_props:
+                    raise ValueError(
+                        f"Mistral schema flattening collision: '{flat_key}' is produced by "
+                        f"more than one source property (a literal '{flat_key}' property "
+                        f"and/or nested '{key}.{sub_key}')"
+                    )
                 new_props[flat_key] = sub_val
-                if sub_key in nested_req:
+                if parent_required and sub_key in nested_req:
                     new_required.append(flat_key)
         else:
+            if key in new_props:
+                raise ValueError(
+                    f"Mistral schema flattening collision: '{key}' is produced by more "
+                    "than one source property"
+                )
             new_props[key] = val
             if key in required:
                 new_required.append(key)
