@@ -402,14 +402,14 @@ def _make_handler(
             if method == "POST" and path == f"{_API_PREFIX}/scheduler/jobs":
                 body = self._read_body()
                 if body is None:
-                    return ApiResponse.error("Invalid JSON body", 400)
+                    return self._body_error_response()
                 return self._handle_create_scheduled_job(body)
 
             # Session collection
             if method == "POST" and path == f"{_API_PREFIX}/sessions":
                 body = self._read_body()
                 if body is None:
-                    return ApiResponse.error("Invalid JSON body", 400)
+                    return self._body_error_response()
                 return self._handle_create_session(body)
             if method == "GET" and path == f"{_API_PREFIX}/sessions":
                 return self._handle_list_sessions(params)
@@ -418,14 +418,14 @@ def _make_handler(
             if method == "POST" and path == f"{_API_PREFIX}/chat":
                 body = self._read_body()
                 if body is None:
-                    return ApiResponse.error("Invalid JSON body", 400)
+                    return self._body_error_response()
                 return self._handle_chat(body)
 
             # Streamed background runs
             if method == "POST" and path == f"{_API_PREFIX}/runs":
                 body = self._read_body()
                 if body is None:
-                    return ApiResponse.error("Invalid JSON body", 400)
+                    return self._body_error_response()
                 return self._handle_start_run(body)
             if method == "GET" and path == f"{_API_PREFIX}/runs":
                 return self._handle_list_runs(params)
@@ -442,7 +442,7 @@ def _make_handler(
             if method == "POST" and path.startswith(controls_prefix):
                 body = self._read_body()
                 if body is None:
-                    return ApiResponse.error("Invalid JSON body", 400)
+                    return self._body_error_response()
                 control_id = path[len(controls_prefix) :]
                 if not control_id or "/" in control_id:
                     return ApiResponse.error("Not found", 404)
@@ -500,12 +500,12 @@ def _make_handler(
                 if method == "PUT" and sub == "":
                     body = self._read_body()
                     if body is None:
-                        return ApiResponse.error("Invalid JSON body", 400)
+                        return self._body_error_response()
                     return self._handle_update_memory_turn(turn_id, body)
                 if method == "POST" and sub == "pin":
                     body = self._read_body()
                     if body is None:
-                        return ApiResponse.error("Invalid JSON body", 400)
+                        return self._body_error_response()
                     return self._handle_pin_memory_turn(turn_id, body)
 
             # Provider item route — redacted config detail
@@ -552,11 +552,21 @@ def _make_handler(
         # Request body
         # ----------------------------------------------------------------
 
+        def _body_error_response(self) -> tuple[int, dict]:
+            """Return the typed error from the most recent body read."""
+            message, status = getattr(
+                self,
+                "_last_body_error",
+                ("Invalid JSON body", 400),
+            )
+            return ApiResponse.error(message, status)
+
         def _read_body(self) -> dict | None:
             """Read, size-check, and parse the JSON request body.
 
             Returns ``None`` on any parse or size error.
             """
+            self._last_body_error = ("Invalid JSON body", 400)
             content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip()
             if content_type != "application/json":
                 return None
@@ -569,6 +579,7 @@ def _make_handler(
                 return None
 
             if length > api_config.max_request_bytes:
+                self._last_body_error = ("Request body too large", 413)
                 return None
 
             raw = self.rfile.read(length)
