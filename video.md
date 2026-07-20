@@ -334,4 +334,122 @@ Two issues discovered live (both folded into the implementation + regression tes
   policy territory, not a structured tool.
 - Subtitle files (SRT/ASS burn-in), picture-in-picture, chroma key.
 - Re-encoding-free (`-c copy`) fast paths — frame accuracy and normalization are worth the
-  encode cost at these clip lengths.
+  encode cost at these clip lengths. *(Part III adds one deliberate exception: the `audio`
+  mux operation stream-copies the video, since remuxing an audio track is not an edit of
+  the video stream and a lossless copy is strictly better there.)*
+
+---
+
+# Part III — Storyboard Coherence + Still/Audio Primitives
+
+Audit date: 2026-07-19. Third pass over the video tool set. Parts I (generation) and II
+(editing) are implemented and live-verified; F16 added `video_storyboard` (multi-scene
+orchestration). This pass audits the storyboard against its own documented contract and
+against the state of practice for multi-scene generation, and fixes what it finds.
+
+Research note: the community-standard technique for coherent multi-scene Wan 2.2 video is
+**last-frame chaining** — generate scene N, extract its final frame, and feed it as the
+`start_image` of scene N+1's image-to-video run, then concatenate (see ComfyUI's official
+Wan 2.2 workflows and the widely-shared multi-scene chaining workflow built on exactly this
+pattern). Missy's `wan` backend already supports i2v via `image_path`; what was missing was
+(a) a way to extract a frame from a clip at all, and (b) the storyboard plumbing to chain it.
+
+## 14. Gaps found
+
+| # | Gap | Severity |
+|---|-----|----------|
+| S1 | **Scene `caption` is silently ignored** — the storyboard schema documents a per-scene `caption`, but `execute()` never overlays it. A documented parameter that does nothing. | high (bug) |
+| S2 | **Per-scene `transition` mis-honored** — only `scenes[-1].get("transition")` is consulted, and whatever the *last* scene says is applied to *every* join. A `transition` on any other scene is ignored outright. | medium (bug) |
+| S3 | **No per-scene overrides, no per-scene seed echo** — scenes can't carry their own `seed`/`negative_prompt`/`image_path`/`audio_prompt`/`steps`/`cfg`/`video_frames`, and the per-scene seeds `video_generate` echoes are discarded, so a storyboard with one bad scene cannot regenerate just that scene. This contradicts the tools' own "iteration is just calling again" contract. | high |
+| S4 | **No visual continuity between scenes** — every scene is generated independently from text, so characters/settings drift freely across cuts. The `wan` backend's i2v mode enables last-frame chaining (the standard technique), but nothing implements it. | high (goal) |
+| S5 | **No way to extract a still frame from a video** — blocks S4, and also blocks pointing `vision_analyze` at a specific moment of a generated clip for the review-then-refine loop. | medium |
+| S6 | **No way to lay one continuous soundtrack over an assembled video** — audio only enters at generation time, per clip. A storyboard given a shared `audio_prompt` generates N *disjoint* mini-soundtracks that get stitched at the cuts. | medium |
+| S7 | Storyboard `title_seconds`/`transition` are unvalidated (arbitrary strings/negatives pass straight through). | low |
+
+## 15. Design
+
+**`video_edit` gains two operations** (same builder-function + policy conventions as Part II):
+
+| operation | purpose | key parameters |
+|-----------|---------|----------------|
+| `extract_frame` | export one frame as PNG/JPEG (S5; enables S4 and vision review) | `input`, `at` (seconds; **-1 = last frame**, computed from probed duration/fps as `duration - max(0.1, 1.5/fps)` so low-fps clips still land on a real frame), `save_path` (extension picks the codec; default timestamped `.png` under `~/.missy/videos/`) |
+| `audio` | mux an audio file onto an existing video (S6) | `input`, `audio_file`, `audio_mode` (`"replace"` default \| `"mix"` — amix with the existing track, `normalize=0`, `duration=first`), `loop` (loop a short track to the video length via `-stream_loop -1`) |
+
+`audio` design points: the video stream is `-c:v copy`ed (bit-exact, fast — remuxing audio is
+not a video edit; `video_format`/`crf` are ignored and documented as such); the audio is
+`apad`ded and `-shortest`ed so the output duration always equals the video's regardless of
+the track being shorter or longer; audio-only inputs are probed with a widened `_probe`
+(`expect="audio"`) since the Part II prober hard-required a video stream. `mix` falls back to
+`replace` when the video has no audio track.
+
+**`video_storyboard` rework**:
+
+- **Captions (S1)**: after a scene's clip is generated (and trimmed), a non-empty `caption`
+  overlays it via `video_edit` `text` (position `bottom`, boxed, whole-clip duration). A
+  caption failure degrades gracefully to the uncaptioned clip (same posture as trim).
+- **Transitions (S2)**: `scenes[i].transition` now means *the join into scene i* (scene 0's is
+  ignored); the storyboard-level `transition` param is the default for scenes that don't say.
+  Uniform joins → one `concat` call exactly as before; mixed joins → left-fold pairwise
+  `concat` calls, each with its own transition. Values validated against `{none, crossfade}`.
+- **Per-scene overrides + seed echo (S3)**: scenes may carry `seed`, `negative_prompt`,
+  `image_path`, `audio_prompt`, `steps`, `cfg`, `video_frames` — a whitelist, overriding the
+  shared kwargs for that scene only. The output's `scenes` list now records each scene's
+  echoed `seed`, `prompt`, and `path`, so any single scene can be reproduced or re-rolled.
+- **Continuity (S4)**: `continuity=True` extracts the last frame of each scene's *final* clip
+  (post-trim/caption — the exact frame the viewer sees before the cut) via `extract_frame`
+  and passes it as the next scene's `image_path` (a scene's own `image_path` wins). Requires
+  an i2v-capable backend: allowed for `wan`/`svd`, rejected with an actionable error for
+  `animatediff`/`wan14b`. For `svd`, scene 0 must supply its own `image_path` (svd always
+  needs one); for `wan`, scene 0 runs t2v as usual. A frame-extraction failure is a hard
+  error (silently dropping continuity mid-storyboard would defeat its purpose).
+- **Soundtrack (S6)**: new `audio_path` storyboard param — after assembly (and title), the
+  file is muxed over the whole video via the new `audio` op (`audio_mode`/`loop`
+  forwarded). Per-scene generated audio still works (scene `audio_prompt` override / shared
+  kwargs) for per-scene sfx/ambience; one continuous *generated* soundtrack would require an
+  audio-only generation path in `video_generate` — deferred, see §18.
+- **Validation (S7)**: `transition` validated; `title_seconds` clamped to 0.5–30 s.
+
+## 16. Tests
+
+- `test_video_edit.py`: `extract_frame` builder shape + last-frame `at` derivation + execute
+  path (monkeypatched run/probe) + validation (missing input, bad `at`); `audio` builder
+  (replace/mix/loop argv), duration semantics flags, audio-file probing, validation
+  (missing/`non-audio` file), `-c:v copy` assertion; widened `_probe` audio mode.
+- `test_video_storyboard.py`: caption → per-scene `text` call; caption failure degrades;
+  mixed per-scene transitions → pairwise concats with correct transition each; uniform →
+  single concat; override whitelist forwarded (and non-whitelisted scene keys *not*
+  forwarded); per-scene seed echo in output; `continuity=True` → `extract_frame` + chained
+  `image_path` (and scene-own `image_path` wins; rejected for non-i2v backends; extraction
+  failure aborts); `audio_path` → final `audio` mux; `title_seconds` clamp; invalid
+  transition rejected.
+
+## 17. Live verification results (ffmpeg 6.1.1 + ComfyUI 0.28 on the 5080 box, 2026-07-19)
+
+| Run | Result |
+|-----|--------|
+| `extract_frame` at t=1.0 and at=-1 on a 4 s/24 fps clip | ✅ two 640×480 PNGs, byte-distinct (`cmp`); at=-1 derived to 3.9 s |
+| `audio` replace: 1.5 s MP3 onto 4 s silent video | ✅ AAC track padded to ~4.0 s; video stream MD5 **identical** to the input's (bit-exact `-c:v copy`) |
+| `audio` loop: same 1.5 s track, `loop=True` | ✅ audio stream spans ~4.0 s |
+| `audio` mix onto a video with an existing track | ✅ blended track, duration unchanged |
+| Real 2-scene `wan` storyboard: `continuity=True`, per-scene captions + durations, crossfade join, title | ✅ scene 1's last frame extracted (`frame_*.png`) and fed to scene 2's i2v generation; per-scene edit chain (trim → caption) visible in artifacts; final 448×256 @ 24 fps MP4, duration exactly 1.375+1.375−0.5 = 2.25 s; **both scene seeds echoed** in the output for re-rolling |
+
+Run-15 validation also exercised VIDEDIT-006's long literal caption (`%`, quotes, commas,
+ampersand, colons). It exposed that the height-only automatic font size could place the
+beginning and end outside the frame even though drawtext rendered the string safely. Automatic
+sizing now measures the selected FreeType font (with a conservative dependency-free fallback)
+and reduces the size until every line fits inside the frame; explicit `font_size` remains exact.
+
+One behavior noted live (correct, kept): a scene `duration` longer than the generated clip
+trims to the clip's actual length (trim cannot extend); the crossfade offset math then uses
+the *probed* durations, so the final length stays exact.
+
+## 18. Explicitly out of scope (Part III)
+
+- Audio-only generation (`video_generate` producing a standalone soundtrack file for
+  storyboard-wide *generated* music) — needs a `SaveAudio`-terminated ComfyUI graph and a
+  different output contract; `audio_path` covers the assembled-soundtrack need today.
+- Wan 2.2 first-last-frame conditioning (`WanFirstLastFrameToVideo`) — jointly conditions a
+  scene on both endpoints for authored-feeling transitions; strictly better than plain
+  last-frame chaining but needs the 14B i2v expert pair (not present on either box) and a
+  per-scene *pair* planning contract. Revisit when the 14B i2v experts are downloaded.
+- Per-scene backend mixing (e.g. svd for scene 1, wan for the rest).
