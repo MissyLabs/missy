@@ -21,6 +21,14 @@ Operations (selected via ``operation``):
 * ``"speed"`` -- change playback speed 0.25x-4x (audio pitch preserved
   via chained ``atempo``).
 * ``"resize"`` -- rescale (0 for one dimension derives it from aspect).
+* ``"extract_frame"`` -- export one frame as a PNG/JPEG still
+  (``at=-1`` = last frame). Enables reviewing a clip with the vision
+  tools and last-frame -> ``image_path`` scene chaining (see
+  ``video_storyboard``'s continuity mode).
+* ``"audio"`` -- lay an audio file onto an existing video
+  (``audio_mode="replace"``/``"mix"``, optional ``loop``). The video
+  stream is stream-copied, never re-encoded; output duration always
+  equals the video's.
 
 All operations re-encode through the same quality surface as
 ``video_generate``: ``video_format`` = ``h264-mp4`` | ``h265-mp4`` |
@@ -70,8 +78,14 @@ _FFPROBE = "ffprobe"
 _DEFAULT_OUTPUT_DIR = str(Path.home() / ".missy" / "videos")
 _DEFAULT_TIMEOUT_SECONDS = 600
 
-_VALID_OPERATIONS = frozenset({"concat", "trim", "text", "speed", "resize"})
+_VALID_OPERATIONS = frozenset(
+    {"concat", "trim", "text", "speed", "resize", "extract_frame", "audio"}
+)
 _VALID_TRANSITIONS = frozenset({"none", "crossfade"})
+_VALID_AUDIO_MODES = frozenset({"replace", "mix"})
+
+# extract_frame output containers ffmpeg's image2 muxer handles by extension.
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
 # Tool-facing format name -> (video encoder argv, container ext). Mirrors
 # video_generate's _VIDEO_FORMATS surface.
@@ -147,7 +161,55 @@ def _find_font() -> str | None:
     return None
 
 
-def _unique_dest(save_path: str, ext: str = ".mp4") -> Path:
+def _auto_font_size(text: str, font_file: str | None, *, width: int, height: int) -> int:
+    """Choose a readable default size that keeps every line inside the frame.
+
+    The old ``height / 12`` default worked for short titles but let longer
+    captions extend beyond both sides of the image. Pillow and ffmpeg both
+    use FreeType, so when Pillow is available its measurement is an accurate
+    preflight for drawtext. Pillow is optional; the fallback deliberately
+    uses a conservative glyph-width estimate so video editing still works in
+    a minimal installation.
+
+    An explicitly requested ``font_size`` is never changed -- this only
+    defines the behavior of the documented automatic (zero) value.
+    """
+    desired = max(16, int(height) // 12)
+    # Position presets leave 20 px at each edge; a boxed caption adds a
+    # 10 px border. Keep a little extra breathing room as well.
+    available = max(1, int(width) - 48)
+    lines = text.splitlines() or [text]
+
+    if font_file:
+        try:
+            from PIL import ImageFont
+
+            def widest_at(size: int) -> float:
+                font = ImageFont.truetype(font_file, size=size)
+                return max(float(font.getlength(line)) for line in lines)
+
+            widest = widest_at(desired)
+            if widest <= available:
+                return desired
+            fitted = max(8, int(desired * available / widest))
+            # Rounding and hinting can move the exact FreeType measurement by
+            # a pixel. Walk down until the measured text genuinely fits.
+            while fitted > 8 and widest_at(fitted) > available:
+                fitted -= 1
+            return fitted
+        except (ImportError, OSError, ValueError):
+            logger.debug("Unable to measure drawtext font; using conservative fallback")
+
+    longest = max((len(line) for line in lines), default=0)
+    if longest:
+        # A typical sans-serif glyph averages ~0.6 em. 0.75 is intentionally
+        # conservative for the no-Pillow path while avoiding unreadably tiny
+        # text for ordinary prose.
+        desired = min(desired, max(8, int(available / (longest * 0.75))))
+    return desired
+
+
+def _unique_dest(save_path: str, ext: str = ".mp4", prefix: str = "edit_") -> Path:
     """Resolve the output path; never overwrite (numeric suffix on collision).
 
     Same contract as video_generate's _retrieve_video destination logic.
@@ -156,7 +218,7 @@ def _unique_dest(save_path: str, ext: str = ".mp4") -> Path:
         dest = Path(save_path).expanduser()
     else:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = Path(_DEFAULT_OUTPUT_DIR) / f"edit_{ts}{ext}"
+        dest = Path(_DEFAULT_OUTPUT_DIR) / f"{prefix}{ts}{ext}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     base = dest
     counter = 1
@@ -171,8 +233,12 @@ def _unique_dest(save_path: str, ext: str = ".mp4") -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _probe(path: str, *, timeout: int = 30) -> dict[str, Any]:
+def _probe(path: str, *, timeout: int = 30, expect: str = "video") -> dict[str, Any]:
     """Probe a media file; returns a compact info dict.
+
+    ``expect="video"`` (default) requires a video stream, matching every
+    Part II operation. ``expect="audio"`` requires an audio stream instead
+    (video optional), for the ``audio`` mux operation's soundtrack input.
 
     Raises ``ValueError`` with an actionable message when the file is not
     probeable media.
@@ -198,19 +264,22 @@ def _probe(path: str, *, timeout: int = 30) -> dict[str, Any]:
     if proc.returncode != 0:
         err = (proc.stderr or "").strip().splitlines()
         raise ValueError(
-            f"not a readable video file: {path} ({err[-1] if err else 'probe failed'})"
+            f"not a readable {expect} file: {path} ({err[-1] if err else 'probe failed'})"
         )
 
     data = json.loads(proc.stdout or "{}")
     streams = data.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    if video is None:
-        raise ValueError(f"no video stream in {path}")
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if expect == "audio":
+        if audio is None:
+            raise ValueError(f"no audio stream in {path}")
+    elif video is None:
+        raise ValueError(f"no video stream in {path}")
 
     # avg_frame_rate is "num/den"; guard against "0/0" on odd containers.
     fps = 0.0
-    raw_rate = video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"
+    raw_rate = (video or {}).get("avg_frame_rate") or (video or {}).get("r_frame_rate") or "0/1"
     try:
         num, _, den = raw_rate.partition("/")
         fps = float(num) / float(den or 1)
@@ -218,7 +287,12 @@ def _probe(path: str, *, timeout: int = 30) -> dict[str, Any]:
         fps = 0.0
 
     duration = 0.0
-    for source in (video.get("duration"), data.get("format", {}).get("duration")):
+    duration_sources = (
+        (video or {}).get("duration"),
+        (audio or {}).get("duration"),
+        data.get("format", {}).get("duration"),
+    )
+    for source in duration_sources:
         try:
             duration = float(source)
             break
@@ -227,8 +301,8 @@ def _probe(path: str, *, timeout: int = 30) -> dict[str, Any]:
 
     return {
         "path": path,
-        "width": int(video.get("width", 0)),
-        "height": int(video.get("height", 0)),
+        "width": int((video or {}).get("width", 0)),
+        "height": int((video or {}).get("height", 0)),
         "fps": round(fps, 3),
         "duration": duration,
         "has_audio": audio is not None,
@@ -525,6 +599,87 @@ def _build_resize_command(
     return cmd
 
 
+def _build_extract_frame_command(input_path: str, dest: str, *, at: float) -> list[str]:
+    """Full ffmpeg argv to export the frame at ``at`` seconds as an image.
+
+    Input-side ``-ss`` seeks to the nearest keyframe then decodes forward,
+    so the first delivered frame is the one at/after ``at`` -- exact for
+    this purpose and fast even on long inputs. ``-update 1`` writes a
+    single image instead of expecting a sequence pattern in the filename.
+    """
+    cmd = [
+        _FFMPEG,
+        "-nostdin",
+        "-hide_banner",
+        "-y",
+        "-ss",
+        f"{at:.3f}",
+        "-i",
+        input_path,
+        "-frames:v",
+        "1",
+        "-update",
+        "1",
+    ]
+    if Path(dest).suffix.lower() in (".jpg", ".jpeg"):
+        cmd += ["-q:v", "2"]
+    cmd.append(dest)
+    return cmd
+
+
+def _build_audio_mux_command(
+    input_path: str,
+    audio_path: str,
+    dest: str,
+    *,
+    mode: str,
+    loop: bool,
+    video_has_audio: bool,
+) -> list[str]:
+    """Full ffmpeg argv to lay an audio file onto a video.
+
+    The video stream is stream-copied (``-c:v copy``): remuxing an audio
+    track is not an edit of the video stream, so a lossless copy is
+    strictly better than a re-encode here. The output duration always
+    equals the video's: the new track is ``apad``-ed (or looped with
+    ``-stream_loop -1``) and ``-shortest`` cuts it at the video's end.
+
+    ``mode="mix"`` blends the new track with the video's existing audio
+    (``amix`` with ``normalize=0`` so levels don't jump, ``duration=first``
+    pinning the mix to the original track's length); with no existing
+    audio it degrades to a plain replace.
+    """
+    cmd = [_FFMPEG, "-nostdin", "-hide_banner", "-y", "-i", input_path]
+    if loop:
+        cmd += ["-stream_loop", "-1"]
+    cmd += ["-i", audio_path]
+    if mode == "mix" and video_has_audio:
+        cmd += [
+            "-filter_complex",
+            "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]",
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
+        ]
+    else:
+        # apad + -shortest: pad a short track with silence out to the
+        # video's end, and cut a long (or looped) one exactly there.
+        cmd += ["-map", "0:v", "-map", "1:a", "-af", "apad", "-shortest"]
+    cmd += [
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        dest,
+    ]
+    return cmd
+
+
 def _run_ffmpeg(cmd: list[str], *, timeout: int) -> str | None:
     """Run an ffmpeg argv. Returns None on success, error string on failure."""
     try:
@@ -560,10 +715,15 @@ class VideoEditTool(BaseTool):
         "operation='text' overlays styled text (captions, titles, "
         "watermarks) with position presets and optional timing. "
         "operation='speed' changes playback speed 0.25x-4x (audio pitch "
-        "preserved). operation='resize' rescales. Returns the local path "
-        "to the produced .mp4 plus its actual probed dimensions/duration. "
-        "Chain complex edits by calling this tool repeatedly (e.g. trim "
-        "each clip, then concat, then add a title)."
+        "preserved). operation='resize' rescales. operation='extract_frame' "
+        "exports one frame as a PNG/JPEG image (at=-1 for the last frame -- "
+        "useful for reviewing a clip or seeding the next scene of an "
+        "image-to-video generation). operation='audio' lays an audio file "
+        "onto a video (audio_mode 'replace' or 'mix', optional loop; video "
+        "stream copied losslessly). Returns the local path to the produced "
+        "file plus its actual probed dimensions/duration. Chain complex "
+        "edits by calling this tool repeatedly (e.g. trim each clip, then "
+        "concat, then add a title)."
     )
     permissions = ToolPermissions(shell=True, filesystem_read=True, filesystem_write=True)
 
@@ -571,7 +731,10 @@ class VideoEditTool(BaseTool):
         "operation": {
             "type": "string",
             "enum": sorted(_VALID_OPERATIONS),
-            "description": "The edit to perform: concat | trim | text | speed | resize.",
+            "description": (
+                "The edit to perform: concat | trim | text | speed | resize | "
+                "extract_frame | audio."
+            ),
             "required": True,
         },
         "inputs": {
@@ -581,7 +744,33 @@ class VideoEditTool(BaseTool):
         },
         "input": {
             "type": "string",
-            "description": "trim/text/speed/resize: the local video path to edit.",
+            "description": "All operations except concat: the local video path to edit.",
+        },
+        "at": {
+            "type": "number",
+            "description": (
+                "extract_frame: timestamp in seconds to grab the frame at. "
+                "-1 (default) = the last frame of the video."
+            ),
+        },
+        "audio_file": {
+            "type": "string",
+            "description": "audio operation: local audio file to lay onto the video.",
+        },
+        "audio_mode": {
+            "type": "string",
+            "enum": sorted(_VALID_AUDIO_MODES),
+            "description": (
+                "audio operation: 'replace' (default) swaps the video's audio for "
+                "the new track; 'mix' blends the two."
+            ),
+        },
+        "loop": {
+            "type": "boolean",
+            "description": (
+                "audio operation: loop a short track until the video ends "
+                "(default false: a short track is padded with silence instead)."
+            ),
         },
         "transition": {
             "type": "string",
@@ -629,7 +818,10 @@ class VideoEditTool(BaseTool):
         },
         "font_size": {
             "type": "integer",
-            "description": "text: font size in px (default 0 = auto, ~1/12 of video height).",
+            "description": (
+                "text: font size in px (default 0 = auto based on video height, "
+                "reduced as needed so every line fits inside the frame)."
+            ),
         },
         "font_color": {
             "type": "string",
@@ -699,7 +891,7 @@ class VideoEditTool(BaseTool):
         """Reads the input video(s) and optional font file; writes the
         output to ``save_path`` or the default videos directory."""
         read_paths = [p for p in (kwargs.get("inputs") or []) if p]
-        for key in ("input", "font_file"):
+        for key in ("input", "font_file", "audio_file"):
             if kwargs.get(key):
                 read_paths.append(kwargs[key])
         save_path = kwargs.get("save_path") or ""
@@ -730,6 +922,10 @@ class VideoEditTool(BaseTool):
         factor: float = 1.0,
         width: int = 0,
         height: int = 0,
+        at: float = -1.0,
+        audio_file: str = "",
+        audio_mode: str = "replace",
+        loop: bool = False,
         video_format: str = "h264-mp4",
         crf: int = 17,
         save_path: str = "",
@@ -740,7 +936,7 @@ class VideoEditTool(BaseTool):
 
         Args:
             operation: ``"concat"``, ``"trim"``, ``"text"``, ``"speed"``,
-                or ``"resize"``.
+                ``"resize"``, ``"extract_frame"``, or ``"audio"``.
             inputs: concat only -- 2+ local video paths, joined in order.
             input: The video to edit (all operations except concat).
             transition: concat -- ``"none"`` (default) or ``"crossfade"``.
@@ -754,7 +950,8 @@ class VideoEditTool(BaseTool):
             position: text placement preset (default ``"bottom"``).
             x: Explicit drawtext x expression (overrides ``position``).
             y: Explicit drawtext y expression (overrides ``position``).
-            font_size: Text size in px (0 = auto: video height / 12).
+            font_size: Text size in px (0 = auto: video height / 12,
+                reduced as needed so every line fits inside the frame).
             font_color: drawtext color (default ``"white"``).
             font_file: Path to a ``.ttf`` (default: system DejaVu bold).
             box: Draw a background box behind the text (default True).
@@ -763,8 +960,17 @@ class VideoEditTool(BaseTool):
             factor: speed multiplier, clamped 0.25-4.0.
             width: resize target width (0 = derive from aspect).
             height: resize target height (0 = derive from aspect).
+            at: extract_frame -- timestamp in seconds; ``-1`` (default) =
+                the last frame (derived from the probed duration/fps).
+            audio_file: audio operation -- the audio file to lay on.
+            audio_mode: audio operation -- ``"replace"`` (default) or
+                ``"mix"`` (blend with the video's existing track).
+            loop: audio operation -- loop a short track to the video's
+                length (default False: padded with silence instead).
             video_format: ``"h264-mp4"`` (default), ``"h265-mp4"``, or
-                ``"nvenc_h264-mp4"`` (GPU encode).
+                ``"nvenc_h264-mp4"`` (GPU encode). Ignored by
+                ``extract_frame`` (image output) and ``audio`` (video
+                stream copied bit-exact, never re-encoded).
             crf: Encoder quality, lower = better (default 17).
             save_path: Optional destination (collision-safe). Defaults to
                 a timestamped file under ``~/.missy/videos/``.
@@ -820,7 +1026,19 @@ class VideoEditTool(BaseTool):
         except ValueError as exc:
             return ToolResult(success=False, output=None, error=str(exc))
 
-        dest = _unique_dest(save_path)
+        if operation == "extract_frame":
+            if save_path and Path(save_path).suffix.lower() not in _IMAGE_EXTENSIONS:
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error=(
+                        f"extract_frame save_path must end in one of "
+                        f"{sorted(_IMAGE_EXTENSIONS)}, got: {save_path}"
+                    ),
+                )
+            dest = _unique_dest(save_path, ext=".png", prefix="frame_")
+        else:
+            dest = _unique_dest(save_path)
         textfile_path: str | None = None
         try:
             # --- build the command per operation ------------------------
@@ -909,7 +1127,16 @@ class VideoEditTool(BaseTool):
                             output=None,
                             error=f"{label} contains characters not allowed in a filter expression: {value!r}",
                         )
-                size = int(font_size) if font_size > 0 else max(16, src["height"] // 12)
+                size = (
+                    int(font_size)
+                    if font_size > 0
+                    else _auto_font_size(
+                        text,
+                        resolved_font,
+                        width=src["width"],
+                        height=src["height"],
+                    )
+                )
                 # Text goes through a temp file: no filter-graph escaping of
                 # user content, ever.
                 fd, textfile_path = tempfile.mkstemp(suffix=".txt", prefix="missy_drawtext_")
@@ -955,6 +1182,62 @@ class VideoEditTool(BaseTool):
                     crf=crf,
                 )
 
+            elif operation == "extract_frame":
+                src = infos[0]
+                at = float(at)
+                if at < 0:
+                    # Last frame: back off from the end by at least one
+                    # (and a bit) frame period so the seek always lands on
+                    # a real frame even for low-fps clips.
+                    fps_period = 1.5 / src["fps"] if src["fps"] > 0 else 0.1
+                    at = max(0.0, src["duration"] - max(0.1, fps_period))
+                elif src["duration"] > 0 and at >= src["duration"]:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error=(
+                            f"at={at} is past the end of the video "
+                            f"({src['duration']:.3f}s); use at=-1 for the last frame."
+                        ),
+                    )
+                cmd = _build_extract_frame_command(paths[0], str(dest), at=at)
+
+            elif operation == "audio":
+                src = infos[0]
+                if not audio_file:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error="audio operation needs 'audio_file' (the track to lay on).",
+                    )
+                audio_mode = (audio_mode or "replace").strip().lower()
+                if audio_mode not in _VALID_AUDIO_MODES:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error=(
+                            f"Unknown audio_mode {audio_mode!r}. "
+                            f"Valid: {sorted(_VALID_AUDIO_MODES)}."
+                        ),
+                    )
+                audio_path = str(Path(audio_file).expanduser())
+                if not Path(audio_path).is_file():
+                    return ToolResult(
+                        success=False, output=None, error=f"audio_file not found: {audio_file}"
+                    )
+                try:
+                    _probe(audio_path, expect="audio")
+                except ValueError as exc:
+                    return ToolResult(success=False, output=None, error=str(exc))
+                cmd = _build_audio_mux_command(
+                    paths[0],
+                    audio_path,
+                    str(dest),
+                    mode=audio_mode,
+                    loop=bool(loop),
+                    video_has_audio=src["has_audio"],
+                )
+
             else:  # resize
                 src = infos[0]
                 width = int(width)
@@ -998,27 +1281,32 @@ class VideoEditTool(BaseTool):
                     success=False, output=None, error=f"output verification failed: {exc}"
                 )
 
-            encoder = {
-                "h264-mp4": "libx264",
-                "h265-mp4": "libx265",
-                "nvenc_h264-mp4": "h264_nvenc",
-            }[video_format]
-            return ToolResult(
-                success=True,
-                output={
-                    "path": str(dest),
-                    "operation": operation,
-                    "width": out_info["width"],
-                    "height": out_info["height"],
-                    "fps": out_info["fps"],
-                    "duration_seconds": round(out_info["duration"], 3),
-                    "has_audio": out_info["has_audio"],
-                    "size_bytes": out_info["size_bytes"],
-                    "inputs": len(paths),
-                    "encoder": encoder,
-                    "elapsed_seconds": round(time.monotonic() - started, 1),
-                },
-            )
+            if operation == "extract_frame":
+                encoder = dest.suffix.lstrip(".").lower()
+            elif operation == "audio":
+                encoder = "copy"  # video stream is never re-encoded by this op
+            else:
+                encoder = {
+                    "h264-mp4": "libx264",
+                    "h265-mp4": "libx265",
+                    "nvenc_h264-mp4": "h264_nvenc",
+                }[video_format]
+            output: dict[str, Any] = {
+                "path": str(dest),
+                "operation": operation,
+                "width": out_info["width"],
+                "height": out_info["height"],
+                "fps": out_info["fps"],
+                "duration_seconds": round(out_info["duration"], 3),
+                "has_audio": out_info["has_audio"],
+                "size_bytes": out_info["size_bytes"],
+                "inputs": len(paths),
+                "encoder": encoder,
+                "elapsed_seconds": round(time.monotonic() - started, 1),
+            }
+            if operation == "extract_frame":
+                output["at"] = round(at, 3)
+            return ToolResult(success=True, output=output)
         finally:
             if textfile_path:
                 import contextlib

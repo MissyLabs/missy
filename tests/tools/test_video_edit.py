@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,10 @@ import pytest
 from missy.tools.builtin.video_edit import (
     VideoEditTool,
     _atempo_chain,
+    _build_audio_mux_command,
     _build_concat_command,
     _build_concat_filter,
+    _build_extract_frame_command,
     _build_resize_command,
     _build_speed_command,
     _build_text_command,
@@ -596,6 +599,46 @@ class TestExecuteHappyPaths:
         textfile = vf.split("textfile=")[1].split(":")[0]
         assert not Path(textfile).exists()  # cleaned up
 
+    def test_text_auto_size_shrinks_long_caption_to_frame(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        holder: dict[str, Any] = {}
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory(holder),
+        ):
+            result = VideoEditTool().execute(
+                operation="text",
+                input=str(src),
+                text='Missy\'s demo: 100% "safe", commas, & colons:;',
+                save_path=str(tmp_path / "out.mp4"),
+            )
+        assert result.success, result.error
+        vf = holder["cmd"][holder["cmd"].index("-vf") + 1]
+        match = re.search(r"fontsize=(\d+)", vf)
+        assert match is not None
+        # The fake probe is 640x480, whose old height-only default was 40.
+        assert 8 <= int(match.group(1)) < 40
+
+    def test_text_explicit_font_size_is_not_auto_reduced(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        holder: dict[str, Any] = {}
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory(holder),
+        ):
+            result = VideoEditTool().execute(
+                operation="text",
+                input=str(src),
+                text="W" * 100,
+                font_size=37,
+                save_path=str(tmp_path / "out.mp4"),
+            )
+        assert result.success, result.error
+        vf = holder["cmd"][holder["cmd"].index("-vf") + 1]
+        assert "fontsize=37" in vf
+
     def test_speed_flow(self, tmp_path: Path) -> None:
         src = tmp_path / "in.mp4"
         src.write_bytes(b"fake")
@@ -751,11 +794,258 @@ class TestResolversAndSchema:
         schema = VideoEditTool().get_schema()
         assert schema["name"] == "video_edit"
         props = schema["parameters"]["properties"]
-        assert set(props["operation"]["enum"]) == {"concat", "trim", "text", "speed", "resize"}
+        assert set(props["operation"]["enum"]) == {
+            "concat",
+            "trim",
+            "text",
+            "speed",
+            "resize",
+            "extract_frame",
+            "audio",
+        }
         assert "operation" in schema["parameters"]["required"]
+
+    def test_resolve_filesystem_targets_audio_file(self) -> None:
+        reads, _ = VideoEditTool().resolve_filesystem_targets(
+            {"input": "/v.mp4", "audio_file": "/music.mp3"}
+        )
+        assert reads == ["/v.mp4", "/music.mp3"]
 
     def test_registered_as_builtin(self) -> None:
         from missy.tools.builtin import _ALL_TOOL_CLASSES
         from missy.tools.builtin import VideoEditTool as Exported
 
         assert Exported in _ALL_TOOL_CLASSES
+
+
+# ---------------------------------------------------------------------------
+# Part III: extract_frame + audio operations
+# ---------------------------------------------------------------------------
+
+
+def _audio_only_probe_json(duration: float = 3.0) -> str:
+    return json.dumps(
+        {
+            "streams": [{"codec_type": "audio", "duration": str(duration)}],
+            "format": {"duration": str(duration), "size": "512"},
+        }
+    )
+
+
+class TestExtractFrameCommand:
+    def test_seeks_before_input_and_writes_single_image(self) -> None:
+        cmd = _build_extract_frame_command("/v/in.mp4", "/v/out.png", at=3.9)
+        assert cmd.index("-ss") < cmd.index("-i")  # input-side seek
+        assert cmd[cmd.index("-ss") + 1] == "3.900"
+        assert cmd[cmd.index("-frames:v") + 1] == "1"
+        assert "-update" in cmd
+        assert cmd[-1] == "/v/out.png"
+        assert "-q:v" not in cmd  # png needs no quality knob
+
+    def test_jpeg_gets_quality_flag(self) -> None:
+        cmd = _build_extract_frame_command("/v/in.mp4", "/v/out.jpg", at=0.0)
+        assert cmd[cmd.index("-q:v") + 1] == "2"
+
+
+class TestAudioMuxCommand:
+    def test_replace_copies_video_and_pads_audio(self) -> None:
+        cmd = _build_audio_mux_command(
+            "/v/in.mp4",
+            "/a/track.mp3",
+            "/v/out.mp4",
+            mode="replace",
+            loop=False,
+            video_has_audio=True,
+        )
+        assert cmd[cmd.index("-c:v") + 1] == "copy"
+        assert cmd[cmd.index("-map") + 1] == "0:v"
+        assert "1:a" in cmd
+        assert cmd[cmd.index("-af") + 1] == "apad"
+        assert "-shortest" in cmd
+        assert "-stream_loop" not in cmd
+        assert "amix" not in " ".join(cmd)
+
+    def test_mix_blends_without_truncating_video(self) -> None:
+        cmd = _build_audio_mux_command(
+            "/v/in.mp4",
+            "/a/track.mp3",
+            "/v/out.mp4",
+            mode="mix",
+            loop=False,
+            video_has_audio=True,
+        )
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "amix=inputs=2:duration=first" in fc
+        assert "normalize=0" in fc
+        assert "-shortest" not in cmd  # amix already bounded; would cut copied video
+        assert cmd[cmd.index("-c:v") + 1] == "copy"
+
+    def test_mix_without_existing_audio_degrades_to_replace(self) -> None:
+        cmd = _build_audio_mux_command(
+            "/v/in.mp4",
+            "/a/track.mp3",
+            "/v/out.mp4",
+            mode="mix",
+            loop=False,
+            video_has_audio=False,
+        )
+        assert "amix" not in " ".join(cmd)
+        assert cmd[cmd.index("-af") + 1] == "apad"
+
+    def test_loop_prepends_stream_loop_to_audio_input_only(self) -> None:
+        cmd = _build_audio_mux_command(
+            "/v/in.mp4",
+            "/a/track.mp3",
+            "/v/out.mp4",
+            mode="replace",
+            loop=True,
+            video_has_audio=False,
+        )
+        loop_idx = cmd.index("-stream_loop")
+        assert cmd[loop_idx + 1] == "-1"
+        # -stream_loop is input-positional: after the video -i, before the audio -i.
+        assert cmd.index("-i") < loop_idx < len(cmd) - 1 - cmd[::-1].index("-i")
+
+
+class TestProbeAudioMode:
+    def test_audio_only_file_accepted_when_expected(self) -> None:
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            return_value=_FakeProc(stdout=_audio_only_probe_json(3.5)),
+        ):
+            info = _probe("/a/track.mp3", expect="audio")
+        assert info["has_audio"] is True
+        assert info["duration"] == 3.5
+        assert info["width"] == 0
+
+    def test_no_audio_stream_rejected_when_audio_expected(self) -> None:
+        with (
+            patch(
+                "missy.tools.builtin.video_edit.subprocess.run",
+                return_value=_FakeProc(stdout=_probe_json(has_audio=False)),
+            ),
+            pytest.raises(ValueError, match="no audio stream"),
+        ):
+            _probe("/v/silent.mp4", expect="audio")
+
+    def test_audio_only_file_still_rejected_for_video(self) -> None:
+        with (
+            patch(
+                "missy.tools.builtin.video_edit.subprocess.run",
+                return_value=_FakeProc(stdout=_audio_only_probe_json()),
+            ),
+            pytest.raises(ValueError, match="no video stream"),
+        ):
+            _probe("/a/track.mp3")
+
+
+class TestExtractFrameExecute:
+    def test_last_frame_default_derives_at_from_duration(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        holder: dict[str, Any] = {}
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory(holder),
+        ):
+            result = VideoEditTool().execute(
+                operation="extract_frame",
+                input=str(src),
+                save_path=str(tmp_path / "last.png"),
+            )
+        assert result.success, result.error
+        # probe says duration=4.0 fps=24 -> at = 4.0 - max(0.1, 1.5/24) = 3.9
+        assert result.output["at"] == 3.9
+        assert holder["cmd"][holder["cmd"].index("-ss") + 1] == "3.900"
+        assert result.output["encoder"] == "png"
+        assert result.output["path"].endswith("last.png")
+
+    def test_explicit_at_past_end_rejected(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory({}),
+        ):
+            result = VideoEditTool().execute(operation="extract_frame", input=str(src), at=9.0)
+        assert not result.success
+        assert "past the end" in result.error
+
+    def test_non_image_save_path_rejected(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory({}),
+        ):
+            result = VideoEditTool().execute(
+                operation="extract_frame",
+                input=str(src),
+                save_path=str(tmp_path / "frame.mp4"),
+            )
+        assert not result.success
+        assert "must end in" in result.error
+
+
+class TestAudioExecute:
+    def test_replace_flow(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        track = tmp_path / "music.mp3"
+        track.write_bytes(b"fake")
+        holder: dict[str, Any] = {}
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory(holder),
+        ):
+            result = VideoEditTool().execute(
+                operation="audio",
+                input=str(src),
+                audio_file=str(track),
+                save_path=str(tmp_path / "scored.mp4"),
+            )
+        assert result.success, result.error
+        assert result.output["encoder"] == "copy"
+        assert "apad" in holder["cmd"]
+
+    def test_audio_file_required(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory({}),
+        ):
+            result = VideoEditTool().execute(operation="audio", input=str(src))
+        assert not result.success
+        assert "audio_file" in result.error
+
+    def test_missing_audio_file_rejected(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory({}),
+        ):
+            result = VideoEditTool().execute(
+                operation="audio", input=str(src), audio_file=str(tmp_path / "nope.mp3")
+            )
+        assert not result.success
+        assert "not found" in result.error
+
+    def test_unknown_audio_mode_rejected(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        src.write_bytes(b"fake")
+        track = tmp_path / "music.mp3"
+        track.write_bytes(b"fake")
+        with patch(
+            "missy.tools.builtin.video_edit.subprocess.run",
+            side_effect=_fake_run_factory({}),
+        ):
+            result = VideoEditTool().execute(
+                operation="audio",
+                input=str(src),
+                audio_file=str(track),
+                audio_mode="overdub",
+            )
+        assert not result.success
+        assert "audio_mode" in result.error
