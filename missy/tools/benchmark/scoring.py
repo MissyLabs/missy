@@ -263,8 +263,9 @@ class BenchmarkScorer:
         actual = result.actual_output
         expected = result.expected_output
         if expected is None:
-            # No ground truth — full credit if tool succeeded.
-            return 1.0 if result.success else 0.0
+            # No independent oracle means correctness is unknown. Do not turn
+            # plumbing success into perfect semantic quality.
+            return 0.0
         if actual == expected:
             return 1.0
         # F21: when a judge is configured, defer semantic scoring to it for the
@@ -274,15 +275,18 @@ class BenchmarkScorer:
             score = self._judge_correctness(expected, actual)
             if score is not None:
                 return score
-        # Partial string match.
+        # Conservative string/token comparison. Raw substring matching makes
+        # expected="safe" score 0.8 for actual="unsafe" and lets negation or
+        # number-smuggling receive credit.
         a_str = str(actual).lower().strip()
         e_str = str(expected).lower().strip()
-        if e_str in a_str:
-            return 0.8
         # Numeric tolerance.
         try:
-            a_num = float(_strip_non_numeric(a_str))
-            e_num = float(_strip_non_numeric(e_str))
+            numeric_re = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+            if not re.fullmatch(numeric_re, a_str) or not re.fullmatch(numeric_re, e_str):
+                raise ValueError
+            a_num = float(a_str)
+            e_num = float(e_str)
             if e_num == 0:
                 return 1.0 if a_num == 0 else 0.0
             rel_err = abs(a_num - e_num) / abs(e_num)
@@ -290,9 +294,11 @@ class BenchmarkScorer:
         except (ValueError, ZeroDivisionError):
             pass
         # Token overlap.
-        a_tokens = set(a_str.split())
-        e_tokens = set(e_str.split())
+        a_tokens = set(re.findall(r"\b\w+\b", a_str))
+        e_tokens = set(re.findall(r"\b\w+\b", e_str))
         if not e_tokens:
+            return 0.0
+        if len(e_tokens) == 1:
             return 0.0
         return len(a_tokens & e_tokens) / len(e_tokens)
 

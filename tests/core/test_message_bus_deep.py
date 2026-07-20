@@ -1035,8 +1035,8 @@ class TestSingletonLifecycle:
         """Messages published on the singleton are visible to any get_message_bus() caller."""
         init_message_bus()
         received: list[BusMessage] = []
-        get_message_bus().subscribe("singleton.test", received.append)
-        get_message_bus().publish(_msg(topic="singleton.test"))
+        get_message_bus().subscribe(SYSTEM_STARTUP, received.append)
+        get_message_bus().publish(_msg(topic=SYSTEM_STARTUP, payload={}))
         assert len(received) == 1
 
     def test_concurrent_init_returns_same_singleton(self) -> None:

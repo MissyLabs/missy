@@ -15,7 +15,13 @@ top.
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
+import math
+import queue
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -91,14 +97,52 @@ class BenchmarkSuite:
     tasks: list[BenchmarkTask] = field(default_factory=list)
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    _task_digests: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not _safe_identifier(self.name, maximum=256):
+            raise ValueError("Benchmark suite name must be a bounded printable identifier.")
+        if not _safe_identifier(self.tool_name, maximum=128):
+            raise ValueError("Benchmark suite tool_name must be a bounded printable identifier.")
+        initial = list(self.tasks)
+        self.tasks = []
+        for task in initial:
+            self.add_task(task)
 
     def add_task(self, task: BenchmarkTask) -> None:
-        """Append *task* to this suite."""
-        self.tasks.append(task)
+        """Validate, snapshot, and append *task* to this single-tool suite."""
+        snapshot, digest = _snapshot_task(task, expected_tool=self.tool_name)
+        if snapshot.id in self._task_digests:
+            raise ValueError(f"Duplicate benchmark task id {snapshot.id!r}.")
+        self.tasks.append(snapshot)
+        self._task_digests[snapshot.id] = digest
 
     def task_count(self) -> int:
         """Return the number of tasks."""
         return len(self.tasks)
+
+    def validated_snapshot(self) -> tuple[list[BenchmarkTask], str]:
+        """Return immutable-by-copy tasks and a content-derived suite identity."""
+        if not self.tasks:
+            raise ValueError("Benchmark suite must contain at least one task.")
+        if len(self.tasks) != len(self._task_digests):
+            raise ValueError("Benchmark suite task inventory was mutated outside add_task().")
+        snapshots: list[BenchmarkTask] = []
+        digests: list[str] = []
+        seen: set[str] = set()
+        for task in self.tasks:
+            snapshot, digest = _snapshot_task(task, expected_tool=self.tool_name)
+            if task.id in seen or self._task_digests.get(task.id) != digest:
+                raise ValueError(f"Benchmark task {task.id!r} was duplicated or mutated.")
+            seen.add(task.id)
+            snapshots.append(snapshot)
+            digests.append(digest)
+        identity_payload = json.dumps(
+            {"name": self.name, "tool_name": self.tool_name, "tasks": digests},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return snapshots, hashlib.sha256(identity_payload.encode()).hexdigest()
 
 
 @dataclass
@@ -170,6 +214,7 @@ class BenchmarkRunner:
         """
         from datetime import UTC, datetime
 
+        tasks, suite_identity = suite.validated_snapshot()
         started_at = datetime.now(UTC).isoformat()
         scored_results: list[ScoredResult] = []
         error_count = 0
@@ -182,8 +227,9 @@ class BenchmarkRunner:
             except Exception:
                 registry = None
 
-        for task in suite.tasks:
+        for task in tasks:
             sr = self._run_task(task, registry)
+            sr.result.metadata.update({"suite_name": suite.name, "suite_identity": suite_identity})
             scored_results.append(sr)
             if not sr.result.success:
                 error_count += 1
@@ -200,7 +246,7 @@ class BenchmarkRunner:
                 "suite": suite.name,
                 "tool": suite.tool_name,
                 "provider": self._provider,
-                "tasks": len(suite.tasks),
+                "tasks": len(tasks),
                 "errors": error_count,
                 "composite": aggregate.get("composite", 0.0),
             },
@@ -210,7 +256,7 @@ class BenchmarkRunner:
             suite.name,
             suite.tool_name,
             self._provider,
-            len(suite.tasks),
+            len(tasks),
             aggregate.get("composite", 0.0),
         )
         return SuiteRunReport(
@@ -248,6 +294,7 @@ class BenchmarkRunner:
             except Exception:
                 registry = None
 
+        task, _digest = _snapshot_task(task, expected_tool=task.tool_name)
         sr = self._run_task(task, registry)
         if persist:
             self._store.save(sr)
@@ -262,6 +309,7 @@ class BenchmarkRunner:
         success = False
         actual_output: Any = None
         error = ""
+        tool_call_made = False
 
         try:
             if registry is None:
@@ -269,7 +317,9 @@ class BenchmarkRunner:
             tool = registry.get(task.tool_name)
             if tool is None:
                 raise KeyError(f"Tool {task.tool_name!r} not registered")
-            result = tool.execute(**task.input_args)
+            args = copy.deepcopy(task.input_args)
+            tool_call_made = True
+            result = self._execute_with_timeout(registry, task, args)
             success = result.success
             actual_output = result.output
             if not result.success:
@@ -289,13 +339,49 @@ class BenchmarkRunner:
             cost_usd=0.0,
             actual_output=actual_output,
             expected_output=task.expected_output,
-            tool_call_made=True,
-            tool_call_args=task.input_args,
+            tool_call_made=tool_call_made,
+            tool_call_args=copy.deepcopy(task.input_args),
             schema_required_params=task.schema_required_params,
             safety_violation=False,
             error=error,
         )
         return self._scorer.score(raw)
+
+    @staticmethod
+    def _execute_with_timeout(registry: Any, task: BenchmarkTask, args: dict[str, Any]) -> Any:
+        """Dispatch through the registry reference monitor with a hard caller deadline.
+
+        In-process Python cannot safely kill an arbitrary non-cooperative
+        function. The worker is therefore daemonized and a timeout is reported
+        as outcome-unknown; its late result is never scored or persisted as a
+        success. Strictly isolated benchmarks should use a subprocess harness.
+        """
+        if task.timeout_s <= 0:
+            return registry.execute(task.tool_name, **args)
+
+        completed: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+        def invoke() -> None:
+            try:
+                completed.put((True, registry.execute(task.tool_name, **args)))
+            except BaseException as exc:  # noqa: BLE001 - marshal to the caller thread
+                completed.put((False, exc))
+
+        worker = threading.Thread(
+            target=invoke,
+            daemon=True,
+            name=f"missy-benchmark-{task.id[:12]}",
+        )
+        worker.start()
+        try:
+            ok, value = completed.get(timeout=task.timeout_s)
+        except queue.Empty as exc:
+            raise TimeoutError(
+                f"Benchmark task exceeded {task.timeout_s:g}s; execution outcome is unknown"
+            ) from exc
+        if not ok:
+            raise value
+        return value
 
 
 def _emit_audit(event_type: str, detail: dict[str, Any]) -> None:
@@ -312,3 +398,45 @@ def _emit_audit(event_type: str, detail: dict[str, Any]) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("BenchmarkRunner: audit emit failed: %s", exc)
+
+
+def _safe_identifier(value: Any, *, maximum: int) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= maximum
+        and value.strip() == value
+        and all(char.isprintable() and char not in "\r\n\x00" for char in value)
+    )
+
+
+def _snapshot_task(task: BenchmarkTask, *, expected_tool: str) -> tuple[BenchmarkTask, str]:
+    if not isinstance(task, BenchmarkTask):
+        raise TypeError("Benchmark suites accept BenchmarkTask instances only.")
+    if not _safe_identifier(task.id, maximum=256):
+        raise ValueError("Benchmark task id must be a bounded printable identifier.")
+    if task.tool_name != expected_tool:
+        raise ValueError(
+            f"Benchmark task {task.id!r} targets {task.tool_name!r}, "
+            f"not suite tool {expected_tool!r}."
+        )
+    if (
+        isinstance(task.timeout_s, bool)
+        or not isinstance(task.timeout_s, (int, float))
+        or not math.isfinite(float(task.timeout_s))
+        or not 0 <= float(task.timeout_s) <= 3600
+    ):
+        raise ValueError("Benchmark task timeout_s must be finite and between 0 and 3600.")
+    payload = {
+        "id": task.id,
+        "tool_name": task.tool_name,
+        "input_args": task.input_args,
+        "expected_output": task.expected_output,
+        "schema_required_params": task.schema_required_params,
+        "timeout_s": task.timeout_s,
+        "tags": task.tags,
+    }
+    try:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Benchmark task evidence must be finite JSON data.") from exc
+    return copy.deepcopy(task), hashlib.sha256(encoded.encode()).hexdigest()

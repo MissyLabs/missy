@@ -20,12 +20,13 @@ Example::
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass
+@dataclass(frozen=True)
 class SkillPermissions:
     """Declares the resources a skill requires at execution time.
 
@@ -59,6 +60,28 @@ class SkillResult:
     output: Any
     error: str = ""
 
+    _MAX_SERIALIZED_BYTES = 1_000_000
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.success, bool):
+            raise TypeError("SkillResult.success must be a bool")
+        if not isinstance(self.error, str):
+            raise TypeError("SkillResult.error must be a string")
+        if self.success and self.error:
+            raise ValueError("A successful SkillResult cannot contain an error")
+        try:
+            encoded = json.dumps(
+                {"output": self.output, "error": self.error},
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("SkillResult must be JSON serializable") from exc
+        if len(encoded) > self._MAX_SERIALIZED_BYTES:
+            raise ValueError(
+                f"SkillResult exceeds the {self._MAX_SERIALIZED_BYTES}-byte serialized limit"
+            )
+
 
 class BaseSkill(ABC):
     """Abstract base for all Missy skills.
@@ -77,7 +100,9 @@ class BaseSkill(ABC):
     name: str
     description: str
     version: str = "0.1.0"
-    permissions: SkillPermissions = field(default_factory=SkillPermissions)  # type: ignore[assignment]
+    # SkillPermissions is immutable, so a shared deny-all default is safe and
+    # remains a real permission value for subclasses that omit the attribute.
+    permissions: SkillPermissions = SkillPermissions()
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> SkillResult:

@@ -20,8 +20,10 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import threading
+import time
 from urllib.parse import urlparse
 
 from missy.config.settings import MissyConfig, ProviderConfig
@@ -54,6 +56,9 @@ class ProviderRegistry:
     filtered to only those that report themselves as available.
     """
 
+    AVAILABILITY_CACHE_SECONDS = 5.0
+    AVAILABILITY_BULK_DEADLINE_SECONDS = 0.5
+
     def __init__(self) -> None:
         self._providers: dict[str, BaseProvider] = {}
         self._key_indices: dict[str, int] = {}
@@ -65,6 +70,9 @@ class ProviderRegistry:
         # can be re-enabled without a restart) but is excluded from
         # get_available() and refused by set_default().
         self._runtime_disabled: set[str] = set()
+        self._effective_provider_hosts: tuple[str, ...] = ()
+        self._availability_cache: dict[str, tuple[bool, float]] = {}
+        self._availability_inflight: dict[str, threading.Event] = {}
         # Guards every mutation of the dicts above, and every read that
         # iterates them (rather than a single dict.get()/[] lookup,
         # which CPython already makes atomic). Found live via a
@@ -85,7 +93,8 @@ class ProviderRegistry:
     ) -> None:
         """Add *provider* under the given *name*.
 
-        A previous registration under the same name is silently replaced.
+        Registration is idempotent for the same instance.  A different
+        implementation cannot silently shadow live/default/disabled state.
 
         Args:
             name: Registry key for the provider.
@@ -93,9 +102,19 @@ class ProviderRegistry:
             config: Optional provider configuration for key rotation support.
         """
         with self._lock:
+            existing = self._providers.get(name)
+            if existing is not None and existing is not provider:
+                raise ValueError(f"Provider name {name!r} is already registered.")
+            if existing is provider:
+                existing_config = self._provider_configs.get(name)
+                if config is not None and existing_config is not None and config != existing_config:
+                    raise ValueError(
+                        f"Provider name {name!r} is already registered with different config."
+                    )
+                return
             self._providers[name] = provider
             if config is not None:
-                self._provider_configs[name] = config
+                self._provider_configs[name] = copy.deepcopy(config)
                 self._key_indices.setdefault(name, 0)
 
     def get_config(self, provider_name: str) -> ProviderConfig | None:
@@ -114,7 +133,14 @@ class ProviderRegistry:
             provider was registered without one (or isn't registered at
             all).
         """
-        return self._provider_configs.get(provider_name)
+        with self._lock:
+            config = self._provider_configs.get(provider_name)
+            return copy.deepcopy(config) if config is not None else None
+
+    @property
+    def effective_provider_hosts(self) -> tuple[str, ...]:
+        """Return the immutable derived provider-egress host snapshot."""
+        return self._effective_provider_hosts
 
     def rotate_key(self, provider_name: str) -> None:
         """Rotate to the next API key for the named provider (round-robin).
@@ -196,12 +222,13 @@ class ProviderRegistry:
                 self._runtime_disabled.discard(name)
             else:
                 self._runtime_disabled.add(name)
+            self._availability_cache.pop(name, None)
         logger.info("Provider %r %s at runtime.", name, "enabled" if enabled else "disabled")
 
     def is_enabled(self, name: str) -> bool:
-        """Return ``False`` only when *name* has been runtime-disabled."""
+        """Return whether a registered provider is runtime-enabled."""
         with self._lock:
-            return name not in self._runtime_disabled
+            return name in self._providers and name not in self._runtime_disabled
 
     def set_default(self, name: str) -> None:
         """Set the default provider by name.
@@ -213,25 +240,15 @@ class ProviderRegistry:
             ValueError: If the name is not registered, runtime-disabled,
                 or the provider is not available.
         """
-        provider = self._providers.get(name)
+        with self._lock:
+            provider = self._providers.get(name)
+            enabled = name not in self._runtime_disabled
         if provider is None:
             raise ValueError(f"Provider {name!r} is not registered.")
-        if not self.is_enabled(name):
+        if not enabled:
             raise ValueError(f"Provider {name!r} is disabled; enable it first.")
-        # is_available() may perform real I/O (e.g. an HTTP health check);
-        # deliberately not held under self._lock so a slow/blocking check
-        # for one provider can't stall unrelated register()/rotate_key()
-        # calls on other providers. Only the final assignment needs the
-        # lock (a single attribute write is already atomic in CPython,
-        # but taking it anyway keeps this consistent with every other
-        # mutation of registry state going through the same guard).
-        try:
-            if not provider.is_available():
-                raise ValueError(f"Provider {name!r} is not available.")
-        except Exception as exc:
-            if isinstance(exc, ValueError):
-                raise
-            raise ValueError(f"Provider {name!r} availability check failed: {exc}") from exc
+        if not self._availability_for(name, provider):
+            raise ValueError(f"Provider {name!r} is not available or its probe timed out.")
         with self._lock:
             self._default_name = name
         logger.info("Default provider set to %r.", name)
@@ -297,28 +314,93 @@ class ProviderRegistry:
             A list of available :class:`~.base.BaseProvider` instances in
             registration order (dict insertion order, Python 3.7+).
         """
-        # Snapshot under the lock, then iterate (and call each provider's
-        # potentially I/O-bound is_available()) outside it -- otherwise
-        # a slow health check would hold self._lock for its full
-        # duration, blocking unrelated register()/rotate_key() calls
-        # from other threads for no good reason.
         with self._lock:
             snapshot = [
-                provider
+                (name, provider)
                 for name, provider in self._providers.items()
                 if name not in self._runtime_disabled
             ]
-        available: list[BaseProvider] = []
-        for provider in snapshot:
+        deadline = time.monotonic() + self.AVAILABILITY_BULK_DEADLINE_SECONDS
+        events = [self._ensure_availability_probe(name, provider) for name, provider in snapshot]
+        for event in events:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            event.wait(remaining)
+        now = time.monotonic()
+        with self._lock:
+            return [
+                provider
+                for name, provider in snapshot
+                if (cached := self._availability_cache.get(name)) is not None
+                and now - cached[1] <= self.AVAILABILITY_CACHE_SECONDS
+                and cached[0]
+            ]
+
+    def availability_status(self) -> dict[str, dict[str, object]]:
+        """Return credential-free probe freshness and in-flight state."""
+        now = time.monotonic()
+        with self._lock:
+            names = list(self._providers)
+            return {
+                name: {
+                    "available": self._availability_cache.get(name, (False, 0.0))[0],
+                    "age_seconds": (
+                        max(0.0, now - self._availability_cache[name][1])
+                        if name in self._availability_cache
+                        else None
+                    ),
+                    "stale": (
+                        name not in self._availability_cache
+                        or now - self._availability_cache[name][1] > self.AVAILABILITY_CACHE_SECONDS
+                    ),
+                    "in_flight": name in self._availability_inflight,
+                    "enabled": name not in self._runtime_disabled,
+                }
+                for name in names
+            }
+
+    def _availability_for(self, name: str, provider: BaseProvider) -> bool:
+        event = self._ensure_availability_probe(name, provider)
+        event.wait(self.AVAILABILITY_BULK_DEADLINE_SECONDS)
+        now = time.monotonic()
+        with self._lock:
+            cached = self._availability_cache.get(name)
+            return bool(cached and now - cached[1] <= self.AVAILABILITY_CACHE_SECONDS and cached[0])
+
+    def _ensure_availability_probe(self, name: str, provider: BaseProvider) -> threading.Event:
+        now = time.monotonic()
+        with self._lock:
+            cached = self._availability_cache.get(name)
+            if cached is not None and now - cached[1] <= self.AVAILABILITY_CACHE_SECONDS:
+                ready = threading.Event()
+                ready.set()
+                return ready
+            existing = self._availability_inflight.get(name)
+            if existing is not None:
+                return existing
+            event = threading.Event()
+            self._availability_inflight[name] = event
+
+        def probe() -> None:
             try:
-                if provider.is_available():
-                    available.append(provider)
+                available = bool(provider.is_available())
             except Exception:
-                logger.exception(
-                    "is_available() raised for provider %r; treating as unavailable",
-                    provider.name,
-                )
-        return available
+                available = False
+                logger.warning("Availability probe failed for provider %r; details withheld.", name)
+            checked_at = time.monotonic()
+            with self._lock:
+                if self._providers.get(name) is provider and name not in self._runtime_disabled:
+                    self._availability_cache[name] = (available, checked_at)
+                self._availability_inflight.pop(name, None)
+                event.set()
+
+        threading.Thread(
+            target=probe,
+            daemon=True,
+            name=f"missy-provider-probe-{name[:32]}",
+        ).start()
+        return event
 
     # ------------------------------------------------------------------
     # Factory
@@ -339,6 +421,11 @@ class ProviderRegistry:
             A new :class:`ProviderRegistry` containing successfully
             constructed provider instances.
         """
+        # Runtime construction must not rewrite the operator's parsed config:
+        # doing so makes config diff/rollback lie and lets a failed provider
+        # partially widen caller-owned policy state.  Providers and the
+        # registry receive an isolated snapshot instead.
+        config = copy.deepcopy(config)
         registry = cls()
         # Auto-populate provider_allowed_hosts from provider base_url entries
         # so users don't have to duplicate hosts in network policy manually.
@@ -386,13 +473,11 @@ class ProviderRegistry:
                                 event_type="provider.base_url_egress_widened",
                                 category="network",
                                 result="allow",
-                                detail={
-                                    "provider": provider_config.name,
-                                    "host": host,
-                                    "base_url": provider_config.base_url,
-                                },
+                                detail={"provider": provider_config.name, "host": host},
                             )
                         )
+
+        registry._effective_provider_hosts = tuple(config.network.provider_allowed_hosts)
 
         for key, provider_config in config.providers.items():
             if not provider_config.enabled:

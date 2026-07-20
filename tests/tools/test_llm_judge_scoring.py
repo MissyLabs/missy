@@ -91,19 +91,19 @@ class TestScorerWithJudge:
             raise RuntimeError("judge down")
 
         scorer = BenchmarkScorer(judge_fn=_boom)
-        # Heuristic substring match -> 0.8 (expected 'Paris' is inside actual).
+        # A failed judge falls back to the conservative non-substring oracle.
         r = _result(actual="Paris, France", expected="Paris")
-        assert scorer.score(r).correctness == 0.8
+        assert scorer.score(r).correctness == 0.0
 
     def test_judge_nan_falls_back(self) -> None:
         scorer = BenchmarkScorer(judge_fn=lambda e, a: float("nan"))
         r = _result(actual="Paris, France", expected="Paris")
-        assert scorer.score(r).correctness == 0.8
+        assert scorer.score(r).correctness == 0.0
 
     def test_no_judge_is_pure_heuristic(self) -> None:
         scorer = BenchmarkScorer()  # default, no judge
         r = _result(actual="Paris, France", expected="Paris")
-        assert scorer.score(r).correctness == 0.8
+        assert scorer.score(r).correctness == 0.0
 
     def test_judge_score_clamped(self) -> None:
         scorer = BenchmarkScorer(judge_fn=lambda e, a: 5.0)  # out of range
@@ -114,8 +114,8 @@ class TestScorerWithJudge:
         judge = MagicMock(return_value=0.0)
         scorer = BenchmarkScorer(judge_fn=judge)
         r = _result(actual="anything", expected=None)
-        # No ground truth -> full credit, judge not consulted.
-        assert scorer.score(r).correctness == 1.0
+        # No ground truth remains unscored, and the judge is not consulted.
+        assert scorer.score(r).correctness == 0.0
         judge.assert_not_called()
 
 
@@ -190,6 +190,6 @@ class TestStructuredJudge:
     def test_scorer_falls_back_when_structured_judge_fails(self) -> None:
         judge = make_structured_llm_judge(self._provider("garbage"), max_retries=0)
         scorer = BenchmarkScorer(judge_fn=judge)
-        # Heuristic substring -> 0.8 despite the judge failing.
+        # Conservative fallback gives no credit for a single-token substring.
         r = _result(actual="Paris, France", expected="Paris")
-        assert scorer.score(r).correctness == 0.8
+        assert scorer.score(r).correctness == 0.0

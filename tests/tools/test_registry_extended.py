@@ -200,12 +200,13 @@ class TestToolRegistryQueries:
         reg = ToolRegistry()
         assert reg.get("nope") is None
 
-    def test_register_replaces_existing(self):
+    def test_register_rejects_existing_name(self):
         reg = ToolRegistry()
         reg.register(EchoTool())
         new_echo = EchoTool()
-        reg.register(new_echo)
-        assert reg.get("echo") is new_echo
+        with pytest.raises(ValueError, match="already registered"):
+            reg.register(new_echo)
+        assert isinstance(reg.get("echo"), EchoTool)
 
 
 class TestSingleton:

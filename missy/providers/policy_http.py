@@ -12,18 +12,18 @@ argument; :func:`build_policy_http_client` returns exactly such a client.
 
 Design notes:
 
-* The hook is **fail-closed** when the policy engine is initialised: a denied
-  host raises :class:`~missy.core.exceptions.PolicyViolationError` before any
-  bytes are sent.
-* The hook is **defensive at startup**: if the policy engine has not yet been
-  initialised, the request is allowed (with a debug log) so provider
-  construction never crashes.  It does *not* silently skip the check once the
-  engine exists.
+* The hook is fail-closed when policy bootstrap is absent or denies the
+  destination.
+* The exact IP validated by policy is pinned into the transport used by the
+  SDK, closing the check/connect DNS-rebinding window.
+* REST method/path policy is applied to provider traffic as well as ordinary
+  gateway HTTP traffic.
 """
 
 from __future__ import annotations
 
 import logging
+import posixpath
 
 import httpx
 
@@ -49,6 +49,23 @@ def _emit_network_event(method: str, url: str, result: str, detail: str) -> None
         logger.exception("Failed to emit provider network audit event")
 
 
+def _safe_request_url(url: httpx.URL) -> str:
+    """Return a bounded URL without credentials, query data, or fragments."""
+    host = url.host or "<missing-host>"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = f":{url.port}" if url.port is not None else ""
+    path = url.path or "/"
+    return f"{url.scheme}://{host}{port}{path}"[:2048]
+
+
+def _normalized_path(raw_path: str) -> str:
+    path = posixpath.normpath(raw_path or "/")
+    if raw_path.endswith("/") and not path.endswith("/"):
+        path += "/"
+    return path
+
+
 def _policy_request_hook(request: httpx.Request) -> None:
     """httpx ``request`` event hook enforcing network policy on provider calls.
 
@@ -61,22 +78,39 @@ def _policy_request_hook(request: httpx.Request) -> None:
     """
     host = request.url.host
     method = request.method
-    url = str(request.url)
+    url = _safe_request_url(request.url)
     if not host:
-        return
+        raise PolicyViolationError(
+            "Provider request has no policy-checkable destination host.",
+            category="network",
+            detail="Provider SDK request URL did not contain a host.",
+        )
 
     from missy.policy.engine import get_policy_engine
 
     try:
         engine = get_policy_engine()
-    except RuntimeError:
-        # Policy engine not initialised yet (e.g. provider used before
-        # runtime bootstrap). Allow but log — do not crash provider startup.
-        logger.debug("Policy engine not initialised; allowing provider request to %s", host)
-        return
+    except RuntimeError as exc:
+        _emit_network_event(method, url, "deny", "provider policy is not initialized")
+        raise PolicyViolationError(
+            "Provider request denied because network policy is not initialized.",
+            category="network",
+            detail="Provider SDK egress requires an initialized policy engine.",
+        ) from exc
 
     try:
-        engine.check_network(host, category="provider")
+        _allowed, resolved_ip = engine.check_network_resolved(host, category="provider")
+        path = _normalized_path(request.url.path)
+        rest_result = engine.rest_policy.check(host, method, path)
+        if rest_result == "deny":
+            raise PolicyViolationError(
+                f"REST policy denied provider request {method} {host}{path}",
+                category="network",
+                detail=f"REST rule denied provider request {method} {path} on {host}",
+            )
+        from missy.gateway.pinned_transport import pin_host
+
+        pin_host(host, resolved_ip)
     except PolicyViolationError:
         _emit_network_event(method, url, "deny", f"network policy denied host {host}")
         logger.warning("Network policy denied provider request to %s", host)
@@ -95,7 +129,10 @@ def build_policy_http_client(timeout: float = 30.0) -> httpx.Client:
         An :class:`httpx.Client` with a policy-enforcing ``request`` event
         hook, suitable for passing to a provider SDK via ``http_client=``.
     """
+    from missy.gateway.pinned_transport import PinnedHTTPTransport
+
     return httpx.Client(
         timeout=timeout,
+        transport=PinnedHTTPTransport(),
         event_hooks={"request": [_policy_request_hook]},
     )

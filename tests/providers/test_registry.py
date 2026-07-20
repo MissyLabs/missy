@@ -76,13 +76,14 @@ class TestRegisterAndGet:
         registry = ProviderRegistry()
         assert registry.get("nonexistent") is None
 
-    def test_register_replaces_existing(self):
+    def test_register_rejects_shadowing_and_preserves_existing(self):
         registry = ProviderRegistry()
         first = _make_provider("alpha")
         second = _make_provider("alpha")
         registry.register("alpha", first)
-        registry.register("alpha", second)
-        assert registry.get("alpha") is second
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register("alpha", second)
+        assert registry.get("alpha") is first
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,9 @@ class TestGetConfig:
         registry = ProviderRegistry()
         cfg = ProviderConfig(name="anthropic", model="claude-sonnet-4-6")
         registry.register("anthropic", _make_provider("anthropic"), config=cfg)
-        assert registry.get_config("anthropic") is cfg
+        stored = registry.get_config("anthropic")
+        assert stored == cfg
+        assert stored is not cfg
 
     def test_get_config_returns_none_when_registered_without_config(self):
         registry = ProviderRegistry()

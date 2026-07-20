@@ -1040,7 +1040,7 @@ class TestResilientMemoryStoreHealthTracking:
 
     def test_health_restored_after_success(self):
         primary = MagicMock()
-        primary.add_turn.side_effect = [RuntimeError("error"), None]
+        primary.add_turn.side_effect = [RuntimeError("error"), None, None]
         store = ResilientMemoryStore(primary, max_failures=3)
         store.add_turn(_make_turn())  # fails
         assert store.is_healthy is False
@@ -1056,13 +1056,13 @@ class TestResilientMemoryStoreHealthTracking:
         turn1 = _make_turn(session_id="s1", content="first")
         turn2 = _make_turn(session_id="s1", content="second")
         store.add_turn(turn1)  # fails; turn1 cached
-        store.add_turn(turn2)  # succeeds; turn2 also in cache before write, then sync replays both
+        store.add_turn(turn2)  # replays failed turn1 first, then writes turn2 once
         # call_count:
         #   1  — turn1 primary write (fails)
-        #   1  — turn2 primary write (succeeds, triggers _on_success -> sync)
-        #   2  — sync replays full cache: turn1 + turn2
-        # total = 4
-        assert primary.add_turn.call_count == 4
+        #   1  — pending journal replays turn1
+        #   1  — turn2 primary write (succeeds)
+        # Successful cached rows are never replayed, so total = 3.
+        assert primary.add_turn.call_count == 3
         # Verify the store reports healthy after recovery
         assert store.is_healthy is True
 

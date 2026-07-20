@@ -820,10 +820,8 @@ class TestFromConfigEdgeCases:
             }
         )
         config.network.provider_allowed_hosts.append("myhost.internal")
-        ProviderRegistry.from_config(config)
-        count = sum(
-            1 for h in config.network.provider_allowed_hosts if h.lower() == "myhost.internal"
-        )
+        registry = ProviderRegistry.from_config(config)
+        count = sum(1 for h in registry.effective_provider_hosts if h.lower() == "myhost.internal")
         assert count == 1
 
     def test_from_config_multiple_unknown_providers_all_skipped(self):

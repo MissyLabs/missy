@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from missy.tools.base import ToolResult
 from missy.tools.builtin.video_storyboard import VideoStoryboardTool
@@ -399,3 +399,19 @@ class TestPartIIIValidation:
         props = VideoStoryboardTool().get_schema()["parameters"]["properties"]
         for key in ("continuity", "audio_path", "audio_mode", "audio_loop"):
             assert key in props
+
+
+def test_tdeep_047_production_children_dispatch_through_registry_reference_monitor():
+    registry = MagicMock()
+    registry.execute.return_value = ToolResult(
+        success=False,
+        output=None,
+        error="policy denied child",
+        policy_denied=True,
+    )
+    tool = VideoStoryboardTool()
+    with patch("missy.tools.registry.get_tool_registry", return_value=registry):
+        result = tool.execute(scenes=[{"prompt": "safe scene"}])
+    registry.execute.assert_called_once_with("video_generate", backend="wan", prompt="safe scene")
+    assert not result.success
+    assert "policy denied child" in result.error

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from missy.providers.round_robin import Account, RoundRobinAccounts
+from missy.providers.round_robin import AccountView, RoundRobinAccounts
 
 
 class _FakeLimiter:
@@ -41,19 +41,20 @@ class TestActivation:
 
 
 class TestAccounts:
-    def test_indices_and_keys(self) -> None:
+    def test_public_views_have_indices_but_no_credentials(self) -> None:
         rr = _rr(["a", "b", "c"])
         assert [acc.index for acc in rr.accounts] == [0, 1, 2]
-        assert [acc.api_key for acc in rr.accounts] == ["a", "b", "c"]
+        assert not any(hasattr(acc, "api_key") for acc in rr.accounts)
 
-    def test_each_account_has_own_limiter(self) -> None:
+    def test_public_views_are_immutable_snapshots(self) -> None:
         rr = _rr(["a", "b"])
-        limiters = {id(acc.rate_limiter) for acc in rr.accounts}
-        assert len(limiters) == 2  # independent budgets
+        views = rr.accounts
+        assert isinstance(views, tuple)
+        assert views is not rr.accounts
 
-    def test_client_starts_none(self) -> None:
+    def test_client_readiness_is_credential_free(self) -> None:
         rr = _rr(["a", "b"])
-        assert all(acc.client is None for acc in rr.accounts)
+        assert all(not acc.client_ready for acc in rr.accounts)
 
 
 class TestSelection:
@@ -62,11 +63,12 @@ class TestSelection:
         picks = [rr.select().index for _ in range(6)]
         assert picks == [0, 1, 2, 0, 1, 2]
 
-    def test_returns_account_objects(self) -> None:
-        rr = _rr(["a", "b"])
+    def test_returns_safe_account_views(self) -> None:
+        rr = _rr(["secret-key-alpha", "secret-key-beta"])
         acc = rr.select()
-        assert isinstance(acc, Account)
-        assert acc.api_key in ("a", "b")
+        assert isinstance(acc, AccountView)
+        assert "secret-key" not in repr(acc)
+        assert not hasattr(acc, "api_key")
 
     def test_concurrent_selection_distributes_evenly(self) -> None:
         rr = _rr([f"k{i}" for i in range(4)])

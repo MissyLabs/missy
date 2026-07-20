@@ -41,6 +41,17 @@ class Account:
     rate_limiter: Any
     client: Any | None = None
 
+    def __repr__(self) -> str:
+        return f"Account(index={self.index}, api_key=<redacted>, client_ready={self.client is not None})"
+
+
+@dataclass(frozen=True)
+class AccountView:
+    """Credential-free immutable public account state."""
+
+    index: int
+    client_ready: bool
+
 
 class RoundRobinAccounts:
     """Thread-safe round-robin selector over a list of :class:`Account`.
@@ -73,8 +84,17 @@ class RoundRobinAccounts:
         self._lock = threading.Lock()
 
     @property
-    def accounts(self) -> list[Account]:
-        """The live account list (empty when balancing is inactive)."""
+    def accounts(self) -> tuple[AccountView, ...]:
+        """Return credential-free immutable snapshots of account state."""
+        with self._lock:
+            return tuple(
+                AccountView(index=account.index, client_ready=account.client is not None)
+                for account in self._accounts
+            )
+
+    @property
+    def _live_accounts(self) -> list[Account]:
+        """Private provider integration surface; never expose in diagnostics."""
         return self._accounts
 
     @property
@@ -87,13 +107,20 @@ class RoundRobinAccounts:
         """How many accounts are balanced across (0 when inactive)."""
         return len(self._accounts)
 
-    def select(self) -> Account | None:
-        """Return the next account round-robin, advancing the index atomically.
+    def select(self) -> AccountView | None:
+        """Return a credential-free view of the next account in rotation.
 
         Returns ``None`` when balancing is inactive, so the caller falls back to
         its single-credential path. Concurrent callers are assigned distinct
         accounts in rotation with no lost or duplicated turns.
         """
+        account = self._select_live()
+        if account is None:
+            return None
+        return AccountView(index=account.index, client_ready=account.client is not None)
+
+    def _select_live(self) -> Account | None:
+        """Private provider integration selector returning credential state."""
         if not self._accounts:
             return None
         with self._lock:

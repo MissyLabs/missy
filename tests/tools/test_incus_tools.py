@@ -162,8 +162,8 @@ class TestIncusListTool:
         mock_run.return_value = _json_proc([])
         self.tool.execute(instance_type="container")
         cmd = mock_run.call_args[0][0]
-        assert "--type" in cmd
-        assert "container" in cmd
+        assert "--type" not in cmd
+        assert "type=container" in cmd
 
 
 # ---------------------------------------------------------------------------

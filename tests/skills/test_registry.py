@@ -50,12 +50,13 @@ class TestSkillRegistryRegister:
         registry.register(EchoSkill())
         assert registry.get("echo") is not None
 
-    def test_register_replaces_existing(self, registry: SkillRegistry):
+    def test_register_rejects_existing_name(self, registry: SkillRegistry):
         s1 = EchoSkill()
         s2 = EchoSkill()
         registry.register(s1)
-        registry.register(s2)
-        assert registry.get("echo") is s2
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(s2)
+        assert registry.get("echo") is s1
 
     def test_get_returns_none_for_unknown(self, registry: SkillRegistry):
         assert registry.get("not_here") is None

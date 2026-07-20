@@ -32,7 +32,7 @@ from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
-from .rate_limiter import RateLimiter
+from .rate_limiter import RateLimiter, parse_retry_after
 from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,7 @@ class OpenAIProvider(BaseProvider):
         self._tokens_per_minute: int = config.tokens_per_minute
         self._max_wait_seconds: float = config.max_wait_seconds
         self._client: Any | None = None
+        self._client_error: str | None = None
         self._resolved_model: str | None = None
         self._last_transcript_repairs: list[dict[str, Any]] = []
 
@@ -141,7 +142,7 @@ class OpenAIProvider(BaseProvider):
                 max_wait_seconds=self._max_wait_seconds,
             ),
         )
-        self._accounts: list[Account] = self._rr.accounts
+        self._accounts: list[Account] = self._rr._live_accounts
 
     @property
     def is_multi_account(self) -> bool:
@@ -163,7 +164,7 @@ class OpenAIProvider(BaseProvider):
         concurrent callers are assigned accounts round-robin with no lost
         or duplicated turns.
         """
-        return self._rr.select()
+        return self._rr._select_live()
 
     def _current_rate_limiter(self) -> RateLimiter | None:
         """Return the rate limiter for the account active on this thread, if any."""
@@ -204,6 +205,7 @@ class OpenAIProvider(BaseProvider):
         """Update the API key and force the SDK client to be rebuilt."""
         self._api_key = value
         self._client = None
+        self._client_error = None
         self._resolved_model = None
 
     @property
@@ -228,7 +230,11 @@ class OpenAIProvider(BaseProvider):
             ``True`` if the ``openai`` package is importable and an API key
             is present.
         """
-        return _OPENAI_AVAILABLE and bool(self._api_key or os.environ.get("OPENAI_API_KEY"))
+        return (
+            _OPENAI_AVAILABLE
+            and bool(self._api_key or os.environ.get("OPENAI_API_KEY"))
+            and self._client_error is None
+        )
 
     @staticmethod
     def _normalized_host(value: str) -> str:
@@ -416,9 +422,14 @@ class OpenAIProvider(BaseProvider):
             from missy.providers.policy_http import build_policy_http_client
 
             client_kwargs["http_client"] = build_policy_http_client(timeout=float(self._timeout))
-        except Exception:  # pragma: no cover - defensive; never block startup
-            logger.debug("Could not build policy-aware http client", exc_info=True)
-        return _openai_sdk.OpenAI(**client_kwargs)
+            client = _openai_sdk.OpenAI(**client_kwargs)
+            self._client_error = None
+            return client
+        except Exception as exc:
+            self._client_error = "policy-aware transport construction failed"
+            raise ProviderError(
+                "OpenAI provider unavailable: policy-aware transport construction failed"
+            ) from exc
 
     def _make_client(self) -> Any:
         """Return a cached OpenAI client, creating one on first call.
@@ -1186,7 +1197,7 @@ class OpenAIProvider(BaseProvider):
         except _openai_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
             if getattr(exc, "status_code", 0) == 429:
-                retry_after = float(
+                retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
                 limiter = self._current_rate_limiter()
@@ -1305,7 +1316,7 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
             if getattr(exc, "status_code", 0) == 429:
-                retry_after = float(
+                retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
                 )
                 limiter = self._current_rate_limiter()

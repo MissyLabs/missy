@@ -122,6 +122,9 @@ class TestClearSessionFull:
             def __init__(self):
                 self.cleared = None
 
+            def add_turn(self, turn):
+                pass
+
             def clear_session(self, session_id):
                 self.cleared = session_id
 
