@@ -208,7 +208,7 @@ class VisionBurstCaptureTool(BaseTool):
     name = "vision_burst"
     description = (
         "Capture a burst of frames from a webcam. Returns metadata for each "
-        "frame or just the sharpest frame if best_only is true."
+        "saved frame or just the sharpest frame if best_only is true."
     )
     permissions = ToolPermissions(filesystem_read=True, filesystem_write=True)
     parameters = {
@@ -243,7 +243,7 @@ class VisionBurstCaptureTool(BaseTool):
         target exists for this tool)."""
         device = kwargs.get("device") or ""
         read_paths = [device] if device else []
-        write_paths = [self._DEFAULT_CAPTURES_DIR] if kwargs.get("best_only") else []
+        write_paths = [self._DEFAULT_CAPTURES_DIR]
         return (read_paths, write_paths)
 
     def execute(
@@ -315,16 +315,30 @@ class VisionBurstCaptureTool(BaseTool):
 
                 # Full burst
                 results = handle.capture_burst(count=count, interval=interval)
+                import cv2
+
+                captures_dir = Path.home() / ".missy" / "captures"
+                captures_dir.mkdir(parents=True, exist_ok=True)
+                capture_id = time.time_ns()
                 frames = []
                 for i, r in enumerate(results):
                     if r.success:
+                        processed = pipeline.process(r.image)
                         quality = pipeline.assess_quality(r.image)
+                        save_path = str(captures_dir / f"burst_{capture_id}_{i:02d}.jpg")
+                        if not cv2.imwrite(
+                            save_path,
+                            processed,
+                            [cv2.IMWRITE_JPEG_QUALITY, 85],
+                        ):
+                            raise OSError(f"Failed to save burst frame {i}")
                         frames.append(
                             {
                                 "index": i,
                                 "width": r.width,
                                 "height": r.height,
                                 "quality": quality,
+                                "saved_to": save_path,
                                 "success": True,
                             }
                         )

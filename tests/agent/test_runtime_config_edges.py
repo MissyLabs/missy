@@ -526,7 +526,9 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_requires_analysis_after_vision_burst(self):
         lower = DISCORD_SYSTEM_PROMPT.lower()
         assert "vision bursts" in lower
-        assert "vision_burst and then vision_analyze" in lower
+        assert "vision_burst once" in lower
+        assert "first and last successful frames" in lower
+        assert "do not repeat vision_burst" in lower
         assert "not scene-change analysis" in lower
 
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):

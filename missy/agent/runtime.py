@@ -501,9 +501,11 @@ DISCORD_SYSTEM_PROMPT = (
     "pyproject.toml). Keep reads inside the approved workspace and bounded to "
     "files needed for the summary. Do not infer project purpose from names alone."
     " VISION BURSTS: When asked to summarize what changed across a burst, call "
-    "vision_burst and then vision_analyze on the captured evidence. Capture "
-    "quality metrics such as brightness, blur, and noise are not scene-change "
-    "analysis and must not be presented as a substitute for comparing frames."
+    "vision_burst once, then use the returned saved frame paths to call "
+    "vision_analyze on at least the first and last successful frames and compare "
+    "those analysis results. Do not repeat vision_burst to rediscover paths. "
+    "Capture quality metrics such as brightness, blur, and noise are not "
+    "scene-change analysis and must not substitute for comparing frames."
 )
 
 
