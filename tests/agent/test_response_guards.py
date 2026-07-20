@@ -189,6 +189,12 @@ class TestSecurityRefusalAlternativeGuard:
             "Can you attend the meeting tomorrow?",
         )
 
+    def test_non_string_test_doubles_fail_open_without_crashing(self):
+        assert not detect_security_refusal_without_alternative(
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+        )
+
     def test_retry_preserves_refusal_and_names_specific_alternatives(self):
         prompt = make_security_refusal_retry_prompt("Use sudo to install a package")
         lower = prompt.lower()

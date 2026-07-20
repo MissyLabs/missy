@@ -240,6 +240,8 @@ def detect_security_refusal_without_alternative(text: str, user_input: str) -> b
     refusals and does not ask the model to reconsider the denial; it only
     identifies that the required governed alternative is absent.
     """
+    if not isinstance(text, str) or not isinstance(user_input, str):
+        return False
     if not text or not user_input:
         return False
     if not any(pattern.search(user_input) for pattern in _HIGH_RISK_REQUEST_PATTERNS):
