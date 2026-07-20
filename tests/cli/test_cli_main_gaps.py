@@ -1205,6 +1205,69 @@ class TestApiStartAgentBudgetWiring:
             _os.unlink(cfg_path)
 
 
+class TestGatewayWebConsoleCredentialOutput:
+    """Regression: gateway startup output is normally captured in a durable
+    service/harness log, so it must never contain the Web console credential.
+    """
+
+    @pytest.mark.parametrize("configured", [False, True])
+    def test_gateway_start_never_prints_operator_key(
+        self, runner: CliRunner, configured: bool
+    ) -> None:
+        import os
+        import signal
+
+        cfg_path = _cfg_path()
+        secret = "validation-operator-secret-that-must-not-appear"
+        try:
+            mock_config = _make_mock_config()
+            mock_config.discord = None
+            mock_config.providers = {}
+            mock_config.proactive.enabled = False
+            mock_config.scheduling.enabled = False
+            mock_config.heartbeat.enabled = False
+
+            call_count = [0]
+
+            def fake_sleep(_seconds):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            mock_server = MagicMock()
+            mock_server.url = "http://127.0.0.1:8080"
+            api_config = {"enabled": True}
+            if configured:
+                api_config["api_key"] = secret
+
+            with (
+                patch("missy.cli.main._load_subsystems", return_value=mock_config),
+                patch("missy.agent.runtime.AgentRuntime", return_value=MagicMock()),
+                patch("missy.agent.runtime.AgentConfig"),
+                patch("missy.api.server.ApiServer", return_value=mock_server),
+                patch("missy.providers.registry.get_registry", return_value=MagicMock()),
+                patch("missy.tools.registry.get_tool_registry", return_value=MagicMock()),
+                patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=MagicMock()),
+                patch("missy.cli.main._load_or_create_web_console_key", return_value=secret),
+                patch("yaml.safe_load", return_value={"api": api_config}),
+                patch("time.sleep", side_effect=fake_sleep),
+            ):
+                result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
+
+            assert result.exit_code == 0
+            assert "Web console started" in result.output
+            assert secret not in result.output
+            assert "value hidden" in result.output
+            if configured:
+                assert "configured" in result.output
+            else:
+                assert "~/.missy/secrets/web_console.key" in result.output
+        finally:
+            import os as _os
+
+            _os.unlink(cfg_path)
+
+
 class TestGatewayStartProactiveStopException:
     def test_proactive_stop_exception_swallowed(self, runner: CliRunner):
         """When proactive_manager.stop() raises, gateway should still exit cleanly."""

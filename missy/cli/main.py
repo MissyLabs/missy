@@ -2994,6 +2994,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 _api_memory_store = None
 
             _api_key = str(_api_cfg.get("api_key") or "").strip()
+            _api_key_is_configured = bool(_api_key)
             if not _api_key:
                 _api_key = _load_or_create_web_console_key()
 
@@ -3010,10 +3011,15 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 discord_channels=discord_channels,
             )
             api_server.start()
+            if _api_key_is_configured:
+                _operator_auth_status = "Operator key: configured (value hidden)"
+            else:
+                _operator_auth_status = (
+                    "Operator key: stored at ~/.missy/secrets/web_console.key (value hidden)"
+                )
             console.print(
                 f"[green]Web console started[/] on [bold]{api_server.url}[/]\n"
-                f"  [dim]Operator key: {_api_key} (also saved to "
-                "~/.missy/secrets/web_console.key)[/]"
+                f"  [dim]{_operator_auth_status}[/]"
             )
         else:
             console.print("[dim]Web console disabled via config (api.enabled: false).[/]")
