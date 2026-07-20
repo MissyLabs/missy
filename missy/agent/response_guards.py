@@ -207,7 +207,7 @@ _HIGH_RISK_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _REFUSAL_PATTERN = re.compile(
-    r"(?i)\b(?:can(?:not|'t)|won't|will\s+not|unable|not\s+able|refus(?:e|ing)|"
+    r"(?i)\b(?:can(?:not|['’]t)|won['’]t|will\s+not|unable|not\s+able|refus(?:e|ing)|"
     r"not\s+(?:allowed|permitted))\b"
 )
 
