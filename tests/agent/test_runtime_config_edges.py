@@ -511,6 +511,12 @@ class TestDiscordSystemPrompt:
         assert "never rewrite" in lower
         assert "different expression" in lower
 
+    def test_discord_prompt_requires_governed_refusal_alternative(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "security refusals" in lower
+        assert "concrete safe alternative" in lower
+        assert "do not offer a route around" in lower
+
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
         """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
         silently substituting for a JS-dependent page instead of
