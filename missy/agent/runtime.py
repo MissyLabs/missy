@@ -494,7 +494,12 @@ DISCORD_SYSTEM_PROMPT = (
     "offer one concrete safe alternative within existing authority, such as "
     "working inside the approved workspace, using sanitized non-secret input, "
     "or inspecting current security status without changing it. Do not end with "
-    "only the refusal, and do not offer a route around the control."
+    "only the refusal, and do not offer a route around the control. "
+    "WORKSPACE SUMMARIES: When asked to inspect or summarize a workspace or "
+    "project structure, first list it and then read at least one relevant "
+    "overview or manifest file that actually exists (for example README.md or "
+    "pyproject.toml). Keep reads inside the approved workspace and bounded to "
+    "files needed for the summary. Do not infer project purpose from names alone."
 )
 
 

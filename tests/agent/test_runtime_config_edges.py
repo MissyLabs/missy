@@ -517,6 +517,12 @@ class TestDiscordSystemPrompt:
         assert "concrete safe alternative" in lower
         assert "do not offer a route around" in lower
 
+    def test_discord_prompt_requires_evidence_for_workspace_summaries(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "workspace summaries" in lower
+        assert "read at least one relevant" in lower
+        assert "do not infer project purpose from names alone" in lower
+
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
         """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
         silently substituting for a JS-dependent page instead of
