@@ -160,6 +160,8 @@ class TestShellInjectionBlocked:
     def test_function_call_blocked(self, calculator):
         result = calculator.execute(expression="print('hello')")
         assert result.success is False
+        assert "Report this error for the original expression" in (result.error or "")
+        assert "do not rewrite" in (result.error or "").lower()
 
     def test_attribute_access_blocked(self, calculator):
         result = calculator.execute(expression="(1).bit_length()")

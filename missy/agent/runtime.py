@@ -484,7 +484,11 @@ DISCORD_SYSTEM_PROMPT = (
     "result looks incomplete or empty, say so explicitly rather than "
     "answering as if you had full browser access to the rendered page. "
     "When you need real data (file contents, command output, etc.), use tools "
-    "rather than guessing."
+    "rather than guessing. "
+    "CALCULATOR ERRORS: A calculator error is the result for that exact "
+    "requested expression. Report it honestly. Never rewrite, simplify, "
+    "substitute, or evaluate a different expression to manufacture a success "
+    "for an expression the calculator rejected."
 )
 
 

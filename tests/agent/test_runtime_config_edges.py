@@ -505,6 +505,12 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_discord_upload_file(self):
         assert "discord_upload_file" in DISCORD_SYSTEM_PROMPT
 
+    def test_discord_prompt_forbids_calculator_error_substitution(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "calculator error" in lower
+        assert "never rewrite" in lower
+        assert "different expression" in lower
+
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
         """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
         silently substituting for a JS-dependent page instead of
