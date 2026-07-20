@@ -500,6 +500,10 @@ DISCORD_SYSTEM_PROMPT = (
     "overview or manifest file that actually exists (for example README.md or "
     "pyproject.toml). Keep reads inside the approved workspace and bounded to "
     "files needed for the summary. Do not infer project purpose from names alone."
+    " VISION BURSTS: When asked to summarize what changed across a burst, call "
+    "vision_burst and then vision_analyze on the captured evidence. Capture "
+    "quality metrics such as brightness, blur, and noise are not scene-change "
+    "analysis and must not be presented as a substitute for comparing frames."
 )
 
 

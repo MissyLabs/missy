@@ -523,6 +523,12 @@ class TestDiscordSystemPrompt:
         assert "read at least one relevant" in lower
         assert "do not infer project purpose from names alone" in lower
 
+    def test_discord_prompt_requires_analysis_after_vision_burst(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "vision bursts" in lower
+        assert "vision_burst and then vision_analyze" in lower
+        assert "not scene-change analysis" in lower
+
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
         """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
         silently substituting for a JS-dependent page instead of
