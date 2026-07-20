@@ -2390,9 +2390,8 @@ class TestRequestSizeLimit:
                 json=big_payload,
                 headers=HEADERS,
             )
-            # Size limit causes body parse to return None → 400, or the route
-            # returns 503 (no runtime). Either way it must not be 200.
-            assert resp.status_code in (400, 503)
+            assert resp.status_code == 413
+            assert resp.json() == {"status": "error", "error": "Request body too large"}
         finally:
             srv.stop()
 

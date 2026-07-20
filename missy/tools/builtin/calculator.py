@@ -90,6 +90,11 @@ _MAX_EXPONENT = 1_000
 # Guard against left-shift memory exhaustion (e.g. 1 << 10000000000)
 _MAX_SHIFT = 10_000
 
+_ERROR_REPORTING_GUIDANCE = (
+    " Report this error for the original expression. Do not rewrite, simplify, "
+    "substitute, or otherwise evaluate a different expression as a workaround."
+)
+
 
 def _safe_eval(node: ast.AST) -> int | float | complex:
     """Recursively evaluate an AST node from a numeric expression.
@@ -195,7 +200,10 @@ class CalculatorTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"expression must be a string, got {type(expression).__name__}",
+                error=(
+                    f"expression must be a string, got {type(expression).__name__}."
+                    f"{_ERROR_REPORTING_GUIDANCE}"
+                ),
             )
 
         expr = expression.strip()
@@ -203,7 +211,7 @@ class CalculatorTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error="expression must not be empty",
+                error=f"expression must not be empty.{_ERROR_REPORTING_GUIDANCE}",
             )
 
         try:
@@ -212,7 +220,7 @@ class CalculatorTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"Syntax error in expression: {exc}",
+                error=f"Syntax error in expression: {exc}.{_ERROR_REPORTING_GUIDANCE}",
             )
 
         try:
@@ -221,7 +229,7 @@ class CalculatorTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error=str(exc),
+                error=f"{exc}.{_ERROR_REPORTING_GUIDANCE}",
             )
 
         return ToolResult(success=True, output=result)

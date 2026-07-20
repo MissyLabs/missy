@@ -199,6 +199,44 @@ class TestVisionBurstCaptureTool:
         assert "count" in schema["parameters"]["properties"]
         assert "best_only" in schema["parameters"]["properties"]
 
+    @patch("cv2.imwrite", return_value=True)
+    @patch("missy.vision.pipeline.ImagePipeline.assess_quality", return_value={"score": 1.0})
+    @patch("missy.vision.pipeline.ImagePipeline.process", side_effect=lambda image: image)
+    @patch("missy.vision.capture.CameraHandle.capture_burst")
+    @patch("missy.vision.capture.CameraHandle.close")
+    @patch("missy.vision.capture.CameraHandle.open")
+    @patch("missy.vision.discovery.find_preferred_camera")
+    def test_full_burst_saves_every_successful_frame_for_analysis(
+        self,
+        mock_find,
+        mock_open,
+        mock_close,
+        mock_capture_burst,
+        mock_process,
+        mock_quality,
+        mock_imwrite,
+    ):
+        import json
+        from unittest.mock import MagicMock
+
+        from missy.tools.builtin.vision_tools import VisionBurstCaptureTool
+
+        mock_find.return_value = MagicMock(device_path="/dev/video0")
+        mock_capture_burst.return_value = [
+            MagicMock(success=True, image=object(), width=640, height=480),
+            MagicMock(success=True, image=object(), width=640, height=480),
+        ]
+
+        result = VisionBurstCaptureTool().execute(count=2, interval=0)
+
+        assert result.success is True
+        payload = json.loads(result.output)
+        assert payload["successful"] == 2
+        assert [frame["index"] for frame in payload["frames"]] == [0, 1]
+        assert all(frame["saved_to"].endswith(".jpg") for frame in payload["frames"])
+        assert payload["frames"][0]["saved_to"] != payload["frames"][1]["saved_to"]
+        assert mock_imwrite.call_count == 2
+
     @patch("missy.vision.discovery.find_preferred_camera", return_value=None)
     def test_tool_no_camera(self, mock_find):
         from missy.tools.builtin.vision_tools import VisionBurstCaptureTool

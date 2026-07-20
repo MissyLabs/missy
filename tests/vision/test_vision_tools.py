@@ -286,14 +286,12 @@ class TestVisionBurstResolveFilesystemTargets:
         _reads, writes = tool.resolve_filesystem_targets({"best_only": True})
         assert writes == [tool._DEFAULT_CAPTURES_DIR]
 
-    def test_full_burst_mode_has_no_write_target(self):
-        """The non-best_only branch never calls cv2.imwrite -- no write
-        target should be checked."""
+    def test_full_burst_writes_to_default_captures_dir(self):
         from missy.tools.builtin.vision_tools import VisionBurstCaptureTool
 
         tool = VisionBurstCaptureTool()
         _reads, writes = tool.resolve_filesystem_targets({"best_only": False})
-        assert writes == []
+        assert writes == [tool._DEFAULT_CAPTURES_DIR]
 
 
 class TestVisionBurstBlankFrameGuidance:

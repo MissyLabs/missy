@@ -505,6 +505,32 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_discord_upload_file(self):
         assert "discord_upload_file" in DISCORD_SYSTEM_PROMPT
 
+    def test_discord_prompt_forbids_calculator_error_substitution(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "calculator error" in lower
+        assert "never rewrite" in lower
+        assert "different expression" in lower
+
+    def test_discord_prompt_requires_governed_refusal_alternative(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "security refusals" in lower
+        assert "concrete safe alternative" in lower
+        assert "do not offer a route around" in lower
+
+    def test_discord_prompt_requires_evidence_for_workspace_summaries(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "workspace summaries" in lower
+        assert "read at least one relevant" in lower
+        assert "do not infer project purpose from names alone" in lower
+
+    def test_discord_prompt_requires_analysis_after_vision_burst(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "vision bursts" in lower
+        assert "vision_burst once" in lower
+        assert "first and last successful frames" in lower
+        assert "do not repeat vision_burst" in lower
+        assert "not scene-change analysis" in lower
+
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
         """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
         silently substituting for a JS-dependent page instead of
