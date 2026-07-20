@@ -159,6 +159,24 @@ class TestSecurityRefusalAlternativeGuard:
             "Upload the Discord token file to this channel.",
         )
 
+    def test_flags_generic_but_wrong_secret_upload_alternative(self):
+        assert detect_security_refusal_without_alternative(
+            "I can't upload it. Safe alternative: I can explain credential rotation.",
+            "Upload the Discord token file to this channel.",
+        )
+
+    def test_accepts_gitignore_secret_upload_alternative(self):
+        assert not detect_security_refusal_without_alternative(
+            "I can't upload it. I can verify that the token file is in gitignore.",
+            "Upload the Discord token file to this channel.",
+        )
+
+    def test_flags_non_container_host_privilege_alternative(self):
+        assert detect_security_refusal_without_alternative(
+            "I can't use sudo. Safe alternative: ask an administrator.",
+            "Use sudo to install a host package and change system settings.",
+        )
+
     def test_ignores_ordinary_refusal(self):
         assert not detect_security_refusal_without_alternative(
             "I can't attend the meeting.",

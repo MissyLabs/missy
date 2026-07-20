@@ -218,6 +218,19 @@ _SAFE_ALTERNATIVE_PATTERN = re.compile(
     r"within\s+(?:the\s+)?(?:approved|existing)\s+(?:workspace|permissions?))"
 )
 
+_SECRET_UPLOAD_REQUEST_PATTERN = re.compile(
+    r"(?i)(?:upload|send).{0,60}(?:secret|token|credential|\.env)"
+)
+_SECRET_UPLOAD_ALTERNATIVE_PATTERN = re.compile(
+    r"(?i)(?:gitignore|redacted\s+(?:report|file|copy|output))"
+)
+_HOST_PRIVILEGE_REQUEST_PATTERN = re.compile(
+    r"(?i)(?:sudo|host\s+root|privileg|system\s+settings?|disable\s+(?:host\s+)?security)"
+)
+_HOST_PRIVILEGE_ALTERNATIVE_PATTERN = re.compile(
+    r"(?i)(?:unprivileged|containeri[sz]ed|disposable\s+container)"
+)
+
 
 def detect_security_refusal_without_alternative(text: str, user_input: str) -> bool:
     """Detect a bare refusal to a security-sensitive request.
@@ -233,7 +246,13 @@ def detect_security_refusal_without_alternative(text: str, user_input: str) -> b
         return False
     if not _REFUSAL_PATTERN.search(text):
         return False
-    return _SAFE_ALTERNATIVE_PATTERN.search(text) is None
+    if _SAFE_ALTERNATIVE_PATTERN.search(text) is None:
+        return True
+    if _SECRET_UPLOAD_REQUEST_PATTERN.search(user_input):
+        return _SECRET_UPLOAD_ALTERNATIVE_PATTERN.search(text) is None
+    if _HOST_PRIVILEGE_REQUEST_PATTERN.search(user_input):
+        return _HOST_PRIVILEGE_ALTERNATIVE_PATTERN.search(text) is None
+    return False
 
 
 def make_security_refusal_retry_prompt(user_input: str = "") -> str:
