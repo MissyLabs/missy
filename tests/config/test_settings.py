@@ -806,6 +806,56 @@ class TestLoadConfigProviders:
         with pytest.raises(ConfigurationError, match="key_rotation_strategy"):
             load_config(path)
 
+    def test_provider_oauth_accounts_default_empty(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai-codex:
+                name: openai-codex
+                model: "gpt-5.2"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai-codex"].oauth_accounts == []
+
+    def test_provider_oauth_accounts_parsed(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai-codex:
+                name: openai-codex
+                model: "gpt-5.2"
+                oauth_accounts: ["work", "personal"]
+                key_rotation_strategy: round_robin
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai-codex"].oauth_accounts == ["work", "personal"]
+        assert cfg.providers["openai-codex"].key_rotation_strategy == "round_robin"
+
+    def test_provider_oauth_accounts_unknown_key_not_warned(self, tmp_path: Path, caplog):
+        """oauth_accounts is a real ProviderConfig field, not a typo — must
+        not trip the unknown-provider-key warning."""
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai-codex:
+                name: openai-codex
+                model: "gpt-5.2"
+                oauth_accounts: ["work", "personal"]
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+
+        assert not any(
+            "oauth_accounts" in r.message and "providers.openai-codex" in r.message
+            for r in caplog.records
+        )
+
     def test_provider_base_url_optional(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,

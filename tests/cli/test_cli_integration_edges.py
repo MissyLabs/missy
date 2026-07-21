@@ -401,6 +401,198 @@ audit_log_path: /tmp/audit.jsonl
         assert result.exit_code == 1
         assert "MISSING_OPENAI_KEY" in (result.output + result.stderr)
 
+    def test_providers_auth_account_flag_requires_oauth_method(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("providers: {}\n", encoding="utf-8")
+
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                str(cfg_path),
+                "providers",
+                "auth",
+                "openai",
+                "--account",
+                "work",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--account" in (result.output + result.stderr)
+
+    def test_providers_auth_oauth_named_account_stored_alone_has_no_balancing_yet(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Signing in to a single named account is not yet enough to balance
+        (round-robin needs 2+), matching api_keys parity."""
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "config_version: 2\nproviders: {}\nworkspace_path: /tmp/workspace\n"
+            "audit_log_path: /tmp/audit.jsonl\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"),
+            patch(
+                "missy.cli.oauth.list_accounts",
+                return_value=[{"account": "work", "email": "", "account_id": "", "expires_at": 0}],
+            ),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    str(cfg_path),
+                    "providers",
+                    "auth",
+                    "openai-codex",
+                    "--method",
+                    "oauth",
+                    "--account",
+                    "work",
+                ],
+            )
+
+        assert result.exit_code == 0
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        codex_cfg = data["providers"]["openai-codex"]
+        assert codex_cfg["oauth_accounts"] == ["work"]
+        assert "key_rotation_strategy" not in codex_cfg
+
+    def test_providers_auth_oauth_second_account_enables_round_robin(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "config_version: 2\nproviders: {}\nworkspace_path: /tmp/workspace\n"
+            "audit_log_path: /tmp/audit.jsonl\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"),
+            patch(
+                "missy.cli.oauth.list_accounts",
+                return_value=[
+                    {"account": "work", "email": "", "account_id": "", "expires_at": 0},
+                    {"account": "personal", "email": "", "account_id": "", "expires_at": 0},
+                ],
+            ),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    str(cfg_path),
+                    "providers",
+                    "auth",
+                    "openai-codex",
+                    "--method",
+                    "oauth",
+                    "--account",
+                    "personal",
+                ],
+            )
+
+        assert result.exit_code == 0
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        codex_cfg = data["providers"]["openai-codex"]
+        assert codex_cfg["oauth_accounts"] == ["work", "personal"]
+        assert codex_cfg["key_rotation_strategy"] == "round_robin"
+        assert "Balancing 2 accounts" in result.output
+
+    def test_providers_auth_oauth_second_account_does_not_override_explicit_failover(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """An operator who deliberately kept failover must not have a later
+        `--account` login silently flip them into round_robin."""
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(
+            "config_version: 2\n"
+            "providers:\n"
+            "  openai-codex:\n"
+            "    name: openai-codex\n"
+            "    model: gpt-5.2\n"
+            "    key_rotation_strategy: failover\n"
+            "workspace_path: /tmp/workspace\n"
+            "audit_log_path: /tmp/audit.jsonl\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("missy.cli.oauth.run_openai_oauth", return_value="oauth-access-token"),
+            patch(
+                "missy.cli.oauth.list_accounts",
+                return_value=[
+                    {"account": "work", "email": "", "account_id": "", "expires_at": 0},
+                    {"account": "personal", "email": "", "account_id": "", "expires_at": 0},
+                ],
+            ),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--config",
+                    str(cfg_path),
+                    "providers",
+                    "auth",
+                    "openai-codex",
+                    "--method",
+                    "oauth",
+                    "--account",
+                    "personal",
+                ],
+            )
+
+        assert result.exit_code == 0
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        codex_cfg = data["providers"]["openai-codex"]
+        assert codex_cfg["oauth_accounts"] == ["work", "personal"]
+        assert codex_cfg["key_rotation_strategy"] == "failover"
+
+
+class TestProvidersOauthAccounts:
+    """Tests for `missy providers oauth-accounts`."""
+
+    def test_no_accounts_stored_shows_hint(self, runner: CliRunner) -> None:
+        with patch("missy.cli.oauth.list_accounts", return_value=[]):
+            result = runner.invoke(cli, ["providers", "oauth-accounts"])
+
+        assert result.exit_code == 0
+        assert "No OpenAI OAuth accounts" in result.output
+
+    def test_lists_stored_accounts_without_secrets(self, runner: CliRunner) -> None:
+        accounts = [
+            {
+                "account": "default",
+                "email": "me@example.com",
+                "account_id": "acc-1",
+                "expires_at": 0,
+            },
+            {
+                "account": "work",
+                "email": "work@example.com",
+                "account_id": "acc-2",
+                "expires_at": 0,
+            },
+        ]
+        cfg = _make_mock_config(providers={})
+        with (
+            patch("missy.cli.oauth.list_accounts", return_value=accounts),
+            _SubsystemsPatch(cfg),
+        ):
+            result = runner.invoke(cli, ["providers", "oauth-accounts"])
+
+        assert result.exit_code == 0
+        assert "default" in result.output
+        assert "work" in result.output
+        assert "me@example.com" in result.output
+        assert "access_token" not in result.output
+
 
 # ===========================================================================
 # missy presets list

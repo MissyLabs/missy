@@ -263,7 +263,16 @@ class ProviderConfig:
             provider into proactively balancing every call across all
             configured keys (e.g. multiple OpenAI accounts), each with
             its own independent rate-limit budget -- currently
-            implemented for :class:`~missy.providers.openai_provider.OpenAIProvider`.
+            implemented for :class:`~missy.providers.openai_provider.OpenAIProvider`
+            and (using OAuth account names instead of raw keys) for
+            :class:`~missy.providers.codex_provider.CodexProvider`.
+        oauth_accounts: OAuth account names (2+) for ``openai-codex`` to
+            round-robin across when ``key_rotation_strategy ==
+            "round_robin"`` -- the OAuth analogue of ``api_keys``, but each
+            entry is an account *name* whose token lives in its own
+            ``~/.missy/secrets/openai-oauth-<name>.json`` file (signed in
+            via ``missy providers auth openai-codex --method oauth
+            --account <name>``) rather than a literal secret in config.
     """
 
     name: str
@@ -274,6 +283,7 @@ class ProviderConfig:
     enabled: bool = True
     api_keys: list = field(default_factory=list)  # Multiple API keys for rotation
     key_rotation_strategy: str = "failover"  # "failover" | "round_robin"
+    oauth_accounts: list = field(default_factory=list)  # OpenAI OAuth account names
     fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
     premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
     requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
@@ -838,6 +848,7 @@ def _parse_providers(
                 f"Provider '{key}' has invalid key_rotation_strategy "
                 f"{key_rotation_strategy!r}; must be 'failover' or 'round_robin'."
             )
+        oauth_accounts = [str(a) for a in raw.get("oauth_accounts", [])]
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
@@ -847,6 +858,7 @@ def _parse_providers(
             enabled=_coerce_bool(raw.get("enabled"), True),
             api_keys=api_keys,
             key_rotation_strategy=key_rotation_strategy,
+            oauth_accounts=oauth_accounts,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
             requests_per_minute=int(raw.get("requests_per_minute", 60)),

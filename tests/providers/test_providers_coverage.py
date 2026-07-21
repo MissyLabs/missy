@@ -1550,7 +1550,12 @@ class TestCodexProviderComplete:
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
         provider = CodexProvider(config)
 
-        with patch.object(provider, "stream", return_value=iter(["Hello", " world"])):
+        # complete() shares the private _iter_deltas() generator with
+        # stream() rather than calling the public stream() method itself,
+        # so a second, possibly different, round-robin account is never
+        # selected for the same logical call (see codex_provider.py's
+        # _prepare_call/_iter_deltas split).
+        with patch.object(provider, "_iter_deltas", return_value=iter(["Hello", " world"])):
             result = provider.complete([Message(role="user", content="hi")])
 
         assert isinstance(result, CompletionResponse)
@@ -1565,7 +1570,7 @@ class TestCodexProviderComplete:
         config = ProviderConfig(name="openai-codex", model="gpt-5.2", api_key="tok")
         provider = CodexProvider(config)
 
-        with patch.object(provider, "stream", return_value=iter([])):
+        with patch.object(provider, "_iter_deltas", return_value=iter([])):
             result = provider.complete([Message(role="user", content="hi")])
 
         assert result.content == ""
