@@ -609,6 +609,81 @@ class TestInstallSoftwareConfirmedTool:
         tool = InstallSoftwareConfirmedTool()
         assert tool.resolve_shell_command({}) == "sudo && apt-get"
 
+    def test_auto_approve_skips_require_approval_call(self):
+        """desktop.auto_approve_software_install: true lets the install
+        proceed without ever calling require_approval -- for unattended
+        deployments where no one is available to answer the prompt."""
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(
+                    enabled=True,
+                    allow_software_install=True,
+                    auto_approve_software_install=True,
+                ),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval") as mock_approval,
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="Setting up wtype", stderr="")
+            result = InstallSoftwareConfirmedTool().execute(package="wtype")
+
+        assert result.success is True
+        mock_approval.assert_not_called()
+
+    def test_auto_approve_false_still_requires_approval(self):
+        """Default (auto_approve_software_install unset/False) is unchanged:
+        approval is still required and a denial still blocks the install."""
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(
+                    enabled=True,
+                    allow_software_install=True,
+                    auto_approve_software_install=False,
+                ),
+            ),
+            patch(
+                "missy.tools.builtin.desktop_tools.require_approval",
+                return_value="denied by operator",
+            ) as mock_approval,
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+
+        assert result.success is False
+        assert "denied" in result.error
+        mock_approval.assert_called_once()
+
+    def test_auto_approve_still_respects_allow_software_install_gate(self):
+        """auto_approve_software_install does not bypass the separate
+        allow_software_install master switch."""
+        with patch(
+            "missy.tools.builtin.desktop_tools._desktop_config",
+            return_value=_mock_config(
+                enabled=True,
+                allow_software_install=False,
+                auto_approve_software_install=True,
+            ),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="wtype")
+        assert result.success is False
+        assert "disabled" in result.error.lower()
+
+    def test_auto_approve_still_rejects_invalid_package_name(self):
+        """auto_approve_software_install does not bypass the package-name
+        format check."""
+        with patch(
+            "missy.tools.builtin.desktop_tools._desktop_config",
+            return_value=_mock_config(
+                enabled=True,
+                allow_software_install=True,
+                auto_approve_software_install=True,
+            ),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="--reinstall")
+        assert result.success is False
+        assert "valid apt package" in result.error
+
 
 # ---------------------------------------------------------------------------
 # Rate limiting integration (mechanics tested directly in

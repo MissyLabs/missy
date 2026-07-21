@@ -466,24 +466,29 @@ _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9+.\-]*(=[a-zA-Z0-9+.\-:~]+
 
 
 class InstallSoftwareConfirmedTool(BaseTool):
-    """Install an apt package. ALWAYS requires approval; needs a separate opt-in.
+    """Install an apt package. Requires approval unless explicitly auto-approved.
 
     Distinct from :class:`DesktopLaunchAppTool`'s allowlist model: there is
     no "trusted package" allowlist here, because unlike launching an
     already-installed binary, installing a *new* package is inherently
     supply-chain-sensitive (a typo-squatted or malicious package name is a
     real risk apt itself won't catch). Every call requires human approval
-    regardless of what's being installed, mirroring
-    ``obs_start_streaming_confirmed``'s no-bypass posture, and additionally
-    needs ``desktop.allow_software_install: true`` (a separate opt-in from
-    ``desktop.enabled``) before it's reachable at all.
+    by default, mirroring ``obs_start_streaming_confirmed``'s no-bypass
+    posture, and additionally needs ``desktop.allow_software_install: true``
+    (a separate opt-in from ``desktop.enabled``) before it's reachable at
+    all. An operator may separately set
+    ``desktop.auto_approve_software_install: true`` to skip the per-call
+    approval prompt (e.g. for an unattended deployment where no one is
+    available to answer it) -- this does not relax ``allow_software_install``,
+    the package-name format check, or rate limiting, all of which still
+    apply regardless.
     """
 
     name = "install_software_confirmed"
     description = (
-        "Install a package via apt. ALWAYS requires human approval -- there is no "
-        "allowlist bypass for this action, and it must be separately enabled via "
-        "desktop.allow_software_install in config.yaml."
+        "Install a package via apt. Requires human approval unless "
+        "desktop.auto_approve_software_install is set, and must be separately "
+        "enabled via desktop.allow_software_install in config.yaml."
     )
     permissions = ToolPermissions(shell=True)
     parameters: dict[str, Any] = {
@@ -520,13 +525,15 @@ class InstallSoftwareConfirmedTool(BaseTool):
                 error=f"{package!r} doesn't look like a valid apt package name/spec.",
             )
 
-        denial = require_approval(
-            action=f"Install software package: {package}",
-            reason="Package installation always requires approval regardless of allowlists.",
-            risk="high",
-        )
-        if denial:
-            return ToolResult(success=False, output=None, error=denial)
+        if not config.auto_approve_software_install:
+            denial = require_approval(
+                action=f"Install software package: {package}",
+                reason="Package installation requires approval unless "
+                "desktop.auto_approve_software_install is set.",
+                risk="high",
+            )
+            if denial:
+                return ToolResult(success=False, output=None, error=denial)
 
         try:
             result = subprocess.run(

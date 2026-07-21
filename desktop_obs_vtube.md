@@ -182,6 +182,19 @@ even after the tools are exposed — session context, not the tools, was the con
 existing over-refusal-spiral recovery (`SQLiteMemoryStore.clear_session_full(session_id)` +
 gateway restart, documented in `CLAUDE.md`) is the fix for a session caught in that state.
 
+## 3.7. `desktop.auto_approve_software_install`
+
+Once `install_software_confirmed` was reachable from Discord (§3.6), its unconditional
+`require_approval()` call became a real usability problem on this operator's deployment: no one
+is reliably available to answer the prompt within its 60s timeout, so a request like "install
+wtype" reliably failed with `Approval timed out after 60.0s`. `DesktopConfig` gained
+`auto_approve_software_install: bool = False` (off by default) to let an operator explicitly skip
+that per-call prompt. It does **not** relax anything else: `desktop.allow_software_install` must
+still be `true` for the tool to be reachable at all, the package-name format check still applies,
+and rate limiting still applies. This is an explicit trust decision for a specific deployment
+(single operator, narrow Discord exposure — see §3.6) rather than a change to the tool's default
+posture, which remains "always ask" for anyone who hasn't set the flag.
+
 ## 4. Tool specifications
 
 ### 4.1 OBS (`missy/tools/builtin/obs_tools.py`)
