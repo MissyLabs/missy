@@ -195,11 +195,17 @@ class TestDiscordConfig:
         dc = DiscordConfig()
         assert dc.accounts == []
         assert dc.enabled is False
+        assert dc.auto_approve_uploads is False
 
     def test_parse_empty_dict(self) -> None:
         dc = parse_discord_config({})
         assert dc.enabled is False
         assert dc.accounts == []
+        assert dc.auto_approve_uploads is False
+
+    def test_parse_auto_approve_uploads_true(self) -> None:
+        dc = parse_discord_config({"enabled": True, "auto_approve_uploads": True})
+        assert dc.auto_approve_uploads is True
 
     def test_parse_non_dict_returns_empty(self) -> None:
         dc = parse_discord_config(None)  # type: ignore[arg-type]

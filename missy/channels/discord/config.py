@@ -165,10 +165,19 @@ class DiscordConfig:
             deployments will have exactly one entry.
         enabled: Master switch.  When ``False`` the Discord channel is not
             started even if ``accounts`` is populated.
+        auto_approve_uploads: Skip ``discord_upload_file``'s per-call human
+            approval prompt. Off by default -- posting a file is publishing
+            it, potentially to a channel with a broad membership, so this
+            is an explicit operator opt-in (mirrors
+            ``desktop.auto_approve_software_install``'s posture), not a
+            change to the tool's default "always ask" behavior. Does not
+            affect any other confirmation gate (OBS streaming,
+            ``install_software_confirmed``, etc.).
     """
 
     accounts: list[DiscordAccountConfig] = field(default_factory=list)
     enabled: bool = False
+    auto_approve_uploads: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -253,4 +262,5 @@ def parse_discord_config(
     return DiscordConfig(
         accounts=accounts,
         enabled=_coerce_bool(data.get("enabled"), False),
+        auto_approve_uploads=_coerce_bool(data.get("auto_approve_uploads"), False),
     )

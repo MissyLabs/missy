@@ -195,6 +195,20 @@ and rate limiting still applies. This is an explicit trust decision for a specif
 (single operator, narrow Discord exposure — see §3.6) rather than a change to the tool's default
 posture, which remains "always ask" for anyone who hasn't set the flag.
 
+## 3.8. `discord.auto_approve_uploads`
+
+Same story as §3.7, for the other unconditional confirmation gate `discord_upload_file` acquired
+(`desktop_obs_vtube.md`'s original design; it "ALWAYS requires human approval before posting" per
+that tool's own docstring): once Missy generates something over Discord (a screenshot, a
+`video_generate` clip, etc.) and tries to actually post it, `require_approval()` blocks for up to
+its timeout with no one available to answer, and the upload fails with
+`Approval timed out after 60.0s`. `DiscordConfig.auto_approve_uploads` (default `False`) lets an
+operator skip that per-call prompt. It doesn't relax the `DISCORD_BOT_TOKEN` presence check (still
+checked first, before bothering with approval logic at all) or any other gate; posting a file is
+still fundamentally "publish this where the channel's members can see it," so this is a deliberate
+trust decision for a single-operator/narrow-guild deployment (see §3.6's exposure analysis), not
+a default.
+
 ## 4. Tool specifications
 
 ### 4.1 OBS (`missy/tools/builtin/obs_tools.py`)
