@@ -11,6 +11,8 @@ from missy.agent.approval import (
     ApprovalGate,
     ApprovalTimeout,
     PendingApproval,
+    get_shared_approval_gate,
+    set_shared_approval_gate,
 )
 
 
@@ -252,3 +254,57 @@ class TestExceptions:
 
     def test_approval_denied_is_exception(self):
         assert issubclass(ApprovalDenied, Exception)
+
+
+class TestSharedApprovalGate:
+    """Tests for the process-wide shared gate accessor (used by built-in
+    tools with no constructor injection point -- see obs_tools.py/
+    desktop_tools.py's ``require_approval()`` helper)."""
+
+    def teardown_method(self):
+        # Never leak a gate registered by one test into the next.
+        set_shared_approval_gate(None)
+
+    def test_defaults_to_none(self):
+        assert get_shared_approval_gate() is None
+
+    def test_set_then_get_returns_the_same_gate(self):
+        gate = ApprovalGate()
+        set_shared_approval_gate(gate)
+        assert get_shared_approval_gate() is gate
+
+    def test_set_none_clears_it(self):
+        set_shared_approval_gate(ApprovalGate())
+        set_shared_approval_gate(None)
+        assert get_shared_approval_gate() is None
+
+    def test_replacing_the_gate_returns_the_new_one(self):
+        first = ApprovalGate()
+        second = ApprovalGate()
+        set_shared_approval_gate(first)
+        set_shared_approval_gate(second)
+        assert get_shared_approval_gate() is second
+
+    def test_concurrent_get_during_set_never_raises(self):
+        import threading
+
+        errors: list[Exception] = []
+
+        def setter():
+            for _ in range(200):
+                set_shared_approval_gate(ApprovalGate())
+
+        def getter():
+            for _ in range(200):
+                try:
+                    get_shared_approval_gate()
+                except Exception as exc:  # pragma: no cover - failure path
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=setter), threading.Thread(target=getter)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []

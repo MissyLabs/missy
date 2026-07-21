@@ -2654,13 +2654,18 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # respond to a pending request from another process, since this
     # gateway process's in-memory approval state is otherwise unreachable
     # from a separate `missy` CLI invocation.
-    from missy.agent.approval import ApprovalGate
+    from missy.agent.approval import ApprovalGate, set_shared_approval_gate
 
     def _approval_send(msg: str) -> None:
         console.print(f"[yellow]{msg}[/]")
         logger.info("Approval request: %s", msg)
 
     approval_gate = ApprovalGate(send_fn=_approval_send)
+    # Registers the same gate for built-in tools with no constructor
+    # injection point (obs_tools.py, desktop_tools.py, ...) that look it
+    # up via get_shared_approval_gate() at execute() time -- see
+    # missy/agent/approval.py's module docstring for why.
+    set_shared_approval_gate(approval_gate)
 
     # Start proactive manager if configured.
     proactive_manager = None
@@ -3332,6 +3337,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             while not stop_event:
                 time.sleep(1)
     finally:
+        try:
+            set_shared_approval_gate(None)
+        except Exception as _gate_clear_exc:
+            logger.debug("shared approval gate: clear error: %s", _gate_clear_exc)
         if voice_channel is not None:
             try:
                 voice_channel.stop()

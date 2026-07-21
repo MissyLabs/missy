@@ -508,6 +508,60 @@ class TestAudioSetVolumeToolValueError:
         assert "timed out" in result.error.lower()
 
 
+class TestAudioSetVolumeToolClamping:
+    """A single call must never be able to push a sink's volume past a
+    sane bound -- absolute values are hard-capped at 100%, relative deltas
+    at 50 percentage points, since PipeWire allows a relative delta to
+    boost a sink arbitrarily far past 100%."""
+
+    def _run(self, tool, volume, get_vol_stdout="Volume: 1.00"):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stderr = ""
+        mock_get = MagicMock()
+        mock_get.returncode = 0
+        mock_get.stdout = get_vol_stdout
+        with (
+            patch("missy.tools.builtin.tts_speak._ensure_runtime_dir", return_value={}),
+            patch("subprocess.run", side_effect=[mock_result, mock_get]) as mock_run,
+        ):
+            result = tool.execute(volume=volume)
+        return result, mock_run
+
+    def test_absolute_volume_over_100_is_clamped_to_100(self):
+        tool = AudioSetVolumeTool()
+        result, mock_run = self._run(tool, "500%")
+        assert result.success is True
+        first_cmd = mock_run.call_args_list[0].args[0]
+        assert first_cmd[-1] == "1.0"
+
+    def test_absolute_volume_100_is_unclamped(self):
+        tool = AudioSetVolumeTool()
+        result, mock_run = self._run(tool, "100%")
+        assert result.success is True
+        first_cmd = mock_run.call_args_list[0].args[0]
+        assert first_cmd[-1] == "1.0"
+
+    def test_relative_increase_over_50_points_is_capped(self):
+        tool = AudioSetVolumeTool()
+        result, mock_run = self._run(tool, "+90%")
+        assert result.success is True
+        first_cmd = mock_run.call_args_list[0].args[0]
+        assert first_cmd[-1] == "0.5+"
+
+    def test_relative_decrease_over_50_points_is_capped(self):
+        tool = AudioSetVolumeTool()
+        result, mock_run = self._run(tool, "-90%", get_vol_stdout="Volume: 0.00")
+        first_cmd = mock_run.call_args_list[0].args[0]
+        assert first_cmd[-1] == "0.5-"
+
+    def test_relative_increase_within_budget_is_unaffected(self):
+        tool = AudioSetVolumeTool()
+        result, mock_run = self._run(tool, "+10%")
+        first_cmd = mock_run.call_args_list[0].args[0]
+        assert first_cmd[-1] == "0.1+"
+
+
 # ---------------------------------------------------------------------------
 # SR-1.5-class: real ToolRegistry shell-policy enforcement
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ class TestDiscordUploadTool:
         tool = self._make_tool()
         mock_rest = MagicMock()
         mock_rest.upload_file.return_value = {"id": "msg123"}
+        mock_gate = MagicMock()
 
         with (
             patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "fake-token"}),
@@ -37,6 +38,7 @@ class TestDiscordUploadTool:
                 "missy.channels.discord.rest.DiscordRestClient",
                 return_value=mock_rest,
             ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=mock_gate),
         ):
             result = tool.execute(file_path="/tmp/test.png", channel_id="123", caption="Hello")
         assert result.success
@@ -44,6 +46,7 @@ class TestDiscordUploadTool:
         mock_rest.upload_file.assert_called_once_with(
             channel_id="123", file_path="/tmp/test.png", caption="Hello"
         )
+        mock_gate.request.assert_called_once()
 
     def test_file_not_found(self):
         tool = self._make_tool()
@@ -56,6 +59,7 @@ class TestDiscordUploadTool:
                 "missy.channels.discord.rest.DiscordRestClient",
                 return_value=mock_rest,
             ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=MagicMock()),
         ):
             result = tool.execute(file_path="/nonexistent.png", channel_id="123")
         assert not result.success
@@ -72,6 +76,7 @@ class TestDiscordUploadTool:
                 "missy.channels.discord.rest.DiscordRestClient",
                 return_value=mock_rest,
             ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=MagicMock()),
         ):
             result = tool.execute(file_path="/tmp/test.png", channel_id="123")
         assert not result.success
@@ -88,6 +93,7 @@ class TestDiscordUploadTool:
                 "missy.channels.discord.rest.DiscordRestClient",
                 return_value=mock_rest,
             ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=MagicMock()),
         ):
             result = tool.execute(file_path="/tmp/test.png", channel_id="123")
         assert result.success
@@ -103,10 +109,63 @@ class TestDiscordUploadTool:
                 "missy.channels.discord.rest.DiscordRestClient",
                 return_value=mock_rest,
             ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=MagicMock()),
         ):
             result = tool.execute(file_path="/tmp/test.png", channel_id="123")
         assert result.success
         assert "?" in result.output  # Falls back to '?'
+
+    def test_upload_denied_with_no_approval_gate_configured(self):
+        """Fail closed: no gate means no upload, regardless of how many
+        times this channel/file combination has been approved before."""
+        tool = self._make_tool()
+        mock_rest = MagicMock()
+
+        with (
+            patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "fake-token"}),
+            patch(
+                "missy.channels.discord.rest.DiscordRestClient",
+                return_value=mock_rest,
+            ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=None),
+        ):
+            result = tool.execute(file_path="/tmp/test.png", channel_id="123")
+        assert not result.success
+        assert "approval" in result.error.lower()
+        mock_rest.upload_file.assert_not_called()
+
+    def test_upload_denied_when_approval_rejected(self):
+        from missy.agent.approval import ApprovalDenied
+
+        tool = self._make_tool()
+        mock_rest = MagicMock()
+        mock_gate = MagicMock()
+        mock_gate.request.side_effect = ApprovalDenied("no")
+
+        with (
+            patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "fake-token"}),
+            patch(
+                "missy.channels.discord.rest.DiscordRestClient",
+                return_value=mock_rest,
+            ),
+            patch("missy.agent.approval.get_shared_approval_gate", return_value=mock_gate),
+        ):
+            result = tool.execute(file_path="/tmp/test.png", channel_id="123")
+        assert not result.success
+        mock_rest.upload_file.assert_not_called()
+
+    def test_no_token_returns_error_before_requesting_approval(self):
+        """Missing DISCORD_BOT_TOKEN is checked before bothering a human
+        with an approval prompt for an upload that can't succeed anyway."""
+        tool = self._make_tool()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("missy.agent.approval.get_shared_approval_gate") as mock_get_gate,
+        ):
+            result = tool.execute(file_path="/tmp/test.png", channel_id="123")
+        assert not result.success
+        assert "DISCORD_BOT_TOKEN" in result.error
+        mock_get_gate.assert_not_called()
 
     def test_tool_metadata(self):
         tool = self._make_tool()

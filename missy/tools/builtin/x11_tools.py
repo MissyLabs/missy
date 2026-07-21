@@ -128,6 +128,109 @@ def _button_num(button: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared desktop guardrails (rate limit / window allowlist / redaction)
+# ---------------------------------------------------------------------------
+
+
+def _check_rate_limit(tool_name: str) -> str | None:
+    """Rate-limit *tool_name* against ``desktop.rate_limit_per_minute``.
+
+    ``x11_*`` predates ``DesktopConfig`` but shares its rate-limit budget --
+    see ``desktop_tools.py``'s module docstring.
+    """
+    from missy.config.settings import DesktopConfig
+    from missy.tools.builtin._desktop_shared import check_rate_limit, load_missy_config
+
+    cfg = load_missy_config()
+    config = cfg.desktop if cfg is not None else DesktopConfig()
+    return check_rate_limit(tool_name, config.rate_limit_per_minute)
+
+
+def _check_window_allowed(window_name: str) -> str | None:
+    """Gate an explicit ``window_name`` target against ``desktop.window_allowlist``.
+
+    A no-op (returns ``None``) when *window_name* is empty -- ``x11_click``/
+    ``x11_type``/``x11_key`` act on whatever's already focused in that case,
+    which isn't "targeting a window" in the sense the allowlist covers.
+    """
+    if not window_name:
+        return None
+    from missy.tools.builtin._desktop_shared import check_window_allowed
+
+    return check_window_allowed(window_name)
+
+
+def _redact_screenshot_secrets(path: str) -> dict[str, Any]:
+    """Best-effort OCR-based redaction of secret-looking text in a screenshot.
+
+    Uses ``pytesseract`` (optional -- part of the ``[vision]`` extra) to
+    locate per-word bounding boxes, checks each word against
+    :class:`~missy.security.secrets.SecretsDetector`'s existing credential
+    patterns, and blacks out any matching region in place. This is
+    necessarily imperfect (a secret split across OCR word boundaries, or
+    one OCR misreads, won't be caught) -- it measurably reduces exposure
+    for the common case (a single contiguous token: API key, JWT, etc.)
+    without claiming a guarantee it can't make.
+
+    Returns a dict describing what happened -- always including
+    ``redaction_available`` so a caller/operator can tell "nothing found"
+    apart from "couldn't check at all" (OCR dependency missing).
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        return {
+            "redaction_available": False,
+            "redaction_applied": False,
+            "redacted_regions": 0,
+            "note": "pytesseract not installed; screenshot was not scanned for secrets. "
+            "Install the [vision] extra and the tesseract-ocr system package to enable this.",
+        }
+
+    from missy.security.secrets import SecretsDetector
+
+    try:
+        image = Image.open(path).convert("RGB")
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception as exc:
+        logger.warning("x11_screenshot: OCR redaction scan failed: %s", exc)
+        return {
+            "redaction_available": True,
+            "redaction_applied": False,
+            "redacted_regions": 0,
+            "note": f"OCR scan failed, screenshot saved unredacted: {exc}",
+        }
+
+    detector = SecretsDetector()
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(image)
+    redacted_regions = 0
+    for i, word in enumerate(data.get("text", [])):
+        if not word.strip() or not detector.has_secrets(word):
+            continue
+        left, top, width, height = (
+            data["left"][i],
+            data["top"][i],
+            data["width"][i],
+            data["height"][i],
+        )
+        draw.rectangle([left, top, left + width, top + height], fill="black")
+        redacted_regions += 1
+
+    if redacted_regions:
+        image.save(path)
+
+    return {
+        "redaction_available": True,
+        "redaction_applied": redacted_regions > 0,
+        "redacted_regions": redacted_regions,
+        "note": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
@@ -165,11 +268,28 @@ class X11ScreenshotTool(BaseTool):
                 "Optional region to capture as 'x,y,w,h'. When omitted the full screen is captured."
             ),
         },
+        "redact": {
+            "type": "boolean",
+            "description": (
+                "Best-effort OCR scan for API keys/tokens/passwords, blacking out any found "
+                "before saving. Requires the optional pytesseract dependency; degrades to "
+                "unredacted (flagged in the result) when unavailable."
+            ),
+            "default": True,
+        },
     }
 
     def execute(
-        self, *, path: str = "/tmp/screenshot.png", region: str = "", **_: Any
+        self,
+        *,
+        path: str = "/tmp/screenshot.png",
+        region: str = "",
+        redact: bool = True,
+        **_: Any,
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         cmd = (
             f"scrot -a {shlex.quote(region)} {shlex.quote(path)}"
             if region
@@ -188,6 +308,15 @@ class X11ScreenshotTool(BaseTool):
                 )
             return ToolResult(success=False, output=None, error=f"scrot failed: {err}")
 
+        redaction: dict[str, Any] = {
+            "redaction_available": False,
+            "redaction_applied": False,
+            "redacted_regions": 0,
+            "note": "redact=False; screenshot was not scanned.",
+        }
+        if redact:
+            redaction = _redact_screenshot_secrets(path)
+
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -195,7 +324,7 @@ class X11ScreenshotTool(BaseTool):
 
         return ToolResult(
             success=True,
-            output={"path": path, "size_bytes": size},
+            output={"path": path, "size_bytes": size, **redaction},
         )
 
 
@@ -250,6 +379,11 @@ class X11ClickTool(BaseTool):
         window_name: str = "",
         **_: Any,
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+        if window_error := _check_window_allowed(window_name):
+            return ToolResult(success=False, output=None, error=window_error)
+
         # Enforce integer types to prevent shell injection via string params
         x, y = int(x), int(y)
 
@@ -323,6 +457,11 @@ class X11TypeTool(BaseTool):
         delay_ms: int = 12,
         **_: Any,
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+        if window_error := _check_window_allowed(window_name):
+            return ToolResult(success=False, output=None, error=window_error)
+
         # Enforce integer type to prevent shell injection via string params
         delay_ms = int(delay_ms)
 
@@ -385,6 +524,11 @@ class X11KeyTool(BaseTool):
     }
 
     def execute(self, *, key: str, window_name: str = "", **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+        if window_error := _check_window_allowed(window_name):
+            return ToolResult(success=False, output=None, error=window_error)
+
         if window_name:
             focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
             r = _run(focus_cmd)
@@ -433,6 +577,9 @@ class X11WindowListTool(BaseTool):
         return "wmctrl && xdotool"
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         # Prefer wmctrl -l (gives cleaner output); fall back to xdotool.
         wmctrl_result = _run("wmctrl -l")
         if wmctrl_result.returncode == 0:
@@ -599,6 +746,9 @@ class X11ReadScreenTool(BaseTool):
         region: str = "",
         **_: Any,
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         # 1. Take screenshot.
         err = self._take_screenshot(path, region)
         if err:
@@ -632,7 +782,28 @@ class X11ReadScreenTool(BaseTool):
         except Exception as exc:  # noqa: BLE001
             return ToolResult(success=False, output=None, error=f"Vision call failed: {exc}")
 
+        # 4. Redact any secret-looking text the vision model transcribed
+        # into its description (the model already saw the raw image to
+        # produce this description -- this can't undo that local Ollama
+        # call, but it stops a token/password the model happened to read
+        # off screen from being repeated back into the agent/chat).
+        from missy.security.censor import censor_response
+
+        redacted_description = censor_response(description)
+
+        # 5. Also redact the saved screenshot file itself, so anything left
+        # on disk (which a later discord_upload_file call could pick up)
+        # doesn't carry raw secrets forward -- best-effort, see
+        # _redact_screenshot_secrets's docstring for what this can and
+        # can't catch.
+        redaction = _redact_screenshot_secrets(path)
+
         return ToolResult(
             success=True,
-            output={"description": description, "screenshot_path": path, "question": question},
+            output={
+                "description": redacted_description,
+                "screenshot_path": path,
+                "question": question,
+                **redaction,
+            },
         )

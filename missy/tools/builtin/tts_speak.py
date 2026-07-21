@@ -449,10 +449,16 @@ class AudioSetVolumeTool(BaseTool):
             vol_str = volume.strip().rstrip("%")
             if vol_str.startswith(("+", "-")):
                 sign = vol_str[0]
-                val = float(vol_str[1:]) / 100.0
-                wpctl_vol = f"{val}{sign}"
+                # "Enforce safe volume defaults": a relative delta is
+                # capped at 50 percentage points per call so one call
+                # can't ramp volume by an arbitrarily large jump (PipeWire
+                # allows relative deltas to push a sink past 100% boost).
+                delta = min(float(vol_str[1:]) / 100.0, 0.5)
+                wpctl_vol = f"{delta}{sign}"
             else:
-                val = float(vol_str) / 100.0
+                # Absolute values are hard-capped at 100% -- this tool has
+                # no "boost past 100%" use case, unlike a relative nudge.
+                val = min(max(float(vol_str) / 100.0, 0.0), 1.0)
                 wpctl_vol = str(val)
             cmd = ["wpctl", "set-volume", device_id, wpctl_vol]
 
