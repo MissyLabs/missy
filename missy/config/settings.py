@@ -446,8 +446,15 @@ class DesktopConfig:
             ``install_software_confirmed`` -- off by default even when
             ``enabled=True``, since installing packages is a materially
             larger blast radius than launching an already-installed GUI
-            app. That tool also always requires approval regardless of
-            this flag; this only gates whether it's reachable at all.
+            app. That tool also requires approval regardless of this
+            flag *unless* ``auto_approve_software_install`` is also set;
+            this only gates whether it's reachable at all.
+        auto_approve_software_install: Explicit opt-in to skip the
+            per-call human confirmation ``install_software_confirmed``
+            otherwise always requires. Off by default -- an operator on
+            an unattended/remote deployment must set this deliberately;
+            it does not relax ``allow_software_install``, the package-name
+            format check, or rate limiting, all of which still apply.
     """
 
     enabled: bool = False
@@ -456,6 +463,7 @@ class DesktopConfig:
     window_allowlist: list[str] = field(default_factory=list)
     rate_limit_per_minute: int = 30
     allow_software_install: bool = False
+    auto_approve_software_install: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1109,6 +1117,9 @@ def _parse_desktop(data: dict[str, Any]) -> DesktopConfig:
         window_allowlist=[str(w) for w in data.get("window_allowlist", [])],
         rate_limit_per_minute=int(data.get("rate_limit_per_minute", 30)),
         allow_software_install=_coerce_bool(data.get("allow_software_install"), False),
+        auto_approve_software_install=_coerce_bool(
+            data.get("auto_approve_software_install"), False
+        ),
     )
 
 

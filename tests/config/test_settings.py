@@ -1360,6 +1360,23 @@ class TestDesktopConfigParsing:
         assert cfg.desktop.enabled is False
         assert cfg.desktop.app_allowlist == []
         assert cfg.desktop.unrestricted is False
+        assert cfg.desktop.allow_software_install is False
+        assert cfg.desktop.auto_approve_software_install is False
+
+    def test_auto_approve_software_install_parses_true(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            desktop:
+              enabled: true
+              allow_software_install: true
+              auto_approve_software_install: true
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.desktop.allow_software_install is True
+        assert cfg.desktop.auto_approve_software_install is True
 
     def test_parses_explicit_values(self, tmp_path: Path):
         path = _write_yaml(
