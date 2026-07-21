@@ -6,6 +6,8 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # DiscordUploadTool
 # ---------------------------------------------------------------------------
@@ -13,6 +15,18 @@ from unittest.mock import MagicMock, patch
 
 class TestDiscordUploadTool:
     """Full coverage for DiscordUploadTool.execute()."""
+
+    @pytest.fixture(autouse=True)
+    def _default_no_auto_approve(self):
+        """Isolate from the real ambient config.yaml: without this, a
+        machine with discord.auto_approve_uploads: true set (e.g. this
+        very deployment) would silently skip require_approval() and
+        break every test below that assumes the approval-required path
+        -- _auto_approve_uploads() reads live config on every call by
+        design, so tests must pin it explicitly rather than relying on
+        whatever happens to be on disk."""
+        with patch("missy.tools.builtin.discord_upload._auto_approve_uploads", return_value=False):
+            yield
 
     def _make_tool(self):
         from missy.tools.builtin.discord_upload import DiscordUploadTool
@@ -172,6 +186,65 @@ class TestDiscordUploadTool:
         assert tool.name == "discord_upload_file"
         assert tool.permissions.network is True
         assert tool.permissions.filesystem_read is True
+
+    def test_auto_approve_uploads_skips_approval_gate(self):
+        """discord.auto_approve_uploads: true lets the upload proceed
+        without ever calling get_shared_approval_gate -- for unattended
+        deployments where no one is available to answer the prompt."""
+        tool = self._make_tool()
+        mock_rest = MagicMock()
+        mock_rest.upload_file.return_value = {"id": "auto123"}
+
+        with (
+            patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "fake-token"}),
+            patch(
+                "missy.channels.discord.rest.DiscordRestClient",
+                return_value=mock_rest,
+            ),
+            patch("missy.tools.builtin.discord_upload._auto_approve_uploads", return_value=True),
+            patch("missy.agent.approval.get_shared_approval_gate") as mock_get_gate,
+        ):
+            result = tool.execute(file_path="/tmp/test.png", channel_id="123")
+
+        assert result.success
+        assert "auto123" in result.output
+        mock_get_gate.assert_not_called()
+
+
+class TestAutoApproveUploadsHelper:
+    """_auto_approve_uploads() in isolation -- deliberately outside
+    TestDiscordUploadTool, whose autouse fixture mocks this exact
+    function and would otherwise shadow it here."""
+
+    def test_reads_discord_config_flag_true(self):
+        from missy.tools.builtin.discord_upload import _auto_approve_uploads
+
+        cfg = MagicMock()
+        cfg.discord.auto_approve_uploads = True
+        with patch("missy.tools.builtin.discord_upload.load_missy_config", return_value=cfg):
+            assert _auto_approve_uploads() is True
+
+    def test_reads_discord_config_flag_false(self):
+        from missy.tools.builtin.discord_upload import _auto_approve_uploads
+
+        cfg = MagicMock()
+        cfg.discord.auto_approve_uploads = False
+        with patch("missy.tools.builtin.discord_upload.load_missy_config", return_value=cfg):
+            assert _auto_approve_uploads() is False
+
+    def test_defaults_false_when_config_unavailable(self):
+        from missy.tools.builtin.discord_upload import _auto_approve_uploads
+
+        with patch("missy.tools.builtin.discord_upload.load_missy_config", return_value=None):
+            assert _auto_approve_uploads() is False
+
+    def test_defaults_false_when_discord_section_absent(self):
+        from missy.tools.builtin.discord_upload import _auto_approve_uploads
+
+        cfg = MagicMock()
+        cfg.discord = None
+        with patch("missy.tools.builtin.discord_upload.load_missy_config", return_value=cfg):
+            assert _auto_approve_uploads() is False
 
 
 class TestDiscordUploadToolRegistryEnforcesFilesystemPolicy:
