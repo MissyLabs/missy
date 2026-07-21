@@ -206,7 +206,7 @@ class TestLoadOAuthToken:
             result = _load_oauth_token(force_refresh=True)
 
         assert result == "oauth-new"
-        mock.assert_called_once_with(force=True)
+        mock.assert_called_once_with(force=True, account=None)
 
 
 class TestMessagesToInput:
@@ -846,7 +846,7 @@ class TestCodexProviderStream:
             result = list(self.provider.stream(self._messages()))
 
         assert result == ["ok"]
-        mock_load.assert_called_once_with(force_refresh=True)
+        mock_load.assert_called_once_with(force_refresh=True, account=None)
         second_headers = mock_cls.return_value.post.call_args_list[1].kwargs["headers"]
         assert second_headers["Authorization"] == "Bearer fresh-token"
 
@@ -961,14 +961,24 @@ class TestCodexProviderComplete:
 
         assert result.content == ""
 
-    def test_delegates_to_stream(self):
-        """complete() should call self.stream(), not make its own HTTP request."""
+    def test_collects_deltas_via_shared_streaming_helper(self):
+        """complete() shares _iter_deltas with stream() (not stream() itself).
+
+        complete() and stream() both call _prepare_call() (account
+        selection + rate-limit acquire) exactly once per call, then read
+        from the same private _iter_deltas() generator -- complete() no
+        longer calls the public stream() method directly, since nesting
+        would select a second, possibly different, round-robin account for
+        the same logical call. Verified here via _iter_deltas rather than
+        an HTTP-level mock so the assertion tracks the actual shared code
+        path rather than only the end-to-end text output.
+        """
         with patch.object(
-            self.provider, "stream", return_value=iter(["abc", "def"])
-        ) as mock_stream:
+            self.provider, "_iter_deltas", return_value=iter(["abc", "def"])
+        ) as mock_iter:
             result = self.provider.complete(self._messages())
 
-        mock_stream.assert_called_once()
+        mock_iter.assert_called_once()
         assert result.content == "abcdef"
 
 
@@ -1269,3 +1279,246 @@ class TestCodexProviderGetToolSchema:
         assert len(schemas) == 2
         assert schemas[0] == dict_tool
         assert schemas[1]["name"] == "b_tool"
+
+
+# ===========================================================================
+# Multi-account round-robin balancing (mirrors OpenAIProvider's api_keys
+# round-robin, but each "account" is an OAuth account name rather than a
+# raw secret — see missy/providers/round_robin.py)
+# ===========================================================================
+
+
+def _make_multi_config(
+    oauth_accounts: list[str],
+    key_rotation_strategy: str = "round_robin",
+    model: str = "gpt-5.2",
+) -> ProviderConfig:
+    return ProviderConfig(
+        name="openai-codex",
+        model=model,
+        api_key=None,
+        oauth_accounts=oauth_accounts,
+        key_rotation_strategy=key_rotation_strategy,
+    )
+
+
+class TestCodexProviderMultiAccountConfig:
+    def test_single_account_config_is_not_multi_account(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_config(api_key="tok"))
+        assert provider.is_multi_account is False
+        assert provider.account_count == 0
+
+    def test_two_oauth_accounts_with_round_robin_enables_multi_account(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        assert provider.is_multi_account is True
+        assert provider.account_count == 2
+
+    def test_one_oauth_account_does_not_enable_multi_account(self):
+        """A single configured account needs no balancing (min_accounts=2)."""
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work"]))
+        assert provider.is_multi_account is False
+        assert provider.account_count == 0
+
+    def test_failover_strategy_ignores_oauth_accounts(self):
+        """oauth_accounts is only consulted under key_rotation_strategy: round_robin."""
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(
+            _make_multi_config(["work", "personal"], key_rotation_strategy="failover")
+        )
+        assert provider.is_multi_account is False
+        assert provider.account_count == 0
+
+
+class TestCodexProviderSelectAccount:
+    def test_select_account_returns_none_when_not_multi_account(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_config(api_key="tok"))
+        assert provider._select_account() is None
+
+    def test_select_account_rotates_round_robin(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        names = [provider._select_account().api_key for _ in range(4)]
+        assert names == ["work", "personal", "work", "personal"]
+
+    def test_current_account_name_none_before_selection(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        assert provider._current_account_name() is None
+
+    def test_current_account_name_reflects_prepared_call(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        with patch.object(provider, "_acquire_rate_limit"):
+            provider._prepare_call()
+        assert provider._current_account_name() == "work"
+
+
+class TestCodexProviderGetTokenMultiAccount:
+    def test_get_token_uses_selected_accounts_own_file(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        provider._account_local.current = provider._rr._live_accounts[0]  # "work"
+
+        with patch(
+            "missy.providers.codex_provider._load_oauth_token", return_value="work-token"
+        ) as mock_load:
+            token = provider._get_token()
+
+        assert token == "work-token"
+        mock_load.assert_called_once_with(force_refresh=False, account="work")
+
+    def test_get_token_raises_actionable_error_for_missing_named_account_token(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        provider._account_local.current = provider._rr._live_accounts[0]  # "work"
+
+        with (
+            patch("missy.providers.codex_provider._load_oauth_token", return_value=None),
+            pytest.raises(ProviderError, match="work"),
+        ):
+            provider._get_token()
+
+    def test_get_token_falls_back_to_default_path_when_no_account_selected(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        # No _prepare_call() yet -> single-account legacy path.
+        with patch(
+            "missy.providers.codex_provider._load_oauth_token", return_value="default-token"
+        ) as mock_load:
+            token = provider._get_token()
+
+        assert token == "default-token"
+        mock_load.assert_called_once_with(force_refresh=False)
+
+
+class TestCodexProviderRateLimitMultiAccount:
+    def test_prepare_call_acquires_selected_accounts_own_rate_limiter(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        work_account = provider._rr._live_accounts[0]
+        with patch.object(work_account.rate_limiter, "acquire") as mock_acquire:
+            provider._prepare_call(estimated_tokens=42)
+
+        mock_acquire.assert_called_once_with(tokens=42)
+
+    def test_accounts_have_independent_rate_limiters(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        work, personal = provider._rr._live_accounts
+        assert work.rate_limiter is not personal.rate_limiter
+
+
+class TestCodexProviderIsAvailableMultiAccount:
+    def test_available_when_any_account_has_a_token(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+
+        def _fake_load(force_refresh=False, account=None):
+            return "tok" if account == "personal" else None
+
+        with patch("missy.providers.codex_provider._load_oauth_token", side_effect=_fake_load):
+            assert provider.is_available() is True
+
+    def test_unavailable_when_no_account_has_a_token(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        with patch("missy.providers.codex_provider._load_oauth_token", return_value=None):
+            assert provider.is_available() is False
+
+
+class TestCodexProviderEmitEventMultiAccount:
+    def test_emit_event_includes_account_index_and_name_when_selected(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        provider._account_local.current = provider._rr._live_accounts[1]  # "personal"
+
+        captured = {}
+        with patch(
+            "missy.core.events.event_bus.publish", side_effect=lambda e: captured.update(e.detail)
+        ):
+            provider._emit_event("sess", "task", "allow", "ok")
+
+        assert captured["account_index"] == 1
+        assert captured["account_name"] == "personal"
+
+    def test_emit_event_omits_account_fields_when_not_multi_account(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_config(api_key="tok"))
+
+        captured = {}
+        with patch(
+            "missy.core.events.event_bus.publish", side_effect=lambda e: captured.update(e.detail)
+        ):
+            provider._emit_event("sess", "task", "allow", "ok")
+
+        assert "account_index" not in captured
+        assert "account_name" not in captured
+
+
+class TestCodexProviderCompleteMultiAccountEndToEnd:
+    def test_complete_uses_the_selected_accounts_token(self):
+        """End-to-end: complete() selects an account, and the token used for
+        the actual HTTP request belongs to that same account — not a
+        different one re-selected somewhere in the middle of the call."""
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        lines = _sse({"type": "response.output_text.delta", "delta": "hi"})
+
+        loaded_for: list[str | None] = []
+
+        def _fake_load(force_refresh=False, account=None):
+            loaded_for.append(account)
+            return f"{account}-token"
+
+        with (
+            patch("missy.providers.codex_provider._load_oauth_token", side_effect=_fake_load),
+            _mock_sse_stream(lines),
+        ):
+            result = provider.complete(_make_messages(("user", "hi")))
+
+        assert result.content == "hi"
+        # Exactly the selected account's token was loaded — not the default
+        # path, and not a second, different account mid-call.
+        assert loaded_for == ["work"]
+
+    def test_successive_completions_rotate_accounts(self):
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+        lines = _sse({"type": "response.output_text.delta", "delta": "hi"})
+
+        loaded_for: list[str | None] = []
+
+        def _fake_load(force_refresh=False, account=None):
+            loaded_for.append(account)
+            return f"{account}-token"
+
+        with patch("missy.providers.codex_provider._load_oauth_token", side_effect=_fake_load):
+            with _mock_sse_stream(lines):
+                provider.complete(_make_messages(("user", "hi")))
+            with _mock_sse_stream(lines):
+                provider.complete(_make_messages(("user", "hi")))
+
+        assert loaded_for == ["work", "personal"]

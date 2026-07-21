@@ -35,6 +35,7 @@ import base64
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -44,8 +45,17 @@ from missy.core.exceptions import ProviderError
 from missy.gateway.client import PolicyHTTPClient
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
+from .rate_limiter import RateLimiter
+from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
+
+#: F15-style multi-account balancing (see openai_provider.py), reusing the
+#: same provider-agnostic Account record. Here ``Account.api_key`` holds an
+#: OAuth account *name* (see missy/cli/oauth.py), not a raw secret -- the
+#: actual bearer token is loaded/refreshed on demand from that account's own
+#: ``openai-oauth-<name>.json`` file, never stored on the Account itself.
+_CodexAccount = Account
 
 _CODEX_BASE = "https://chatgpt.com/backend-api"
 _CODEX_ENDPOINT = f"{_CODEX_BASE}/codex/responses"
@@ -94,12 +104,16 @@ def _token_needs_refresh(token: str) -> bool:
         return False
 
 
-def _load_oauth_token(force_refresh: bool = False) -> str | None:
-    """Load the stored OAuth access token, refreshing if needed."""
+def _load_oauth_token(force_refresh: bool = False, account: str | None = None) -> str | None:
+    """Load the stored OAuth access token for *account*, refreshing if needed.
+
+    ``account=None`` loads the original single-account token file, matching
+    behavior before multi-account balancing existed.
+    """
     try:
         from missy.cli.oauth import refresh_token_if_needed
 
-        return refresh_token_if_needed(force=force_refresh)
+        return refresh_token_if_needed(force=force_refresh, account=account)
     except Exception:
         logger.debug("Failed to load OpenAI OAuth token", exc_info=True)
         return None
@@ -249,7 +263,12 @@ class CodexProvider(BaseProvider):
     Args:
         config: Provider config.  ``api_key`` should be the OAuth access
             token.  If omitted, the token is loaded from
-            ``~/.missy/secrets/openai-oauth.json``.
+            ``~/.missy/secrets/openai-oauth.json``. When
+            ``config.key_rotation_strategy == "round_robin"`` and
+            ``config.oauth_accounts`` has 2+ entries, every call is
+            balanced round-robin across those named OAuth accounts (see
+            :class:`_CodexAccount`) instead of using the single default
+            account, each with its own independent rate-limit budget.
     """
 
     name = "openai-codex"
@@ -258,8 +277,113 @@ class CodexProvider(BaseProvider):
         self._api_key: str | None = config.api_key
         self._model: str = config.model or _DEFAULT_MODEL
         self._timeout: int = config.timeout or 60
+        self._requests_per_minute: int = config.requests_per_minute
+        self._tokens_per_minute: int = config.tokens_per_minute
+        self._max_wait_seconds: float = config.max_wait_seconds
+
+        # Multi-account round-robin balancing across named OAuth accounts,
+        # mirroring OpenAIProvider's api_keys round-robin (see
+        # missy/providers/round_robin.py). self._accounts stays empty --
+        # and every call keeps using the single default-account token path
+        # below, completely unchanged -- unless the operator both opts in
+        # (key_rotation_strategy: round_robin) AND has 2+ oauth_accounts
+        # configured. _account_local is a thread-local "which account is
+        # this call using" slot, set once at the top of each of
+        # complete()/complete_with_tools()/stream() via _select_account(),
+        # so concurrent calls on different threads never race over which
+        # account's token/rate-limiter is active for their own call.
+        self._account_local = threading.local()
+        _rr_accounts = (
+            list(config.oauth_accounts or [])
+            if config.key_rotation_strategy == "round_robin"
+            else []
+        )
+        self._rr = RoundRobinAccounts(
+            _rr_accounts,
+            make_rate_limiter=lambda: RateLimiter(
+                requests_per_minute=self._requests_per_minute,
+                tokens_per_minute=self._tokens_per_minute,
+                max_wait_seconds=self._max_wait_seconds,
+            ),
+        )
+        self._accounts: list[Account] = self._rr._live_accounts
+
+    @property
+    def is_multi_account(self) -> bool:
+        """Return ``True`` when 2+ OAuth accounts are configured for round-robin balancing."""
+        return bool(self._accounts)
+
+    @property
+    def account_count(self) -> int:
+        """Return how many OAuth accounts this provider round-robins across (0 if not multi-account)."""
+        return len(self._accounts)
+
+    def _select_account(self) -> _CodexAccount | None:
+        """Return the OAuth account to use for the call in progress on this thread.
+
+        Returns ``None`` when this provider isn't configured for
+        multi-account balancing, in which case callers fall back to the
+        single default-account token exactly as before this feature
+        existed. Advances the round-robin index atomically so concurrent
+        callers are assigned accounts round-robin with no lost or
+        duplicated turns.
+        """
+        return self._rr._select_live()
+
+    def _current_account_name(self) -> str | None:
+        """Return the OAuth account name selected for this thread's in-progress call, if any."""
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        return account.api_key if account is not None else None
+
+    def _record_account_outcome(self, success: bool) -> None:
+        """Feed this call's outcome back into the selected account's health tracking.
+
+        A no-op when this provider isn't in multi-account mode (no account
+        was selected for this thread). See :class:`~missy.providers.round_robin.RoundRobinAccounts`
+        for what happens to an account after repeated failures -- it stops
+        being selected for a backoff window instead of continuing to fail on
+        every one of its scheduled turns.
+        """
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        if account is None:
+            return
+        if success:
+            self._rr.record_success(account)
+        else:
+            self._rr.record_failure(account)
+
+    def _prepare_call(self, estimated_tokens: int = 0) -> None:
+        """Select this thread's round-robin account (if any) and acquire its rate limit.
+
+        Called exactly once at the top of each public entry point
+        (``complete``/``complete_with_tools``/``stream``) so the account
+        used for the actual HTTP request and the account whose rate limiter
+        gated it are always the same one, even though ``complete()``
+        internally reuses the streaming machinery.
+        """
+        self._account_local.current = self._select_account()
+        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
+
+    def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
+        """Block until the active account's (or the shared) rate limiter permits a request."""
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            account.rate_limiter.acquire(tokens=estimated_tokens)
+            return
+        super()._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
     def _get_token(self, *, force_refresh: bool = False) -> str:
+        account_name = self._current_account_name()
+        if account_name is not None:
+            token = _load_oauth_token(force_refresh=force_refresh, account=account_name)
+            if not token:
+                raise ProviderError(
+                    f"openai-codex: no OAuth token available for account "
+                    f"'{account_name}'. Run 'missy providers auth openai-codex "
+                    f"--method oauth --account {account_name}', then retry."
+                )
+            return token
+
         if self._api_key and not force_refresh and not _token_needs_refresh(self._api_key):
             return self._api_key
 
@@ -338,9 +462,12 @@ class CodexProvider(BaseProvider):
         """
         try:
             response = self._post_sse(client, body, token, account_id)
+            self._record_account_outcome(True)
         except Exception as exc:
             if _http_status(exc) in _AUTH_STATUS_CODES:
-                refreshed = _load_oauth_token(force_refresh=True)
+                refreshed = _load_oauth_token(
+                    force_refresh=True, account=self._current_account_name()
+                )
                 if refreshed and refreshed != token:
                     try:
                         response = self._post_sse(
@@ -349,11 +476,15 @@ class CodexProvider(BaseProvider):
                             refreshed,
                             _extract_account_id(refreshed),
                         )
+                        self._record_account_outcome(True)
                     except Exception as retry_exc:
+                        self._record_account_outcome(False)
                         raise _codex_request_error(retry_exc) from retry_exc
                 else:
+                    self._record_account_outcome(False)
                     raise _codex_request_error(exc) from exc
             else:
+                self._record_account_outcome(False)
                 raise _codex_request_error(exc) from exc
 
         try:
@@ -403,10 +534,10 @@ class CodexProvider(BaseProvider):
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
 
-        self._acquire_rate_limit()
+        self._prepare_call()
 
         try:
-            text = "".join(self.stream(messages, session_id=session_id, task_id=task_id))
+            text = "".join(self._iter_deltas(messages, session_id=session_id, task_id=task_id))
         except ProviderError as exc:
             logger.warning("openai-codex completion failed: %s", exc, exc_info=True)
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -434,6 +565,29 @@ class CodexProvider(BaseProvider):
         # Fallback: older shape
         return data.get("text", "") or data.get("content", "") or ""
 
+    def _iter_deltas(
+        self, messages: list[Message], session_id: str = "", task_id: str = ""
+    ) -> Iterator[str]:
+        """Issue the SSE request and yield output-text delta chunks.
+
+        Assumes the caller has already selected an account and acquired its
+        rate limit (see :meth:`_prepare_call`) -- shared by both
+        :meth:`stream` and :meth:`complete` so a completion built by
+        collecting the stream never selects a *different* round-robin
+        account than the one its rate limiter was acquired for.
+        """
+        token = self._get_token()
+        account_id = _extract_account_id(token)
+        body = self._build_body(messages, stream=True)
+        client = self._make_client(session_id=session_id, task_id=task_id)
+
+        for event in self._stream_sse(client, body, token, account_id):
+            etype = event.get("type", "")
+            if etype == "response.output_text.delta":
+                delta = event.get("delta", "")
+                if delta:
+                    yield delta
+
     def stream(self, messages: list[Message], system: str = "", **kwargs: Any) -> Iterator[str]:
         """Stream tokens from the Codex backend via SSE.
 
@@ -452,20 +606,13 @@ class CodexProvider(BaseProvider):
         if system:
             messages = [Message(role="system", content=system), *messages]
 
-        token = self._get_token()
-        account_id = _extract_account_id(token)
-        body = self._build_body(messages, stream=True)
-        client = self._make_client(
+        self._prepare_call()
+
+        yield from self._iter_deltas(
+            messages,
             session_id=str(kwargs.get("session_id", "")),
             task_id=str(kwargs.get("task_id", "")),
         )
-
-        for event in self._stream_sse(client, body, token, account_id):
-            etype = event.get("type", "")
-            if etype == "response.output_text.delta":
-                delta = event.get("delta", "")
-                if delta:
-                    yield delta
 
     def complete_with_tools(
         self,
@@ -492,7 +639,7 @@ class CodexProvider(BaseProvider):
         Raises:
             ProviderError: On transport failure or stream errors.
         """
-        self._acquire_rate_limit()
+        self._prepare_call()
 
         if system:
             messages = [Message(role="system", content=system), *messages]
@@ -598,8 +745,16 @@ class CodexProvider(BaseProvider):
         return schemas
 
     def is_available(self) -> bool:
-        """Return True if an OAuth token is accessible."""
+        """Return True if an OAuth token is accessible.
+
+        When multi-account balancing is active, any one configured account
+        having a loadable token is enough -- an operator adding a second
+        account before it's fully signed in shouldn't make the whole
+        provider report unavailable.
+        """
         try:
+            if self._accounts:
+                return any(_load_oauth_token(account=account.api_key) for account in self._accounts)
             return bool(self._api_key or _load_oauth_token())
         except Exception:
             return False
@@ -611,9 +766,27 @@ class CodexProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event including the model name."""
+        """Publish a provider audit event including the model name.
+
+        When this call was dispatched through a multi-account round-robin
+        slot, ``account_index``/``account_name`` are included so operators
+        can confirm balancing is actually happening across accounts. Unlike
+        OpenAIProvider's api-key accounts, the OAuth account "name" here is
+        an operator-chosen label (e.g. "work"), never a credential, so it's
+        safe to include directly rather than only its index.
+        """
         try:
             from missy.core.events import AuditEvent, event_bus
+
+            detail: dict[str, Any] = {
+                "provider": self.name,
+                "model": self._model,
+                "message": detail_msg,
+            }
+            account: _CodexAccount | None = getattr(self._account_local, "current", None)
+            if account is not None:
+                detail["account_index"] = account.index
+                detail["account_name"] = account.api_key
 
             event = AuditEvent.now(
                 session_id=session_id,
@@ -621,7 +794,7 @@ class CodexProvider(BaseProvider):
                 event_type="provider_invoke",
                 category="provider",
                 result=result,  # type: ignore[arg-type]
-                detail={"provider": self.name, "model": self._model, "message": detail_msg},
+                detail=detail,
             )
             event_bus.publish(event)
         except Exception:

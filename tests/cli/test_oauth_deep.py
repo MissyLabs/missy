@@ -716,3 +716,236 @@ class TestCallbackHandler:
         # Must not raise and must return None
         result = handler.log_message("GET /path HTTP/1.1", "200", "OK")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 11. Multiple accounts — slugging, per-account file resolution, listing
+# ---------------------------------------------------------------------------
+
+
+class TestSlugifyAccount:
+    def test_lowercases_and_keeps_alnum(self):
+        assert oauth_module._slugify_account("Work") == "work"
+
+    def test_spaces_become_hyphens(self):
+        assert oauth_module._slugify_account("my work account") == "my-work-account"
+
+    def test_strips_leading_trailing_punctuation(self):
+        assert oauth_module._slugify_account("  --work--  ") == "work"
+
+    def test_raises_on_no_usable_characters(self):
+        with pytest.raises(ValueError):
+            oauth_module._slugify_account("!!!")
+
+    def test_raises_on_empty_string(self):
+        with pytest.raises(ValueError):
+            oauth_module._slugify_account("")
+
+
+class TestTokenFileFor:
+    def test_none_maps_to_default_token_file(self):
+        assert oauth_module._token_file_for(None) == oauth_module.TOKEN_FILE
+
+    def test_default_string_maps_to_default_token_file(self):
+        assert oauth_module._token_file_for("default") == oauth_module.TOKEN_FILE
+
+    def test_empty_string_maps_to_default_token_file(self):
+        assert oauth_module._token_file_for("") == oauth_module.TOKEN_FILE
+
+    def test_named_account_maps_to_sibling_file(self):
+        path = oauth_module._token_file_for("work")
+        assert path.name == "openai-oauth-work.json"
+        assert path.parent == oauth_module.TOKEN_FILE.parent
+
+    def test_named_account_is_slugified(self):
+        path = oauth_module._token_file_for("My Work Account")
+        assert path.name == "openai-oauth-my-work-account.json"
+
+    def test_derives_from_token_file_parent_not_a_fixed_constant(self, tmp_path):
+        """Patching only TOKEN_FILE (the established single-account test
+        convention) must relocate named-account files too — otherwise a
+        test that overrides TOKEN_FILE but not some separate directory
+        constant would silently still write named accounts under the real
+        ~/.missy/secrets/."""
+        relocated = tmp_path / "elsewhere" / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", relocated):
+            path = oauth_module._token_file_for("work")
+        assert path.parent == relocated.parent
+        assert path.parent == tmp_path / "elsewhere"
+
+
+class TestSaveLoadTokenNamedAccount:
+    def test_named_account_round_trip(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            data = {"access_token": "work-token", "account_name": "work"}
+            oauth_module._save_token(data, account="work")
+
+            # Named account never touches the default file.
+            assert not token_file.exists()
+            assert oauth_module.load_token(account="work") == data
+            assert oauth_module.load_token() is None
+
+    def test_default_and_named_accounts_coexist(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "default-token"})
+            oauth_module._save_token({"access_token": "work-token"}, account="work")
+
+            assert oauth_module.load_token()["access_token"] == "default-token"
+            assert oauth_module.load_token(account="work")["access_token"] == "work-token"
+
+    def test_two_named_accounts_do_not_collide(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "work-token"}, account="work")
+            oauth_module._save_token({"access_token": "personal-token"}, account="personal")
+
+            assert oauth_module.load_token(account="work")["access_token"] == "work-token"
+            assert oauth_module.load_token(account="personal")["access_token"] == "personal-token"
+
+    def test_named_account_file_mode_is_600(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "x"}, account="work")
+            named_file = tmp_path / "openai-oauth-work.json"
+            assert stat.S_IMODE(named_file.stat().st_mode) == 0o600
+
+
+class TestRefreshTokenIfNeededNamedAccount:
+    def test_refreshes_named_account_without_touching_default(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token(
+                {
+                    "access_token": "default-stale",
+                    "refresh_token": "default-refresh",
+                    "client_id": "cid",
+                    "expires_at": int(time.time()) - 3600,
+                }
+            )
+            oauth_module._save_token(
+                {
+                    "access_token": "work-stale",
+                    "refresh_token": "work-refresh",
+                    "client_id": "cid",
+                    "expires_at": int(time.time()) - 3600,
+                },
+                account="work",
+            )
+
+            with patch.object(
+                oauth_module,
+                "_do_refresh",
+                return_value={"access_token": "work-fresh", "expires_in": 3600},
+            ) as mock_refresh:
+                result = oauth_module.refresh_token_if_needed(account="work")
+
+            assert result == "work-fresh"
+            mock_refresh.assert_called_once_with("cid", "work-refresh")
+            # Default account's stored token is untouched.
+            assert oauth_module.load_token()["access_token"] == "default-stale"
+            assert oauth_module.load_token(account="work")["access_token"] == "work-fresh"
+
+
+class TestListAccounts:
+    def test_empty_when_nothing_stored(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            assert oauth_module.list_accounts() == []
+            assert oauth_module.account_slugs() == []
+
+    def test_default_account_listed_as_default(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token(
+                {"access_token": "t", "email": "me@example.com", "account_id": "acc-1"}
+            )
+            accounts = oauth_module.list_accounts()
+
+        assert len(accounts) == 1
+        assert accounts[0]["account"] == "default"
+        assert accounts[0]["email"] == "me@example.com"
+        assert accounts[0]["account_id"] == "acc-1"
+        # No secret material leaks into the listing.
+        assert "access_token" not in accounts[0]
+
+    def test_named_accounts_listed_alphabetically(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "z"}, account="zeta")
+            oauth_module._save_token({"access_token": "a"}, account="alpha")
+
+            slugs = oauth_module.account_slugs()
+
+        assert slugs == ["alpha", "zeta"]
+
+    def test_default_listed_before_named_accounts(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "d"})
+            oauth_module._save_token({"access_token": "w"}, account="work")
+
+            slugs = oauth_module.account_slugs()
+
+        assert slugs == ["default", "work"]
+
+    def test_corrupt_named_account_file_is_skipped(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "d"})
+            (tmp_path / "openai-oauth-broken.json").write_text("{not json", encoding="utf-8")
+
+            slugs = oauth_module.account_slugs()
+
+        assert slugs == ["default"]
+
+    def test_tmp_files_are_not_listed_as_accounts(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        with patch.object(oauth_module, "TOKEN_FILE", token_file):
+            oauth_module._save_token({"access_token": "w"}, account="work")
+            # A leftover atomic-write .tmp file (crash mid-write) must not
+            # itself be surfaced as a separate account.
+            (tmp_path / "openai-oauth-work.json.tmp").write_text("{}", encoding="utf-8")
+
+            slugs = oauth_module.account_slugs()
+
+        assert slugs == ["work"]
+
+
+class TestRunOpenAIOAuthNamedAccount:
+    def test_stores_named_account_and_sets_account_name_field(self, tmp_path):
+        token_file = tmp_path / "openai-oauth.json"
+        jwt = _make_jwt({"sub": "user-1", "email": "work@example.com"})
+
+        with (
+            patch.object(oauth_module, "TOKEN_FILE", token_file),
+            patch.object(oauth_module, "_start_callback_server", return_value=None),
+            patch("webbrowser.open"),
+            patch(
+                "click.prompt",
+                return_value="http://localhost:1455/auth/callback?code=abc&state=xyz",
+            ),
+            patch.object(oauth_module, "secrets") as mock_secrets,
+            patch.object(
+                oauth_module,
+                "_exchange_code",
+                return_value={
+                    "access_token": jwt,
+                    "refresh_token": "r",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            ),
+        ):
+            mock_secrets.token_urlsafe.return_value = "xyz"
+            mock_secrets.token_bytes.return_value = b"0" * 96
+            result = oauth_module.run_openai_oauth(account="work")
+
+        assert result == jwt
+        named_file = tmp_path / "openai-oauth-work.json"
+        assert named_file.exists()
+        assert not token_file.exists()
+        stored = json.loads(named_file.read_text(encoding="utf-8"))
+        assert stored["account_name"] == "work"
+        assert stored["email"] == "work@example.com"

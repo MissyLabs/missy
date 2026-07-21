@@ -16,6 +16,18 @@ Uses the same client ID and parameters as OpenClaw's ``@mariozechner/pi-ai``
 package (``app_EMoamEEZ73f0CkXaXp7hrann``) so the flow is accepted by
 OpenAI's auth server.  Override with ``OPENAI_OAUTH_CLIENT_ID`` env var
 to use your own registered OAuth application.
+
+Multiple accounts
+------------------
+Every function that touches the token file accepts an optional *account*
+name. The unnamed/default account keeps using the original single-file path
+(``~/.missy/secrets/openai-oauth.json``) so existing single-account setups
+are untouched. A named account (``account="work"``) is persisted to its own
+file (``~/.missy/secrets/openai-oauth-work.json``), so signing in to a
+second ChatGPT account never overwrites the first. :func:`list_accounts`
+enumerates every stored account (without secrets) so a provider can
+round-robin across them -- see
+:class:`~missy.providers.codex_provider.CodexProvider`.
 """
 
 from __future__ import annotations
@@ -25,6 +37,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -57,9 +70,37 @@ SCOPES = "openid profile email offline_access"
 DEFAULT_CLIENT_ID = os.environ.get("OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
 
 TOKEN_FILE = Path("~/.missy/secrets/openai-oauth.json").expanduser()
+_NAMED_TOKEN_GLOB = "openai-oauth-*.json"
+_ACCOUNT_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 
 # Refresh tokens 5 minutes before expiry.
 REFRESH_MARGIN_SECONDS = 300
+
+
+def _slugify_account(account: str) -> str:
+    """Return a filesystem-safe slug for an account name."""
+    slug = _ACCOUNT_SLUG_RE.sub("-", account.strip().lower()).strip("-")
+    if not slug:
+        raise ValueError(f"Account name {account!r} has no usable characters for a slug.")
+    return slug
+
+
+def _token_file_for(account: str | None) -> Path:
+    """Return the token file path for *account*.
+
+    ``None``/``""``/``"default"`` all map to the original single-account
+    file, so existing single-account configs are untouched. Any other name
+    maps to its own ``openai-oauth-<slug>.json`` file next to it. Derived
+    from ``TOKEN_FILE.parent`` (rather than a separate directory constant)
+    so that tests/callers overriding ``TOKEN_FILE`` alone -- the
+    established single-account patching convention -- automatically
+    relocate named-account files too, instead of silently still touching
+    the real ``~/.missy/secrets/``.
+    """
+    if not account or account == "default":
+        return TOKEN_FILE
+    return TOKEN_FILE.parent / f"openai-oauth-{_slugify_account(account)}.json"
+
 
 # ---------------------------------------------------------------------------
 # PKCE helpers
@@ -253,10 +294,11 @@ def _extract_account_metadata(access_token: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _save_token(data: dict) -> None:
-    """Write token data to TOKEN_FILE atomically (mode 0o600)."""
-    TOKEN_FILE.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    tmp = TOKEN_FILE.with_suffix(".tmp")
+def _save_token(data: dict, account: str | None = None) -> None:
+    """Write token data to the account's token file atomically (mode 0o600)."""
+    token_file = _token_file_for(account)
+    token_file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    tmp = token_file.with_suffix(".tmp")
     fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w") as f:
@@ -264,26 +306,31 @@ def _save_token(data: dict) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    tmp.replace(TOKEN_FILE)
+    tmp.replace(token_file)
 
 
-def load_token() -> dict | None:
-    """Load the stored OAuth token dict, or None if not present."""
-    if not TOKEN_FILE.exists():
+def load_token(account: str | None = None) -> dict | None:
+    """Load the stored OAuth token dict for *account*, or None if not present."""
+    token_file = _token_file_for(account)
+    if not token_file.exists():
         return None
     try:
-        return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+        return json.loads(token_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def refresh_token_if_needed(client_id: str | None = None, force: bool = False) -> str | None:
-    """Return a valid access token, refreshing if within the expiry margin.
+def refresh_token_if_needed(
+    client_id: str | None = None,
+    force: bool = False,
+    account: str | None = None,
+) -> str | None:
+    """Return a valid access token for *account*, refreshing if near expiry.
 
     Returns the access token string, or None if no token is stored or
     refresh fails.
     """
-    token_data = load_token()
+    token_data = load_token(account)
     if not token_data:
         return None
 
@@ -308,11 +355,54 @@ def refresh_token_if_needed(client_id: str | None = None, force: bool = False) -
                 "expires_at": expires_at,
             }
         )
-        _save_token(token_data)
+        _save_token(token_data, account=account)
         return token_data["access_token"]
     except Exception as exc:
         console.print(f"  [yellow]Token refresh failed:[/] {exc}")
         return token_data.get("access_token")
+
+
+def list_accounts() -> list[dict]:
+    """Enumerate every stored OpenAI OAuth account without exposing secrets.
+
+    Returns a list of ``{"account", "email", "account_id", "expires_at",
+    "file"}`` dicts, ``"default"`` first (if present) followed by named
+    accounts sorted alphabetically. Corrupt/unreadable token files are
+    skipped rather than raising, since this is a read-only status listing.
+    """
+    accounts: list[dict] = []
+
+    if TOKEN_FILE.exists():
+        data = load_token()
+        if data:
+            accounts.append(_account_summary("default", data, TOKEN_FILE))
+
+    secrets_dir = TOKEN_FILE.parent
+    if secrets_dir.is_dir():
+        for path in sorted(secrets_dir.glob(_NAMED_TOKEN_GLOB)):
+            slug = path.stem.removeprefix("openai-oauth-")
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            accounts.append(_account_summary(slug, data, path))
+
+    return accounts
+
+
+def _account_summary(slug: str, data: dict, path: Path) -> dict:
+    return {
+        "account": slug,
+        "email": data.get("email", ""),
+        "account_id": data.get("account_id", ""),
+        "expires_at": data.get("expires_at", 0),
+        "file": str(path),
+    }
+
+
+def account_slugs() -> list[str]:
+    """Return the slugs of every currently stored OpenAI OAuth account."""
+    return [entry["account"] for entry in list_accounts()]
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +426,7 @@ def _extract_code_from_url(raw: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def run_openai_oauth(client_id: str | None = None) -> str | None:
+def run_openai_oauth(client_id: str | None = None, account: str | None = None) -> str | None:
     """Run the full PKCE OAuth flow and return the access token on success.
 
     Steps:
@@ -346,6 +436,15 @@ def run_openai_oauth(client_id: str | None = None) -> str | None:
     4. Open browser to authorization URL.
     5. Exchange code for tokens.
     6. Persist and return access token.
+
+    Args:
+        client_id: OAuth client ID override.
+        account: Optional account name. Omit (or pass ``"default"``) to sign
+            in to the single default account, matching original behavior.
+            Any other name signs in to (or re-authenticates) that named
+            account without touching any other account's stored token, so
+            multiple ChatGPT logins can be kept side by side — see
+            :func:`list_accounts`.
 
     Returns:
         The OAuth access token string, or ``None`` if the flow was aborted.
@@ -462,11 +561,14 @@ def run_openai_oauth(client_id: str | None = None) -> str | None:
         "token_type": token_resp.get("token_type", "Bearer"),
         "account_id": account_id,
         "email": email,
+        "account_name": account or "default",
     }
-    _save_token(token_data)
+    _save_token(token_data, account=account)
 
     id_display = email or account_id or "(unknown)"
-    console.print(f"  [green]OAuth complete.[/] Signed in as [bold]{id_display}[/]")
-    console.print(f"  [dim]Token stored at {TOKEN_FILE}[/]")
+    token_file = _token_file_for(account)
+    account_label = f" [dim](account: {account or 'default'})[/]" if account else ""
+    console.print(f"  [green]OAuth complete.[/] Signed in as [bold]{id_display}[/]{account_label}")
+    console.print(f"  [dim]Token stored at {token_file}[/]")
 
     return access_token

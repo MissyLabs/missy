@@ -1610,6 +1610,13 @@ def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_ke
 )
 @click.option("--model", default=None, help='Model selector to store, e.g. "auto" or "gpt-5.5".')
 @click.option("--no-verify", is_flag=True, default=False, help="Skip the OpenAI verification call.")
+@click.option(
+    "--account",
+    default=None,
+    help="Named OAuth account to sign in as (--method oauth only). Omit to use/overwrite the "
+    "single default account, matching prior single-account behavior. Signing in to a second "
+    "distinct name enables round-robin token balancing across every stored account.",
+)
 @click.pass_context
 def providers_auth(
     ctx: click.Context,
@@ -1619,11 +1626,21 @@ def providers_auth(
     api_key_env: str | None,
     model: str | None,
     no_verify: bool,
+    account: str | None,
 ) -> None:
     """Refresh provider credentials in the config file.
 
     Currently supports OpenAI API-key auth and OpenAI OAuth/Codex auth.
+
+    Multiple OpenAI OAuth accounts can be signed in side by side with
+    ``--account NAME`` (e.g. ``--account work``, ``--account personal``);
+    each gets its own token file. Once 2+ accounts are stored,
+    ``openai-codex`` automatically balances every call round-robin across
+    them -- see ``missy providers oauth-accounts``.
     """
+    if account and method != "oauth":
+        _print_error("--account is only meaningful with --method oauth.")
+        sys.exit(1)
     method = method.lower()
     if name not in {"openai", "openai-codex"}:
         _print_error("Only OpenAI re-auth is currently supported.")
@@ -1672,21 +1689,37 @@ def providers_auth(
 
     verify_secret: str | None = None
     if method == "oauth":
-        from missy.cli.oauth import run_openai_oauth
+        from missy.cli.oauth import list_accounts, run_openai_oauth
         from missy.cli.wizard import _PROVIDERS
 
-        console.print("[dim]Starting OpenAI OAuth flow...[/]")
-        token = run_openai_oauth()
+        console.print(
+            f"[dim]Starting OpenAI OAuth flow{f' (account: {account})' if account else ''}...[/]"
+        )
+        token = run_openai_oauth(account=account)
         if not token:
             _print_error("OpenAI OAuth did not return a token.")
             sys.exit(1)
         provider_cfg["name"] = "openai-codex"
-        # run_openai_oauth writes ~/.missy/secrets/openai-oauth.json with the
-        # refresh token. Keep short-lived access tokens out of config.yaml.
+        # run_openai_oauth writes ~/.missy/secrets/openai-oauth[-<account>].json
+        # with the refresh token. Keep short-lived access tokens out of config.yaml.
         provider_cfg.pop("api_key", None)
         provider_cfg["model"] = (
             model or provider_cfg.get("model") or _PROVIDERS["openai-codex"]["models"]["primary"]
         )
+
+        if account:
+            # Every currently stored account (default + every named account
+            # signed in so far) becomes the balancing set -- not just the one
+            # just added -- so a 3rd/4th `--account` login keeps extending
+            # the same rotation rather than requiring the operator to hand-
+            # edit oauth_accounts. key_rotation_strategy only flips to
+            # round_robin automatically the first time this crosses 2
+            # accounts; if the operator later set it back to "failover"
+            # deliberately, a subsequent login here won't silently undo that.
+            stored_slugs = [entry["account"] for entry in list_accounts()]
+            provider_cfg["oauth_accounts"] = stored_slugs
+            if len(stored_slugs) >= 2 and "key_rotation_strategy" not in provider_cfg:
+                provider_cfg["key_rotation_strategy"] = "round_robin"
     else:
         provider_cfg["name"] = "openai"
         if api_key_env:
@@ -1741,10 +1774,79 @@ def providers_auth(
         _print_error(f"Failed to update config: {exc}")
         sys.exit(1)
 
+    balancing_note = ""
+    if method == "oauth" and len(provider_cfg.get("oauth_accounts", [])) >= 2:
+        balancing_note = (
+            f"\n[cyan]Balancing {len(provider_cfg['oauth_accounts'])} accounts round-robin:[/] "
+            f"{', '.join(provider_cfg['oauth_accounts'])}"
+        )
     _print_success(
         f"Updated [bold]{provider_key}[/] auth in [bold]{config_file}[/].\n"
-        f"Backup: [dim]{backup_path}[/]"
+        f"Backup: [dim]{backup_path}[/]{balancing_note}"
     )
+
+
+@providers_group.command("oauth-accounts")
+@click.pass_context
+def providers_oauth_accounts(ctx: click.Context) -> None:
+    """List every stored OpenAI OAuth account (no secrets)."""
+    from missy.cli.oauth import list_accounts
+
+    accounts = list_accounts()
+    if not accounts:
+        console.print(
+            "[dim]No OpenAI OAuth accounts stored.[/]\n"
+            "[dim]Run `missy providers auth openai-codex --method oauth` "
+            "(add `--account NAME` for additional accounts).[/]"
+        )
+        return
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    codex_cfg = cfg.providers.get("openai-codex")
+    balancing_active = bool(
+        codex_cfg
+        and codex_cfg.key_rotation_strategy == "round_robin"
+        and len(codex_cfg.oauth_accounts) >= 2
+    )
+
+    table = Table(title="OpenAI OAuth Accounts", show_lines=True)
+    table.add_column("Account", style="bold")
+    table.add_column("Email")
+    table.add_column("Account ID")
+    table.add_column("Token Expires")
+    table.add_column("Balancing")
+
+    now = time.time()
+    for entry in accounts:
+        expires_at = entry.get("expires_at", 0) or 0
+        if expires_at:
+            delta = int(expires_at - now)
+            expiry_text = (
+                Text(f"in {delta}s", style="green") if delta > 0 else Text("expired", style="red")
+            )
+        else:
+            expiry_text = Text("unknown", style="dim")
+
+        in_rotation = balancing_active and entry["account"] in (
+            codex_cfg.oauth_accounts if codex_cfg else []
+        )
+        balancing_cell = Text("active", style="cyan") if in_rotation else Text("—", style="dim")
+
+        table.add_row(
+            entry["account"],
+            entry.get("email") or "[dim]—[/]",
+            entry.get("account_id") or "[dim]—[/]",
+            expiry_text,
+            balancing_cell,
+        )
+
+    console.print(table)
+    if not balancing_active and len(accounts) >= 2:
+        console.print(
+            "[yellow]2+ accounts are stored but round-robin balancing isn't active.[/] "
+            "Set `key_rotation_strategy: round_robin` and `oauth_accounts: "
+            f"{[a['account'] for a in accounts]}` under `providers.openai-codex` in config.yaml."
+        )
 
 
 # ---------------------------------------------------------------------------

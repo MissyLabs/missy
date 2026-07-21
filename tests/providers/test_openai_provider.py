@@ -857,3 +857,147 @@ class TestOpenAICompleteWithTools:
         p = OpenAIProvider(_make_config())
         with pytest.raises(ProviderError, match="not installed"):
             p.complete_with_tools([Message(role="user", content="Hi")], [])
+
+
+class TestOpenAIMultiAccountHealthTracking:
+    """Per-account failure tracking wiring (round_robin.py's RoundRobinAccounts
+    record_success/record_failure) for OpenAIProvider's complete()/
+    complete_with_tools()/stream(), mirroring CodexProvider's OAuth-account
+    coverage."""
+
+    def _multi_config(self) -> ProviderConfig:
+        return _make_config(
+            api_key=None,
+            api_keys=["k1", "k2"],
+            key_rotation_strategy="round_robin",
+        )
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_successful_complete_records_success(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = TestOpenAIComplete()._mock_response()
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(self._multi_config())
+        with patch.object(p._rr, "record_success") as mock_record:
+            p.complete([Message(role="user", content="hi")])
+
+        mock_record.assert_called_once()
+        assert mock_record.call_args[0][0].index == 0
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_failed_complete_records_failure(self, mock_sdk):
+        _APIError = type("APIError", (Exception,), {})
+        _APITimeoutError = type("APITimeoutError", (_APIError,), {})
+        _AuthenticationError = type("AuthenticationError", (_APIError,), {})
+        mock_sdk.APIError = _APIError
+        mock_sdk.APITimeoutError = _APITimeoutError
+        mock_sdk.AuthenticationError = _AuthenticationError
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = _AuthenticationError("bad")
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(self._multi_config())
+        with (
+            patch.object(p._rr, "record_failure") as mock_record,
+            pytest.raises(ProviderError),
+        ):
+            p.complete([Message(role="user", content="hi")])
+
+        mock_record.assert_called_once()
+        assert mock_record.call_args[0][0].index == 0
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_failed_complete_with_tools_records_failure(self, mock_sdk):
+        _APIError = type("APIError", (Exception,), {})
+        _APITimeoutError = type("APITimeoutError", (_APIError,), {})
+        _AuthenticationError = type("AuthenticationError", (_APIError,), {})
+        mock_sdk.APIError = _APIError
+        mock_sdk.APITimeoutError = _APITimeoutError
+        mock_sdk.AuthenticationError = _AuthenticationError
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = _APITimeoutError("slow")
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(self._multi_config())
+        with (
+            patch.object(p._rr, "record_failure") as mock_record,
+            pytest.raises(ProviderError),
+        ):
+            p.complete_with_tools([Message(role="user", content="hi")], [])
+
+        mock_record.assert_called_once()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_successful_stream_records_success(self, mock_sdk):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = iter(
+            [SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="hi"))])]
+        )
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(self._multi_config())
+        with patch.object(p._rr, "record_success") as mock_record:
+            list(p.stream([Message(role="user", content="hi")]))
+
+        mock_record.assert_called_once()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_failed_stream_records_failure(self, mock_sdk):
+        _APIError = type("APIError", (Exception,), {})
+        _APITimeoutError = type("APITimeoutError", (_APIError,), {})
+        _AuthenticationError = type("AuthenticationError", (_APIError,), {})
+        mock_sdk.APIError = _APIError
+        mock_sdk.APITimeoutError = _APITimeoutError
+        mock_sdk.AuthenticationError = _AuthenticationError
+
+        def _boom(**_kwargs):
+            raise _APITimeoutError("slow")
+            yield  # pragma: no cover - make this a generator function
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = _boom
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(self._multi_config())
+        with (
+            patch.object(p._rr, "record_failure") as mock_record,
+            pytest.raises(ProviderError),
+        ):
+            list(p.stream([Message(role="user", content="hi")]))
+
+        mock_record.assert_called_once()
+
+    @patch("missy.providers.openai_provider._openai_sdk")
+    @patch("missy.providers.openai_provider._OPENAI_AVAILABLE", True)
+    def test_single_account_config_never_touches_round_robin_tracking(self, mock_sdk):
+        """No account selected -> _record_account_outcome is a no-op, so a
+        single-key config's failures/successes never reach record_success/
+        record_failure (nothing there to track)."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = TestOpenAIComplete()._mock_response()
+        mock_sdk.OpenAI.return_value = mock_client
+
+        p = OpenAIProvider(_make_config())  # single api_key, no round_robin
+        with (
+            patch.object(p._rr, "record_success") as mock_success,
+            patch.object(p._rr, "record_failure") as mock_failure,
+        ):
+            p.complete([Message(role="user", content="hi")])
+
+        mock_success.assert_not_called()
+        mock_failure.assert_not_called()
+
+    def test_account_skipped_after_repeated_failures(self):
+        p = OpenAIProvider(self._multi_config())
+        first = p._rr._live_accounts[0]
+        for _ in range(5):  # default failure_threshold
+            p._rr.record_failure(first)
+
+        picks = [p._select_account().index for _ in range(4)]
+        assert picks == [1, 1, 1, 1]
