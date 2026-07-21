@@ -158,3 +158,44 @@ class ApprovalGate:
                 return False
             pending.deny()
             return True
+
+
+# ---------------------------------------------------------------------------
+# Shared gate accessor
+# ---------------------------------------------------------------------------
+#
+# Built-in tools (obs_tools.py, desktop_tools.py, ...) that need human
+# confirmation for a destructive/public-facing action have no constructor
+# injection point today -- register_builtin_tools() instantiates every
+# tool class with zero arguments (see missy/tools/builtin/__init__.py).
+# Rather than threading an ApprovalGate through that registration path (a
+# much larger, riskier plumbing change), such tools look it up here at
+# execute() time. gateway_start() registers the same shared gate it
+# already builds for ProactiveManager/the Web API here too, so an
+# interactive Discord/Web session can actually approve these prompts; a
+# process with no gate registered (plain `missy ask`, most tests) sees
+# `get_shared_approval_gate()` return None, and each such tool must treat
+# that as "fail closed" -- the same posture McpManager already uses for
+# `requires_approval` MCP tools when no gate is configured.
+
+_shared_gate: ApprovalGate | None = None
+_shared_gate_lock = threading.Lock()
+
+
+def set_shared_approval_gate(gate: ApprovalGate | None) -> None:
+    """Register *gate* as the process-wide shared approval gate.
+
+    Called once by ``gateway_start()`` with the same gate wired into
+    ``ProactiveManager``/the Web API, so built-in tools without their own
+    constructor-injected gate can still route through real interactive
+    confirmation. Passing ``None`` clears it (e.g. on shutdown).
+    """
+    global _shared_gate
+    with _shared_gate_lock:
+        _shared_gate = gate
+
+
+def get_shared_approval_gate() -> ApprovalGate | None:
+    """Return the process-wide shared approval gate, or ``None`` if unset."""
+    with _shared_gate_lock:
+        return _shared_gate

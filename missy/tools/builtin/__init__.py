@@ -19,6 +19,7 @@ from missy.tools.builtin.atspi_tools import (
     AtSpiGetTreeTool,
     AtSpiSetValueTool,
 )
+from missy.tools.builtin.audio_route import AudioRouteTtsTool, AudioTestRouteTool
 from missy.tools.builtin.browser_tools import (
     BrowserClickTool,
     BrowserCloseTool,
@@ -33,6 +34,12 @@ from missy.tools.builtin.browser_tools import (
 from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.builtin.code_evolve import CodeEvolveTool
 from missy.tools.builtin.delegate_task import DelegateTaskTool
+from missy.tools.builtin.desktop_tools import (
+    DesktopFocusWindowTool,
+    DesktopLaunchAppTool,
+    DesktopMouseDragTool,
+    DesktopStatusTool,
+)
 from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.discord_voice import (
     DiscordVoiceJoinTool,
@@ -67,6 +74,16 @@ from missy.tools.builtin.memory_tools import (
     MemoryExpandTool,
     MemorySearchTool,
 )
+from missy.tools.builtin.obs_tools import (
+    ObsListScenesTool,
+    ObsSetSourceVisibilityTool,
+    ObsStartRecordingTool,
+    ObsStartStreamingConfirmedTool,
+    ObsStatusTool,
+    ObsStopRecordingTool,
+    ObsStopStreamingConfirmedTool,
+    ObsSwitchSceneTool,
+)
 from missy.tools.builtin.rag_query import RagQueryTool
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
@@ -80,6 +97,12 @@ from missy.tools.builtin.vision_tools import (
     VisionCaptureTool,
     VisionDevicesTool,
     VisionSceneMemoryTool,
+)
+from missy.tools.builtin.vtube_tools import (
+    VtubeLoadModelTool,
+    VtubeSetParameterTool,
+    VtubeStatusTool,
+    VtubeTriggerHotkeyTool,
 )
 from missy.tools.builtin.web_fetch import WebFetchTool
 from missy.tools.builtin.x11_launch import X11LaunchTool
@@ -159,6 +182,24 @@ __all__ = [
     "VisionCaptureTool",
     "VisionDevicesTool",
     "VisionSceneMemoryTool",
+    "DesktopStatusTool",
+    "DesktopFocusWindowTool",
+    "DesktopMouseDragTool",
+    "DesktopLaunchAppTool",
+    "ObsStatusTool",
+    "ObsListScenesTool",
+    "ObsSwitchSceneTool",
+    "ObsSetSourceVisibilityTool",
+    "ObsStartRecordingTool",
+    "ObsStopRecordingTool",
+    "ObsStartStreamingConfirmedTool",
+    "ObsStopStreamingConfirmedTool",
+    "VtubeStatusTool",
+    "VtubeLoadModelTool",
+    "VtubeTriggerHotkeyTool",
+    "VtubeSetParameterTool",
+    "AudioRouteTtsTool",
+    "AudioTestRouteTool",
     "register_builtin_tools",
 ]
 
@@ -229,6 +270,24 @@ _ALL_TOOL_CLASSES = [
     VisionAnalyzeTool,
     VisionDevicesTool,
     VisionSceneMemoryTool,
+    DesktopStatusTool,
+    DesktopFocusWindowTool,
+    DesktopMouseDragTool,
+    DesktopLaunchAppTool,
+    ObsStatusTool,
+    ObsListScenesTool,
+    ObsSwitchSceneTool,
+    ObsSetSourceVisibilityTool,
+    ObsStartRecordingTool,
+    ObsStopRecordingTool,
+    ObsStartStreamingConfirmedTool,
+    ObsStopStreamingConfirmedTool,
+    VtubeStatusTool,
+    VtubeLoadModelTool,
+    VtubeTriggerHotkeyTool,
+    VtubeSetParameterTool,
+    AudioRouteTtsTool,
+    AudioTestRouteTool,
 ]
 
 

@@ -1230,3 +1230,174 @@ class TestQuotedBooleanConfigValues:
         )
         with pytest.raises(ConfigurationError, match="Cannot interpret"):
             load_config(path)
+
+
+# ---------------------------------------------------------------------------
+# Desktop / OBS / VTube Studio config sections
+# ---------------------------------------------------------------------------
+
+
+class TestObsConfigParsing:
+    def test_defaults_when_section_absent(self, tmp_path: Path):
+        path = _write_yaml(tmp_path, "providers: {}\n")
+        cfg = load_config(path)
+        assert cfg.obs.enabled is False
+        assert cfg.obs.host == "127.0.0.1"
+        assert cfg.obs.port == 4455
+        assert cfg.obs.password is None
+        assert cfg.obs.scene_allowlist == []
+
+    def test_parses_explicit_values(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            obs:
+              enabled: true
+              host: 192.168.1.50
+              port: 4456
+              scene_allowlist: ["Main", "BRB"]
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.obs.enabled is True
+        assert cfg.obs.host == "192.168.1.50"
+        assert cfg.obs.port == 4456
+        assert cfg.obs.scene_allowlist == ["Main", "BRB"]
+
+    def test_password_resolves_vault_reference(self, tmp_path: Path):
+        vault_dir = tmp_path / "secrets"
+        vault_dir.mkdir()
+        from missy.security.vault import Vault
+
+        Vault(str(vault_dir)).set("obs_pw", "hunter2")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            providers: {{}}
+            vault:
+              vault_dir: {vault_dir}
+            obs:
+              enabled: true
+              password: vault://obs_pw
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.obs.password == "hunter2"
+
+    def test_unknown_key_warns(self, tmp_path: Path, caplog):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            obs:
+              enabled: true
+              typo_field: oops
+            """,
+        )
+        with caplog.at_level("WARNING", logger="missy.config.settings"):
+            load_config(path)
+        assert any("typo_field" in r.message and "obs" in r.message for r in caplog.records)
+
+
+class TestVtubeConfigParsing:
+    def test_defaults_when_section_absent(self, tmp_path: Path):
+        path = _write_yaml(tmp_path, "providers: {}\n")
+        cfg = load_config(path)
+        assert cfg.vtube.enabled is False
+        assert cfg.vtube.host == "127.0.0.1"
+        assert cfg.vtube.port == 8001
+        assert cfg.vtube.auth_token is None
+        assert cfg.vtube.plugin_name == "Missy"
+        assert cfg.vtube.plugin_developer == "MissyLabs"
+
+    def test_parses_explicit_values(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            vtube:
+              enabled: true
+              host: 127.0.0.1
+              port: 8002
+              plugin_name: MissyStream
+              plugin_developer: TestDev
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.vtube.enabled is True
+        assert cfg.vtube.port == 8002
+        assert cfg.vtube.plugin_name == "MissyStream"
+        assert cfg.vtube.plugin_developer == "TestDev"
+
+    def test_auth_token_resolves_vault_reference(self, tmp_path: Path):
+        vault_dir = tmp_path / "secrets"
+        vault_dir.mkdir()
+        from missy.security.vault import Vault
+
+        Vault(str(vault_dir)).set("vtube_studio_token", "tok-abc")
+
+        path = _write_yaml(
+            tmp_path,
+            f"""
+            providers: {{}}
+            vault:
+              vault_dir: {vault_dir}
+            vtube:
+              enabled: true
+              auth_token: vault://vtube_studio_token
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.vtube.auth_token == "tok-abc"
+
+
+class TestDesktopConfigParsing:
+    def test_defaults_when_section_absent(self, tmp_path: Path):
+        path = _write_yaml(tmp_path, "providers: {}\n")
+        cfg = load_config(path)
+        assert cfg.desktop.enabled is False
+        assert cfg.desktop.app_allowlist == []
+        assert cfg.desktop.unrestricted is False
+
+    def test_parses_explicit_values(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            desktop:
+              enabled: true
+              app_allowlist: ["firefox", "obs"]
+              unrestricted: false
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.desktop.enabled is True
+        assert cfg.desktop.app_allowlist == ["firefox", "obs"]
+        assert cfg.desktop.unrestricted is False
+
+    def test_unrestricted_true(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            desktop:
+              enabled: true
+              unrestricted: true
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.desktop.unrestricted is True
+
+    def test_ambiguous_enabled_string_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            desktop:
+              enabled: "maybe"
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="Cannot interpret"):
+            load_config(path)

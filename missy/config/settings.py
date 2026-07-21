@@ -344,6 +344,91 @@ class VaultConfig:
 
 
 # ---------------------------------------------------------------------------
+# Desktop / OBS / VTube Studio integration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ObsConfig:
+    """OBS Studio integration via the obs-websocket v5 protocol.
+
+    Attributes:
+        enabled: Master switch. Every ``obs_*`` tool fails closed (denied)
+            when ``False`` -- mirrors ``ShellPolicy.enabled``'s contract.
+        host: obs-websocket host (default local loopback; OBS is expected
+            to run on the same machine or a trusted LAN host).
+        port: obs-websocket port (OBS default: 4455).
+        password: obs-websocket server password. Supports ``vault://KEY``/
+            ``$ENV`` references, resolved the same way as
+            ``ProviderConfig.api_key`` -- never stored in config.yaml in
+            plaintext by anything Missy writes itself.
+        scene_allowlist: Scene names ``obs_switch_scene`` may switch to
+            without an additional approval prompt. Empty list means every
+            scene switch is allowed (still gated by ``enabled``) --
+            operators streaming to the public should populate this.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 4455
+    password: str | None = None
+    scene_allowlist: list[str] = field(default_factory=list)
+
+
+@dataclass
+class VtubeConfig:
+    """VTube Studio integration via its WebSocket API.
+
+    Attributes:
+        enabled: Master switch. Every ``vtube_*`` tool fails closed when
+            ``False``.
+        host: VTube Studio host (default local loopback).
+        port: VTube Studio API port (VTS default: 8001).
+        auth_token: Persistent auth token issued by VTube Studio the first
+            time the plugin is authorized (approved in the VTS UI).
+            Supports ``vault://KEY``/``$ENV`` references. Never echoed
+            back in any tool output once acquired.
+        plugin_name: Identifies Missy in VTube Studio's authorization
+            pop-up and in the issued token's scope.
+        plugin_developer: Shown alongside ``plugin_name`` in VTube Studio's
+            authorization pop-up.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8001
+    auth_token: str | None = None
+    plugin_name: str = "Missy"
+    plugin_developer: str = "MissyLabs"
+
+
+@dataclass
+class DesktopConfig:
+    """Desktop GUI automation policy (session detection, app launch).
+
+    Covers ``desktop_*`` tools only -- ``x11_*`` tools (click/type/key/
+    screenshot/window-list, already implemented) have their own
+    ``shell`` permission gating and are unaffected by this section.
+
+    Attributes:
+        enabled: Master switch. ``desktop_launch_app`` fails closed when
+            ``False``.
+        app_allowlist: Executable names (as passed to ``desktop_launch_app``)
+            that may be launched without an approval prompt.
+        unrestricted: ``True`` skips the allowlist entirely -- any app may
+            be launched without confirmation. Mirrors
+            ``ShellPolicy.unrestricted``'s explicit-opt-in contract; still
+            gated on ``enabled=True``. An empty ``app_allowlist`` with
+            ``unrestricted=False`` means every launch requires approval
+            (fail closed), not that launching is impossible.
+    """
+
+    enabled: bool = False
+    app_allowlist: list[str] = field(default_factory=list)
+    unrestricted: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Proactive config
 # ---------------------------------------------------------------------------
 
@@ -485,6 +570,9 @@ class MissyConfig:
     tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
     agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
     tool_intelligence: ToolIntelligenceConfig = field(default_factory=ToolIntelligenceConfig)
+    obs: ObsConfig = field(default_factory=ObsConfig)
+    vtube: VtubeConfig = field(default_factory=VtubeConfig)
+    desktop: DesktopConfig = field(default_factory=DesktopConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -954,6 +1042,41 @@ def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
     return parse_sandbox_config(data)
 
 
+def _parse_obs(data: dict[str, Any], vault_dir: str) -> ObsConfig:
+    """Parse the ``obs`` section of a Missy config dict."""
+    _warn_unknown_keys("obs", data, ObsConfig)
+    return ObsConfig(
+        enabled=_coerce_bool(data.get("enabled"), False),
+        host=str(data.get("host", "127.0.0.1")),
+        port=int(data.get("port", 4455)),
+        password=_resolve_vault_ref(data.get("password"), vault_dir),
+        scene_allowlist=[str(s) for s in data.get("scene_allowlist", [])],
+    )
+
+
+def _parse_vtube(data: dict[str, Any], vault_dir: str) -> VtubeConfig:
+    """Parse the ``vtube`` section of a Missy config dict."""
+    _warn_unknown_keys("vtube", data, VtubeConfig)
+    return VtubeConfig(
+        enabled=_coerce_bool(data.get("enabled"), False),
+        host=str(data.get("host", "127.0.0.1")),
+        port=int(data.get("port", 8001)),
+        auth_token=_resolve_vault_ref(data.get("auth_token"), vault_dir),
+        plugin_name=str(data.get("plugin_name", "Missy")),
+        plugin_developer=str(data.get("plugin_developer", "MissyLabs")),
+    )
+
+
+def _parse_desktop(data: dict[str, Any]) -> DesktopConfig:
+    """Parse the ``desktop`` section of a Missy config dict."""
+    _warn_unknown_keys("desktop", data, DesktopConfig)
+    return DesktopConfig(
+        enabled=_coerce_bool(data.get("enabled"), False),
+        app_allowlist=[str(a) for a in data.get("app_allowlist", [])],
+        unrestricted=_coerce_bool(data.get("unrestricted"), False),
+    )
+
+
 def _parse_vision(data: dict[str, Any]) -> VisionConfig:
     """Parse the ``vision`` section of a Missy config dict."""
     return VisionConfig(
@@ -1052,6 +1175,9 @@ def load_config(path: str) -> MissyConfig:
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
             container=_parse_container(data.get("container") or {}),
             vision=_parse_vision(data.get("vision") or {}),
+            obs=_parse_obs(data.get("obs") or {}, vault_dir=vault_dir),
+            vtube=_parse_vtube(data.get("vtube") or {}, vault_dir=vault_dir),
+            desktop=_parse_desktop(data.get("desktop") or {}),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
             global_budget_period=str(data.get("global_budget_period", "total") or "total"),
