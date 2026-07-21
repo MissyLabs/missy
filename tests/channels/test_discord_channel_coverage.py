@@ -496,6 +496,59 @@ class TestHandleMessageAttachment:
         await ch._handle_message(data)
         assert ch._queue.empty()
 
+    @pytest.mark.asyncio
+    async def test_message_with_zip_attachment_is_allowed(self):
+        """A .zip attachment must pass the policy gate and its metadata
+        must reach the queued ChannelMessage under discord_zip_attachments
+        -- downstream (cli/main.py's _process_channel) then downloads and
+        safely extracts it (see zip_extract.py)."""
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "project.zip",
+                    "content_type": "application/zip",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/project.zip",
+                    "size": 4096,
+                }
+            ]
+        )
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+        msg = ch._queue.get_nowait()
+        zip_atts = msg.metadata["discord_zip_attachments"]
+        assert len(zip_atts) == 1
+        assert zip_atts[0]["filename"] == "project.zip"
+        assert msg.metadata["discord_image_attachments"] == []
+        assert msg.metadata["discord_text_attachments"] == []
+
+    @pytest.mark.asyncio
+    async def test_oversized_zip_attachment_is_denied(self):
+        ch = _make_channel()
+        data = _make_message(
+            attachments=[
+                {
+                    "id": "att-1",
+                    "filename": "huge.zip",
+                    "content_type": "application/zip",
+                    "url": "https://cdn.discordapp.com/attachments/1/2/huge.zip",
+                    "size": 100 * 1024 * 1024,
+                }
+            ]
+        )
+        await ch._handle_message(data)
+        assert ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_zip_denied_message_mentions_zip_support(self):
+        ch = _make_channel()
+        data = _make_message(attachments=[{"id": "att-1", "filename": "file.exe"}])
+        await ch._handle_message(data)
+        assert ch._rest.send_message.called
+        text = ch._rest.send_message.call_args[0][1]
+        assert "zip" in text.lower()
+
 
 # ---------------------------------------------------------------------------
 # _check_dm_policy — PAIRING (line 725)

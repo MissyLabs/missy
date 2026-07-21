@@ -242,3 +242,88 @@ class TestBuildInboundAttachmentContext:
         assert "photo.png" in result
         assert "notes.txt" in result
         assert "plain text content" in result
+
+    @pytest.mark.asyncio
+    async def test_zip_attachment_extracted_and_listed(self, tmp_path, monkeypatch):
+        import io
+        import zipfile
+
+        import missy.channels.discord.attachment_context as attachment_context_module
+
+        monkeypatch.setattr(attachment_context_module, "INBOUND_ZIPS_DIR", str(tmp_path / "zips"))
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("README.md", "# Hello\n\nProject readme.")
+            zf.writestr("src/main.py", "print('hi')")
+
+        rest_client = MagicMock()
+        rest_client.download_attachment.return_value = buf.getvalue()
+
+        result = await attachment_context_module.build_inbound_attachment_context(
+            rest_client,
+            [],
+            [],
+            [{"url": "https://cdn.discordapp.com/x/y/project.zip", "filename": "project.zip"}],
+            message_id="msg-9",
+        )
+        assert "project.zip" in result
+        assert "README.md" in result
+        assert "src/main.py" in result
+        assert "safely extracted" in result
+        # Small text file content is spliced in inline.
+        assert "Project readme." in result
+
+        extracted_dirs = list((tmp_path / "zips").glob("msg-9_0_project.zip"))
+        assert len(extracted_dirs) == 1
+        assert (extracted_dirs[0] / "README.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_zip_download_failure_reported_inline_not_raised(self):
+        from missy.channels.discord.attachment_context import build_inbound_attachment_context
+
+        rest_client = MagicMock()
+        rest_client.download_attachment.side_effect = RuntimeError("network error")
+
+        result = await build_inbound_attachment_context(
+            rest_client,
+            [],
+            [],
+            [{"url": "https://cdn.discordapp.com/x/y/project.zip", "filename": "project.zip"}],
+        )
+        assert "could not be downloaded" in result
+        assert "project.zip" in result
+
+    @pytest.mark.asyncio
+    async def test_rejected_zip_reported_inline_not_raised(self, tmp_path, monkeypatch):
+        import io
+        import zipfile
+
+        import missy.channels.discord.attachment_context as attachment_context_module
+
+        monkeypatch.setattr(attachment_context_module, "INBOUND_ZIPS_DIR", str(tmp_path / "zips"))
+
+        # A highly compressible payload trips the zip-bomb ratio check in
+        # zip_extract.py, so the whole archive is rejected.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("bomb.bin", b"\x00" * (20 * 1024 * 1024))
+
+        rest_client = MagicMock()
+        rest_client.download_attachment.return_value = buf.getvalue()
+
+        result = await attachment_context_module.build_inbound_attachment_context(
+            rest_client,
+            [],
+            [],
+            [{"url": "https://cdn.discordapp.com/x/y/bomb.zip", "filename": "bomb.zip"}],
+        )
+        assert "rejected" in result
+        assert "bomb.zip" in result
+
+    @pytest.mark.asyncio
+    async def test_no_zip_attachments_still_returns_empty_when_nothing_else(self):
+        from missy.channels.discord.attachment_context import build_inbound_attachment_context
+
+        result = await build_inbound_attachment_context(MagicMock(), [], [], [])
+        assert result == ""

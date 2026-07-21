@@ -730,16 +730,18 @@ class DiscordChannel(BaseChannel):
 
         # 3. Attachment policy gate.
         #
-        # Three-way classification: image (for vision analysis), text-like
+        # Four-way classification: image (for vision analysis), text-like
         # (for direct reading -- .md/.txt/.json/.yaml/.csv/.log, spliced
-        # into the prompt as content once downloaded), and everything
-        # else, which is still denied outright. A message with even one
-        # denied attachment is dropped entirely (matches the prior
-        # image-only gate's all-or-nothing behavior) rather than silently
-        # processing a partial attachment set.
+        # into the prompt as content once downloaded), zip archives (for
+        # safe extraction -- see zip_extract.py), and everything else,
+        # which is still denied outright. A message with even one denied
+        # attachment is dropped entirely (matches the prior image-only
+        # gate's all-or-nothing behavior) rather than silently processing
+        # a partial attachment set.
         attachments: list[dict] = data.get("attachments") or []
         image_attachments: list[tuple[dict, Any]] = []
         text_attachments: list[tuple[dict, Any]] = []
+        zip_attachments: list[tuple[dict, Any]] = []
         if attachments:
             from missy.channels.discord.image_analyze import (
                 AttachmentValidation,
@@ -750,6 +752,10 @@ class DiscordChannel(BaseChannel):
                 MAX_TEXT_ATTACHMENT_BYTES,
                 is_text_attachment,
                 validate_text_attachment,
+            )
+            from missy.channels.discord.zip_attachment import (
+                is_zip_attachment,
+                validate_zip_attachment,
             )
 
             denied_attachments: list[tuple[dict, Any]] = []
@@ -762,6 +768,11 @@ class DiscordChannel(BaseChannel):
                 elif is_text_attachment(attachment):
                     validation = validate_text_attachment(attachment)
                     (text_attachments if validation.allowed else denied_attachments).append(
+                        (attachment, validation)
+                    )
+                elif is_zip_attachment(attachment):
+                    validation = validate_zip_attachment(attachment)
+                    (zip_attachments if validation.allowed else denied_attachments).append(
                         (attachment, validation)
                     )
                 else:
@@ -804,11 +815,11 @@ class DiscordChannel(BaseChannel):
                     )
                     self._rest.send_message(
                         channel_id,
-                        f"⚠️ <@{author_id}> I can't accept {names} — only image and "
+                        f"⚠️ <@{author_id}> I can't accept {names} — only image, "
                         f"text file (.md/.txt/.json/.yaml/.csv/.log, under "
-                        f"{MAX_TEXT_ATTACHMENT_BYTES // 1024}KB) attachments are "
-                        f"supported right now. Paste the content as text instead if "
-                        f"you'd like me to look at it.",
+                        f"{MAX_TEXT_ATTACHMENT_BYTES // 1024}KB), and .zip archive "
+                        f"attachments are supported right now. Paste the content as "
+                        f"text instead if you'd like me to look at it.",
                     )
                 return
 
@@ -854,6 +865,27 @@ class DiscordChannel(BaseChannel):
                     author_id,
                 )
 
+            if zip_attachments:
+                allowed_zip_details = [
+                    {**validation.details, "reasons": []}
+                    for _attachment, validation in zip_attachments
+                ]
+                self._emit_audit(
+                    "discord.channel.zip_attachment_allowed",
+                    "allow",
+                    {
+                        "author_id": author_id,
+                        "channel_id": channel_id,
+                        "zip_count": len(zip_attachments),
+                        "attachments": allowed_zip_details,
+                    },
+                )
+                logger.info(
+                    "Discord: allowing %d zip attachment(s) from %s for extraction",
+                    len(zip_attachments),
+                    author_id,
+                )
+
         # 5. Resolve thread-scoped session if applicable.
         effective_thread_id = thread_id
         # Discord thread channels have type 11 (PUBLIC_THREAD) or 12 (PRIVATE_THREAD).
@@ -890,7 +922,8 @@ class DiscordChannel(BaseChannel):
 
         # Include allowed attachment info in metadata for downstream
         # processing (vision analysis for images, direct reading for
-        # text). Reuses image_attachments/text_attachments computed by
+        # text, safe extraction for zip archives). Reuses
+        # image_attachments/text_attachments/zip_attachments computed by
         # the policy gate above rather than re-validating -- by this
         # point any denied attachment has already caused an early
         # `return`, so these are exactly the final, allowed sets.
@@ -916,6 +949,16 @@ class DiscordChannel(BaseChannel):
             }
             for attachment, validation in text_attachments
         ]
+        zip_attachment_data: list[dict] = [
+            {
+                "url": attachment.get("url", ""),
+                "proxy_url": attachment.get("proxy_url", ""),
+                "filename": validation.details["filename"],
+                "content_type": validation.details["content_type"],
+                "size": validation.details["size"] or 0,
+            }
+            for attachment, validation in zip_attachments
+        ]
 
         msg = ChannelMessage(
             content=content,
@@ -931,6 +974,7 @@ class DiscordChannel(BaseChannel):
                 "discord_author_is_bot": bool(author.get("bot", False)),
                 "discord_image_attachments": image_attachment_data,
                 "discord_text_attachments": text_attachment_data,
+                "discord_zip_attachments": zip_attachment_data,
             },
         )
         self._emit_audit(
