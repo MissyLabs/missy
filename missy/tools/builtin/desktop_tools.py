@@ -107,6 +107,36 @@ def _display_env() -> dict[str, str]:
     return env
 
 
+def _probe_x11_display() -> bool:
+    """Return True if an X11 display is actually reachable right now.
+
+    Every *other* tool in this module (and x11_tools.py) runs commands
+    against ``_display_env()``'s DISPLAY, which defaults to ``:0`` when
+    the env var is unset -- so an unset ``DISPLAY`` does NOT mean X11
+    automation is unavailable, it means the default target is in play.
+    A bare ``bool(os.environ.get("DISPLAY"))`` check would therefore
+    misreport a perfectly working ":0" default session as unavailable
+    (observed in practice: a gateway process launched from an SSH/screen
+    session with no DISPLAY of its own, automating a real GNOME session
+    on :0). Actually probing connectivity -- rather than trusting either
+    the raw env var or the default -- is the only way to report this
+    honestly in both directions.
+    """
+    if shutil.which("xdotool") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["xdotool", "getdisplaygeometry"],
+            capture_output=True,
+            text=True,
+            env=_display_env(),
+            timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _desktop_config():
     """Return the configured :class:`~missy.config.settings.DesktopConfig`, or ``None``."""
     cfg = load_missy_config()
@@ -145,7 +175,7 @@ class DesktopStatusTool(BaseTool):
 
         session_type = os.environ.get("XDG_SESSION_TYPE", "unknown")
         desktop_env = os.environ.get("XDG_CURRENT_DESKTOP", "unknown")
-        has_display = bool(os.environ.get("DISPLAY"))
+        has_display = _probe_x11_display()
         has_wayland_display = bool(os.environ.get("WAYLAND_DISPLAY"))
 
         binaries = {name: shutil.which(name) is not None for name in _CAPABILITY_BINARIES}
