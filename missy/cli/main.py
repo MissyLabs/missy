@@ -3166,16 +3166,18 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
                     # DiscordChannel._handle_message() already policy-validated any
-                    # image/text attachments and attached their metadata to
+                    # image/text/zip attachments and attached their metadata to
                     # msg.metadata -- download them now and make the agent
                     # actually aware of them (a local path + vision_capture
-                    # instruction for images, sanitized inline content for text).
+                    # instruction for images, sanitized inline content for text,
+                    # a safely-extracted directory listing for zip archives).
                     # Previously this metadata was built and forwarded but never
                     # consumed anywhere, so an attached image or spec file was
                     # invisible to the agent regardless of the policy gate.
                     image_atts = msg.metadata.get("discord_image_attachments") or []
                     text_atts = msg.metadata.get("discord_text_attachments") or []
-                    if image_atts or text_atts:
+                    zip_atts = msg.metadata.get("discord_zip_attachments") or []
+                    if image_atts or text_atts or zip_atts:
                         from missy.channels.discord.attachment_context import (
                             build_inbound_attachment_context,
                         )
@@ -3185,6 +3187,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 ch._rest,  # noqa: SLF001
                                 image_atts,
                                 text_atts,
+                                zip_atts,
                                 message_id=msg.metadata.get("discord_message_id", ""),
                             )
                         except Exception:
