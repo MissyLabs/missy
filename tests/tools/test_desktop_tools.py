@@ -49,9 +49,14 @@ class TestDesktopStatusTool:
         monkeypatch.setenv("XDG_CURRENT_DESKTOP", "GNOME")
         monkeypatch.setenv("DISPLAY", ":0")
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-        with patch(
-            "shutil.which",
-            side_effect=lambda b: f"/usr/bin/{b}" if b in ("xdotool", "wmctrl", "scrot") else None,
+        with (
+            patch(
+                "shutil.which",
+                side_effect=lambda b: (
+                    f"/usr/bin/{b}" if b in ("xdotool", "wmctrl", "scrot") else None
+                ),
+            ),
+            patch("missy.tools.builtin.desktop_tools._probe_x11_display", return_value=True),
         ):
             result = DesktopStatusTool().execute()
 
@@ -67,7 +72,10 @@ class TestDesktopStatusTool:
         monkeypatch.setenv("XDG_CURRENT_DESKTOP", "GNOME")
         monkeypatch.delenv("DISPLAY", raising=False)
         monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-        with patch("shutil.which", return_value=None):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("missy.tools.builtin.desktop_tools._probe_x11_display", return_value=False),
+        ):
             result = DesktopStatusTool().execute()
 
         assert result.success is True
@@ -83,8 +91,11 @@ class TestDesktopStatusTool:
         monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
         monkeypatch.setenv("DISPLAY", ":0")
         monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-        with patch(
-            "shutil.which", side_effect=lambda b: f"/usr/bin/{b}" if b == "xdotool" else None
+        with (
+            patch(
+                "shutil.which", side_effect=lambda b: f"/usr/bin/{b}" if b == "xdotool" else None
+            ),
+            patch("missy.tools.builtin.desktop_tools._probe_x11_display", return_value=True),
         ):
             result = DesktopStatusTool().execute()
 
@@ -93,7 +104,10 @@ class TestDesktopStatusTool:
 
     def test_binaries_available_reports_each_checked_binary(self, monkeypatch):
         monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
-        with patch("shutil.which", return_value=None):
+        with (
+            patch("shutil.which", return_value=None),
+            patch("missy.tools.builtin.desktop_tools._probe_x11_display", return_value=False),
+        ):
             result = DesktopStatusTool().execute()
         assert set(result.output["binaries_available"]) == {
             "xdotool",
@@ -108,6 +122,67 @@ class TestDesktopStatusTool:
     def test_requires_no_permissions(self):
         assert DesktopStatusTool().permissions.shell is False
         assert DesktopStatusTool().permissions.network is False
+
+    def test_display_env_var_unset_but_probe_succeeds_is_still_usable(self, monkeypatch):
+        """Regression: a gateway process launched with no DISPLAY of its
+        own (e.g. from an SSH/screen session) must not be misreported as
+        automation-unusable when the default ':0' target is actually
+        reachable -- this is exactly the discrepancy that made a real
+        desktop_status call report x11_automation_usable=False while
+        x11_screenshot/x11_click were actually succeeding."""
+        monkeypatch.setenv("XDG_SESSION_TYPE", "tty")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        with (
+            patch(
+                "shutil.which", side_effect=lambda b: f"/usr/bin/{b}" if b == "xdotool" else None
+            ),
+            patch("missy.tools.builtin.desktop_tools._probe_x11_display", return_value=True),
+        ):
+            result = DesktopStatusTool().execute()
+
+        assert result.output["has_x11_display"] is True
+        assert result.output["x11_automation_usable"] is True
+
+
+class TestProbeX11Display:
+    def test_returns_false_when_xdotool_missing(self):
+        from missy.tools.builtin.desktop_tools import _probe_x11_display
+
+        with patch("shutil.which", return_value=None):
+            assert _probe_x11_display() is False
+
+    def test_returns_true_when_probe_succeeds(self):
+        from missy.tools.builtin.desktop_tools import _probe_x11_display
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/xdotool"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            assert _probe_x11_display() is True
+            args, kwargs = mock_run.call_args
+            assert args[0] == ["xdotool", "getdisplaygeometry"]
+            assert kwargs["timeout"] == 3
+
+    def test_returns_false_when_probe_fails(self):
+        from missy.tools.builtin.desktop_tools import _probe_x11_display
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/xdotool"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=1)
+            assert _probe_x11_display() is False
+
+    def test_returns_false_on_exception(self):
+        from missy.tools.builtin.desktop_tools import _probe_x11_display
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/xdotool"),
+            patch("subprocess.run", side_effect=OSError("boom")),
+        ):
+            assert _probe_x11_display() is False
 
 
 # ---------------------------------------------------------------------------
