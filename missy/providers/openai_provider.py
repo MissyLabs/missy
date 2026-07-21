@@ -195,6 +195,24 @@ class OpenAIProvider(BaseProvider):
             return
         super()._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
 
+    def _record_account_outcome(self, success: bool) -> None:
+        """Feed this call's outcome back into the selected account's health tracking.
+
+        A no-op when this provider isn't in multi-account mode (no account
+        was selected for this thread). See :class:`~missy.providers.round_robin.RoundRobinAccounts`
+        for what happens to an account after repeated failures -- it stops
+        being selected for a backoff window instead of continuing to fail on
+        every one of its scheduled turns (e.g. one account hitting a billing
+        or rate limit the others haven't).
+        """
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        if account is None:
+            return
+        if success:
+            self._rr.record_success(account)
+        else:
+            self._rr.record_failure(account)
+
     @property
     def api_key(self) -> str | None:
         """Return the active API key, if one is configured directly."""
@@ -1182,20 +1200,25 @@ class OpenAIProvider(BaseProvider):
                     estimated_tokens=estimated_tokens,
                 )
                 self._emit_event(session_id, task_id, "allow", "responses completion successful")
+                self._record_account_outcome(True)
                 return response
             response = self._complete_via_chat(
                 client, api_messages, model, kwargs, estimated_tokens=estimated_tokens
             )
             self._emit_event(session_id, task_id, "allow", "chat completion successful")
+            self._record_account_outcome(True)
             return response
         except _openai_sdk.APITimeoutError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            self._record_account_outcome(False)
             if getattr(exc, "status_code", 0) == 429:
                 retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
@@ -1207,6 +1230,7 @@ class OpenAIProvider(BaseProvider):
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
             self._emit_event(session_id, task_id, "error", str(exc))
+            self._record_account_outcome(False)
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
 
     def structured_output_kwargs(self, schema: Any) -> dict[str, Any]:
@@ -1310,11 +1334,15 @@ class OpenAIProvider(BaseProvider):
         try:
             client = self._make_client()
             raw_response = client.chat.completions.create(**call_kwargs)
+            self._record_account_outcome(True)
         except _openai_sdk.APITimeoutError as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            self._record_account_outcome(False)
             if getattr(exc, "status_code", 0) == 429:
                 retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
@@ -1325,6 +1353,7 @@ class OpenAIProvider(BaseProvider):
                 raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
 
         choice = raw_response.choices[0] if raw_response.choices else None
@@ -1404,6 +1433,7 @@ class OpenAIProvider(BaseProvider):
                     model,
                     system=system,
                 )
+                self._record_account_outcome(True)
                 return
 
             call_kwargs: dict[str, Any] = {
@@ -1414,15 +1444,21 @@ class OpenAIProvider(BaseProvider):
             for chunk in client.chat.completions.create(**call_kwargs):
                 delta = chunk.choices[0].delta.content if chunk.choices else None
                 yield delta or ""
+            self._record_account_outcome(True)
         except ProviderError:
+            self._record_account_outcome(False)
             raise
         except _openai_sdk.APITimeoutError as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI stream timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"OpenAI API error during stream: {exc}") from exc
         except Exception as exc:
+            self._record_account_outcome(False)
             raise ProviderError(f"Unexpected error streaming from OpenAI: {exc}") from exc
 
     # ------------------------------------------------------------------

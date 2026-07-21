@@ -335,6 +335,23 @@ class CodexProvider(BaseProvider):
         account: _CodexAccount | None = getattr(self._account_local, "current", None)
         return account.api_key if account is not None else None
 
+    def _record_account_outcome(self, success: bool) -> None:
+        """Feed this call's outcome back into the selected account's health tracking.
+
+        A no-op when this provider isn't in multi-account mode (no account
+        was selected for this thread). See :class:`~missy.providers.round_robin.RoundRobinAccounts`
+        for what happens to an account after repeated failures -- it stops
+        being selected for a backoff window instead of continuing to fail on
+        every one of its scheduled turns.
+        """
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        if account is None:
+            return
+        if success:
+            self._rr.record_success(account)
+        else:
+            self._rr.record_failure(account)
+
     def _prepare_call(self, estimated_tokens: int = 0) -> None:
         """Select this thread's round-robin account (if any) and acquire its rate limit.
 
@@ -445,6 +462,7 @@ class CodexProvider(BaseProvider):
         """
         try:
             response = self._post_sse(client, body, token, account_id)
+            self._record_account_outcome(True)
         except Exception as exc:
             if _http_status(exc) in _AUTH_STATUS_CODES:
                 refreshed = _load_oauth_token(
@@ -458,11 +476,15 @@ class CodexProvider(BaseProvider):
                             refreshed,
                             _extract_account_id(refreshed),
                         )
+                        self._record_account_outcome(True)
                     except Exception as retry_exc:
+                        self._record_account_outcome(False)
                         raise _codex_request_error(retry_exc) from retry_exc
                 else:
+                    self._record_account_outcome(False)
                     raise _codex_request_error(exc) from exc
             else:
+                self._record_account_outcome(False)
                 raise _codex_request_error(exc) from exc
 
         try:
