@@ -78,13 +78,24 @@ def _compute_auth_response(password: str, challenge: str, salt: str) -> str:
 
         base64_secret = base64(sha256(password + salt))
         auth_response = base64(sha256(base64_secret + challenge))
+
+    CodeQL flags SHA-256 here as weak "password hashing" (py/weak-sensitive-data-hashing) --
+    that rule is about hashes used to *store/verify* a password at rest, where a slow,
+    salted KDF (bcrypt/scrypt/argon2) resists offline brute force. This isn't that: it's a
+    live network challenge-response computed identically by the OBS server on every
+    connection per the obs-websocket v5 spec above, not a stored credential. OBS's own
+    server-side implementation is fixed to SHA-256 -- swapping the algorithm here would
+    only break real authentication against every actual OBS instance, not make anything
+    more secure. The password itself never touches disk/logs unhashed outside this
+    transient computation (see module docstring's Security model).
     """
-    base64_secret = base64.b64encode(
-        hashlib.sha256((password + salt).encode("utf-8")).digest()
-    ).decode("utf-8")
-    auth_response = base64.b64encode(
-        hashlib.sha256((base64_secret + challenge).encode("utf-8")).digest()
-    ).decode("utf-8")
+    salted = (password + salt).encode("utf-8")
+    secret_hash = hashlib.sha256(salted).digest()  # codeql[py/weak-sensitive-data-hashing]
+    base64_secret = base64.b64encode(secret_hash).decode("utf-8")
+
+    combined = (base64_secret + challenge).encode("utf-8")
+    response_hash = hashlib.sha256(combined).digest()  # codeql[py/weak-sensitive-data-hashing]
+    auth_response = base64.b64encode(response_hash).decode("utf-8")
     return auth_response
 
 
