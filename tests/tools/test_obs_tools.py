@@ -19,6 +19,7 @@ import pytest
 
 from missy.config.settings import MissyConfig, ObsConfig
 from missy.tools.builtin.obs_tools import (
+    ObsError,
     ObsListScenesTool,
     ObsSetSourceTextTool,
     ObsSetSourceVisibilityTool,
@@ -631,9 +632,13 @@ class TestObsSetSourceTextTool:
         assert req["inputName"] == "LowerThird"
         assert req["inputSettings"] == {"text": "Hello!"}
 
-    def test_sets_file_content(self):
-        raw = [_hello(), _identified(), _request_response("SetInputSettings", {})]
-        connect, fake_ws = _connect_sequence(*raw)
+    def test_sets_file_content_on_image_source(self):
+        """An Image Source's file path is set via the 'file' settings key."""
+        pairs = [
+            ("GetInputSettings", {"inputKind": "image_source", "inputSettings": {}}),
+            ("SetInputSettings", {}),
+        ]
+        connect, fakes = _connect_multi_request(*pairs)
         with (
             patch(
                 "missy.tools.builtin.obs_tools.load_missy_config",
@@ -648,8 +653,70 @@ class TestObsSetSourceTextTool:
             )
 
         assert result.success is True
-        req = fake_ws.sent[-1]["d"]["requestData"]
-        assert req["inputSettings"] == {"file": "/tmp/image.png"}
+        assert result.output == {"source_name": "Overlay", "file": "/tmp/image.png"}
+        set_req = fakes[-1].sent[-1]["d"]["requestData"]
+        assert set_req["inputSettings"] == {"file": "/tmp/image.png"}
+
+    def test_sets_file_content_on_media_source_uses_local_file_key(self):
+        """A real Media Source (ffmpeg_source) needs 'local_file', not 'file' --
+        sending 'file' to it is a silent no-op in OBS."""
+        pairs = [
+            ("GetInputSettings", {"inputKind": "ffmpeg_source", "inputSettings": {}}),
+            ("SetInputSettings", {}),
+        ]
+        connect, fakes = _connect_multi_request(*pairs)
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config()),
+            ),
+            patch("missy.policy.engine.get_policy_engine") as mock_engine,
+            patch("websockets.connect", connect),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = ObsSetSourceTextTool().execute(source_name="Clip", file_path="/tmp/clip.mp4")
+
+        assert result.success is True
+        set_req = fakes[-1].sent[-1]["d"]["requestData"]
+        assert set_req["inputSettings"] == {
+            "local_file": "/tmp/clip.mp4",
+            "is_local_file": True,
+        }
+
+    def test_sets_file_content_on_unknown_kind_falls_back_to_file_key(self):
+        pairs = [
+            ("GetInputSettings", {"inputKind": "some_future_source", "inputSettings": {}}),
+            ("SetInputSettings", {}),
+        ]
+        connect, fakes = _connect_multi_request(*pairs)
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config()),
+            ),
+            patch("missy.policy.engine.get_policy_engine") as mock_engine,
+            patch("websockets.connect", connect),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = ObsSetSourceTextTool().execute(source_name="Mystery", file_path="/tmp/x.bin")
+
+        assert result.success is True
+        set_req = fakes[-1].sent[-1]["d"]["requestData"]
+        assert set_req["inputSettings"] == {"file": "/tmp/x.bin"}
+
+    def test_get_input_settings_failure_returns_error(self):
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config()),
+            ),
+            patch("missy.tools.builtin.obs_tools._obs_request") as mock_request,
+        ):
+            mock_request.side_effect = ObsError("source not found")
+            result = ObsSetSourceTextTool().execute(source_name="Missing", file_path="/tmp/x.png")
+
+        assert result.success is False
+        assert "source not found" in result.error
 
     def test_rejects_neither_text_nor_file(self):
         result = ObsSetSourceTextTool().execute(source_name="LowerThird")

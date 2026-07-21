@@ -551,13 +551,30 @@ class ObsStopStreamingConfirmedTool(BaseTool):
         return ToolResult(success=True, output={"streaming": False})
 
 
+#: OBS input kinds that take a local file path, mapped to the settings key
+#: each one actually reads it from. ``image_source`` uses ``file``;
+#: ``ffmpeg_source`` (OBS's "Media Source") uses ``local_file`` (plus
+#: ``is_local_file`` to make sure it's in local-file mode, not the same
+#: input's URL-streaming mode) -- sending ``file`` to a media source is a
+#: silent no-op, since obs-websocket's ``SetInputSettings`` merges unknown
+#: keys into the settings object without erroring or applying them.
+_FILE_SETTINGS_KEY_BY_INPUT_KIND: dict[str, str] = {
+    "image_source": "file",
+    "ffmpeg_source": "local_file",
+}
+
+
 class ObsSetSourceTextTool(BaseTool):
     """Update a text/image/media source's content via obs-websocket's SetInputSettings.
 
     Exactly one of ``text``/``file_path`` should be given: ``text`` for a
     text source (lower-thirds, alerts), ``file_path`` for an image or
     media source (local file already on disk -- this never fetches a URL
-    or accepts remote content, only a path OBS itself reads).
+    or accepts remote content, only a path OBS itself reads). For
+    ``file_path``, the source's actual input kind is looked up first
+    (``GetInputSettings``) so the correct settings key is used -- ``file``
+    for an Image Source, ``local_file`` for a Media Source -- rather than
+    assuming every source is an Image Source.
     """
 
     name = "obs_set_source_text"
@@ -605,7 +622,19 @@ class ObsSetSourceTextTool(BaseTool):
                 error="Provide exactly one of 'text' or 'file_path', not both/neither.",
             )
 
-        settings = {"text": text} if text is not None else {"file": file_path}
+        if text is not None:
+            settings: dict[str, Any] = {"text": text}
+        else:
+            try:
+                current = _obs_request("GetInputSettings", {"inputName": source_name})
+            except ObsError as exc:
+                return ToolResult(success=False, output=None, error=str(exc))
+            input_kind = current.get("inputKind", "")
+            file_key = _FILE_SETTINGS_KEY_BY_INPUT_KIND.get(input_kind, "file")
+            settings = {file_key: file_path}
+            if file_key == "local_file":
+                settings["is_local_file"] = True
+
         try:
             _obs_request("SetInputSettings", {"inputName": source_name, "inputSettings": settings})
         except ObsError as exc:
