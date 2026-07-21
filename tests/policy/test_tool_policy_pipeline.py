@@ -131,8 +131,12 @@ def test_discord_capability_mode_includes_voice_tools():
     assert "discord_voice_leave" in decision.tools
     assert "discord_voice_say" in decision.tools
     assert "discord_voice_status" in decision.tools
+    # browser_* remains excluded from Discord's tool set; x11_* was
+    # explicitly reversed (see MISSY_DISCORD_TOOLS's module comment) --
+    # this specific bot's desktop control was commissioned for exactly
+    # this Discord-driven use case.
     assert "browser_navigate" not in decision.tools
-    assert "x11_click" not in decision.tools
+    assert "x11_click" in decision.tools
 
 
 def test_configured_layers_apply_provider_global_agent_sandbox_subagent_order():
@@ -221,9 +225,15 @@ def test_new_agent_tools_are_reachable_over_discord():
     decision = resolve_tool_policy(
         ["rag_query", "graph_query", "video_storyboard", "x11_screenshot"], layers
     )
-    assert set(decision.tools) == {"rag_query", "graph_query", "video_storyboard"}
-    # A GUI tool is still excluded from discord mode (fix didn't widen scope).
-    assert "x11_screenshot" not in decision.tools
+    # x11_screenshot is now also reachable over Discord -- this bot's
+    # desktop control was commissioned specifically for Discord-driven
+    # use (see MISSY_DISCORD_TOOLS's module comment for the reversal).
+    assert set(decision.tools) == {
+        "rag_query",
+        "graph_query",
+        "video_storyboard",
+        "x11_screenshot",
+    }
 
 
 def test_mcp_namespaced_tools_reachable_in_discord_mode():
@@ -243,7 +253,9 @@ def test_mcp_namespaced_tools_reachable_in_discord_mode():
     assert "httptest__echo" in decision.tools
     assert "server__do_thing" in decision.tools
     assert "calculator" in decision.tools  # built-ins still allowed
-    assert "x11_screenshot" not in decision.tools  # host-GUI still excluded
+    # x11_screenshot is now in-scope for Discord too (reversed; see
+    # MISSY_DISCORD_TOOLS's module comment).
+    assert "x11_screenshot" in decision.tools
 
 
 def test_missy_discord_tools_tuple_has_no_glob_entries():

@@ -32,23 +32,30 @@ MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
     "atspi_get_text",
 )
 
-# FX-round2-F3 (deliberately NOT "fixed" as the harness report proposed):
-# the report observed Discord-routed requests substituting web_fetch for
-# browser_*, or flatly denying any browser/desktop/GUI capability, and
-# framed this as a tool-schema-salience/prompting bug because a *direct,
-# out-of-Discord* call to BrowserNavigateTool/X11LaunchTool succeeded in
-# the same environment. That direct-call evidence only proves the tools
-# work in the codebase -- it does not mean they should be reachable via
-# Discord specifically. MISSY_DISCORD_TOOLS below is a deliberately
-# curated allowlist that excludes every browser_*/x11_*/atspi_* tool
-# (not even the read-only ones in MISSY_SAFE_CHAT_TOOLS above), and
-# DISCORD_SYSTEM_PROMPT (missy/agent/runtime.py) says so explicitly:
-# remote Discord users do not get host GUI/desktop control. The model's
-# denial in this capability mode is therefore accurate, not false, and
-# "strengthening salience" here would mean either lying to the model
-# about tools it genuinely doesn't have, or silently widening what an
-# arbitrary Discord user can make Missy's host desktop do -- a real
-# security-scope decision this fix pass does not make unilaterally.
+# FX-round2-F3 (2026-07, superseded below): a prior pass deliberately
+# excluded every browser_*/x11_*/atspi_* tool from Discord's tool set,
+# reasoning that a direct, out-of-Discord call succeeding proved the
+# tools work in the codebase but not that they should be reachable via
+# an arbitrary remote Discord user -- and explicitly declined to make
+# that security-scope call unilaterally.
+#
+# That call has since been made explicitly by the operator: this
+# specific bot's desktop/OBS/VTube Studio integration
+# (desktop_obs_vtube.md) was commissioned *specifically* so Discord
+# requests could drive host desktop control, OBS, and the VTuber avatar
+# (feedback.md's "Discord-side UX" section) -- and the operator
+# confirmed this intent again directly, after observing Missy correctly
+# but unhelpfully deny desktop control in Discord despite the tools
+# working when called directly. The exposure this widens is narrow:
+# `discord.accounts[].dm_policy: disabled` (no DMs at all), a single
+# allowlisted guild with `require_mention: true`, and in practice the
+# requests come from `owner_ids`. Every deeper guardrail this profile
+# change does NOT touch stays fully in force underneath it: rate
+# limiting, the window/app allowlists, discord_upload_file's and
+# install_software_confirmed's and OBS streaming's confirmation gates,
+# and screenshot secret redaction all still gate individual tool calls
+# regardless of which capability_mode exposed the tool schema.
+# DISCORD_SYSTEM_PROMPT (missy/agent/runtime.py) is updated to match.
 MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "calculator",
     "file_read",
@@ -117,6 +124,43 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "rag_query",
     "graph_query",
     "delegate_task",
+    # Desktop/GUI/OBS/VTube control (see the FX-round2-F3 note above):
+    # this specific bot's desktop_*/x11_*/atspi_* tools were purpose-built
+    # for exactly this Discord-driven use case, gated by their own
+    # config.enabled flags, rate limits, allowlists, and confirmation
+    # gates -- this only makes their schemas visible to the model.
+    "desktop_status",
+    "desktop_focus_window",
+    "desktop_mouse_drag",
+    "desktop_mouse_move",
+    "desktop_launch_app",
+    "install_software_confirmed",
+    "x11_screenshot",
+    "x11_click",
+    "x11_type",
+    "x11_key",
+    "x11_window_list",
+    "x11_read_screen",
+    "atspi_get_tree",
+    "atspi_click",
+    "atspi_get_text",
+    "atspi_set_value",
+    "obs_status",
+    "obs_list_scenes",
+    "obs_switch_scene",
+    "obs_set_source_visibility",
+    "obs_set_source_text",
+    "obs_start_recording",
+    "obs_stop_recording",
+    "obs_start_streaming_confirmed",
+    "obs_stop_streaming_confirmed",
+    "vtube_status",
+    "vtube_load_model",
+    "vtube_trigger_hotkey",
+    "vtube_set_parameter",
+    "vtube_list_models",
+    "audio_route_tts",
+    "audio_test_route",
 )
 
 DEFAULT_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
