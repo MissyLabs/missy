@@ -1776,7 +1776,20 @@ class TestAudioSetVolumeTool:
 
 
 class TestDiscordUploadTool:
-    """Tests for DiscordUploadTool.execute()."""
+    """Tests for DiscordUploadTool.execute().
+
+    Every upload now requires human approval (see discord_upload.py's
+    module docstring) -- an approving mock gate is patched in for the
+    whole class so the pre-existing tests below still exercise the actual
+    upload path; the fail-closed "no gate configured" behavior itself is
+    covered separately in
+    tests/unit/test_discord_upload_self_create_tool_coverage.py.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _approving_gate(self):
+        with patch("missy.agent.approval.get_shared_approval_gate", return_value=MagicMock()):
+            yield
 
     def test_no_bot_token_returns_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)

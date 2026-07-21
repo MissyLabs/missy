@@ -20,34 +20,51 @@ XWayland for legacy apps specifically.
 
 Security model
 ---------------
-- ``desktop.enabled`` must be explicitly set; :class:`DesktopLaunchAppTool`
-  fails closed otherwise.
-- :class:`DesktopLaunchAppTool` never uses a shell string -- it always
-  execs an argv list directly (``subprocess.Popen([binary, *args], ...)``,
-  no ``shell=True``), so there is no shell-metacharacter injection surface
+- ``desktop.enabled`` must be explicitly set; :class:`DesktopLaunchAppTool`/
+  :class:`InstallSoftwareConfirmedTool` fail closed otherwise.
+- :class:`DesktopLaunchAppTool`/:class:`InstallSoftwareConfirmedTool` never
+  use a shell string -- both always exec an argv list directly
+  (``subprocess.Popen([binary, *args], ...)``/``subprocess.run([...])``, no
+  ``shell=True``), so there is no shell-metacharacter injection surface
   regardless of what arguments are requested.
 - An app not on ``desktop.app_allowlist`` (and ``desktop.unrestricted`` not
   set) requires :class:`~missy.agent.approval.ApprovalGate` confirmation,
   failing closed when no gate is configured -- same posture as the
-  ``obs_*``/``vtube_*`` confirmation gates.
+  ``obs_*``/``vtube_*`` confirmation gates. A window name not on
+  ``desktop.window_allowlist`` requires the same for
+  :class:`DesktopFocusWindowTool`.
+  :class:`InstallSoftwareConfirmedTool` *always* requires approval
+  (no allowlist bypass -- same posture as OBS's streaming start/stop) and
+  additionally needs ``desktop.allow_software_install: true``, since
+  installing packages is a materially larger blast radius than launching
+  an already-installed GUI app.
 - ``ToolPermissions(shell=True)`` is still declared (and the real binary
   reported via :meth:`resolve_shell_command`) so the existing global
   ``ShellPolicy`` allowlist also applies as defense in depth -- this is
   strictly *more* restrictive than bare ``shell_exec`` (arbitrary
   commands), not a bypass of it.
+- Every tool in this module checks ``desktop.rate_limit_per_minute``
+  (default 30/tool/60s) before doing anything else, as a guardrail against
+  a runaway loop hammering desktop actions.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
-from missy.tools.builtin._desktop_shared import load_missy_config, require_approval
+from missy.tools.builtin._desktop_shared import (
+    check_rate_limit,
+    check_window_allowed,
+    load_missy_config,
+    require_approval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +113,19 @@ def _desktop_config():
     return cfg.desktop if cfg is not None else None
 
 
+def _check_rate_limit(tool_name: str) -> str | None:
+    """Rate-limit *tool_name* against ``desktop.rate_limit_per_minute``.
+
+    Falls back to the field's default (30/min) when no config loads at
+    all, consistent with :func:`~missy.tools.builtin._desktop_shared.check_window_allowed`
+    treating an unloadable config as the safe default rather than "no limit."
+    """
+    from missy.config.settings import DesktopConfig
+
+    config = _desktop_config() or DesktopConfig()
+    return check_rate_limit(tool_name, config.rate_limit_per_minute)
+
+
 class DesktopStatusTool(BaseTool):
     """Detect the desktop session type and which automation binaries are usable."""
 
@@ -110,6 +140,9 @@ class DesktopStatusTool(BaseTool):
     parameters: dict[str, Any] = {}
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         session_type = os.environ.get("XDG_SESSION_TYPE", "unknown")
         desktop_env = os.environ.get("XDG_CURRENT_DESKTOP", "unknown")
         has_display = bool(os.environ.get("DISPLAY"))
@@ -175,6 +208,11 @@ class DesktopFocusWindowTool(BaseTool):
         return "xdotool"
 
     def execute(self, *, window_name: str, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+        if window_error := check_window_allowed(window_name):
+            return ToolResult(success=False, output=None, error=window_error)
+
         result = subprocess.run(
             ["xdotool", "search", "--name", window_name, "windowfocus"],
             capture_output=True,
@@ -232,6 +270,9 @@ class DesktopMouseDragTool(BaseTool):
         button: str = "left",
         **_: Any,
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         start_x, start_y, end_x, end_y = int(start_x), int(start_y), int(end_x), int(end_y)
         btn_num = {"left": "1", "middle": "2", "right": "3"}.get(button.lower(), "1")
 
@@ -295,6 +336,9 @@ class DesktopLaunchAppTool(BaseTool):
         return app or "true"
 
     def execute(self, *, app: str, args: list[str] | None = None, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         args = list(args or [])
         config = _desktop_config()
         if config is None or not config.enabled:
@@ -336,4 +380,144 @@ class DesktopLaunchAppTool(BaseTool):
         return ToolResult(
             success=True,
             output={"app": app, "resolved_path": resolved, "pid": proc.pid, "args": args},
+        )
+
+
+class DesktopMouseMoveTool(BaseTool):
+    """Move the mouse cursor to an x,y coordinate without clicking. X11 only."""
+
+    name = "desktop_mouse_move"
+    description = (
+        "Move the mouse cursor to an x,y coordinate without clicking, e.g. to "
+        "hover for a tooltip or reposition before a separate click. X11 only."
+    )
+    permissions = ToolPermissions(shell=True)
+    parameters: dict[str, Any] = {
+        "x": {"type": "integer", "description": "X coordinate.", "required": True},
+        "y": {"type": "integer", "description": "Y coordinate.", "required": True},
+    }
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        return "xdotool"
+
+    def execute(self, *, x: int, y: int, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
+        x, y = int(x), int(y)
+        result = subprocess.run(
+            ["xdotool", "mousemove", str(x), str(y)],
+            capture_output=True,
+            text=True,
+            env=_display_env(),
+            timeout=10,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            if "command not found" in err or not shutil.which("xdotool"):
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error="xdotool is not installed. Install it with: sudo apt install xdotool",
+                )
+            return ToolResult(success=False, output=None, error=f"xdotool mousemove failed: {err}")
+
+        return ToolResult(success=True, output={"x": x, "y": y})
+
+
+#: Package names/specs must look like real apt package identifiers -- this
+#: is defense in depth, not the injection boundary itself (argv exec already
+#: means no shell metacharacter can do anything): it stops a value that's
+#: obviously not a package name (e.g. a stray "-y" or "--reinstall" flag
+#: smuggled in as the "package") from being accepted as one, since argv
+#: position alone doesn't stop apt from interpreting a leading-dash argument
+#: as a flag rather than a package name.
+_PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9+.\-]*(=[a-zA-Z0-9+.\-:~]+)?$")
+
+
+class InstallSoftwareConfirmedTool(BaseTool):
+    """Install an apt package. ALWAYS requires approval; needs a separate opt-in.
+
+    Distinct from :class:`DesktopLaunchAppTool`'s allowlist model: there is
+    no "trusted package" allowlist here, because unlike launching an
+    already-installed binary, installing a *new* package is inherently
+    supply-chain-sensitive (a typo-squatted or malicious package name is a
+    real risk apt itself won't catch). Every call requires human approval
+    regardless of what's being installed, mirroring
+    ``obs_start_streaming_confirmed``'s no-bypass posture, and additionally
+    needs ``desktop.allow_software_install: true`` (a separate opt-in from
+    ``desktop.enabled``) before it's reachable at all.
+    """
+
+    name = "install_software_confirmed"
+    description = (
+        "Install a package via apt. ALWAYS requires human approval -- there is no "
+        "allowlist bypass for this action, and it must be separately enabled via "
+        "desktop.allow_software_install in config.yaml."
+    )
+    permissions = ToolPermissions(shell=True)
+    parameters: dict[str, Any] = {
+        "package": {
+            "type": "string",
+            "description": "apt package name, e.g. 'obs-studio' (optionally 'name=version').",
+            "required": True,
+        },
+    }
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        return "sudo && apt-get"
+
+    def execute(self, *, package: str, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
+        config = _desktop_config()
+        if config is None or not config.enabled or not config.allow_software_install:
+            return ToolResult(
+                success=False,
+                output=None,
+                error=(
+                    "Software installation is disabled. Set both desktop.enabled: true "
+                    "and desktop.allow_software_install: true in config.yaml."
+                ),
+            )
+
+        package = package.strip()
+        if not _PACKAGE_NAME_RE.match(package):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"{package!r} doesn't look like a valid apt package name/spec.",
+            )
+
+        denial = require_approval(
+            action=f"Install software package: {package}",
+            reason="Package installation always requires approval regardless of allowlists.",
+            risk="high",
+        )
+        if denial:
+            return ToolResult(success=False, output=None, error=denial)
+
+        try:
+            result = subprocess.run(
+                ["sudo", "apt-get", "install", "-y", package],
+                capture_output=True,
+                text=True,
+                env=_display_env(),
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return ToolResult(
+                success=False, output=None, error=f"Installation of {package!r} timed out."
+            )
+
+        if result.returncode != 0:
+            err = (result.stderr.strip() or result.stdout.strip())[-2000:]
+            return ToolResult(
+                success=False, output=None, error=f"Installation of {package!r} failed: {err}"
+            )
+
+        return ToolResult(
+            success=True,
+            output={"package": package, "log_tail": result.stdout.strip()[-1000:]},
         )

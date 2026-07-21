@@ -224,3 +224,28 @@ class TestAudioTestRouteTool:
         assert result.success is True
         assert result.output["test_phrase_played"] is False
         assert "espeak-ng" in result.output["play_error"]
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+class TestAudioRouteRateLimiting:
+    def test_route_tts_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.audio_route.check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = AudioRouteTtsTool().execute()
+        assert result.success is False
+        assert "Rate limit" in result.error
+
+    def test_test_route_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.audio_route.check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = AudioTestRouteTool().execute()
+        assert result.success is False
+        assert "Rate limit" in result.error

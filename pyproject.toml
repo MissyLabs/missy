@@ -65,6 +65,9 @@ vision = [
     "opencv-python-headless>=4.8",
     "numpy>=1.24",
     "Pillow>=10.0",
+    # OCR for best-effort screenshot secret redaction (x11_tools.py). Also
+    # requires the tesseract-ocr system package: sudo apt install tesseract-ocr
+    "pytesseract>=0.3",
 ]
 # Browser automation (Firefox via Playwright) and GTK/X11 accessibility tools.
 # After installing playwright, run: playwright install firefox

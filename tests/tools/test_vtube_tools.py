@@ -16,6 +16,7 @@ import pytest
 
 from missy.config.settings import MissyConfig, VtubeConfig
 from missy.tools.builtin.vtube_tools import (
+    VtubeListModelsTool,
     VtubeLoadModelTool,
     VtubeSetParameterTool,
     VtubeStatusTool,
@@ -368,3 +369,83 @@ class TestVtubePermissions:
     )
     def test_declares_network_permission(self, tool_cls):
         assert tool_cls().permissions.network is True
+
+
+# ---------------------------------------------------------------------------
+# VtubeListModelsTool
+# ---------------------------------------------------------------------------
+
+
+class TestVtubeListModelsTool:
+    def test_lists_available_models(self):
+        responses = {
+            "AuthenticationRequest": {"authenticated": True, "reason": "ok"},
+            "AvailableModelsRequest": {
+                "availableModels": [
+                    {"modelName": "Missy_v1", "modelID": "id-1", "modelLoaded": True},
+                    {"modelName": "Missy_v2", "modelID": "id-2", "modelLoaded": False},
+                ]
+            },
+        }
+        config = _mock_config()
+        patches, _ = _patched(config, responses)
+        with patches[0], patches[1] as mock_engine, patches[2]:
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeListModelsTool().execute()
+
+        assert result.success is True
+        assert result.output["count"] == 2
+        assert result.output["models"][0] == {
+            "model_name": "Missy_v1",
+            "model_id": "id-1",
+            "is_loaded": True,
+        }
+        assert result.output["models"][1]["is_loaded"] is False
+
+    def test_empty_model_list(self):
+        responses = {
+            "AuthenticationRequest": {"authenticated": True, "reason": "ok"},
+            "AvailableModelsRequest": {"availableModels": []},
+        }
+        config = _mock_config()
+        patches, _ = _patched(config, responses)
+        with patches[0], patches[1] as mock_engine, patches[2]:
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeListModelsTool().execute()
+
+        assert result.success is True
+        assert result.output == {"models": [], "count": 0}
+
+    def test_fails_when_disabled(self):
+        with patch(
+            "missy.tools.builtin.vtube_tools.load_missy_config",
+            return_value=_make_missy_config(_mock_config(enabled=False)),
+        ):
+            result = VtubeListModelsTool().execute()
+        assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+class TestVtubeRateLimiting:
+    @pytest.mark.parametrize(
+        "tool_cls,kwargs",
+        [
+            (VtubeStatusTool, {}),
+            (VtubeListModelsTool, {}),
+            (VtubeLoadModelTool, {"model_name": "x"}),
+            (VtubeTriggerHotkeyTool, {"hotkey_name": "x"}),
+            (VtubeSetParameterTool, {"parameter_id": "MouthOpen", "value": 0.5}),
+        ],
+    )
+    def test_denied_when_rate_limited(self, tool_cls, kwargs):
+        with patch(
+            "missy.tools.builtin.vtube_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = tool_cls().execute(**kwargs)
+        assert result.success is False
+        assert "Rate limit" in result.error

@@ -30,9 +30,15 @@ import subprocess
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.builtin._desktop_shared import check_rate_limit
 
 _SINK_NAME = "missy_tts_out"
 _SAFE_DEFAULT_VOLUME_PCT = 70
+#: No dedicated config section exists for audio routing (unlike obs/vtube/
+#: desktop), so this is a fixed default rather than operator-configurable --
+#: still a real guardrail against a runaway loop repeatedly recreating/
+#: testing the sink.
+_AUDIO_RATE_LIMIT_PER_MINUTE = 20
 
 
 def _pw_env() -> dict[str, str]:
@@ -85,6 +91,8 @@ class AudioRouteTtsTool(BaseTool):
     def execute(
         self, *, sink_name: str = _SINK_NAME, set_default: bool = False, **_: Any
     ) -> ToolResult:
+        if rate_error := check_rate_limit(self.name, _AUDIO_RATE_LIMIT_PER_MINUTE):
+            return ToolResult(success=False, output=None, error=rate_error)
         if not shutil.which("pactl"):
             return ToolResult(
                 success=False,
@@ -168,6 +176,8 @@ class AudioTestRouteTool(BaseTool):
     def execute(
         self, *, sink_name: str = _SINK_NAME, play_test_phrase: bool = True, **_: Any
     ) -> ToolResult:
+        if rate_error := check_rate_limit(self.name, _AUDIO_RATE_LIMIT_PER_MINUTE):
+            return ToolResult(success=False, output=None, error=rate_error)
         if not shutil.which("pactl"):
             return ToolResult(success=False, output=None, error="pactl is not available.")
         if not _sink_exists(sink_name):

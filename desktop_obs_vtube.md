@@ -114,6 +114,33 @@ desktop:
   (never left at PipeWire's occasionally-100%+ default), and it never changes the operator's
   system-wide default audio sink unless `set_default=True` is explicitly passed.
 
+## 3.5. Follow-up hardening pass (self-audit against `~/feedback.md`)
+
+A second pass re-read the original request against the shipped Phases 1–4 code and found nine
+gaps between what was asked for and what actually landed. All nine are now closed, in the same
+commit as this note:
+
+| # | Gap | Fix |
+|---|---|---|
+| 1 | No window allowlist — only an app allowlist existed | `desktop.window_allowlist` + `_desktop_shared.check_window_allowed()`, wired into `x11_click`/`x11_type`/`x11_key`'s optional `window_name` param and `desktop_focus_window`. Enforced **only** when `desktop.enabled` is `True` (see backward-compatibility note below) — a fresh boolean, not a fail-closed-on-absent-config default, so every pre-existing deployment that never opted into `desktop:` keeps working unchanged. |
+| 2 | No rate limiting anywhere for tool calls | `_desktop_shared.check_rate_limit()` — an in-memory sliding-window limiter keyed by tool name — applied to every `x11_*`, `desktop_*`, `obs_*`, `vtube_*`, and `audio_route_*`/`audio_test_route` tool. Budgets come from each family's new `rate_limit_per_minute` config field (OBS/VTube default 30/min; audio routing uses a fixed 20/min, no dedicated config surface). |
+| 3 | No screenshot secret redaction | `x11_tools._redact_screenshot_secrets()` — best-effort OCR via optional `pytesseract` (new `[vision]` extra), blacking out any word `SecretsDetector` flags before the image is saved. Runs on `x11_screenshot` (new `redact: bool = True` param) and on `x11_read_screen`'s saved capture; the vision model's *description* is separately passed through `censor_response()`. Degrades gracefully (never blocks the screenshot) when `pytesseract` isn't installed or OCR fails. |
+| 4 | No `obs_set_source_text`/image/media tool | `ObsSetSourceTextTool` (`obs_set_source_text`) — `SetInputSettings` with either literal `text` or a `file_path` (mutually exclusive), for on-stream captions/lower-thirds/alerts. |
+| 5 | No confirmation gate on `discord_upload_file` | `discord_upload.py`'s `execute()` now always calls `require_approval()` before posting (token-presence check happens first, so a missing token never triggers an approval prompt for nothing). No allowlist bypass, matching the existing OBS start/stop-streaming posture. |
+| 6 | No `install_software` tool/gate | `InstallSoftwareConfirmedTool` (`install_software_confirmed`) — argv-only `sudo apt-get install -y <package>` (never `shell=True`), gated on `desktop.enabled` **and** the new `desktop.allow_software_install` flag (default `False`), a package-name regex, rate limiting, and a `require_approval()` prompt before every install. |
+| 7 | No standalone mouse-move (no click) | `DesktopMouseMoveTool` (`desktop_mouse_move`) — `xdotool mousemove` only, no click event, for hover-only interactions (e.g. tooltip/preview triggers) that shouldn't also click. |
+| 8 | `audio_set_volume` had no upper volume clamp | `AudioSetVolumeTool.execute()` now hard-caps an absolute volume at 100% and a relative delta (`+N%`/`-N%`) at 50 percentage points per call — PipeWire otherwise allows a relative delta to boost a sink arbitrarily far past 100%. |
+| 9 | No `vtube_list_models` standalone tool | `VtubeListModelsTool` (`vtube_list_models`) — wraps VTube Studio's `AvailableModelsRequest`, returning `{model_name, model_id, is_loaded}` per available Live2D model, for model discovery/selection independent of `vtube_load_model`'s by-name lookup. |
+
+**Backward-compatibility principle applied to gap #1:** the first implementation of the window
+allowlist failed closed whenever `desktop:` config was absent, which would have silently broken
+every pre-existing `x11_click`/`x11_type`/`x11_key` call using `window_name` on a deployment that
+never configured the new `desktop:` section. Caught before commit by testing with
+`MISSY_CONFIG=/nonexistent/config.yaml` (simulating CI, which has no `~/.missy/config.yaml`) —
+the local dev machine's real config (with `desktop.unrestricted: true` already set) had been
+masking the bug. Fixed by tying enforcement to `desktop.enabled` being explicitly `True`, the
+same opt-in pattern every other guardrail in this feature already follows.
+
 ## 4. Tool specifications
 
 ### 4.1 OBS (`missy/tools/builtin/obs_tools.py`)

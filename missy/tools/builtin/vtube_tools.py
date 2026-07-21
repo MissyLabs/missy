@@ -47,7 +47,7 @@ import uuid
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
-from missy.tools.builtin._desktop_shared import load_missy_config
+from missy.tools.builtin._desktop_shared import check_rate_limit, load_missy_config
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,14 @@ def _vtube_config():
     """Return the configured :class:`~missy.config.settings.VtubeConfig`, or ``None``."""
     cfg = load_missy_config()
     return cfg.vtube if cfg is not None else None
+
+
+def _check_rate_limit(tool_name: str) -> str | None:
+    """Rate-limit *tool_name* against ``vtube.rate_limit_per_minute``."""
+    from missy.config.settings import VtubeConfig
+
+    config = _vtube_config() or VtubeConfig()
+    return check_rate_limit(tool_name, config.rate_limit_per_minute)
 
 
 def _vtube_host() -> str:
@@ -267,6 +275,9 @@ class VtubeStatusTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             data = _vtube_request("CurrentModelRequest")
         except VtubeError as exc:
@@ -306,6 +317,9 @@ class VtubeLoadModelTool(BaseTool):
         return [host] if host else []
 
     def execute(self, *, model_name: str, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             models = _vtube_request("AvailableModelsRequest")
             model_id = next(
@@ -353,6 +367,9 @@ class VtubeTriggerHotkeyTool(BaseTool):
         return [host] if host else []
 
     def execute(self, *, hotkey_name: str, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             hotkeys = _vtube_request("HotkeysInCurrentModelRequest")
             hotkey_id = next(
@@ -419,6 +436,9 @@ class VtubeSetParameterTool(BaseTool):
     def execute(
         self, *, parameter_id: str, value: float, weight: float = 1.0, **_: Any
     ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             _vtube_request(
                 "InjectParameterDataRequest",
@@ -436,3 +456,44 @@ class VtubeSetParameterTool(BaseTool):
         return ToolResult(
             success=True, output={"parameter_id": parameter_id, "value": float(value)}
         )
+
+
+class VtubeListModelsTool(BaseTool):
+    """List every Live2D model VTube Studio currently has imported.
+
+    Answers "locating Live2D models" -- this is read-only discovery, not
+    import: VTube Studio has no API to import a new model file, only to
+    load one it already knows about (see module docstring).
+    """
+
+    name = "vtube_list_models"
+    description = (
+        "List every Live2D model currently imported into VTube Studio (name, ID, "
+        "and whether it's the one currently loaded). Use this to find a model_name "
+        "for vtube_load_model."
+    )
+    permissions = ToolPermissions(network=True)
+    parameters: dict[str, Any] = {}
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        host = _vtube_host()
+        return [host] if host else []
+
+    def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
+        try:
+            models = _vtube_request("AvailableModelsRequest")
+        except VtubeError as exc:
+            return ToolResult(success=False, output=None, error=str(exc))
+
+        model_list = [
+            {
+                "model_name": m.get("modelName"),
+                "model_id": m.get("modelID"),
+                "is_loaded": bool(m.get("modelLoaded")),
+            }
+            for m in models.get("availableModels", [])
+        ]
+        return ToolResult(success=True, output={"models": model_list, "count": len(model_list)})

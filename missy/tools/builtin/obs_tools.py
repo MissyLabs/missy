@@ -49,7 +49,11 @@ import uuid
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
-from missy.tools.builtin._desktop_shared import load_missy_config, require_approval
+from missy.tools.builtin._desktop_shared import (
+    check_rate_limit,
+    load_missy_config,
+    require_approval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,14 @@ def _obs_config():
     """Return the configured :class:`~missy.config.settings.ObsConfig`, or ``None``."""
     cfg = load_missy_config()
     return cfg.obs if cfg is not None else None
+
+
+def _check_rate_limit(tool_name: str) -> str | None:
+    """Rate-limit *tool_name* against ``obs.rate_limit_per_minute``."""
+    from missy.config.settings import ObsConfig
+
+    config = _obs_config() or ObsConfig()
+    return check_rate_limit(tool_name, config.rate_limit_per_minute)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +245,9 @@ class ObsStatusTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             version = _obs_request("GetVersion")
             scene = _obs_request("GetCurrentProgramScene")
@@ -272,6 +287,9 @@ class ObsListScenesTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             scene_list = _obs_request("GetSceneList")
             current = scene_list.get("currentProgramSceneName", "")
@@ -320,6 +338,9 @@ class ObsSwitchSceneTool(BaseTool):
         return [host] if host else []
 
     def execute(self, *, scene_name: str, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         config = _obs_config()
         if (
             config is not None
@@ -371,6 +392,9 @@ class ObsSetSourceVisibilityTool(BaseTool):
         return [host] if host else []
 
     def execute(self, *, scene_name: str, source_name: str, visible: bool, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             items = _obs_request("GetSceneItemList", {"sceneName": scene_name})
             item_id = next(
@@ -417,6 +441,9 @@ class ObsStartRecordingTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             _obs_request("StartRecord")
         except ObsError as exc:
@@ -437,6 +464,9 @@ class ObsStopRecordingTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         try:
             result = _obs_request("StopRecord")
         except ObsError as exc:
@@ -469,6 +499,9 @@ class ObsStartStreamingConfirmedTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         denial = require_approval(
             action="Start OBS streaming (go live)",
             reason="Public-facing action; always confirmed regardless of any allowlist.",
@@ -500,6 +533,9 @@ class ObsStopStreamingConfirmedTool(BaseTool):
         return [host] if host else []
 
     def execute(self, **_: Any) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
         denial = require_approval(
             action="Stop OBS streaming",
             reason="Public-facing action; always confirmed regardless of any allowlist.",
@@ -513,3 +549,66 @@ class ObsStopStreamingConfirmedTool(BaseTool):
         except ObsError as exc:
             return ToolResult(success=False, output=None, error=str(exc))
         return ToolResult(success=True, output={"streaming": False})
+
+
+class ObsSetSourceTextTool(BaseTool):
+    """Update a text/image/media source's content via obs-websocket's SetInputSettings.
+
+    Exactly one of ``text``/``file_path`` should be given: ``text`` for a
+    text source (lower-thirds, alerts), ``file_path`` for an image or
+    media source (local file already on disk -- this never fetches a URL
+    or accepts remote content, only a path OBS itself reads).
+    """
+
+    name = "obs_set_source_text"
+    description = (
+        "Update a source's content: pass 'text' for a text source (e.g. a "
+        "lower-third or alert), or 'file_path' for an image/media source. "
+        "Exactly one of the two should be given."
+    )
+    permissions = ToolPermissions(network=True)
+    parameters: dict[str, Any] = {
+        "source_name": {
+            "type": "string",
+            "description": "Name of the source to update (see obs_list_scenes).",
+            "required": True,
+        },
+        "text": {
+            "type": "string",
+            "description": "New text content, for a text source.",
+        },
+        "file_path": {
+            "type": "string",
+            "description": "Local file path, for an image/media source.",
+        },
+    }
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        host = _obs_host()
+        return [host] if host else []
+
+    def execute(
+        self,
+        *,
+        source_name: str,
+        text: str | None = None,
+        file_path: str | None = None,
+        **_: Any,
+    ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
+        if (text is None) == (file_path is None):
+            return ToolResult(
+                success=False,
+                output=None,
+                error="Provide exactly one of 'text' or 'file_path', not both/neither.",
+            )
+
+        settings = {"text": text} if text is not None else {"file": file_path}
+        try:
+            _obs_request("SetInputSettings", {"inputName": source_name, "inputSettings": settings})
+        except ObsError as exc:
+            return ToolResult(success=False, output=None, error=str(exc))
+
+        return ToolResult(success=True, output={"source_name": source_name, **settings})

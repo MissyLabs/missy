@@ -366,6 +366,9 @@ class ObsConfig:
             without an additional approval prompt. Empty list means every
             scene switch is allowed (still gated by ``enabled``) --
             operators streaming to the public should populate this.
+        rate_limit_per_minute: Maximum ``obs_*`` tool calls allowed per
+            rolling 60s window, tracked per tool name. Guards against a
+            runaway loop hammering OBS (e.g. rapid scene-switch spam).
     """
 
     enabled: bool = False
@@ -373,6 +376,7 @@ class ObsConfig:
     port: int = 4455
     password: str | None = None
     scene_allowlist: list[str] = field(default_factory=list)
+    rate_limit_per_minute: int = 30
 
 
 @dataclass
@@ -392,6 +396,8 @@ class VtubeConfig:
             pop-up and in the issued token's scope.
         plugin_developer: Shown alongside ``plugin_name`` in VTube Studio's
             authorization pop-up.
+        rate_limit_per_minute: Maximum ``vtube_*`` tool calls allowed per
+            rolling 60s window, tracked per tool name.
     """
 
     enabled: bool = False
@@ -400,32 +406,56 @@ class VtubeConfig:
     auth_token: str | None = None
     plugin_name: str = "Missy"
     plugin_developer: str = "MissyLabs"
+    rate_limit_per_minute: int = 30
 
 
 @dataclass
 class DesktopConfig:
     """Desktop GUI automation policy (session detection, app launch).
 
-    Covers ``desktop_*`` tools only -- ``x11_*`` tools (click/type/key/
-    screenshot/window-list, already implemented) have their own
-    ``shell`` permission gating and are unaffected by this section.
+    Covers ``desktop_*`` tools and the pre-existing ``x11_*`` tools
+    (click/type/key/screenshot/window-list) -- both tool families share
+    this section's ``window_allowlist`` and ``rate_limit_per_minute``,
+    since both are "desktop control" in the sense the guardrails below
+    are meant to cover, even though ``x11_*`` predates this config
+    section and has its own separate ``shell`` permission gating.
 
     Attributes:
-        enabled: Master switch. ``desktop_launch_app`` fails closed when
-            ``False``.
+        enabled: Master switch. ``desktop_launch_app``/
+            ``install_software_confirmed`` fail closed when ``False``.
         app_allowlist: Executable names (as passed to ``desktop_launch_app``)
             that may be launched without an approval prompt.
-        unrestricted: ``True`` skips the allowlist entirely -- any app may
-            be launched without confirmation. Mirrors
-            ``ShellPolicy.unrestricted``'s explicit-opt-in contract; still
-            gated on ``enabled=True``. An empty ``app_allowlist`` with
-            ``unrestricted=False`` means every launch requires approval
-            (fail closed), not that launching is impossible.
+        unrestricted: ``True`` skips the app/window allowlists entirely --
+            any app may be launched or window targeted without
+            confirmation. Mirrors ``ShellPolicy.unrestricted``'s
+            explicit-opt-in contract; still gated on ``enabled=True``. An
+            empty ``app_allowlist``/``window_allowlist`` with
+            ``unrestricted=False`` means every launch/window-target
+            requires approval (fail closed), not that it's impossible.
+        window_allowlist: Substrings of window names/titles that
+            ``desktop_focus_window`` and ``x11_click``/``x11_type``/
+            ``x11_key``'s optional ``window_name`` targeting may act on
+            without an approval prompt (matched case-insensitively as a
+            substring, since window titles are often dynamic -- e.g. a
+            browser's title includes the current page). Empty list means
+            every window-name target requires approval.
+        rate_limit_per_minute: Maximum calls allowed per rolling 60s
+            window, tracked per tool name, for every ``desktop_*`` and
+            ``x11_*`` tool.
+        allow_software_install: Separate master switch for
+            ``install_software_confirmed`` -- off by default even when
+            ``enabled=True``, since installing packages is a materially
+            larger blast radius than launching an already-installed GUI
+            app. That tool also always requires approval regardless of
+            this flag; this only gates whether it's reachable at all.
     """
 
     enabled: bool = False
     app_allowlist: list[str] = field(default_factory=list)
     unrestricted: bool = False
+    window_allowlist: list[str] = field(default_factory=list)
+    rate_limit_per_minute: int = 30
+    allow_software_install: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1081,7 @@ def _parse_obs(data: dict[str, Any], vault_dir: str) -> ObsConfig:
         port=int(data.get("port", 4455)),
         password=_resolve_vault_ref(data.get("password"), vault_dir),
         scene_allowlist=[str(s) for s in data.get("scene_allowlist", [])],
+        rate_limit_per_minute=int(data.get("rate_limit_per_minute", 30)),
     )
 
 
@@ -1064,6 +1095,7 @@ def _parse_vtube(data: dict[str, Any], vault_dir: str) -> VtubeConfig:
         auth_token=_resolve_vault_ref(data.get("auth_token"), vault_dir),
         plugin_name=str(data.get("plugin_name", "Missy")),
         plugin_developer=str(data.get("plugin_developer", "MissyLabs")),
+        rate_limit_per_minute=int(data.get("rate_limit_per_minute", 30)),
     )
 
 
@@ -1074,6 +1106,9 @@ def _parse_desktop(data: dict[str, Any]) -> DesktopConfig:
         enabled=_coerce_bool(data.get("enabled"), False),
         app_allowlist=[str(a) for a in data.get("app_allowlist", [])],
         unrestricted=_coerce_bool(data.get("unrestricted"), False),
+        window_allowlist=[str(w) for w in data.get("window_allowlist", [])],
+        rate_limit_per_minute=int(data.get("rate_limit_per_minute", 30)),
+        allow_software_install=_coerce_bool(data.get("allow_software_install"), False),
     )
 
 

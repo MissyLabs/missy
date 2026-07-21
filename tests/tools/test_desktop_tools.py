@@ -18,7 +18,9 @@ from missy.tools.builtin.desktop_tools import (
     DesktopFocusWindowTool,
     DesktopLaunchAppTool,
     DesktopMouseDragTool,
+    DesktopMouseMoveTool,
     DesktopStatusTool,
+    InstallSoftwareConfirmedTool,
 )
 
 # ---------------------------------------------------------------------------
@@ -355,3 +357,261 @@ class TestDesktopToolPermissions:
     )
     def test_declares_shell_permission(self, tool_cls):
         assert tool_cls().permissions.shell is True
+
+
+# ---------------------------------------------------------------------------
+# DesktopMouseMoveTool
+# ---------------------------------------------------------------------------
+
+
+class TestDesktopMouseMoveTool:
+    def test_moves_cursor(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = DesktopMouseMoveTool().execute(x=100, y=200)
+
+        assert result.success is True
+        assert result.output == {"x": 100, "y": 200}
+        args = mock_run.call_args[0][0]
+        assert args == ["xdotool", "mousemove", "100", "200"]
+
+    def test_does_not_click(self):
+        """Regression guard: must never issue a click, only a move."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            DesktopMouseMoveTool().execute(x=0, y=0)
+        args = mock_run.call_args[0][0]
+        assert "click" not in " ".join(args)
+
+    def test_xdotool_missing_reports_install_hint(self):
+        with patch("subprocess.run") as mock_run, patch("shutil.which", return_value=None):
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+            result = DesktopMouseMoveTool().execute(x=0, y=0)
+        assert result.success is False
+        assert "xdotool" in result.error.lower()
+
+    def test_requires_shell_permission(self):
+        assert DesktopMouseMoveTool().permissions.shell is True
+
+
+# ---------------------------------------------------------------------------
+# InstallSoftwareConfirmedTool
+# ---------------------------------------------------------------------------
+
+
+class TestInstallSoftwareConfirmedTool:
+    def test_disabled_by_default_even_when_desktop_enabled(self):
+        """desktop.enabled alone is not enough -- needs the separate
+        allow_software_install opt-in."""
+        with patch(
+            "missy.tools.builtin.desktop_tools._desktop_config",
+            return_value=_mock_config(enabled=True, allow_software_install=False),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+        assert result.success is False
+        assert "disabled" in result.error.lower()
+
+    def test_disabled_when_desktop_not_enabled_even_if_install_flag_set(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._desktop_config",
+            return_value=_mock_config(enabled=False, allow_software_install=True),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+        assert result.success is False
+
+    def test_invalid_package_name_rejected(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._desktop_config",
+            return_value=_mock_config(enabled=True, allow_software_install=True),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="--reinstall")
+        assert result.success is False
+        assert "valid apt package" in result.error
+
+    def test_always_requires_approval(self):
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch(
+                "missy.tools.builtin.desktop_tools.require_approval",
+                return_value="denied by operator",
+            ) as mock_approval,
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+        assert result.success is False
+        assert "denied" in result.error
+        mock_approval.assert_called_once()
+
+    def test_approved_install_runs_apt_get(self):
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="Setting up obs-studio", stderr=""
+            )
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+
+        assert result.success is True
+        assert result.output["package"] == "obs-studio"
+        args = mock_run.call_args[0][0]
+        assert args == ["sudo", "apt-get", "install", "-y", "obs-studio"]
+
+    def test_failed_install_reports_error(self):
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=1, stdout="", stderr="E: Unable to locate package bogus-pkg"
+            )
+            result = InstallSoftwareConfirmedTool().execute(package="bogus-pkg")
+
+        assert result.success is False
+        assert "Unable to locate package" in result.error
+
+    def test_install_timeout_reports_error(self):
+        import subprocess as _subprocess
+
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval", return_value=None),
+            patch(
+                "subprocess.run",
+                side_effect=_subprocess.TimeoutExpired(cmd="apt-get", timeout=300),
+            ),
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+
+        assert result.success is False
+        assert "timed out" in result.error.lower()
+
+    def test_never_uses_a_shell_string(self):
+        """subprocess.run must be called with an argv list, never shell=True."""
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            InstallSoftwareConfirmedTool().execute(package="obs-studio")
+
+        call_args, call_kwargs = mock_run.call_args
+        assert isinstance(call_args[0], list)
+        assert call_kwargs.get("shell", False) is False
+
+    def test_package_with_version_spec_accepted(self):
+        with (
+            patch(
+                "missy.tools.builtin.desktop_tools._desktop_config",
+                return_value=_mock_config(enabled=True, allow_software_install=True),
+            ),
+            patch("missy.tools.builtin.desktop_tools.require_approval", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio=30.0.2")
+
+        assert result.success is True
+
+    def test_resolve_shell_command_declares_sudo_and_apt(self):
+        tool = InstallSoftwareConfirmedTool()
+        assert tool.resolve_shell_command({}) == "sudo && apt-get"
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting integration (mechanics tested directly in
+# test_desktop_shared.py; these confirm each tool actually wires it in)
+# ---------------------------------------------------------------------------
+
+
+class TestDesktopToolsRateLimiting:
+    def test_launch_app_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = DesktopLaunchAppTool().execute(app="firefox")
+        assert result.success is False
+        assert "Rate limit" in result.error
+
+    def test_focus_window_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = DesktopFocusWindowTool().execute(window_name="Firefox")
+        assert result.success is False
+
+    def test_mouse_drag_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = DesktopMouseDragTool().execute(start_x=0, start_y=0, end_x=1, end_y=1)
+        assert result.success is False
+
+    def test_mouse_move_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = DesktopMouseMoveTool().execute(x=0, y=0)
+        assert result.success is False
+
+    def test_status_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = DesktopStatusTool().execute()
+        assert result.success is False
+
+    def test_install_software_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = InstallSoftwareConfirmedTool().execute(package="obs-studio")
+        assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# DesktopFocusWindowTool window allowlist integration
+# ---------------------------------------------------------------------------
+
+
+class TestDesktopFocusWindowToolAllowlist:
+    def test_denied_when_window_not_allowed(self):
+        with patch(
+            "missy.tools.builtin.desktop_tools.check_window_allowed",
+            return_value="requires approval",
+        ):
+            result = DesktopFocusWindowTool().execute(window_name="Secret App")
+        assert result.success is False
+        assert "requires approval" in result.error
+
+    def test_proceeds_when_window_allowed(self):
+        with (
+            patch("missy.tools.builtin.desktop_tools.check_window_allowed", return_value=None),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = DesktopFocusWindowTool().execute(window_name="Firefox")
+        assert result.success is True

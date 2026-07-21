@@ -20,6 +20,7 @@ import pytest
 from missy.config.settings import MissyConfig, ObsConfig
 from missy.tools.builtin.obs_tools import (
     ObsListScenesTool,
+    ObsSetSourceTextTool,
     ObsSetSourceVisibilityTool,
     ObsStartRecordingTool,
     ObsStartStreamingConfirmedTool,
@@ -602,3 +603,119 @@ class TestObsPermissions:
     )
     def test_streaming_tools_take_no_parameters(self, tool_cls):
         assert tool_cls().parameters == {}
+
+
+# ---------------------------------------------------------------------------
+# ObsSetSourceTextTool
+# ---------------------------------------------------------------------------
+
+
+class TestObsSetSourceTextTool:
+    def test_sets_text_content(self):
+        raw = [_hello(), _identified(), _request_response("SetInputSettings", {})]
+        connect, fake_ws = _connect_sequence(*raw)
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config()),
+            ),
+            patch("missy.policy.engine.get_policy_engine") as mock_engine,
+            patch("websockets.connect", connect),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = ObsSetSourceTextTool().execute(source_name="LowerThird", text="Hello!")
+
+        assert result.success is True
+        assert result.output == {"source_name": "LowerThird", "text": "Hello!"}
+        req = fake_ws.sent[-1]["d"]["requestData"]
+        assert req["inputName"] == "LowerThird"
+        assert req["inputSettings"] == {"text": "Hello!"}
+
+    def test_sets_file_content(self):
+        raw = [_hello(), _identified(), _request_response("SetInputSettings", {})]
+        connect, fake_ws = _connect_sequence(*raw)
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config()),
+            ),
+            patch("missy.policy.engine.get_policy_engine") as mock_engine,
+            patch("websockets.connect", connect),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = ObsSetSourceTextTool().execute(
+                source_name="Overlay", file_path="/tmp/image.png"
+            )
+
+        assert result.success is True
+        req = fake_ws.sent[-1]["d"]["requestData"]
+        assert req["inputSettings"] == {"file": "/tmp/image.png"}
+
+    def test_rejects_neither_text_nor_file(self):
+        result = ObsSetSourceTextTool().execute(source_name="LowerThird")
+        assert result.success is False
+        assert "exactly one" in result.error.lower()
+
+    def test_rejects_both_text_and_file(self):
+        result = ObsSetSourceTextTool().execute(
+            source_name="LowerThird", text="hi", file_path="/tmp/x.png"
+        )
+        assert result.success is False
+        assert "exactly one" in result.error.lower()
+
+    def test_obs_request_failure_returns_error(self):
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools.load_missy_config",
+                return_value=_make_missy_config(_mock_config(enabled=False)),
+            ),
+        ):
+            result = ObsSetSourceTextTool().execute(source_name="LowerThird", text="hi")
+        assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+class TestObsRateLimiting:
+    @pytest.mark.parametrize(
+        "tool_cls,kwargs",
+        [
+            (ObsStatusTool, {}),
+            (ObsListScenesTool, {}),
+            (ObsStartRecordingTool, {}),
+            (ObsStopRecordingTool, {}),
+        ],
+    )
+    def test_denied_when_rate_limited(self, tool_cls, kwargs):
+        with patch(
+            "missy.tools.builtin.obs_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = tool_cls().execute(**kwargs)
+        assert result.success is False
+        assert "Rate limit" in result.error
+
+    def test_switch_scene_denied_when_rate_limited(self):
+        with patch(
+            "missy.tools.builtin.obs_tools._check_rate_limit",
+            return_value="Rate limit exceeded",
+        ):
+            result = ObsSwitchSceneTool().execute(scene_name="Main")
+        assert result.success is False
+
+    def test_streaming_confirmed_still_gated_by_rate_limit_before_approval(self):
+        """Rate limiting should short-circuit before even asking for
+        approval -- a runaway loop shouldn't spam approval prompts either."""
+        with (
+            patch(
+                "missy.tools.builtin.obs_tools._check_rate_limit",
+                return_value="Rate limit exceeded",
+            ),
+            patch("missy.tools.builtin.obs_tools.require_approval") as mock_approval,
+        ):
+            result = ObsStartStreamingConfirmedTool().execute()
+        assert result.success is False
+        mock_approval.assert_not_called()
