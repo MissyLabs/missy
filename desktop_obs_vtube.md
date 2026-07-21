@@ -141,6 +141,47 @@ the local dev machine's real config (with `desktop.unrestricted: true` already s
 masking the bug. Fixed by tying enforcement to `desktop.enabled` being explicitly `True`, the
 same opt-in pattern every other guardrail in this feature already follows.
 
+## 3.6. Discord tool-set reversal: desktop/OBS/VTube control is now reachable from Discord
+
+A prior, unrelated validation pass (`FX-round2-F3`, before this feature existed) deliberately
+excluded every `browser_*`/`x11_*`/`atspi_*` tool from Discord's tool set
+(`missy/policy/tool_policy_pipeline.py`'s `MISSY_DISCORD_TOOLS`/`"messaging"` profile, used by
+`capability_mode="discord"`), reasoning that a tool working when called directly didn't mean it
+should be reachable from an arbitrary remote Discord user — and explicitly declined to make that
+security-scope call unilaterally. `DISCORD_SYSTEM_PROMPT` (`missy/agent/runtime.py`) enforced the
+same boundary at the prompt level ("You do NOT have access to a desktop, GUI, browser, or
+screen").
+
+That exclusion directly contradicted this feature's own purpose once built: the whole point of
+the desktop/OBS/VTube integration is Discord-driven control (feedback.md's "Discord-side UX"
+section explicitly asks for the bot to control the VTuber avatar, etc., from Discord). In
+practice this surfaced as Missy correctly-but-unhelpfully denying desktop control whenever asked
+over Discord, even after every tool below was built, hardened, and verified working when called
+directly — including looping on `shell_exec`-based workarounds (trying to run `desktop_status` as
+a literal shell binary) because the actual tool wasn't in her visible tool set for that channel.
+
+The operator confirmed the intent explicitly and repeatedly (three separate `/goal` rounds plus
+direct follow-up), so `MISSY_DISCORD_TOOLS` now includes `desktop_status`,
+`desktop_focus_window`, `desktop_mouse_drag`, `desktop_mouse_move`, `desktop_launch_app`,
+`install_software_confirmed`, every `x11_*` tool, every `atspi_*` tool, every `obs_*` tool, every
+`vtube_*` tool, and `audio_route_tts`/`audio_test_route`. `browser_*` remains excluded — that
+boundary wasn't part of this reversal. `DISCORD_SYSTEM_PROMPT` was updated to describe these
+tools instead of denying them.
+
+The actual exposure this widens is narrow and was weighed as part of the decision: this
+deployment's `discord.accounts[].dm_policy` is `disabled` (no DMs reach the bot at all), only one
+guild is allowlisted with `require_mention: true`, and in practice the requests originate from
+`owner_ids`. Every deeper guardrail built into these tools is untouched by this change and still
+gates individual calls regardless of which capability_mode exposed the schema: rate limiting, the
+window/app allowlists, `discord_upload_file`'s and `install_software_confirmed`'s and OBS
+streaming's confirmation gates, and screenshot secret redaction all still apply.
+
+A stale Discord session's own conversation history predating this feature (turns where Missy
+correctly said "I don't have desktop tools" from before they existed) can keep that belief alive
+even after the tools are exposed — session context, not the tools, was the contamination. The
+existing over-refusal-spiral recovery (`SQLiteMemoryStore.clear_session_full(session_id)` +
+gateway restart, documented in `CLAUDE.md`) is the fix for a session caught in that state.
+
 ## 4. Tool specifications
 
 ### 4.1 OBS (`missy/tools/builtin/obs_tools.py`)

@@ -573,12 +573,16 @@ class TestGetToolsDiscordMode:
         discord_tool = MagicMock()
         discord_tool.name = "calculator"
 
-        # Pick a tool that is in _SAFE_CHAT_TOOLS but NOT in _DISCORD_TOOLS
-        desktop_only_name = next(
+        # Pick a tool that is in _SAFE_CHAT_TOOLS but NOT in _DISCORD_TOOLS --
+        # since x11_*/atspi_* were deliberately added to _DISCORD_TOOLS (this
+        # bot's desktop control is Discord-driven by design; see
+        # tool_policy_pipeline.py's MISSY_DISCORD_TOOLS comment), this now
+        # resolves to a browser_* tool, the one family still excluded.
+        excluded_only_name = next(
             n for n in AgentRuntime._SAFE_CHAT_TOOLS if n not in AgentRuntime._DISCORD_TOOLS
         )
         extra_tool = MagicMock()
-        extra_tool.name = desktop_only_name
+        extra_tool.name = excluded_only_name
 
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = [discord_tool.name, extra_tool.name]

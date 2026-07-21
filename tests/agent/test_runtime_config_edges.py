@@ -478,18 +478,23 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_discord(self):
         assert "Discord" in DISCORD_SYSTEM_PROMPT
 
-    def test_discord_prompt_disallows_x11(self):
-        # Discord prompt mentions X11 only to deny access to it
+    def test_discord_prompt_describes_x11_desktop_control(self):
+        """Reversal of the prior "Discord never gets desktop control"
+        decision: this bot's desktop/OBS/VTube integration was
+        commissioned specifically for Discord-driven use (see
+        missy/policy/tool_policy_pipeline.py's updated MISSY_DISCORD_TOOLS
+        comment for the full rationale), so the prompt now describes
+        these tools positively rather than denying them."""
         lower = DISCORD_SYSTEM_PROMPT.lower()
-        if "x11" in lower:
-            # Must be in a denial context — the prompt says "do NOT have access to ... X11"
-            assert "not" in lower or "do not" in lower
+        assert "x11_screenshot" in lower
+        assert "desktop_status" in lower
 
-    def test_discord_prompt_no_browser_reference(self):
-        # Discord prompt explicitly says no browser/GUI access
+    def test_discord_prompt_still_denies_browser(self):
+        # browser_* tools remain out of scope for Discord (narrower than
+        # the desktop/OBS/VTube reversal above).
         lower = DISCORD_SYSTEM_PROMPT.lower()
-        if "browser" in lower:
-            assert "not" in lower or "do not" in lower
+        assert "browser" in lower
+        assert "do not" in lower
 
     def test_discord_prompt_different_from_default(self):
         default = AgentConfig().system_prompt
@@ -542,16 +547,23 @@ class TestDiscordSystemPrompt:
         assert "javascript" in lower
         assert "web_fetch" in DISCORD_SYSTEM_PROMPT
 
-    def test_discord_tools_still_exclude_desktop_gui(self):
-        """Regression guard for the won't-fix decision: Discord sessions
-        must never be silently granted browser/x11/atspi tool access --
-        that would be a real security-scope expansion, not a bug fix."""
+    def test_discord_tools_now_include_desktop_gui_but_not_browser(self):
+        """The FX-round2-F3 exclusion of x11_*/atspi_*/desktop_*/obs_*/
+        vtube_* tools from Discord has been explicitly reversed by the
+        operator: this bot's desktop/OBS/VTube integration was built
+        specifically for Discord-driven control (see
+        missy/policy/tool_policy_pipeline.py's MISSY_DISCORD_TOOLS
+        comment). browser_* remains excluded -- that boundary wasn't
+        part of this reversal."""
         from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
 
+        assert "x11_screenshot" in MISSY_DISCORD_TOOLS
+        assert "atspi_get_tree" in MISSY_DISCORD_TOOLS
+        assert "desktop_status" in MISSY_DISCORD_TOOLS
+        assert "obs_status" in MISSY_DISCORD_TOOLS
+        assert "vtube_status" in MISSY_DISCORD_TOOLS
         for name in MISSY_DISCORD_TOOLS:
             assert not name.startswith("browser_"), name
-            assert not name.startswith("x11_"), name
-            assert not name.startswith("atspi_"), name
 
 
 class TestFullPromptToolSurfaceSalience:
@@ -840,22 +852,33 @@ class TestCapabilityMode:
         assert "calculator" in tool_names
         assert "shell_exec" not in tool_names
 
-    def test_discord_mode_excludes_x11_tools(self):
+    def test_discord_mode_includes_x11_tools_but_not_browser(self):
+        """Reversed from the prior exclusion: this bot's desktop control
+        was purpose-built for Discord (see tool_policy_pipeline.py's
+        MISSY_DISCORD_TOOLS comment), so x11_* tools are now visible in
+        Discord's capability mode; browser_* remains excluded."""
         t_x11 = MagicMock()
         t_x11.name = "x11_screenshot"
+        t_browser = MagicMock()
+        t_browser.name = "browser_screenshot"
         t_file = MagicMock()
         t_file.name = "file_read"
 
         tool_reg = MagicMock()
-        tool_reg.list_tools.return_value = ["x11_screenshot", "file_read"]
-        tool_reg.get.side_effect = {"x11_screenshot": t_x11, "file_read": t_file}.get
+        tool_reg.list_tools.return_value = ["x11_screenshot", "browser_screenshot", "file_read"]
+        tool_reg.get.side_effect = {
+            "x11_screenshot": t_x11,
+            "browser_screenshot": t_browser,
+            "file_read": t_file,
+        }.get
 
         runtime = _make_runtime(capability_mode="discord")
         with patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg):
             tools = runtime._get_tools()
 
         tool_names = [t.name for t in tools]
-        assert "x11_screenshot" not in tool_names
+        assert "x11_screenshot" in tool_names
+        assert "browser_screenshot" not in tool_names
         assert "file_read" in tool_names
 
     def test_get_tools_returns_empty_list_when_registry_unavailable(self):
