@@ -1423,6 +1423,7 @@ class AgentRuntime:
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
+            make_video_generation_error_report_prompt,
             make_video_generation_retry_prompt,
             make_web_request_retry_prompt,
             terminal_parameter_errors_are_reported,
@@ -1865,7 +1866,15 @@ class AgentRuntime:
                             _cm.update(_checkpoint_id, loop_messages, tool_names_used, iteration)
 
                     # Inject verification prompt
-                    verification = make_verification_prompt()
+                    if _last_round_errors and all(
+                        error.casefold().startswith("video_generate:")
+                        for error in _last_round_errors
+                    ):
+                        verification = make_video_generation_error_report_prompt(
+                            _last_round_errors, _tool_request_input
+                        )
+                    else:
+                        verification = make_verification_prompt()
                     loop_messages.append({"role": "user", "content": verification})
 
                     # Continue loop to get model's next response

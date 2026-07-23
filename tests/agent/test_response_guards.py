@@ -30,6 +30,7 @@ from missy.agent.response_guards import (
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
+    make_video_generation_error_report_prompt,
     make_video_generation_retry_prompt,
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
@@ -75,6 +76,15 @@ class TestVideoGenerationGuards:
             ["shell_exec: command timed out after 15 seconds"],
             "The command timed out.",
         )
+
+    def test_terminal_error_prompt_forbids_retry_and_preserves_evidence(self):
+        retry = make_video_generation_error_report_prompt(
+            ["video_generate: missing models/checkpoints/svd_xt.safetensors"],
+            "Animate the test image with SVD.",
+        )
+        assert "Do not retry" in retry
+        assert "svd_xt.safetensors" in retry
+        assert "Animate the test image with SVD." in retry
 
 
 class TestFilesystemVerificationGuard:

@@ -1067,6 +1067,20 @@ def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -
     )
 
 
+def make_video_generation_error_report_prompt(errors: list[str], user_input: str = "") -> str:
+    """Tell the model to relay a terminal render failure without retry churn."""
+    observed = "\n".join(f"  - {error[:500]}" for error in errors)
+    anchor = f"\n\nThe original request was:\n{user_input}" if user_input else ""
+    return (
+        "The requested video_generate call returned a terminal result. Do not retry "
+        "video_generate, switch backends, inspect the host with shell/file tools, or "
+        "substitute another video tool unless the user explicitly requested that fallback. "
+        "Reply now with the exact observed error and a concise actionable next step; do "
+        "not claim a file was generated.\n\nObserved tool result(s):\n"
+        f"{observed}{anchor}"
+    )
+
+
 def make_capability_denial_retry_prompt(
     user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
 ) -> str:
