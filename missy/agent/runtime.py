@@ -1400,9 +1400,11 @@ class AgentRuntime:
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            find_unmet_desktop_requests,
             find_unverified_desktop_action,
             is_security_refusal,
             make_capability_denial_retry_prompt,
+            make_desktop_request_retry_prompt,
             make_desktop_verification_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
@@ -1491,6 +1493,8 @@ class AgentRuntime:
         _explicit_tool_request_retries = 0
         _MAX_DESKTOP_VERIFICATION_RETRIES = 1
         _desktop_verification_retries = 0
+        _MAX_DESKTOP_REQUEST_RETRIES = 1
+        _desktop_request_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1508,14 +1512,20 @@ class AgentRuntime:
             # the tool-free iteration-limit fallback. The grace turn is not
             # available to ordinary tool loops, preserving max_iterations for
             # every task that did not trigger this safety correction.
-            _desktop_grace_limit = self.config.max_iterations + _MAX_DESKTOP_VERIFICATION_RETRIES
+            _desktop_grace_limit = (
+                self.config.max_iterations
+                + _MAX_DESKTOP_REQUEST_RETRIES
+                + _MAX_DESKTOP_VERIFICATION_RETRIES
+            )
             for iteration in range(_desktop_grace_limit):
-                if iteration >= self.config.max_iterations and _desktop_verification_retries == 0:
+                _desktop_grace_used = min(
+                    _desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES
+                ) + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES)
+                if iteration >= self.config.max_iterations + _desktop_grace_used:
                     break
                 _progress.on_iteration(
                     iteration,
-                    self.config.max_iterations
-                    + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES),
+                    self.config.max_iterations + _desktop_grace_used,
                 )
 
                 # SR-3.4: check budget against cost already accumulated from
@@ -2021,6 +2031,54 @@ class AgentRuntime:
                             result="warn",
                             detail={"missing_tools": sorted(_missing_explicit_tools)},
                         )
+
+                # A long-lived Discord transcript may already contain the
+                # same desktop prompt and an earlier successful answer. Do
+                # not accept replayed prose as current execution: bind narrow
+                # imperative desktop wording to current-task tool evidence.
+                _missing_desktop_requests = find_unmet_desktop_requests(
+                    _tool_request_input, tool_names_used, allowed_tool_names
+                )
+                if _missing_desktop_requests and not is_security_refusal(
+                    final_text, _tool_request_input
+                ):
+                    if _desktop_request_retries < _MAX_DESKTOP_REQUEST_RETRIES:
+                        _desktop_request_retries += 1
+                        logger.warning(
+                            "Desktop request missing current-task execution for %s; retrying once.",
+                            _missing_desktop_requests,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_desktop_request_retry_prompt(
+                                    _missing_desktop_requests, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.desktop_request_retry",
+                                result="warn",
+                                detail={"missing_requirements": _missing_desktop_requests},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.desktop_request_unresolved",
+                            result="deny",
+                            detail={"missing_requirements": _missing_desktop_requests},
+                        )
+                    final_text = (
+                        "I could not complete the requested desktop operation because the "
+                        "required current-turn desktop tools did not run. I cannot confirm "
+                        "the desktop task as complete."
+                    )
 
                 # A low-level desktop mutation reports whether input was
                 # emitted, not whether it reached the intended window/control
