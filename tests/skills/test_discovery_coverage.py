@@ -112,7 +112,7 @@ class TestParseSkillMd:
         assert manifest.tools == ["web_fetch", "shell_exec"]
 
     def test_tools_as_non_str_non_list(self, discovery, tmp_path):
-        """Line 137: tools is neither str nor list → empty list.
+        """Non-string/list tool declarations fail closed.
 
         Our minimal parser converts everything to str or list[str],
         so we need to patch _parse_yaml to return a non-standard type.
@@ -131,9 +131,11 @@ class TestParseSkillMd:
                 result["tools"] = 42  # Force non-str, non-list
             return result
 
-        with patch.object(discovery, "_parse_yaml", patched):
-            manifest = discovery.parse_skill_md(str(skill_file))
-        assert manifest.tools == []
+        with (
+            patch.object(discovery, "_parse_yaml", patched),
+            pytest.raises(ValueError, match="tools"),
+        ):
+            discovery.parse_skill_md(str(skill_file))
 
     def test_file_not_found(self, discovery, tmp_path):
         with pytest.raises(FileNotFoundError):

@@ -78,14 +78,16 @@ class TestSystemInfoSkill:
         result = skill.execute()
         assert result.error == ""
 
-    def test_output_has_five_lines(self, skill):
+    def test_output_has_bounded_scope_and_five_fields(self, skill):
         result = skill.execute()
         lines = result.output.strip().splitlines()
-        assert len(lines) == 5
+        assert len(lines) == 6
+        assert lines[0].startswith("scope: process-visible namespace")
 
-    def test_extra_kwargs_ignored(self, skill):
+    def test_extra_kwargs_rejected(self, skill):
         result = skill.execute(unexpected_kwarg="ignored")
-        _assert_result(result, success=True)
+        _assert_result(result, success=False)
+        assert "Unknown arguments" in result.error
 
     def test_permissions_require_nothing(self):
         from missy.skills.builtin.system_info import SystemInfoSkill
@@ -158,16 +160,17 @@ class TestDateTimeSkill:
         parsed = datetime.datetime.fromisoformat(ts_str)
         assert parsed.tzinfo is not None
 
-    def test_extra_kwargs_ignored(self, skill):
+    def test_extra_kwargs_rejected(self, skill):
         result = skill.execute(foo="bar")
-        _assert_result(result, success=True)
+        _assert_result(result, success=False)
+        assert "Unknown arguments" in result.error
 
     def test_permissions_require_nothing(self):
         from missy.skills.builtin.datetime_info import DateTimeSkill
 
         p = DateTimeSkill.permissions
         assert p.network is False
-        assert p.filesystem_read is False
+        assert p.filesystem_read is True
 
     def test_skill_metadata(self):
         from missy.skills.builtin.datetime_info import DateTimeSkill
@@ -796,7 +799,7 @@ class TestSummarizeSessionSkill:
     def skill(self):
         from missy.skills.builtin.summarize_session import SummarizeSessionSkill
 
-        return SummarizeSessionSkill()
+        return SummarizeSessionSkill(session_authorizer=lambda _session_id: True)
 
     @pytest.fixture()
     def mock_turn(self):
@@ -891,14 +894,15 @@ class TestSummarizeSessionSkill:
 
         mock_store.get_session_turns.assert_called_once_with("s1", limit=_TURN_LIMIT)
 
-    def test_extra_kwargs_ignored(self, skill):
+    def test_extra_kwargs_rejected(self, skill):
         mock_store = MagicMock()
         mock_store.get_session_turns.return_value = []
 
         with patch("missy.memory.sqlite_store.SQLiteMemoryStore", return_value=mock_store):
             result = skill.execute(session_id="s1", unknown_param="ignored")
 
-        _assert_result(result, success=True)
+        _assert_result(result, success=False)
+        assert "Unknown arguments" in result.error
 
     def test_permissions_require_filesystem_read(self):
         from missy.skills.builtin.summarize_session import SummarizeSessionSkill
@@ -919,10 +923,10 @@ class TestSummarizeSessionSkill:
 
 class TestWorkspaceListSkill:
     @pytest.fixture()
-    def skill(self):
+    def skill(self, tmp_path):
         from missy.skills.builtin.workspace_list import WorkspaceListSkill
 
-        return WorkspaceListSkill()
+        return WorkspaceListSkill(workspace_root=str(tmp_path))
 
     def test_nonexistent_path_returns_failure(self, skill, tmp_path):
         missing = str(tmp_path / "no_such_dir")
@@ -984,9 +988,10 @@ class TestWorkspaceListSkill:
         result = skill.execute(workspace_path=str(tmp_path))
         assert result.error == ""
 
-    def test_extra_kwargs_ignored(self, skill, tmp_path):
+    def test_extra_kwargs_rejected(self, skill, tmp_path):
         result = skill.execute(workspace_path=str(tmp_path), unused="param")
-        assert isinstance(result, SkillResult)
+        _assert_result(result, success=False)
+        assert "Unknown arguments" in result.error
 
     def test_permissions_require_filesystem_read(self):
         from missy.skills.builtin.workspace_list import WorkspaceListSkill

@@ -184,8 +184,55 @@ def _fingerprint_tc(name: str, arguments: dict) -> str:
     """
     import hashlib
     import json as _json
+    import math
+    import unicodedata
 
-    payload = _json.dumps({"name": name, "args": arguments}, sort_keys=True, default=str)
+    max_items = 10_000
+    item_count = 0
+
+    def canonicalize(value: Any, depth: int = 0) -> Any:
+        nonlocal item_count
+        item_count += 1
+        if item_count > max_items or depth > 32:
+            raise ValueError("argument structure exceeds fingerprint limits")
+        if value is None or isinstance(value, bool | int):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("non-finite number")
+            return 0.0 if value == 0 else value
+        if isinstance(value, str):
+            return unicodedata.normalize("NFC", value)
+        if isinstance(value, list):
+            return [canonicalize(item, depth + 1) for item in value]
+        if isinstance(value, dict):
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError("non-string object key")
+                safe_key = unicodedata.normalize("NFC", key)
+                if safe_key in normalized:
+                    raise ValueError("duplicate key after Unicode normalization")
+                normalized[safe_key] = canonicalize(item, depth + 1)
+            return normalized
+        raise ValueError(f"non-JSON argument type: {type(value).__name__}")
+
+    safe_name = unicodedata.normalize("NFC", name) if isinstance(name, str) else "invalid-tool"
+    try:
+        canonical = canonicalize(arguments)
+        payload = _json.dumps(
+            {"name": safe_name, "args": canonical},
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+        if len(payload.encode("utf-8")) > 64 * 1024:
+            raise ValueError("serialized arguments exceed fingerprint limit")
+    except (TypeError, ValueError, RecursionError) as exc:
+        # Invalid calls still need a stable retry key, but neither their raw
+        # values nor secrets may enter logs/audit metadata.
+        payload = f"invalid:{safe_name}:{type(exc).__name__}:{str(exc)[:80]}"
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 

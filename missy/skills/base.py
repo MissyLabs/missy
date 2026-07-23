@@ -83,6 +83,19 @@ class SkillResult:
             )
 
 
+def reject_unknown_arguments(arguments: dict[str, Any]) -> SkillResult | None:
+    """Return a bounded failure for unexpected skill arguments, if any."""
+    if not arguments:
+        return None
+    names = sorted(arguments)[:10]
+    suffix = "..." if len(arguments) > len(names) else ""
+    return SkillResult(
+        success=False,
+        output=None,
+        error=f"Unknown arguments: {', '.join(names)}{suffix}",
+    )
+
+
 class BaseSkill(ABC):
     """Abstract base for all Missy skills.
 

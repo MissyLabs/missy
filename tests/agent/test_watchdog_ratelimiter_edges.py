@@ -602,12 +602,13 @@ class TestRateLimiterRecordUsageEdgeCases:
         rl.record_usage(prompt_tokens=0, completion_tokens=0)
         assert rl._tok_tokens == 300.0
 
-    def test_record_usage_negative_total_is_no_op(self) -> None:
-        """record_usage with negative combined total must skip deduction."""
+    def test_record_usage_negative_total_rejects_early(self) -> None:
+        """Negative provider usage is malformed and must be surfaced."""
         rl = RateLimiter(requests_per_minute=100, tokens_per_minute=500)
         with rl._lock:
             rl._tok_tokens = 300.0
-        rl.record_usage(prompt_tokens=-100, completion_tokens=-50)
+        with pytest.raises(ValueError, match="prompt_tokens"):
+            rl.record_usage(prompt_tokens=-100, completion_tokens=-50)
         assert rl._tok_tokens == 300.0
 
     def test_record_usage_clamps_to_zero_not_negative(self) -> None:

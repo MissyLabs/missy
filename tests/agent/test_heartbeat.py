@@ -109,6 +109,19 @@ class TestActiveHours:
         runner = HeartbeatRunner(agent_run_fn=lambda p: "ok", active_hours="")
         assert runner._in_active_hours() is True
 
+    def test_non_string_active_hours_uses_safe_default(self, caplog):
+        runner = HeartbeatRunner(agent_run_fn=lambda p: "ok", active_hours=object())  # type: ignore[arg-type]
+
+        assert runner._active_hours == ""
+        assert runner._in_active_hours() is True
+        assert "Invalid heartbeat active_hours" in caplog.text
+
+    def test_mutated_non_string_active_hours_remains_safe(self):
+        runner = HeartbeatRunner(agent_run_fn=lambda p: "ok", active_hours="09:00-17:00")
+        runner._active_hours = object()  # type: ignore[assignment]
+
+        assert runner._in_active_hours() is True
+
     def test_invalid_format_always_active(self):
         runner = HeartbeatRunner(agent_run_fn=lambda p: "ok", active_hours="badformat")
         assert runner._in_active_hours() is True

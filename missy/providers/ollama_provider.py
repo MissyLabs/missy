@@ -271,7 +271,11 @@ class OllamaProvider(BaseProvider):
         # Forward any remaining kwargs directly into the payload
         payload.update(kwargs)
 
-        self._acquire_rate_limit()
+        estimated_tokens = self._estimate_tokens(messages)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client(session_id=session_id, task_id=task_id)
@@ -281,14 +285,17 @@ class OllamaProvider(BaseProvider):
             )
             response.raise_for_status()
         except ProviderError:
+            self._cancel_rate_limit_reservation(reservation)
             raise
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"Ollama request failed: {exc}") from exc
 
         try:
             data: dict[str, Any] = response.json()
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", "invalid JSON response")
             raise ProviderError(f"Ollama returned invalid JSON: {exc}") from exc
 
@@ -315,7 +322,11 @@ class OllamaProvider(BaseProvider):
             usage=usage,
             raw=data,
         )
-        self._record_rate_limit_usage(result)
+        self._record_rate_limit_usage(
+            result,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return result
 
     def get_tool_schema(self, tools: list) -> list:
@@ -417,7 +428,11 @@ class OllamaProvider(BaseProvider):
             "stream": False,
         }
 
-        self._acquire_rate_limit()
+        estimated_tokens = self._estimate_tokens(messages, system)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client()
@@ -427,14 +442,17 @@ class OllamaProvider(BaseProvider):
             )
             response.raise_for_status()
         except ProviderError:
+            self._cancel_rate_limit_reservation(reservation)
             raise
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event("", "", "error", str(exc))
             raise ProviderError(f"Ollama request failed: {exc}") from exc
 
         try:
             data: dict[str, Any] = response.json()
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event("", "", "error", "invalid JSON response")
             raise ProviderError(f"Ollama returned invalid JSON: {exc}") from exc
 
@@ -484,7 +502,11 @@ class OllamaProvider(BaseProvider):
                 tool_calls=parsed_tool_calls,
                 finish_reason="tool_calls",
             )
-            self._record_rate_limit_usage(result)
+            self._record_rate_limit_usage(
+                result,
+                estimated_tokens=estimated_tokens,
+                reservation=reservation,
+            )
             return result
 
         self._emit_event("", "", "allow", "completion successful")
@@ -497,7 +519,11 @@ class OllamaProvider(BaseProvider):
             tool_calls=[],
             finish_reason="stop",
         )
-        self._record_rate_limit_usage(result)
+        self._record_rate_limit_usage(
+            result,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return result
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:

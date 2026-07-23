@@ -42,7 +42,7 @@ class UnhappySkill(BaseSkill):
 
 @pytest.fixture
 def registry() -> SkillRegistry:
-    return SkillRegistry()
+    return SkillRegistry(permission_authorizer=lambda _name, _permissions: True)
 
 
 class TestSkillRegistryRegister:

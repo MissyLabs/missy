@@ -22,6 +22,10 @@ class _EchoSkill(BaseSkill):
         return SkillResult(success=True, output=kwargs)
 
 
+def _authorized_registry() -> SkillRegistry:
+    return SkillRegistry(permission_authorizer=lambda _name, _permissions: True)
+
+
 def test_skill_041_builtin_catalog_exports_all_six() -> None:
     from missy.skills import builtin
 
@@ -66,7 +70,7 @@ def test_skill_043_result_contract_is_serializable_and_coherent() -> None:
         def execute(self, **kwargs):
             return SkillResult(success=False, output="must not escape", error="failed")
 
-    registry = SkillRegistry()
+    registry = _authorized_registry()
     registry.register(FailureOutput())
     result = registry.execute("failure_output")
     assert result.output is None
@@ -94,7 +98,7 @@ def test_skill_044_045_metadata_is_inert_and_canonical(name, description, versio
 
 def test_skill_046_audit_uses_skill_taxonomy_and_provenance() -> None:
     event_bus.clear()
-    registry = SkillRegistry()
+    registry = _authorized_registry()
     registry.register(_EchoSkill())
     registry.execute("validation_echo", session_id="s", task_id="t", value=1)
     event = event_bus.get_events(event_type="skill.execute")[-1]
@@ -112,7 +116,7 @@ def test_skill_047_censor_failure_never_returns_or_audits_raw_secret() -> None:
             raise RuntimeError("sk-test-abcdefghijklmnopqrstuvwxyz")
 
     event_bus.clear()
-    registry = SkillRegistry()
+    registry = _authorized_registry()
     registry.register(Failing())
     with patch("missy.security.censor.censor_response", side_effect=RuntimeError("censor down")):
         result = registry.execute("failing_skill")
@@ -136,7 +140,7 @@ def test_skill_048_arguments_are_snapshotted_from_caller_and_callee_mutation() -
             kwargs["nested"]["value"] = "callee"
             return SkillResult(success=True, output=kwargs)
 
-    registry = SkillRegistry()
+    registry = _authorized_registry()
     registry.register(Mutating())
     original = {"nested": {"value": "initial"}}
     holder = {}
@@ -154,7 +158,7 @@ def test_skill_048_arguments_are_snapshotted_from_caller_and_callee_mutation() -
 
 
 def test_skill_049_recursive_cycle_terminates_without_corrupting_registry() -> None:
-    registry = SkillRegistry()
+    registry = _authorized_registry()
 
     class Recursive(_EchoSkill):
         name = "recursive_skill"
@@ -183,7 +187,7 @@ def test_skill_050_unregister_refuses_active_then_revokes_name() -> None:
             release.wait(2)
             return SkillResult(success=True, output="done")
 
-    registry = SkillRegistry()
+    registry = _authorized_registry()
     registry.register(Blocking())
     thread = threading.Thread(target=lambda: registry.execute("blocking_skill"))
     thread.start()

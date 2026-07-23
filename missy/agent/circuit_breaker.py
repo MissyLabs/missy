@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from enum import StrEnum
 
 
@@ -54,11 +55,16 @@ class CircuitBreaker:
         threshold: int = 5,
         base_timeout: float = 60.0,
         max_timeout: float = 300.0,
+        *,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.name = name
         self._threshold = threshold
         self._base_timeout = base_timeout
         self._max_timeout = max_timeout
+        # Keep the default lookup dynamic so existing operators/tests that
+        # monkeypatch ``time.monotonic`` after construction still work.
+        self._clock = clock if clock is not None else lambda: time.monotonic()
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._last_failure_time: float = 0.0
@@ -81,7 +87,7 @@ class CircuitBreaker:
         with self._lock:
             if (
                 self._state == CircuitState.OPEN
-                and time.monotonic() - self._last_failure_time >= self._recovery_timeout
+                and self._clock() - self._last_failure_time >= self._recovery_timeout
             ):
                 self._state = CircuitState.HALF_OPEN
             return self._state
@@ -119,7 +125,7 @@ class CircuitBreaker:
         #      all executed func() before this fix).
         with self._lock:
             if self._state == CircuitState.OPEN:
-                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+                if self._clock() - self._last_failure_time >= self._recovery_timeout:
                     self._state = CircuitState.HALF_OPEN
                     self._probe_in_flight = True
                 else:
@@ -155,7 +161,7 @@ class CircuitBreaker:
         """Record a failure; open the circuit when threshold is exceeded."""
         with self._lock:
             self._failure_count += 1
-            self._last_failure_time = time.monotonic()
+            self._last_failure_time = self._clock()
             if self._state == CircuitState.HALF_OPEN:
                 # Probe failed: back off further and re-open
                 self._recovery_timeout = min(self._recovery_timeout * 2, self._max_timeout)

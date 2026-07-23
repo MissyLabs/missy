@@ -23,6 +23,9 @@ import logging
 import math
 import threading
 import time
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -73,6 +76,39 @@ class RateLimitExceeded(Exception):
         super().__init__(f"Rate limit exceeded; would need to wait {wait_seconds:.1f}s")
 
 
+class RateLimitRequestTooLarge(RateLimitExceeded, ValueError):
+    """Raised when one request can never fit in the configured token bucket."""
+
+    def __init__(self, requested_tokens: int, capacity: int) -> None:
+        self.requested_tokens = requested_tokens
+        self.capacity = capacity
+        RateLimitExceeded.__init__(self, float("inf"))
+        self.args = (
+            f"Token estimate {requested_tokens} exceeds the configured "
+            f"tokens-per-minute capacity {capacity}",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitReservation:
+    """Opaque identity for one tracked token estimate.
+
+    Passing the reservation back to :meth:`RateLimiter.record_usage` makes
+    reconciliation idempotent and lets the limiter settle concurrent responses
+    in acquisition order, even when responses arrive out of order.
+    """
+
+    _owner: object
+    sequence: int
+    estimated_tokens: int
+
+
+@dataclass(slots=True)
+class _PendingReconciliation:
+    estimate: int
+    actual: int | None = None
+
+
 class RateLimiter:
     """Token bucket rate limiter with request and token budgets.
 
@@ -86,40 +122,79 @@ class RateLimiter:
 
     def __init__(
         self,
-        requests_per_minute: int = 60,
-        tokens_per_minute: int = 100_000,
+        requests_per_minute: int | None = 60,
+        tokens_per_minute: int | None = 100_000,
         max_wait_seconds: float = 30.0,
+        *,
+        clock: Callable[[], float] | None = None,
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
-        self._rpm = requests_per_minute
-        self._tpm = tokens_per_minute
-        self._max_wait = max_wait_seconds
+        self._rpm = self._validate_limit("requests_per_minute", requests_per_minute)
+        self._tpm = self._validate_limit("tokens_per_minute", tokens_per_minute)
+        self._max_wait = self._validate_wait(max_wait_seconds)
+        # Keep defaults dynamic so runtime instrumentation and tests may
+        # replace the module clock/sleeper after construction. Explicit fake
+        # functions remain fixed and deterministic.
+        self._clock = clock if clock is not None else lambda: time.monotonic()
+        self._sleep = sleeper if sleeper is not None else lambda delay: time.sleep(delay)
         self._lock = threading.Lock()
 
+        self._reservation_owner = object()
+        self._next_reservation = 1
+        self._reservation_order: deque[int] = deque()
+        self._pending_reconciliations: dict[int, _PendingReconciliation] = {}
+
         # Request bucket
-        self._req_tokens = float(requests_per_minute) if requests_per_minute > 0 else 0.0
-        self._req_last_refill = time.monotonic()
+        self._req_tokens = float(self._rpm) if self._rpm > 0 else 0.0
+        self._req_last_refill = self._clock()
 
         # Token bucket
-        self._tok_tokens = float(tokens_per_minute) if tokens_per_minute > 0 else 0.0
-        self._tok_last_refill = time.monotonic()
+        self._tok_tokens = float(self._tpm) if self._tpm > 0 else 0.0
+        self._tok_last_refill = self._clock()
+
+    @staticmethod
+    def _validate_limit(name: str, value: int | None) -> int:
+        """Normalize ``None`` to unlimited and reject ambiguous limits."""
+        if value is None:
+            return 0
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a non-negative integer or None")
+        return value
+
+    @staticmethod
+    def _validate_wait(value: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("max_wait_seconds must be a finite non-negative number")
+        result = float(value)
+        if not math.isfinite(result) or result < 0:
+            raise ValueError("max_wait_seconds must be a finite non-negative number")
+        return result
+
+    @staticmethod
+    def _validate_token_count(name: str, value: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
+        return value
 
     def _refill(self) -> None:
         """Refill both buckets based on elapsed time (must hold lock)."""
-        now = time.monotonic()
+        now = self._clock()
 
         if self._rpm > 0:
             elapsed = now - self._req_last_refill
-            refill = elapsed * (self._rpm / 60.0)
-            self._req_tokens = min(float(self._rpm), self._req_tokens + refill)
-            self._req_last_refill = now
+            if elapsed > 0:
+                refill = elapsed * (self._rpm / 60.0)
+                self._req_tokens = min(float(self._rpm), self._req_tokens + refill)
+                self._req_last_refill = now
 
         if self._tpm > 0:
             elapsed = now - self._tok_last_refill
-            refill = elapsed * (self._tpm / 60.0)
-            self._tok_tokens = min(float(self._tpm), self._tok_tokens + refill)
-            self._tok_last_refill = now
+            if elapsed > 0:
+                refill = elapsed * (self._tpm / 60.0)
+                self._tok_tokens = min(float(self._tpm), self._tok_tokens + refill)
+                self._tok_last_refill = now
 
-    def acquire(self, tokens: int = 0) -> None:
+    def acquire(self, tokens: int = 0, *, reconcile: bool = False) -> RateLimitReservation | None:
         """Acquire permission for one API request, blocking if necessary.
 
         Args:
@@ -130,10 +205,13 @@ class RateLimiter:
             RateLimitExceeded: If the request cannot be serviced within
                 ``max_wait_seconds``.
         """
+        tokens = self._validate_token_count("tokens", tokens)
+        if self._tpm > 0 and tokens > self._tpm:
+            raise RateLimitRequestTooLarge(tokens, self._tpm)
         if self._rpm <= 0 and self._tpm <= 0:
-            return  # No limits configured
+            return None  # No limits configured
 
-        deadline = time.monotonic() + self._max_wait
+        deadline = self._clock() + self._max_wait
 
         while True:
             with self._lock:
@@ -147,7 +225,17 @@ class RateLimiter:
                         self._req_tokens -= 1.0
                     if self._tpm > 0 and tokens > 0:
                         self._tok_tokens -= max(0.0, float(tokens))
-                    return
+                    if reconcile and self._tpm > 0:
+                        sequence = self._next_reservation
+                        self._next_reservation += 1
+                        self._reservation_order.append(sequence)
+                        self._pending_reconciliations[sequence] = _PendingReconciliation(tokens)
+                        return RateLimitReservation(
+                            self._reservation_owner,
+                            sequence,
+                            tokens,
+                        )
+                    return None
 
                 # Calculate wait time
                 waits = []
@@ -158,19 +246,21 @@ class RateLimiter:
                     waits.append(needed / (self._tpm / 60.0))
                 wait_needed = max(waits) if waits else 0.1
 
-            remaining = deadline - time.monotonic()
+            remaining = deadline - self._clock()
             if remaining <= 0:
                 raise RateLimitExceeded(wait_needed)
 
             sleep_time = min(wait_needed, remaining, 0.5)
-            time.sleep(sleep_time)
+            self._sleep(sleep_time)
 
     def record_usage(
         self,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         estimated_tokens: int = 0,
-    ) -> None:
+        *,
+        reservation: RateLimitReservation | None = None,
+    ) -> bool:
         """Reconcile the token bucket against actual usage after a response.
 
         The ``acquire()`` call already deducted *estimated_tokens* from the
@@ -189,16 +279,66 @@ class RateLimiter:
             estimated_tokens: The estimate originally passed to the
                 :meth:`acquire` call this response corresponds to.
         """
+        prompt_tokens = self._validate_token_count("prompt_tokens", prompt_tokens)
+        completion_tokens = self._validate_token_count("completion_tokens", completion_tokens)
+        estimated_tokens = self._validate_token_count("estimated_tokens", estimated_tokens)
         if self._tpm <= 0:
-            return
+            return False
         total = prompt_tokens + completion_tokens
-        if total < 0:
-            return  # Malformed/defensive: negative usage is never valid.
+
+        if reservation is not None:
+            if not isinstance(reservation, RateLimitReservation):
+                raise ValueError("reservation must be returned by acquire(reconcile=True)")
+            if reservation._owner is not self._reservation_owner:
+                raise ValueError("reservation belongs to a different rate limiter")
+            with self._lock:
+                pending = self._pending_reconciliations.get(reservation.sequence)
+                if pending is None or pending.actual is not None:
+                    return False
+                pending.actual = total
+                self._settle_reconciliations()
+            return True
+
         net_adjustment = float(estimated_tokens) - float(total)
         if net_adjustment == 0:
-            return
+            return False
         with self._lock:
             self._tok_tokens = max(0.0, min(float(self._tpm), self._tok_tokens + net_adjustment))
+        return True
+
+    def cancel_reservation(self, reservation: RateLimitReservation) -> bool:
+        """Finalize a failed request while retaining its conservative estimate.
+
+        Cancellation applies a zero reconciliation adjustment: the estimate
+        already consumed at acquisition remains charged, but the request no
+        longer blocks deterministic settlement of later responses.
+        """
+        if not isinstance(reservation, RateLimitReservation):
+            raise ValueError("reservation must be returned by acquire(reconcile=True)")
+        if reservation._owner is not self._reservation_owner:
+            raise ValueError("reservation belongs to a different rate limiter")
+        with self._lock:
+            pending = self._pending_reconciliations.get(reservation.sequence)
+            if pending is None or pending.actual is not None:
+                return False
+            pending.actual = pending.estimate
+            self._settle_reconciliations()
+        return True
+
+    def _settle_reconciliations(self) -> None:
+        """Apply completed tracked requests in acquisition order (lock held)."""
+        while self._reservation_order:
+            sequence = self._reservation_order[0]
+            pending = self._pending_reconciliations[sequence]
+            if pending.actual is None:
+                break
+            self._reservation_order.popleft()
+            del self._pending_reconciliations[sequence]
+            adjustment = float(pending.estimate - pending.actual)
+            self._tok_tokens = max(
+                0.0,
+                min(float(self._tpm), self._tok_tokens + adjustment),
+            )
 
     def on_rate_limit_response(self, retry_after: float = 0.0) -> None:
         """Handle a 429 response from the API.
@@ -209,13 +349,14 @@ class RateLimiter:
         Args:
             retry_after: Seconds to wait (from the API's Retry-After header).
         """
+        retry_after = self._validate_wait(retry_after)
         with self._lock:
             self._req_tokens = 0.0
             if self._tpm > 0:
                 self._tok_tokens = 0.0
         if retry_after > 0:
             logger.info("Rate limited by API; waiting %.1fs", retry_after)
-            time.sleep(min(retry_after, self._max_wait))
+            self._sleep(min(retry_after, self._max_wait))
 
     @property
     def request_capacity(self) -> float:

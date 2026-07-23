@@ -511,7 +511,11 @@ class TestSkills:
         ):
             result = runner.invoke(cli, ["skills", "list"])
 
-        assert "no skills" in result.output.lower() or "not currently" in result.output.lower()
+        normalized = " ".join(result.output.lower().split())
+        assert "no skills" in normalized or "not currently" in normalized
+        assert "isolated cli process" in normalized
+        assert "does not inspect a running gateway" in normalized
+        assert "library-only" in normalized
 
     def test_skills_bare_group_also_lists(self, runner: CliRunner, mock_config: MagicMock) -> None:
         """``missy skills`` (no sub-command) delegates to list."""

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from missy.skills.base import BaseSkill, SkillPermissions, SkillResult
+from missy.skills.base import BaseSkill, SkillPermissions, SkillResult, reject_unknown_arguments
 
 # Default paths — match the layout documented in CLAUDE.md.
 _CONFIG_PATH = Path("~/.missy/config.yaml")
@@ -104,6 +104,8 @@ class HealthCheckSkill(BaseSkill):
             when all checks pass or warn, ``success=False`` if any check
             fails.  The ``output`` field contains a human-readable table.
         """
+        if error := reject_unknown_arguments(kwargs):
+            return error
         config_path = _CONFIG_PATH.expanduser()
         checks: list[_Check] = [
             _check_config(config_path),
