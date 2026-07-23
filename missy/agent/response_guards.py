@@ -540,6 +540,115 @@ def make_explicit_tool_request_retry_prompt(
     )
 
 
+# ---------------------------------------------------------------------------
+# Calculator result completeness: multi-expression requests can execute every
+# call correctly and still return a final answer that only mentions the last
+# result/error after the generic DONE-criteria correction loop.
+# ---------------------------------------------------------------------------
+
+_CALCULATOR_ERROR_MARKERS = (
+    "unsupported expression construct:",
+    "exceeds the maximum allowed value of",
+    "division by zero",
+    "expression must not be empty",
+    "syntax error in expression",
+)
+_CALCULATOR_NUMERIC_RESULT_RE = re.compile(
+    r"[-+]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?|"
+    r"\(?[-+]?\d+(?:\.\d*)?[-+]\d+(?:\.\d*)?j\)?)",
+    re.IGNORECASE,
+)
+
+
+def calculator_observations_are_reportable(
+    observations: list[tuple[str, str, bool]],
+) -> bool:
+    """Return whether every observation is a documented calculator outcome."""
+    if not observations:
+        return False
+    for _expression, content, is_error in observations:
+        folded_content = (content or "").strip().casefold()
+        if is_error:
+            if not any(marker in folded_content for marker in _CALCULATOR_ERROR_MARKERS):
+                return False
+        elif _CALCULATOR_NUMERIC_RESULT_RE.fullmatch(folded_content) is None:
+            return False
+    return True
+
+
+def find_unreported_calculator_expressions(
+    observations: list[tuple[str, str, bool]],
+    response_text: str,
+) -> list[str]:
+    """Return executed calculator inputs whose outcome is absent from a reply.
+
+    ``observations`` contains ``(expression, tool_content, is_error)`` tuples
+    captured from the current task.  Both the expression and its observed
+    result/error must be represented in the final answer.  Empty and
+    whitespace-only expressions cannot be searched literally, so their
+    explicit calculator error marker is the evidence requirement instead.
+    """
+    if not observations:
+        return []
+    folded_response = (response_text or "").casefold()
+    missing: list[str] = []
+    seen: set[str] = set()
+    for expression, content, is_error in observations:
+        label = expression if expression.strip() else "<empty or whitespace-only expression>"
+        folded_content = (content or "").casefold()
+        if is_error:
+            applicable_markers = [
+                marker for marker in _CALCULATOR_ERROR_MARKERS if marker in folded_content
+            ]
+            # Unknown infrastructure/schema errors remain under the generic
+            # DONE-criteria gate.  This guard only understands the calculator's
+            # documented arithmetic-domain outcomes.
+            if not applicable_markers:
+                continue
+            outcome_reported = bool(applicable_markers) and any(
+                marker in folded_response for marker in applicable_markers
+            )
+        else:
+            result = (content or "").strip().casefold()
+            # Test doubles and infrastructure failures sometimes yield prose
+            # such as "calculator_result".  Production calculator successes
+            # are numeric; do not impose a semantic result check on anything
+            # outside that contract.
+            if _CALCULATOR_NUMERIC_RESULT_RE.fullmatch(result) is None:
+                continue
+            outcome_reported = bool(result) and result in folded_response
+        if label in seen:
+            continue
+        seen.add(label)
+        expression_reported = not expression.strip() or expression.casefold() in folded_response
+        if not expression_reported or not outcome_reported:
+            missing.append(label)
+    return missing
+
+
+def make_calculator_completeness_retry_prompt(
+    observations: list[tuple[str, str, bool]],
+    missing_expressions: list[str],
+    user_input: str = "",
+) -> str:
+    """Return a correction grounded in every current-task calculator result."""
+    rendered: list[str] = []
+    for expression, content, is_error in observations:
+        label = expression if expression.strip() else "<empty or whitespace-only expression>"
+        outcome = (content or "").split(". Report this error", 1)[0].strip()
+        rendered.append(f"- `{label}` -> {'ERROR' if is_error else 'RESULT'}: {outcome[:500]}")
+    missing = ", ".join(f"`{item}`" for item in missing_expressions)
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "Your previous final answer omitted one or more calculator outcomes "
+        f"that were actually observed in this task: {missing}. Do not call the "
+        "calculator again and do not rewrite any expression. Report every "
+        "executed expression with its exact result or error from this evidence:\n"
+        + "\n".join(rendered)
+        + anchor
+    )
+
+
 _DESKTOP_MUTATION_TOOLS = frozenset(
     {
         "x11_launch",

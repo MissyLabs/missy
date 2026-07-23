@@ -1316,6 +1316,59 @@ class TestExplicitToolRequestRetry:
         )
 
 
+class TestCalculatorResponseCompletenessRetry:
+    def test_multi_error_reply_must_report_every_executed_expression(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        def _execute(name: str, **kwargs):
+            result = MagicMock()
+            result.success = False
+            result.output = None
+            if kwargs["expression"] == "abs(-5)":
+                result.error = "Unsupported expression construct: Call"
+            else:
+                result.error = "Unsupported expression construct: Name"
+            return result
+
+        tool_reg.execute.side_effect = _execute
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response(
+                "calculator", tool_id="calc-a", args={"expression": "abs(-5)"}
+            ),
+            _make_tool_call_response("calculator", tool_id="calc-b", args={"expression": "x + 1"}),
+            _make_stop_response("`x + 1` failed: Unsupported expression construct: Name"),
+            _make_stop_response(
+                "`abs(-5)` failed: Unsupported expression construct: Call; "
+                "`x + 1` failed: Unsupported expression construct: Name"
+            ),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use your calculator to evaluate `abs(-5)` and `x + 1`.")
+
+        assert provider.complete_with_tools.call_count == 4
+        assert tool_reg.execute.call_count == 2
+        assert "abs(-5)" in result
+        assert "x + 1" in result
+        retries = [
+            event
+            for event in events
+            if event["event_type"] == "agent.response.calculator_completeness_retry"
+        ]
+        assert len(retries) == 1
+        assert retries[0]["detail"] == {"missing_expressions": ["abs(-5)"]}
+        assert not any(event["event_type"].startswith("agent.done_criteria") for event in events)
+
+
 class TestDesktopActionVerificationRetry:
     def test_desktop_action_requires_later_observation_before_completion(self):
         provider = _make_provider()

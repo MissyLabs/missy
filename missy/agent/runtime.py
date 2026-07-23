@@ -1394,6 +1394,7 @@ class AgentRuntime:
             make_verification_prompt,
         )
         from missy.agent.response_guards import (
+            calculator_observations_are_reportable,
             detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
@@ -1401,8 +1402,10 @@ class AgentRuntime:
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
             find_unmet_desktop_requests,
+            find_unreported_calculator_expressions,
             find_unverified_desktop_action,
             is_security_refusal,
+            make_calculator_completeness_retry_prompt,
             make_capability_denial_retry_prompt,
             make_desktop_request_retry_prompt,
             make_desktop_verification_retry_prompt,
@@ -1491,6 +1494,9 @@ class AgentRuntime:
         _security_refusal_retries = 0
         _MAX_EXPLICIT_TOOL_REQUEST_RETRIES = 1
         _explicit_tool_request_retries = 0
+        _MAX_CALCULATOR_COMPLETENESS_RETRIES = 1
+        _calculator_completeness_retries = 0
+        _calculator_observations: list[tuple[str, str, bool]] = []
         _MAX_DESKTOP_VERIFICATION_RETRIES = 1
         _desktop_verification_retries = 0
         _MAX_DESKTOP_REQUEST_RETRIES = 1
@@ -1516,11 +1522,17 @@ class AgentRuntime:
                 self.config.max_iterations
                 + _MAX_DESKTOP_REQUEST_RETRIES
                 + _MAX_DESKTOP_VERIFICATION_RETRIES
+                + _MAX_CALCULATOR_COMPLETENESS_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
-                _desktop_grace_used = min(
-                    _desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES
-                ) + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES)
+                _desktop_grace_used = (
+                    min(_desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES)
+                    + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES)
+                    + min(
+                        _calculator_completeness_retries,
+                        _MAX_CALCULATOR_COMPLETENESS_RETRIES,
+                    )
+                )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
                     break
                 _progress.on_iteration(
@@ -1646,6 +1658,19 @@ class AgentRuntime:
                             )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
+
+                        # Preserve every calculator outcome for a deterministic
+                        # final-response completeness check.  In a sequence of
+                        # intentional error probes, the generic DONE-criteria
+                        # retry focuses on only the latest failed round and can
+                        # cause an otherwise correct final answer to omit an
+                        # earlier expression entirely.
+                        if tc.name == "calculator" and "expression" in (tc.arguments or {}):
+                            expression = tc.arguments.get("expression")
+                            if isinstance(expression, str):
+                                _calculator_observations.append(
+                                    (expression, tr.content or "", bool(tr.is_error))
+                                )
 
                         # OpenClaw A3: mutation fingerprinting
                         _fp = _fingerprint_tc(tc.name, tc.arguments or {})
@@ -2031,6 +2056,62 @@ class AgentRuntime:
                             result="warn",
                             detail={"missing_tools": sorted(_missing_explicit_tools)},
                         )
+
+                # A multi-expression calculator request can execute every
+                # call and still lose earlier results from the final prose,
+                # especially when several expected arithmetic-sandbox errors
+                # trigger the generic DONE-criteria retry.  Bind the answer to
+                # every current-task calculator observation before accepting
+                # it.  Once every observed semantic error is reported, it is a
+                # completed answer rather than an actionable tool failure.
+                _missing_calculator_results = find_unreported_calculator_expressions(
+                    _calculator_observations, final_text
+                )
+                if _missing_calculator_results:
+                    if _calculator_completeness_retries < _MAX_CALCULATOR_COMPLETENESS_RETRIES:
+                        _calculator_completeness_retries += 1
+                        logger.warning(
+                            "Calculator response omitted observed expression(s) %s; "
+                            "retrying once with grounded result evidence.",
+                            _missing_calculator_results,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_calculator_completeness_retry_prompt(
+                                    _calculator_observations,
+                                    _missing_calculator_results,
+                                    _tool_request_input,
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.calculator_completeness_retry",
+                                result="warn",
+                                detail={"missing_expressions": _missing_calculator_results},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.calculator_completeness_unresolved",
+                            result="warn",
+                            detail={"missing_expressions": _missing_calculator_results},
+                        )
+                elif calculator_observations_are_reportable(_calculator_observations) and all(
+                    name == "calculator" for name in tool_names_used
+                ):
+                    # The user received every exact calculator outcome.  An
+                    # arithmetic-domain error (unsupported AST, division by
+                    # zero, resource cap, syntax) is itself the requested
+                    # observed result and must not be retried as an unfinished
+                    # mutation once it has been reported truthfully.
+                    _last_round_errors = []
 
                 # A long-lived Discord transcript may already contain the
                 # same desktop prompt and an earlier successful answer. Do

@@ -14,8 +14,10 @@ from missy.agent.response_guards import (
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
     find_unmet_desktop_requests,
+    find_unreported_calculator_expressions,
     find_unverified_desktop_action,
     is_security_refusal,
+    make_calculator_completeness_retry_prompt,
     make_capability_denial_retry_prompt,
     make_desktop_request_retry_prompt,
     make_desktop_verification_retry_prompt,
@@ -25,6 +27,50 @@ from missy.agent.response_guards import (
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
 )
+
+
+class TestCalculatorCompletenessGuard:
+    def test_finds_an_earlier_omitted_error(self):
+        observations = [
+            ("abs(-5)", "Unsupported expression construct: Call", True),
+            ("x + 1", "Unsupported expression construct: Name", True),
+        ]
+        reply = "`x + 1` failed: Unsupported expression construct: Name"
+        assert find_unreported_calculator_expressions(observations, reply) == ["abs(-5)"]
+
+    def test_accepts_every_expression_and_observed_outcome(self):
+        observations = [
+            ("1 << 8", "256", False),
+            ("1 / 0", "division by zero", True),
+        ]
+        reply = "`1 << 8` = 256; `1 / 0` failed with division by zero."
+        assert find_unreported_calculator_expressions(observations, reply) == []
+
+    def test_empty_input_is_bound_to_its_error_marker(self):
+        observations = [("", "expression must not be empty", True)]
+        assert find_unreported_calculator_expressions(observations, "No value was returned") == [
+            "<empty or whitespace-only expression>"
+        ]
+        assert (
+            find_unreported_calculator_expressions(
+                observations, "The empty input failed: expression must not be empty."
+            )
+            == []
+        )
+
+    def test_retry_prompt_includes_all_grounded_outcomes_and_request(self):
+        observations = [
+            ("2 ** 100000", "Exponent 100000 exceeds the maximum allowed value of 1000.", True),
+            ("2 ** 10", "1024", False),
+        ]
+        prompt = make_calculator_completeness_retry_prompt(
+            observations, ["2 ** 100000"], "Calculate both with your calculator."
+        )
+        assert "2 ** 100000" in prompt
+        assert "2 ** 10" in prompt
+        assert "Exponent 100000" in prompt
+        assert "1024" in prompt
+        assert "Calculate both with your calculator." in prompt
 
 
 class TestExplicitToolRequestGuard:
