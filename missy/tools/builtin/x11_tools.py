@@ -230,6 +230,82 @@ def _redact_screenshot_secrets(path: str) -> dict[str, Any]:
     }
 
 
+_MAX_OCR_COORDINATE_BOXES = 120
+
+
+def _extract_native_ocr_coordinates(path: str) -> dict[str, Any]:
+    """Return bounded OCR anchors in the screenshot's native pixel space.
+
+    Vision backends commonly resize images internally. Coordinates they infer
+    from that resized representation cannot be passed straight to ``xdotool``
+    on the native display. OCR runs against the original screenshot and gives
+    the model/tool caller explicit native-pixel anchors for visible labels.
+
+    Text is censored before it leaves this helper and the list is bounded. OCR
+    is best-effort: unavailable dependencies or malformed images yield useful
+    dimension/availability metadata rather than failing screen analysis.
+    """
+    metadata: dict[str, Any] = {
+        "coordinate_space": "native_screenshot_pixels",
+        "screen_width": None,
+        "screen_height": None,
+        "ocr_coordinates_available": False,
+        "ocr_text_boxes": [],
+    }
+    try:
+        import pytesseract
+        from PIL import Image
+
+        image = Image.open(path)
+        metadata["screen_width"], metadata["screen_height"] = image.size
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception as exc:  # noqa: BLE001 - optional best-effort metadata
+        metadata["ocr_coordinate_note"] = f"Native OCR coordinates unavailable: {exc}"
+        return metadata
+
+    from missy.security.censor import censor_response
+
+    boxes: list[dict[str, Any]] = []
+    texts = data.get("text", [])
+    for index, raw_text in enumerate(texts):
+        text = str(raw_text).strip()
+        if not text:
+            continue
+        try:
+            confidence = float(data.get("conf", [])[index])
+            left = int(data.get("left", [])[index])
+            top = int(data.get("top", [])[index])
+            width = int(data.get("width", [])[index])
+            height = int(data.get("height", [])[index])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if confidence < 40 or width <= 0 or height <= 0:
+            continue
+        safe_text = censor_response(text[:128])
+        boxes.append(
+            {
+                "text": safe_text,
+                "left": left,
+                "top": top,
+                "right": left + width,
+                "bottom": top + height,
+                "center_x": left + width // 2,
+                "center_y": top + height // 2,
+                "confidence": round(confidence, 1),
+            }
+        )
+        if len(boxes) >= _MAX_OCR_COORDINATE_BOXES:
+            break
+
+    metadata["ocr_coordinates_available"] = True
+    metadata["ocr_text_boxes"] = boxes
+    metadata["ocr_coordinate_note"] = (
+        "Coordinates above are native display pixels. For a multi-word target, "
+        "combine adjacent word boxes and click the center of their union."
+    )
+    return metadata
+
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
@@ -761,9 +837,29 @@ class X11ReadScreenTool(BaseTool):
         except OSError as exc:
             return ToolResult(success=False, output=None, error=f"Could not read screenshot: {exc}")
 
+        # Vision backends may resize the screenshot internally, making any
+        # raw coordinates they infer unusable for native X11 clicks. Extract
+        # native OCR anchors first and include the coordinate contract in the
+        # local vision prompt as well as the structured tool result.
+        coordinate_metadata = _extract_native_ocr_coordinates(path)
+        vision_question = question
+        if coordinate_metadata.get("screen_width") and coordinate_metadata.get("screen_height"):
+            vision_question += (
+                "\n\nCOORDINATE CONTRACT: The original screenshot is "
+                f"{coordinate_metadata['screen_width']}x"
+                f"{coordinate_metadata['screen_height']} native display pixels. "
+                "Any coordinates in your answer MUST use that native pixel space, "
+                "not coordinates from an internally resized image. Native OCR anchors: "
+                + json.dumps(
+                    coordinate_metadata.get("ocr_text_boxes", []),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+
         # 3. Call Ollama vision model.
         try:
-            description = self._call_ollama_vision(question, b64_image)
+            description = self._call_ollama_vision(vision_question, b64_image)
         except httpx.HTTPStatusError as exc:
             return ToolResult(
                 success=False,
@@ -804,6 +900,7 @@ class X11ReadScreenTool(BaseTool):
                 "description": redacted_description,
                 "screenshot_path": path,
                 "question": question,
+                **coordinate_metadata,
                 **redaction,
             },
         )

@@ -13,8 +13,10 @@ from missy.agent.response_guards import (
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
+    find_unverified_desktop_action,
     is_security_refusal,
     make_capability_denial_retry_prompt,
+    make_desktop_verification_retry_prompt,
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
     make_identity_confusion_retry_prompt,
@@ -60,6 +62,32 @@ class TestExplicitToolRequestGuard:
         assert "calculator" in prompt
         assert "Call the named tool now" in prompt
         assert "Use your calculator for 2 + 2" in prompt
+
+
+class TestDesktopActionVerificationGuard:
+    def test_returns_latest_action_when_no_later_observation_exists(self):
+        assert (
+            find_unverified_desktop_action(
+                ["x11_read_screen", "atspi_get_tree", "atspi_click", "x11_click"]
+            )
+            == "x11_click"
+        )
+
+    def test_later_screen_or_tree_observation_satisfies_gate(self):
+        assert find_unverified_desktop_action(["x11_click", "x11_read_screen"]) is None
+        assert find_unverified_desktop_action(["atspi_set_value", "atspi_get_text"]) is None
+
+    def test_observation_before_action_does_not_verify_action(self):
+        assert find_unverified_desktop_action(["x11_read_screen", "x11_key"]) == "x11_key"
+
+    def test_non_desktop_tools_do_not_trigger(self):
+        assert find_unverified_desktop_action(["calculator", "file_read"]) is None
+
+    def test_retry_prompt_names_action_and_requires_later_observation(self):
+        prompt = make_desktop_verification_retry_prompt("x11_click", "Click the Run Test button")
+        assert "x11_click" in prompt
+        assert "successful input event is not proof" in prompt.lower()
+        assert "Click the Run Test button" in prompt
 
 
 class TestDetectFabrication:

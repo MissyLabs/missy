@@ -505,6 +505,67 @@ class TestX11ReadScreenTool:
         assert result.output["screenshot_path"] == dest
         assert result.output["question"] == "What do you see?"
 
+    def test_native_coordinate_contract_and_ocr_boxes_reach_vision_and_result(self, tmp_path):
+        from PIL import Image
+
+        dest = str(tmp_path / "screen.png")
+        Image.new("RGB", (1920, 1080), "white").save(dest)
+        ocr_data = {
+            "text": ["Run", "Test"],
+            "conf": ["96", "95"],
+            "left": [374, 404],
+            "top": [935, 935],
+            "width": [25, 29],
+            "height": [10, 10],
+        }
+
+        with (
+            patch.object(self.tool, "_take_screenshot", return_value=None),
+            patch("pytesseract.image_to_data", return_value=ocr_data),
+            patch.object(
+                self.tool, "_call_ollama_vision", return_value="Run Test is at native (403, 940)"
+            ) as vision,
+            patch(
+                "missy.tools.builtin.x11_tools._redact_screenshot_secrets",
+                return_value={
+                    "redaction_available": True,
+                    "redaction_applied": False,
+                    "redacted_regions": 0,
+                    "note": None,
+                },
+            ),
+        ):
+            result = self.tool.execute(question="Locate Run Test", path=dest)
+
+        sent_question = vision.call_args.args[0]
+        assert "1920x1080 native display pixels" in sent_question
+        assert '"center_y":940' in sent_question
+        assert result.output["coordinate_space"] == "native_screenshot_pixels"
+        assert result.output["screen_width"] == 1920
+        assert result.output["screen_height"] == 1080
+        assert result.output["ocr_text_boxes"] == [
+            {
+                "text": "Run",
+                "left": 374,
+                "top": 935,
+                "right": 399,
+                "bottom": 945,
+                "center_x": 386,
+                "center_y": 940,
+                "confidence": 96.0,
+            },
+            {
+                "text": "Test",
+                "left": 404,
+                "top": 935,
+                "right": 433,
+                "bottom": 945,
+                "center_x": 418,
+                "center_y": 940,
+                "confidence": 95.0,
+            },
+        ]
+
     def test_screenshot_failure_propagates(self, tmp_path):
         with patch("missy.tools.builtin.x11_tools.subprocess.run") as mock_run:
             mock_run.return_value = _completed(returncode=1, stderr="command not found")
