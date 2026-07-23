@@ -678,6 +678,18 @@ class TestPreflight:
         assert "wan2.2_ti2v_5B_fp16.safetensors" in result.error
         assert "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" in result.error
 
+    def test_missing_sa3_models_recommend_legacy_audio_fallback(self) -> None:
+        listings = dict(_MODEL_LISTINGS, checkpoints=[], text_encoders=[])
+        mock_client = _make_mock_client(model_listings=listings)
+        with patch("missy.gateway.client.PolicyHTTPClient", return_value=mock_client):
+            result = VideoGenerateTool().execute(
+                backend="wan", prompt="rain", audio_prompt="rain soundtrack"
+            )
+        assert result.success is False
+        assert "stable_audio_3_medium_base.safetensors" in result.error
+        assert "t5gemma_b_b_ul2.safetensors" in result.error
+        assert 'audio_model="stable-audio-open-1.0"' in result.error
+
     def test_model_listing_endpoint_unavailable_is_tolerated(self, tmp_path: Path) -> None:
         video_out = tmp_path / "out.mp4"
         video_out.write_bytes(b"video")

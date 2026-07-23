@@ -1200,6 +1200,11 @@ class VideoGenerateTool(BaseTool):
                 )
                 models_error = self._check_models(http, base_url, required_models)
                 if models_error:
+                    if audio_prompt and audio_model == "stable-audio-3":
+                        models_error += (
+                            '; older ComfyUI installs can use '
+                            'audio_model="stable-audio-open-1.0" as a legacy fallback.'
+                        )
                     return ToolResult(success=False, output=None, error=models_error)
 
                 uploaded_image = ""
