@@ -1407,6 +1407,7 @@ class AgentRuntime:
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
             find_unmet_desktop_requests,
+            find_unmet_video_generation_request,
             find_unmet_web_requests,
             find_unreported_calculator_expressions,
             find_unverified_desktop_action,
@@ -1422,7 +1423,9 @@ class AgentRuntime:
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
+            make_video_generation_retry_prompt,
             make_web_request_retry_prompt,
+            terminal_parameter_errors_are_reported,
         )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
@@ -1520,6 +1523,8 @@ class AgentRuntime:
         # the whole remainder of the workflow.
         _MAX_WEB_REQUEST_RETRIES = 4
         _web_request_retries = 0
+        _MAX_VIDEO_GENERATION_RETRIES = 1
+        _video_generation_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1544,6 +1549,7 @@ class AgentRuntime:
                 + _MAX_CALCULATOR_COMPLETENESS_RETRIES
                 + _MAX_FILESYSTEM_VERIFICATION_RETRIES
                 + 2 * _MAX_WEB_REQUEST_RETRIES
+                + 2 * _MAX_VIDEO_GENERATION_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
                 _desktop_grace_used = (
@@ -1562,6 +1568,11 @@ class AgentRuntime:
                     # next missing step. Reserve both rather than consuming the
                     # task's normal iteration budget with the guard itself.
                     + 2 * min(_web_request_retries, _MAX_WEB_REQUEST_RETRIES)
+                    + 2
+                    * min(
+                        _video_generation_retries,
+                        _MAX_VIDEO_GENERATION_RETRIES,
+                    )
                 )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
                     break
@@ -2134,6 +2145,34 @@ class AgentRuntime:
                         + ". I cannot confirm the browser task as complete."
                     )
 
+                _missing_video_generation = find_unmet_video_generation_request(
+                    _tool_request_input, tool_names_used, allowed_tool_names
+                )
+                if (
+                    _missing_video_generation
+                    and not is_security_refusal(final_text, _tool_request_input)
+                    and _video_generation_retries < _MAX_VIDEO_GENERATION_RETRIES
+                ):
+                    _video_generation_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_video_generation_retry_prompt(
+                                _tool_request_input
+                            ),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.video_generation_retry",
+                            result="warn",
+                            detail={"missing_tools": _missing_video_generation},
+                        )
+                    continue
+
                 # A multi-expression calculator request can execute every
                 # call and still lose earlier results from the final prose,
                 # especially when several expected arithmetic-sandbox errors
@@ -2431,6 +2470,9 @@ class AgentRuntime:
                 # calls immediately preceding it contained an error --
                 # deterministic, tool-observed evidence, not the model's
                 # own say-so.
+                if terminal_parameter_errors_are_reported(_last_round_errors, final_text):
+                    _last_round_errors = []
+
                 if _last_round_errors:
                     if _done_verification_retries < _MAX_DONE_VERIFICATION_RETRIES:
                         _done_verification_retries += 1

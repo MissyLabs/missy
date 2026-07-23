@@ -828,6 +828,68 @@ class TestDoneCriteriaEnforcement:
         assert result == "The answer is 4."
 
 
+class TestVideoGenerationCompletionGuards:
+    def test_reported_parameter_refusal_is_terminal(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=False,
+            output=None,
+            error="audio_prompt and audio_path are mutually exclusive; pass only one.",
+        )
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("video_generate"),
+            _make_stop_response(
+                "I can't apply both soundtracks because those inputs are mutually exclusive."
+            ),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Generate a video with both audio sources.")
+
+        assert "mutually exclusive" in result
+        assert provider.complete_with_tools.call_count == 2
+        assert not any("done_criteria" in event["event_type"] for event in events)
+
+    def test_tool_free_render_explanation_is_retried_with_video_generate(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("SVD normally needs an image."),
+            _make_tool_call_response("video_generate", args={"backend": "svd"}),
+            _make_stop_response("The tool confirmed that SVD requires image_path."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Generate a video of a sunset using the SVD backend.")
+
+        assert "requires image_path" in result
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "video_generate"
+        ]
+        assert any(
+            event["event_type"] == "agent.response.video_generation_retry"
+            for event in events
+        )
+
+
 class TestPlaceholderArtifactRetry:
     """FX-round2-F1: a provider's "final" response is sometimes a raw
     internal placeholder artifact (e.g. "[Called tool: file_write]") that

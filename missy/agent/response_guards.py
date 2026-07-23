@@ -999,6 +999,65 @@ def make_web_request_retry_prompt(missing: list[str], user_input: str = "") -> s
     )
 
 
+_VIDEO_GENERATION_REQUEST_RE = re.compile(
+    r"\b(?:generate|create|make|animate|render|produce)\b[^\n]{0,100}\bvideo\b"
+    r"|\bvideo\b[^\n]{0,100}\b(?:using|with)\b[^\n]{0,40}\b(?:wan|svd|animatediff)\b"
+    r"|\banimate\b[^\n]{0,100}\b(?:image|clip)\b",
+    re.I,
+)
+
+
+def find_unmet_video_generation_request(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Require ``video_generate`` evidence for an actionable render request."""
+    if available_tool_names is not None and "video_generate" not in available_tool_names:
+        return []
+    if not _VIDEO_GENERATION_REQUEST_RE.search(user_input):
+        return []
+    return [] if "video_generate" in tool_names_used else ["video_generate"]
+
+
+def make_video_generation_retry_prompt(user_input: str = "") -> str:
+    """Return a correction requiring the requested render tool call."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "This request requires calling video_generate, including when the requested "
+        "parameter combination is expected to be rejected. Call video_generate once "
+        "with the requested backend and parameters, then report its actual result. Do "
+        "not substitute video_storyboard or explain a predicted validation error without "
+        f"executing the tool.{anchor}"
+    )
+
+
+_TERMINAL_PARAMETER_ERROR_RE = re.compile(
+    r"\b(?:mutually exclusive|requires? [`'\"]?[a-z_]+|text-to-video only|"
+    r"image-to-video only|must (?:be|provide|pass|specify|choose)|"
+    r"invalid (?:parameter|value|backend|model)|unsupported (?:parameter|value|backend))\b",
+    re.I,
+)
+_ERROR_REPORT_RE = re.compile(
+    r"\b(?:cannot|can't|could not|failed|error|invalid|unsupported|requires?|"
+    r"mutually exclusive|only|choose|instead|not allowed|refused|rejected)\b",
+    re.I,
+)
+
+
+def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -> bool:
+    """Return whether expected parameter refusals were honestly relayed.
+
+    Operational failures such as timeouts, OOMs, and network errors remain
+    subject to the normal DONE-criteria retries.
+    """
+    return bool(
+        errors
+        and all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
+        and _ERROR_REPORT_RE.search(final_text)
+    )
+
+
 def make_capability_denial_retry_prompt(
     user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
 ) -> str:

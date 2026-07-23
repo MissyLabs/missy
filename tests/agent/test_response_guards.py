@@ -14,6 +14,7 @@ from missy.agent.response_guards import (
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
     find_unmet_desktop_requests,
+    find_unmet_video_generation_request,
     find_unmet_web_requests,
     find_unreported_calculator_expressions,
     find_unverified_desktop_action,
@@ -29,8 +30,45 @@ from missy.agent.response_guards import (
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
+    make_video_generation_retry_prompt,
     make_web_request_retry_prompt,
+    terminal_parameter_errors_are_reported,
 )
+
+
+class TestVideoGenerationGuards:
+    def test_render_request_requires_video_generate(self):
+        prompt = "Generate a video of a sunset using the SVD backend."
+        assert find_unmet_video_generation_request(prompt, [], {"video_generate"}) == [
+            "video_generate"
+        ]
+        assert find_unmet_video_generation_request(
+            prompt, ["video_generate"], {"video_generate"}
+        ) == []
+
+    def test_animation_request_requires_video_generate(self):
+        assert find_unmet_video_generation_request(
+            "Animate this image into a short video.", [], {"video_generate"}
+        ) == ["video_generate"]
+
+    def test_retry_prompt_requires_exact_tool(self):
+        retry = make_video_generation_retry_prompt("Generate an SVD video")
+        assert "video_generate" in retry
+        assert "video_storyboard" in retry
+        assert "Generate an SVD video" in retry
+
+    def test_reported_parameter_constraint_is_terminal(self):
+        errors = [
+            "video_generate: audio_prompt and audio_path are mutually exclusive; pass only one."
+        ]
+        reply = "I can't apply both because those parameters are mutually exclusive."
+        assert terminal_parameter_errors_are_reported(errors, reply)
+
+    def test_operational_failure_is_not_terminal(self):
+        assert not terminal_parameter_errors_are_reported(
+            ["video_generate: generation timed out after 15 seconds"],
+            "The generation timed out.",
+        )
 
 
 class TestFilesystemVerificationGuard:
