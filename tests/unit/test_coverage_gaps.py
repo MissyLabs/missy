@@ -392,7 +392,7 @@ class TestSkillRegistryEmitEventPublishRaises:
             def execute(self, **kwargs: Any) -> SkillResult:
                 return SkillResult(success=True, output="done")
 
-        registry = SkillRegistry()
+        registry = SkillRegistry(permission_authorizer=lambda _name, _permissions: True)
         registry.register(OkSkill())
         return registry
 

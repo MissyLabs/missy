@@ -17,7 +17,9 @@ Example::
         def execute(self, *, text: str = "") -> SkillResult:
             return SkillResult(success=True, output=text)
 
-    registry = init_skill_registry()
+    registry = init_skill_registry(
+        permission_authorizer=lambda name, permissions: True,
+    )
     registry.register(EchoSkill())
     result = registry.execute("echo", text="hello")
 """
@@ -28,6 +30,7 @@ import copy
 import logging
 import re
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from missy.core.events import AuditEvent, event_bus
@@ -40,6 +43,7 @@ _SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _VERSION_RE = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 _MAX_DESCRIPTION_CHARS = 500
 _GENERIC_SKILL_ERROR = "Skill execution failed; sensitive details were withheld."
+PermissionAuthorizer = Callable[[str, SkillPermissions], bool]
 
 
 def _safe_text(value: object) -> str:
@@ -80,15 +84,17 @@ def _validate_metadata(skill: BaseSkill) -> None:
 class SkillRegistry:
     """Registry that manages and executes :class:`~.base.BaseSkill` instances.
 
-    Audit events with category ``"plugin"`` are emitted for every execution
-    attempt so that skill invocations appear in the unified audit trail.
+    Audit events with category ``"skill"`` are emitted for every execution
+    attempt so that skill invocations appear in the unified audit trail. A
+    registry without an explicit permission authorizer denies execution.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, permission_authorizer: PermissionAuthorizer | None = None) -> None:
         self._skills: dict[str, BaseSkill] = {}
         self._active: dict[str, int] = {}
         self._lock = threading.RLock()
         self._execution_local = threading.local()
+        self._permission_authorizer = permission_authorizer
 
     # ------------------------------------------------------------------
     # Registration
@@ -200,6 +206,10 @@ class SkillRegistry:
             return SkillResult(success=False, output=None, error=error_msg)
 
         try:
+            if not self._permission_allowed(name, skill.permissions):
+                error_msg = "Skill execution denied by permission policy."
+                self._emit_event(name, session_id, task_id, "deny", error_msg, skill=skill)
+                return SkillResult(success=False, output=None, error=error_msg)
             try:
                 call_kwargs: dict[str, Any] = copy.deepcopy(kwargs)
             except Exception:
@@ -249,6 +259,17 @@ class SkillRegistry:
             skill=skill,
         )
         return skill_result
+
+    def _permission_allowed(self, name: str, permissions: SkillPermissions) -> bool:
+        """Fail closed unless an explicit authorizer returns literal ``True``."""
+        authorizer = self._permission_authorizer
+        if authorizer is None:
+            return False
+        try:
+            return authorizer(name, permissions) is True
+        except Exception:
+            logger.exception("Skill permission authorizer failed for %r", name)
+            return False
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -304,7 +325,9 @@ _registry: SkillRegistry | None = None
 _lock: threading.Lock = threading.Lock()
 
 
-def init_skill_registry() -> SkillRegistry:
+def init_skill_registry(
+    permission_authorizer: PermissionAuthorizer | None = None,
+) -> SkillRegistry:
     """Create and install a fresh process-level :class:`SkillRegistry`.
 
     Subsequent calls replace the existing registry atomically under a lock.
@@ -314,7 +337,7 @@ def init_skill_registry() -> SkillRegistry:
         separately via :meth:`~SkillRegistry.register`).
     """
     global _registry
-    registry = SkillRegistry()
+    registry = SkillRegistry(permission_authorizer=permission_authorizer)
     with _lock:
         _registry = registry
     return registry

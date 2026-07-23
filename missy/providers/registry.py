@@ -250,12 +250,28 @@ class ProviderRegistry:
         if not self._availability_for(name, provider):
             raise ValueError(f"Provider {name!r} is not available or its probe timed out.")
         with self._lock:
+            # Availability probing deliberately happens outside the registry
+            # lock, so a runtime toggle may race it. Revalidate the complete
+            # transition under the mutation lock before committing; otherwise
+            # set_default() could install a provider that was disabled or
+            # replaced while the probe was running (PROV-027).
+            if self._providers.get(name) is not provider:
+                raise ValueError(f"Provider {name!r} changed while it was being selected.")
+            if name in self._runtime_disabled:
+                raise ValueError(f"Provider {name!r} is disabled; enable it first.")
+            cached = self._availability_cache.get(name)
+            now = time.monotonic()
+            if cached is not None and (
+                not cached[0] or now - cached[1] > self.AVAILABILITY_CACHE_SECONDS
+            ):
+                raise ValueError(f"Provider {name!r} is not available or its probe timed out.")
             self._default_name = name
         logger.info("Default provider set to %r.", name)
 
     def get_default_name(self) -> str | None:
         """Return the name of the current default provider, or ``None``."""
-        return self._default_name
+        with self._lock:
+            return self._default_name
 
     # ------------------------------------------------------------------
     # Queries
@@ -271,7 +287,8 @@ class ProviderRegistry:
             The :class:`~.base.BaseProvider` instance, or ``None`` if the
             name is not registered.
         """
-        return self._providers.get(name)
+        with self._lock:
+            return self._providers.get(name)
 
     def key_for(self, provider: BaseProvider) -> str | None:
         """Return the registry key *provider* was registered under, or ``None``.

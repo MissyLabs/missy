@@ -32,7 +32,7 @@ from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
-from .rate_limiter import RateLimiter, parse_retry_after
+from .rate_limiter import RateLimiter, RateLimitReservation, parse_retry_after
 from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
@@ -173,27 +173,52 @@ class OpenAIProvider(BaseProvider):
             return account.rate_limiter
         return self.rate_limiter
 
-    def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
+    def _acquire_rate_limit(
+        self, estimated_tokens: int = 0, *, reconcile: bool = False
+    ) -> RateLimitReservation | None:
         """Block until the active account's (or the shared) rate limiter permits a request."""
         account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
         if account is not None:
-            account.rate_limiter.acquire(tokens=estimated_tokens)
-            return
-        super()._acquire_rate_limit(estimated_tokens=estimated_tokens)
+            if reconcile:
+                return account.rate_limiter.acquire(tokens=estimated_tokens, reconcile=True)
+            return account.rate_limiter.acquire(tokens=estimated_tokens)
+        return super()._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=reconcile,
+        )
 
     def _record_rate_limit_usage(
-        self, response: CompletionResponse, estimated_tokens: int = 0
+        self,
+        response: CompletionResponse,
+        estimated_tokens: int = 0,
+        *,
+        reservation: RateLimitReservation | None = None,
     ) -> None:
         """Reconcile usage against the active account's (or the shared) rate limiter."""
         account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
         if account is not None:
-            account.rate_limiter.record_usage(
-                prompt_tokens=response.usage.get("prompt_tokens", 0),
-                completion_tokens=response.usage.get("completion_tokens", 0),
-                estimated_tokens=estimated_tokens,
-            )
+            try:
+                account.rate_limiter.record_usage(
+                    prompt_tokens=response.usage.get("prompt_tokens", 0),
+                    completion_tokens=response.usage.get("completion_tokens", 0),
+                    estimated_tokens=estimated_tokens,
+                    reservation=reservation,
+                )
+            except Exception:
+                if reservation is not None:
+                    account.rate_limiter.cancel_reservation(reservation)
+                raise
             return
-        super()._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        super()._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
+
+    def _cancel_rate_limit_reservation(self, reservation: RateLimitReservation | None) -> None:
+        limiter = self._current_rate_limiter()
+        if limiter is not None and reservation is not None:
+            limiter.cancel_reservation(reservation)
 
     def _record_account_outcome(self, success: bool) -> None:
         """Feed this call's outcome back into the selected account's health tracking.
@@ -1095,6 +1120,7 @@ class OpenAIProvider(BaseProvider):
         kwargs: dict[str, Any],
         system: str = "",
         estimated_tokens: int = 0,
+        reservation: RateLimitReservation | None = None,
     ) -> CompletionResponse:
         """Execute a plain text/vision request via OpenAI Responses."""
         instructions, input_items = self._messages_to_responses_payload(api_messages, system=system)
@@ -1116,7 +1142,11 @@ class OpenAIProvider(BaseProvider):
             usage=usage,
             raw=self._raw_dump(raw_response),
         )
-        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        self._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return response
 
     def _complete_via_chat(
@@ -1126,6 +1156,7 @@ class OpenAIProvider(BaseProvider):
         model: str,
         kwargs: dict[str, Any],
         estimated_tokens: int = 0,
+        reservation: RateLimitReservation | None = None,
     ) -> CompletionResponse:
         """Execute a request via Chat Completions compatibility mode."""
         call_kwargs: dict[str, Any] = {
@@ -1151,7 +1182,11 @@ class OpenAIProvider(BaseProvider):
             usage=usage,
             raw=self._raw_dump(raw_response),
         )
-        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        self._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return response
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
@@ -1186,7 +1221,10 @@ class OpenAIProvider(BaseProvider):
 
         self._account_local.current = self._select_account()
         estimated_tokens = self._estimate_tokens(messages)
-        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client()
@@ -1198,25 +1236,34 @@ class OpenAIProvider(BaseProvider):
                     kwargs,
                     system=system,
                     estimated_tokens=estimated_tokens,
+                    reservation=reservation,
                 )
                 self._emit_event(session_id, task_id, "allow", "responses completion successful")
                 self._record_account_outcome(True)
                 return response
             response = self._complete_via_chat(
-                client, api_messages, model, kwargs, estimated_tokens=estimated_tokens
+                client,
+                api_messages,
+                model,
+                kwargs,
+                estimated_tokens=estimated_tokens,
+                reservation=reservation,
             )
             self._emit_event(session_id, task_id, "allow", "chat completion successful")
             self._record_account_outcome(True)
             return response
         except _openai_sdk.APITimeoutError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             self._record_account_outcome(False)
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             self._record_account_outcome(False)
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             self._record_account_outcome(False)
             if getattr(exc, "status_code", 0) == 429:
@@ -1229,6 +1276,7 @@ class OpenAIProvider(BaseProvider):
                 raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             self._record_account_outcome(False)
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
@@ -1329,19 +1377,25 @@ class OpenAIProvider(BaseProvider):
 
         self._account_local.current = self._select_account()
         estimated_tokens = self._estimate_tokens(messages, system)
-        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client()
             raw_response = client.chat.completions.create(**call_kwargs)
             self._record_account_outcome(True)
         except _openai_sdk.APITimeoutError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._record_account_outcome(False)
             raise ProviderError(f"OpenAI request timed out after {self._timeout}s: {exc}") from exc
         except _openai_sdk.AuthenticationError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._record_account_outcome(False)
             raise ProviderError(f"OpenAI authentication failed: {exc}") from exc
         except _openai_sdk.APIError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._record_account_outcome(False)
             if getattr(exc, "status_code", 0) == 429:
                 retry_after = parse_retry_after(
@@ -1353,6 +1407,7 @@ class OpenAIProvider(BaseProvider):
                 raise ProviderError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderError(f"OpenAI API error: {exc}") from exc
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._record_account_outcome(False)
             raise ProviderError(f"Unexpected error calling OpenAI: {exc}") from exc
 
@@ -1396,7 +1451,11 @@ class OpenAIProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
-        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        self._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:

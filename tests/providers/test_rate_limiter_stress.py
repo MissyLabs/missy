@@ -344,13 +344,13 @@ class TestZeroLimitsUnlimited:
 class TestEdgeCases:
     """Negative tokens, very large counts, max_wait=0."""
 
-    def test_negative_tokens_treated_as_zero(self) -> None:
-        """Negative token arg must not deduct from the bucket."""
+    def test_negative_tokens_reject_early(self) -> None:
+        """Negative estimates are malformed and must not become free requests."""
         rl = RateLimiter(requests_per_minute=100, tokens_per_minute=100, max_wait_seconds=0.1)
         before = rl.token_capacity
-        rl.acquire(tokens=-999)
+        with pytest.raises(ValueError, match="tokens"):
+            rl.acquire(tokens=-999)
         after = rl.token_capacity
-        # Token bucket should be unchanged (negative deduction is clamped)
         assert after >= before - 1.0  # allow tiny refill jitter
 
     def test_zero_tokens_arg_skips_token_bucket_check(self) -> None:

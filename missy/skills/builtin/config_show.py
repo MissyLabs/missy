@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from missy.skills.base import BaseSkill, SkillPermissions, SkillResult
+from missy.skills.base import BaseSkill, SkillPermissions, SkillResult, reject_unknown_arguments
 
 _CONFIG_PATH = Path("~/.missy/config.yaml")
 
@@ -97,6 +97,8 @@ class ConfigShowSkill(BaseSkill):
             sanitized YAML text, or an error if the config file is missing or
             unreadable.
         """
+        if error := reject_unknown_arguments(kwargs):
+            return error
         config_path = _CONFIG_PATH.expanduser()
         if not config_path.exists():
             return SkillResult(

@@ -1870,17 +1870,20 @@ def skills_list_cmd(ctx: click.Context) -> None:
 
     _load_subsystems(ctx.obj["config_path"])
 
-    # Build a fresh registry — built-in skills would be registered by the
-    # application bootstrap; here we report the current process state.
+    # This command is a separate process and intentionally constructs an empty
+    # registry. It cannot inspect a running gateway's process-local state.
     registry = SkillRegistry()
     skill_names = registry.list_skills()
 
     if not skill_names:
         console.print("[dim]No skills are currently registered.[/]")
-        console.print("[dim]Skills are registered programmatically at application startup.[/]")
+        console.print(
+            "[dim]Authority: this isolated CLI process only; it does not inspect "
+            "a running gateway. Shipped built-ins are currently library-only.[/]"
+        )
         return
 
-    table = Table(title="Registered Skills")
+    table = Table(title="Registered Skills (isolated CLI process)")
     table.add_column("Name", style="bold")
 
     for name in skill_names:

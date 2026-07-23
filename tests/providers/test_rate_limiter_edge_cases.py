@@ -70,60 +70,42 @@ class TestTokensPerMinuteZeroIsUnlimited:
 
 
 # ---------------------------------------------------------------------------
-# 2. Negative max_wait_seconds: deadline already expired
+# 2. Negative max_wait_seconds: invalid configuration
 # ---------------------------------------------------------------------------
 
 
 class TestNegativeMaxWait:
-    """max_wait_seconds < 0 means the deadline is immediately in the past.
-
-    Any acquire call that cannot be served from the current bucket must
-    raise RateLimitExceeded without any sleep.
-    """
+    """Negative wait limits reject at construction rather than changing semantics."""
 
     def test_negative_max_wait_raises_on_empty_bucket(self) -> None:
-        """First acquire drains the single token; second must raise instantly."""
-        rl = RateLimiter(requests_per_minute=1, max_wait_seconds=-1.0)
-        rl.acquire()  # consumes the only token
-        with pytest.raises(RateLimitExceeded):
-            rl.acquire()
+        with pytest.raises(ValueError, match="max_wait_seconds"):
+            RateLimiter(requests_per_minute=1, max_wait_seconds=-1.0)
 
     def test_negative_max_wait_raises_without_sleeping(self) -> None:
-        """The raise must happen almost immediately (< 50 ms)."""
-        rl = RateLimiter(requests_per_minute=1, max_wait_seconds=-99.0)
-        rl.acquire()
+        """The constructor rejects almost immediately (< 50 ms)."""
         start = time.monotonic()
-        with pytest.raises(RateLimitExceeded):
-            rl.acquire()
+        with pytest.raises(ValueError, match="max_wait_seconds"):
+            RateLimiter(requests_per_minute=1, max_wait_seconds=-99.0)
         elapsed = time.monotonic() - start
         assert elapsed < 0.05, f"Expected near-instant raise; took {elapsed:.3f}s"
 
     def test_negative_max_wait_still_allows_first_acquire(self) -> None:
-        """A full bucket must satisfy the first acquire even with negative max_wait."""
-        rl = RateLimiter(requests_per_minute=10, max_wait_seconds=-5.0)
-        # Should not raise – bucket starts full
-        rl.acquire()
+        with pytest.raises(ValueError, match="max_wait_seconds"):
+            RateLimiter(requests_per_minute=10, max_wait_seconds=-5.0)
 
     def test_negative_max_wait_raises_on_large_token_ask(self) -> None:
-        """Asking for more tokens than the budget with negative wait must raise."""
-        rl = RateLimiter(
-            requests_per_minute=1000,
-            tokens_per_minute=100,
-            max_wait_seconds=-1.0,
-        )
-        with pytest.raises(RateLimitExceeded):
-            rl.acquire(tokens=101)  # one more than the full bucket
+        with pytest.raises(ValueError, match="max_wait_seconds"):
+            RateLimiter(
+                requests_per_minute=1000,
+                tokens_per_minute=100,
+                max_wait_seconds=-1.0,
+            )
 
     def test_negative_max_wait_no_sleep_on_rpm_exhausted(self) -> None:
-        """RPM exhaustion with negative max_wait must raise without any blocking."""
-        rpm = 5
-        rl = RateLimiter(requests_per_minute=rpm, max_wait_seconds=-10.0)
-        for _ in range(rpm):
-            rl.acquire()
-
+        """Invalid configuration fails before any bucket operation or sleep."""
         start = time.monotonic()
-        with pytest.raises(RateLimitExceeded):
-            rl.acquire()
+        with pytest.raises(ValueError, match="max_wait_seconds"):
+            RateLimiter(requests_per_minute=5, max_wait_seconds=-10.0)
         elapsed = time.monotonic() - start
         assert elapsed < 0.05, f"Unexpected sleep of {elapsed:.3f}s with negative max_wait"
 

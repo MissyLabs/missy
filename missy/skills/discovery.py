@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,61 @@ logger = logging.getLogger(__name__)
 
 #: Default directory for user-installed SKILL.md files.
 DEFAULT_SKILLS_DIR = os.path.expanduser("~/.missy/skills")
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+_MAX_SEARCH_RESULTS = 100
+
+
+def _normalize_tool_names(value: object) -> list[str]:
+    """Return validated, deduplicated tool names from frontmatter."""
+    if isinstance(value, str):
+        if not value.strip():
+            return []
+        candidates: list[object] = value.split(",")
+    elif isinstance(value, list):
+        candidates = value
+    else:
+        raise ValueError("Frontmatter 'tools' must be a string or list of strings")
+
+    tools: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            raise ValueError("Frontmatter 'tools' entries must be strings")
+        name = candidate.strip()
+        if not _TOOL_NAME_RE.fullmatch(name):
+            raise ValueError("Frontmatter 'tools' contains an invalid tool name")
+        if name not in seen:
+            tools.append(name)
+            seen.add(name)
+    return tools
+
+
+def _split_inline_list(value: str) -> list[str]:
+    """Split a minimal YAML inline list without splitting quoted commas."""
+    items: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    for character in value:
+        if quote is not None:
+            if character == quote:
+                quote = None
+            else:
+                current.append(character)
+        elif character in {'"', "'"}:
+            quote = character
+        elif character == ",":
+            item = "".join(current).strip()
+            if item:
+                items.append(item)
+            current = []
+        else:
+            current.append(character)
+    if quote is not None:
+        raise ValueError("Unterminated quote in YAML inline list")
+    item = "".join(current).strip()
+    if item:
+        items.append(item)
+    return items
 
 
 @dataclass
@@ -129,13 +185,7 @@ class SkillDiscovery:
         if not name:
             raise ValueError(f"Missing required 'name' field in {resolved}")
 
-        tools_raw = meta.get("tools", [])
-        if isinstance(tools_raw, str):
-            tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
-        elif isinstance(tools_raw, list):
-            tools = [str(t) for t in tools_raw]
-        else:
-            tools = []
+        tools = _normalize_tool_names(meta.get("tools", []))
 
         return SkillManifest(
             name=str(name),
@@ -174,15 +224,14 @@ class SkillDiscovery:
         Returns:
             Matching manifests sorted by relevance (name match first).
         """
-        if not query:
-            return list(skills)
 
         def _normalize(text: str) -> str:
-            return re.sub(r"[-_]+", " ", text.lower())
+            compatible = unicodedata.normalize("NFKC", text).casefold()
+            return " ".join(re.sub(r"[-_]+", " ", compatible).split())
 
         query_words = _normalize(query).split()
         if not query_words:
-            return list(skills)
+            return list(skills[:_MAX_SEARCH_RESULTS])
 
         name_matches: list[SkillManifest] = []
         desc_matches: list[SkillManifest] = []
@@ -195,7 +244,7 @@ class SkillDiscovery:
             elif all(w in name_norm or w in desc_norm for w in query_words):
                 desc_matches.append(skill)
 
-        return name_matches + desc_matches
+        return (name_matches + desc_matches)[:_MAX_SEARCH_RESULTS]
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -299,8 +348,7 @@ class SkillDiscovery:
             # Inline list: [a, b, c]
             if value.startswith("[") and value.endswith("]"):
                 inner = value[1:-1]
-                items = [item.strip().strip("\"'") for item in inner.split(",") if item.strip()]
-                result[key] = items
+                result[key] = _split_inline_list(inner)
             else:
                 # Strip optional quotes
                 if (value.startswith('"') and value.endswith('"')) or (

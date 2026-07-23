@@ -11,12 +11,13 @@ how to write and configure them.
 | Term | Definition |
 |---|---|
 | **Tool** | A callable function registered with the tool registry (`missy/tools/`) that the agent can invoke during a conversation.  Tools are the lowest-level callable unit. |
-| **Skill** | A higher-level, self-describing callable that declares permissions, a version, and a description.  Skills are registered in-process and do not require configuration to enable. |
+| **Skill** | A higher-level, self-describing callable that declares permissions, a version, and a description. Skills are library objects until an application explicitly constructs, registers, and authorizes them. |
 | **Plugin** | An externally-loaded component that extends Missy's capabilities.  Plugins are disabled by default and must be explicitly enabled and allowlisted in the configuration file. |
 
-The key distinction: **skills are trusted in-process code** (shipped with
-Missy or registered programmatically), while **plugins are untrusted external
-code** that must pass through security gates before loading.
+The key distinction: **skills are in-process library code** registered
+programmatically behind an explicit permission authorizer, while **plugins are
+external code** that must pass through security gates before loading. Merely
+being shipped or discovered does not make a skill executable.
 
 ---
 
@@ -78,7 +79,11 @@ Skills are managed by `SkillRegistry` (`missy/skills/registry.py`):
 ```python
 from missy.skills.registry import init_skill_registry
 
-registry = init_skill_registry()
+def authorize_skill(name, permissions):
+    # Apply the application's real policy to every declared permission.
+    return name == "my_skill" and not permissions.shell
+
+registry = init_skill_registry(permission_authorizer=authorize_skill)
 registry.register(MySkill())
 
 # Execute a skill by name
@@ -93,8 +98,10 @@ Key methods:
 - `execute(name, **kwargs)` -- execute a skill and emit audit events
 
 Every execution attempt emits an audit event with `event_type: "skill.execute"`
-and `category: "plugin"`.  Failed executions return a `SkillResult` with
-`success=False` rather than raising.
+and `category: "skill"`. A registry created without a permission authorizer
+fails closed: the skill implementation is not called and the result is a
+policy denial. Failed executions return a `SkillResult` with `success=False`
+rather than raising.
 
 ### Example Skill Implementation
 
@@ -121,14 +128,34 @@ class SystemInfoSkill(BaseSkill):
         return SkillResult(success=True, output=info)
 ```
 
-### Listing Skills via CLI
+### Runtime ownership and the CLI inventory
+
+The gateway, API server, and shipped service bootstraps currently do **not**
+initialize a production `SkillRegistry`. The six shipped built-ins are
+therefore explicitly **library-only**:
+
+- `SystemInfoSkill`
+- `DateTimeSkill`
+- `ConfigShowSkill`
+- `HealthCheckSkill`
+- `SummarizeSessionSkill`
+- `WorkspaceListSkill`
+
+They may be constructed directly by tests or by an embedding application, but
+they are not exposed to the model, Discord, or the gateway tool loop. There is
+no supported live invocation surface until a bootstrap owner registers them
+with a real permission authorizer.
+
+The CLI command below starts a new, isolated process and reports only the empty
+registry it constructs. It cannot inspect or serialize a different running
+process's registry and labels that authority in its output.
 
 ```bash
-missy skills
+missy skills list
 ```
 
-This shows all skills currently registered in the process.  Skills are
-registered programmatically at application startup.
+This is not a remote gateway inventory. `missy skills scan` is likewise only
+metadata discovery and never activates a manifest.
 
 ---
 
@@ -177,7 +204,7 @@ When the user asks to search the web...
 | `description` | No | Human-readable one-line summary. |
 | `version` | No | Semantic version string. |
 | `author` | No | Author or organisation name. |
-| `tools` | No | List of tool names the skill expects to use. Accepts either a YAML inline list (`[a, b]`) or a comma-separated string. |
+| `tools` | No | YAML inline list of validated tool names the skill expects to use (`[a, b]`). Non-list values and ambiguous/control-character names are rejected. |
 
 The body (everything after the closing `---`) becomes
 `SkillManifest.instructions` — free-form markdown intended to be read by
@@ -210,10 +237,10 @@ manifests = discovery.scan_directory("~/.missy/skills")   # recursive rglob("SKI
 results = discovery.search("web", manifests)
 ```
 
-`search(query, skills)` performs a case-insensitive substring match
-against `name` first, then `description`; skills with a name match are
-ranked ahead of description-only matches. An empty query returns all
-skills unchanged.
+`search(query, skills)` performs an NFKC-normalized, case-folded substring
+match against `name` first, then `description`; skills with a name match are
+ranked ahead of description-only matches. Results are capped at 100, including
+for an empty query, and distinct confusable scripts are not aliased.
 
 ### CLI: `missy skills scan`
 

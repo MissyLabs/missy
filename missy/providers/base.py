@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from missy.providers.rate_limiter import RateLimiter
+    from missy.providers.rate_limiter import RateLimiter, RateLimitReservation
 
 logger = logging.getLogger(__name__)
 
@@ -282,13 +282,22 @@ class BaseProvider(ABC):
         char_count += len(system or "")
         return char_count // 4
 
-    def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
+    def _acquire_rate_limit(
+        self, estimated_tokens: int = 0, *, reconcile: bool = False
+    ) -> RateLimitReservation | None:
         """Block until the rate limiter permits a request, if one is set."""
         if self.rate_limiter is not None:
-            self.rate_limiter.acquire(tokens=estimated_tokens)
+            if reconcile:
+                return self.rate_limiter.acquire(tokens=estimated_tokens, reconcile=True)
+            return self.rate_limiter.acquire(tokens=estimated_tokens)
+        return None
 
     def _record_rate_limit_usage(
-        self, response: CompletionResponse, estimated_tokens: int = 0
+        self,
+        response: CompletionResponse,
+        estimated_tokens: int = 0,
+        *,
+        reservation: RateLimitReservation | None = None,
     ) -> None:
         """Reconcile actual token usage against the rate limiter budget.
 
@@ -300,11 +309,22 @@ class BaseProvider(ABC):
                 deducting the real total (see that method's docstring).
         """
         if self.rate_limiter is not None:
-            self.rate_limiter.record_usage(
-                prompt_tokens=response.usage.get("prompt_tokens", 0),
-                completion_tokens=response.usage.get("completion_tokens", 0),
-                estimated_tokens=estimated_tokens,
-            )
+            try:
+                self.rate_limiter.record_usage(
+                    prompt_tokens=response.usage.get("prompt_tokens", 0),
+                    completion_tokens=response.usage.get("completion_tokens", 0),
+                    estimated_tokens=estimated_tokens,
+                    reservation=reservation,
+                )
+            except Exception:
+                if reservation is not None:
+                    self.rate_limiter.cancel_reservation(reservation)
+                raise
+
+    def _cancel_rate_limit_reservation(self, reservation: RateLimitReservation | None) -> None:
+        """Finalize an unsuccessful tracked request without refunding its estimate."""
+        if self.rate_limiter is not None and reservation is not None:
+            self.rate_limiter.cancel_reservation(reservation)
 
     def _emit_event(
         self,

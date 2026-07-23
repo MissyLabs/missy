@@ -185,20 +185,26 @@ class AnthropicProvider(BaseProvider):
         call_kwargs.update(kwargs)
 
         estimated_tokens = self._estimate_tokens(messages, system_content or "")
-        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
         except _anthropic_sdk.APITimeoutError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(
                 f"Anthropic request timed out after {self._timeout}s: {exc}"
             ) from exc
         except _anthropic_sdk.AuthenticationError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
         except _anthropic_sdk.APIError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             if getattr(exc, "status_code", 0) == 429:
                 retry_after = parse_retry_after(
@@ -209,6 +215,7 @@ class AnthropicProvider(BaseProvider):
                 raise ProviderError(f"Anthropic rate limited: {exc}") from exc
             raise ProviderError(f"Anthropic API error: {exc}") from exc
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             self._emit_event(session_id, task_id, "error", str(exc))
             raise ProviderError(f"Unexpected error calling Anthropic: {exc}") from exc
 
@@ -231,7 +238,11 @@ class AnthropicProvider(BaseProvider):
             usage=usage,
             raw=raw_response.model_dump() if hasattr(raw_response, "model_dump") else {},
         )
-        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        self._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return response
 
     def get_tool_schema(self, tools: list) -> list:
@@ -329,18 +340,24 @@ class AnthropicProvider(BaseProvider):
             call_kwargs["system"] = system_content
 
         estimated_tokens = self._estimate_tokens(messages, system_content or "")
-        self._acquire_rate_limit(estimated_tokens=estimated_tokens)
+        reservation = self._acquire_rate_limit(
+            estimated_tokens=estimated_tokens,
+            reconcile=True,
+        )
 
         try:
             client = self._make_client()
             raw_response = client.messages.create(**call_kwargs)
         except _anthropic_sdk.APITimeoutError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             raise ProviderError(
                 f"Anthropic request timed out after {self._timeout}s: {exc}"
             ) from exc
         except _anthropic_sdk.AuthenticationError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             raise ProviderError(f"Anthropic authentication failed: {exc}") from exc
         except _anthropic_sdk.APIError as exc:
+            self._cancel_rate_limit_reservation(reservation)
             if getattr(exc, "status_code", 0) == 429:
                 retry_after = parse_retry_after(
                     getattr(getattr(exc, "response", None), "headers", {}).get("retry-after", 5)
@@ -350,6 +367,7 @@ class AnthropicProvider(BaseProvider):
                 raise ProviderError(f"Anthropic rate limited: {exc}") from exc
             raise ProviderError(f"Anthropic API error: {exc}") from exc
         except Exception as exc:
+            self._cancel_rate_limit_reservation(reservation)
             raise ProviderError(f"Unexpected error calling Anthropic: {exc}") from exc
 
         # Extract text content and tool use blocks
@@ -387,7 +405,11 @@ class AnthropicProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )
-        self._record_rate_limit_usage(response, estimated_tokens=estimated_tokens)
+        self._record_rate_limit_usage(
+            response,
+            estimated_tokens=estimated_tokens,
+            reservation=reservation,
+        )
         return response
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:

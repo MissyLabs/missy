@@ -8,12 +8,28 @@ rather than raising an exception.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from missy.skills.base import BaseSkill, SkillPermissions, SkillResult
+from missy.skills.base import BaseSkill, SkillPermissions, SkillResult, reject_unknown_arguments
 
 _TURN_LIMIT = 20
 _CONTENT_PREVIEW_LEN = 200  # chars shown per turn in the summary
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9:_-]{1,128}$")
+
+
+def _safe_content(value: object) -> str:
+    try:
+        from missy.security.censor import censor_response
+
+        safe = censor_response(str(value or ""))
+        if not isinstance(safe, str):
+            raise TypeError("censor returned a non-string")
+        return safe
+    except Exception:
+        return "[content unavailable: redaction failed]"
 
 
 def _format_turns(turns: list) -> str:  # type: ignore[type-arg]
@@ -37,8 +53,9 @@ def _format_turns(turns: list) -> str:  # type: ignore[type-arg]
         # string (unlike the legacy JSON store's datetime object) --
         # truncate to seconds precision rather than calling .isoformat().
         ts = turn.timestamp[:19] if turn.timestamp else "unknown time"
-        role_label = turn.role.capitalize() if turn.role else "Unknown"
-        content = turn.content or ""
+        role = turn.role if turn.role in {"user", "assistant", "system", "tool"} else "unknown"
+        role_label = role.capitalize()
+        content = _safe_content(turn.content)
         if len(content) > _CONTENT_PREVIEW_LEN:
             content = content[:_CONTENT_PREVIEW_LEN].rstrip() + "…"
         lines.append(f"[{ts}] {role_label}: {content}")
@@ -54,24 +71,50 @@ class SummarizeSessionSkill(BaseSkill):
     version = "1.0.0"
     permissions = SkillPermissions(filesystem_read=True)
 
+    def __init__(
+        self,
+        authorized_session_id: str | None = None,
+        *,
+        session_authorizer: Callable[[str], bool] | None = None,
+        db_path: str = "~/.missy/memory.db",
+    ) -> None:
+        self._authorized_session_id = authorized_session_id
+        self._session_authorizer = session_authorizer
+        self._db_path = Path(db_path).expanduser().absolute()
+
     def execute(self, session_id: str = "", **kwargs: Any) -> SkillResult:
         """Load and format recent turns for *session_id*.
 
         Args:
             session_id: Identifier of the session to summarize.  When
                 omitted or empty a helpful prompt is returned instead.
-            **kwargs: Extra keyword arguments are accepted but ignored.
+            **kwargs: Rejected; the built-in accepts only its documented
+                arguments.
 
         Returns:
             :class:`~missy.skills.base.SkillResult` with a formatted
             transcript in ``output``, or an error message if the memory
             store cannot be reached.
         """
-        if not session_id:
+        if error := reject_unknown_arguments(kwargs):
+            return error
+        if not isinstance(session_id, str) or not _SESSION_ID_RE.fullmatch(session_id):
             return SkillResult(
                 success=False,
-                output="",
+                output=None,
                 error="session_id is required. Pass the active session identifier to summarize it.",
+            )
+        if not self._session_allowed(session_id):
+            return SkillResult(
+                success=False,
+                output=None,
+                error="Session summary access denied for this session_id.",
+            )
+        if self._db_path.is_symlink():
+            return SkillResult(
+                success=False,
+                output=None,
+                error="Memory database symlink paths are not allowed.",
             )
 
         try:
@@ -84,13 +127,13 @@ class SummarizeSessionSkill(BaseSkill):
                 SQLiteMemoryStore,  # local import to isolate failures
             )
 
-            store = SQLiteMemoryStore()
+            store = SQLiteMemoryStore(str(self._db_path))
             turns = store.get_session_turns(session_id, limit=_TURN_LIMIT)
-        except Exception as exc:  # pragma: no cover
+        except Exception:  # pragma: no cover
             return SkillResult(
                 success=False,
-                output="",
-                error=f"Memory store unavailable: {exc}",
+                output=None,
+                error="Memory store unavailable or unreadable.",
             )
 
         turn_count = len(turns)
@@ -102,3 +145,14 @@ class SummarizeSessionSkill(BaseSkill):
         body = _format_turns(turns)
         output = "\n".join(header_lines) + "\n" + body
         return SkillResult(success=True, output=output)
+
+    def _session_allowed(self, session_id: str) -> bool:
+        if self._authorized_session_id is not None:
+            return session_id == self._authorized_session_id
+        authorizer = self._session_authorizer
+        if authorizer is None:
+            return False
+        try:
+            return authorizer(session_id) is True
+        except Exception:
+            return False

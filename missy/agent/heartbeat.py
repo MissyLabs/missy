@@ -44,7 +44,11 @@ class HeartbeatRunner:
             interval = 1800.0
         self._interval = interval
         self._workspace = Path(workspace).expanduser()
-        self._active_hours = active_hours
+        if isinstance(active_hours, str):
+            self._active_hours = active_hours
+        else:
+            logger.warning("Invalid heartbeat active_hours; using the always-active safe default")
+            self._active_hours = ""
         self._report = report_fn
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -103,7 +107,10 @@ class HeartbeatRunner:
     def _in_active_hours(self) -> bool:
         from datetime import datetime
 
-        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", self._active_hours)
+        active_hours = self._active_hours
+        if not isinstance(active_hours, str):
+            return True
+        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", active_hours)
         if not m:
             return True
         now = datetime.now()
