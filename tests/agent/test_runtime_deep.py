@@ -1485,6 +1485,72 @@ class TestDesktopActionVerificationRetry:
         provider.complete.assert_not_called()
 
 
+class TestFilesystemActionVerificationRetry:
+    def test_file_writes_require_later_listing_before_completion(self):
+        provider = _make_provider()
+        write_tool = _make_mock_tool("file_write")
+        list_tool = _make_mock_tool("list_files")
+        tool_reg = _make_tool_registry([write_tool, list_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("file_write", args={"path": "/tmp/a", "content": "a"}),
+            _make_stop_response("Created the file."),
+            _make_tool_call_response("list_files", args={"path": "/tmp"}),
+            _make_stop_response("Verified the file exists."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Create /tmp/a.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "file_write",
+            "list_files",
+        ]
+        assert result == "Verified the file exists."
+        retry = [
+            event
+            for event in events
+            if event["event_type"] == "agent.response.filesystem_verification_retry"
+        ]
+        assert len(retry) == 1
+        assert retry[0]["detail"] == {"unverified_action": "file_write"}
+
+    def test_failed_write_is_left_to_done_criteria_not_verification_guard(self):
+        provider = _make_provider()
+        write_tool = _make_mock_tool("file_write")
+        tool_reg = _make_tool_registry([write_tool])
+        failed = MagicMock(success=False, output=None, error="policy denied")
+        tool_reg.execute.side_effect = lambda *_args, **_kwargs: failed
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("file_write"),
+            _make_stop_response("I could not write it: policy denied."),
+            _make_stop_response("The policy prevents this write."),
+            _make_stop_response("The policy prevents this write."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.run("Create /tmp/a.")
+
+        assert not any(
+            event["event_type"].startswith("agent.response.filesystem_verification")
+            for event in events
+        )
+        assert any(event["event_type"].startswith("agent.done_criteria") for event in events)
+
+
 class TestDesktopRequestExecutionRetry:
     def test_replayed_keyboard_answer_executes_current_tools(self):
         provider = _make_provider()

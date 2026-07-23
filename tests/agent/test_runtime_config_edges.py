@@ -165,6 +165,20 @@ class TestAgentConfigCustomValues:
         cfg = AgentConfig(system_prompt="Be brief.")
         assert cfg.system_prompt == "Be brief."
 
+    def test_workspace_path_defaults_to_none(self):
+        assert AgentConfig().workspace_path is None
+
+    def test_effective_prompt_names_configured_workspace(self):
+        runtime = AgentRuntime(
+            AgentConfig(system_prompt="Be brief.", workspace_path="/tmp/missy-workspace")
+        )
+        messages = runtime._build_messages("Inspect README.md")
+
+        assert messages[0].content.startswith("Be brief.")
+        assert "/tmp/missy-workspace" in messages[0].content
+        assert "shell_exec cwd" in messages[0].content
+        assert messages[1].content == "Inspect README.md"
+
     def test_custom_capability_mode(self):
         cfg = AgentConfig(capability_mode="safe-chat")
         assert cfg.capability_mode == "safe-chat"

@@ -799,6 +799,49 @@ def make_desktop_verification_retry_prompt(action_name: str, user_input: str = "
     )
 
 
+_FILESYSTEM_MUTATION_TOOLS = frozenset({"file_write", "file_delete"})
+_FILESYSTEM_VERIFICATION_TOOLS = frozenset({"list_files", "file_read"})
+
+
+def find_unverified_filesystem_action(successful_tool_names: list[str]) -> str | None:
+    """Return the latest successful file mutation lacking later observation.
+
+    A successful write/delete syscall establishes that the operation returned
+    without error, but multi-path agent tasks still need a post-mutation view
+    before they can truthfully claim the requested tree is complete. Only
+    successful calls are supplied so a policy-denied mutation remains the
+    responsibility of the ordinary done-criteria error gate.
+    """
+    if not isinstance(successful_tool_names, list):
+        return None
+    last_action_index = -1
+    last_action_name: str | None = None
+    for index, name in enumerate(successful_tool_names):
+        if name in _FILESYSTEM_MUTATION_TOOLS:
+            last_action_index = index
+            last_action_name = name
+    if last_action_index < 0:
+        return None
+    if any(
+        name in _FILESYSTEM_VERIFICATION_TOOLS
+        for name in successful_tool_names[last_action_index + 1 :]
+    ):
+        return None
+    return last_action_name
+
+
+def make_filesystem_verification_retry_prompt(action_name: str, user_input: str = "") -> str:
+    """Return a correction requiring post-mutation filesystem evidence."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        f"Your last successful filesystem mutation was {action_name}, but you made no "
+        "later filesystem observation to confirm the requested final state. Verify the "
+        "affected paths now with list_files (use a recursive listing when the request "
+        "spans directories) or file_read. Do not repeat the mutation unless verification "
+        f"shows it is necessary.{anchor}"
+    )
+
+
 def make_capability_denial_retry_prompt(
     user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
 ) -> str:

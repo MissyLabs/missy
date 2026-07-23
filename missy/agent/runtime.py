@@ -447,6 +447,7 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
+    workspace_path: str | None = None
     capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
     agent_id: str = "default"
@@ -1404,6 +1405,7 @@ class AgentRuntime:
             find_unmet_desktop_requests,
             find_unreported_calculator_expressions,
             find_unverified_desktop_action,
+            find_unverified_filesystem_action,
             is_security_refusal,
             make_calculator_completeness_retry_prompt,
             make_capability_denial_retry_prompt,
@@ -1411,6 +1413,7 @@ class AgentRuntime:
             make_desktop_verification_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
+            make_filesystem_verification_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
@@ -1440,6 +1443,7 @@ class AgentRuntime:
             _checkpoint_id = None
 
         tool_names_used: list[str] = []
+        successful_tool_names: list[str] = []
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
@@ -1501,6 +1505,8 @@ class AgentRuntime:
         _desktop_verification_retries = 0
         _MAX_DESKTOP_REQUEST_RETRIES = 1
         _desktop_request_retries = 0
+        _MAX_FILESYSTEM_VERIFICATION_RETRIES = 1
+        _filesystem_verification_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1523,6 +1529,7 @@ class AgentRuntime:
                 + _MAX_DESKTOP_REQUEST_RETRIES
                 + _MAX_DESKTOP_VERIFICATION_RETRIES
                 + _MAX_CALCULATOR_COMPLETENESS_RETRIES
+                + _MAX_FILESYSTEM_VERIFICATION_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
                 _desktop_grace_used = (
@@ -1531,6 +1538,10 @@ class AgentRuntime:
                     + min(
                         _calculator_completeness_retries,
                         _MAX_CALCULATOR_COMPLETENESS_RETRIES,
+                    )
+                    + min(
+                        _filesystem_verification_retries,
+                        _MAX_FILESYSTEM_VERIFICATION_RETRIES,
                     )
                 )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
@@ -1658,6 +1669,8 @@ class AgentRuntime:
                             )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
+                        if not tr.is_error:
+                            successful_tool_names.append(tc.name)
 
                         # Preserve every calculator outcome for a deterministic
                         # final-response completeness check.  In a sequence of
@@ -2207,6 +2220,44 @@ class AgentRuntime:
                         "the intended control or produced the requested UI state. I cannot "
                         "confirm the desktop task as complete."
                     )
+
+                _unverified_filesystem_action = find_unverified_filesystem_action(
+                    successful_tool_names
+                )
+                if _unverified_filesystem_action:
+                    if _filesystem_verification_retries < _MAX_FILESYSTEM_VERIFICATION_RETRIES:
+                        _filesystem_verification_retries += 1
+                        logger.warning(
+                            "Tool loop reported completion after filesystem action %r "
+                            "without post-action observation; retrying once.",
+                            _unverified_filesystem_action,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_filesystem_verification_retry_prompt(
+                                    _unverified_filesystem_action, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.filesystem_verification_retry",
+                                result="warn",
+                                detail={"unverified_action": _unverified_filesystem_action},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.filesystem_verification_unresolved",
+                            result="warn",
+                            detail={"unverified_action": _unverified_filesystem_action},
+                        )
 
                 # General response guards (missy/agent/response_guards.py):
                 # a tool-free response that reads like it fabricated a
@@ -3202,7 +3253,7 @@ class AgentRuntime:
                         logger.debug("Failed to load summaries", exc_info=True)
 
                 # Shape system prompt with persona and behavior layer.
-                base_system = self.config.system_prompt
+                base_system = self._effective_system_prompt()
                 if self._behavior is not None:
                     try:
                         behavior_context = {
@@ -3286,7 +3337,31 @@ class AgentRuntime:
                 logger.debug("ContextManager.build_messages failed: %s", exc)
 
         # Minimal fallback
-        return self.config.system_prompt, [{"role": "user", "content": user_input}]
+        return self._effective_system_prompt(), [{"role": "user", "content": user_input}]
+
+    def _effective_system_prompt(self) -> str:
+        """Return the system prompt with the configured workspace contract.
+
+        File and shell tools resolve relative paths against the gateway
+        process's current directory. That directory is an implementation
+        detail and may be the service or harness directory rather than the
+        operator-configured workspace. Give the model one trusted absolute
+        root so it supplies absolute file paths and an explicit ``cwd`` for
+        shell calls instead of guessing from the launcher directory.
+        """
+        workspace = self.config.workspace_path
+        if not workspace:
+            return self.config.system_prompt
+        return (
+            f"{self.config.system_prompt}\n\n"
+            "CONFIGURED WORKSPACE ROOT (trusted operator configuration): "
+            f"{workspace}\n"
+            "Treat this as the current project workspace. Resolve every relative "
+            "file request underneath this root, pass absolute paths to filesystem "
+            "tools, and pass this root as shell_exec cwd unless the user explicitly "
+            "names another policy-approved directory. Never infer the workspace from "
+            "the gateway process's launch directory."
+        )
 
     def _synthesize_memory(
         self,
@@ -4785,7 +4860,7 @@ class AgentRuntime:
             the system prompt first, followed by the user turn.
         """
         return [
-            Message(role="system", content=self.config.system_prompt),
+            Message(role="system", content=self._effective_system_prompt()),
             Message(role="user", content=user_input),
         ]
 

@@ -327,8 +327,16 @@ def _agent_tool_policy_kwargs(
             return None
         return value
 
+    configured_workspace = getattr(cfg, "workspace_path", None)
+    workspace_path = (
+        str(Path(configured_workspace).expanduser().resolve(strict=False))
+        if isinstance(configured_workspace, str) and configured_workspace
+        else None
+    )
+
     return {
         "agent_id": agent_id,
+        "workspace_path": workspace_path,
         "tool_policy": _policy(getattr(cfg, "tools", None)),
         "agent_tool_policy": _policy(getattr(agent_cfg, "tools", None)),
         "sandbox_tool_policy": _policy(getattr(sandbox, "tools", None)),

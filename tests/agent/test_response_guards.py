@@ -16,6 +16,7 @@ from missy.agent.response_guards import (
     find_unmet_desktop_requests,
     find_unreported_calculator_expressions,
     find_unverified_desktop_action,
+    find_unverified_filesystem_action,
     is_security_refusal,
     make_calculator_completeness_retry_prompt,
     make_capability_denial_retry_prompt,
@@ -23,10 +24,32 @@ from missy.agent.response_guards import (
     make_desktop_verification_retry_prompt,
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
+    make_filesystem_verification_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
 )
+
+
+class TestFilesystemVerificationGuard:
+    def test_latest_write_requires_later_observation(self):
+        assert find_unverified_filesystem_action(["file_write", "file_write"]) == "file_write"
+
+    def test_listing_after_mutation_satisfies_guard(self):
+        assert find_unverified_filesystem_action(["file_write", "list_files"]) is None
+
+    def test_read_after_mutation_satisfies_guard(self):
+        assert find_unverified_filesystem_action(["file_delete", "file_read"]) is None
+
+    def test_observation_before_latest_mutation_does_not_satisfy_guard(self):
+        assert find_unverified_filesystem_action(["list_files", "file_write"]) == "file_write"
+
+    def test_retry_prompt_anchors_original_request(self):
+        prompt = make_filesystem_verification_retry_prompt(
+            "file_write", "Create README.md and src/main.txt"
+        )
+        assert "list_files" in prompt
+        assert "Create README.md and src/main.txt" in prompt
 
 
 class TestCalculatorCompletenessGuard:
