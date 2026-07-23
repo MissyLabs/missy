@@ -829,6 +829,59 @@ class TestDoneCriteriaEnforcement:
 
 
 class TestVideoGenerationCompletionGuards:
+    def test_same_seed_request_repeats_exact_arguments(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=True,
+            output={"seed": 12345, "path": "/tmp/video.mp4"},
+            error=None,
+        )
+        first_args = {
+            "backend": "wan",
+            "prompt": "A cinematic spinning top",
+            "steps": 20,
+        }
+        second_args = {**first_args, "seed": 12345}
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("video_generate", args=first_args, tool_id="video-1"),
+            _make_tool_call_response("video_generate", args=second_args, tool_id="video-2"),
+            _make_stop_response("Both exact-parameter renders completed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(
+                "Generate a spinning top, then generate it AGAIN with that exact seed "
+                "and the same parameters."
+            )
+
+        assert result == "Both exact-parameter renders completed."
+        observed_arguments = [
+            {
+                key: value
+                for key, value in call.kwargs.items()
+                if key not in {"session_id", "task_id"}
+            }
+            for call in tool_reg.execute.call_args_list
+        ]
+        assert observed_arguments == [
+            first_args,
+            second_args,
+        ]
+        assert not any(
+            event["event_type"] == "agent.response.video_reproducibility_retry"
+            for event in events
+        )
+
     def test_reported_parameter_refusal_is_terminal(self):
         provider = _make_provider()
         tool = _make_mock_tool("video_generate")

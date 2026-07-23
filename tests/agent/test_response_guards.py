@@ -19,7 +19,9 @@ from missy.agent.response_guards import (
     find_unreported_calculator_expressions,
     find_unverified_desktop_action,
     find_unverified_filesystem_action,
+    find_video_reproducibility_issue,
     is_security_refusal,
+    is_video_reproducibility_request,
     make_calculator_completeness_retry_prompt,
     make_capability_denial_retry_prompt,
     make_desktop_request_retry_prompt,
@@ -32,12 +34,50 @@ from missy.agent.response_guards import (
     make_security_refusal_retry_prompt,
     make_video_generation_error_report_prompt,
     make_video_generation_retry_prompt,
+    make_video_reproducibility_prompt,
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
 )
 
 
 class TestVideoGenerationGuards:
+    def test_detects_same_seed_rerender_request(self):
+        prompt = "Tell me the seed, then generate it AGAIN with that exact seed."
+        assert is_video_reproducibility_request(prompt)
+
+    def test_reproducibility_prompt_preserves_full_arguments(self):
+        arguments = {"backend": "wan", "prompt": "A spinning top", "steps": 20}
+        result = '{"seed": 12345, "path": "/tmp/a.mp4"}'
+        retry = make_video_reproducibility_prompt(arguments, result)
+        assert '"prompt": "A spinning top"' in retry
+        assert '"seed": 12345' in retry
+
+    def test_reproducibility_check_rejects_prompt_drift(self):
+        request = "Generate twice, again with the exact same seed."
+        observations = [
+            ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
+            (
+                {"backend": "wan", "prompt": "top", "seed": 12345},
+                '{"seed": 12345}',
+                False,
+            ),
+        ]
+        assert find_video_reproducibility_issue(request, observations) == (
+            "the repeat call changed generation parameters"
+        )
+
+    def test_reproducibility_check_accepts_exact_repeat(self):
+        request = "Generate twice, again with the exact same seed."
+        observations = [
+            ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
+            (
+                {"backend": "wan", "prompt": "A spinning top", "seed": 12345},
+                '{"seed": 12345}',
+                False,
+            ),
+        ]
+        assert find_video_reproducibility_issue(request, observations) is None
+
     def test_render_request_requires_video_generate(self):
         prompt = "Generate a video of a sunset using the SVD backend."
         assert find_unmet_video_generation_request(prompt, [], {"video_generate"}) == [

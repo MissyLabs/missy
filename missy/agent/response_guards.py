@@ -31,7 +31,10 @@ require ``tools_used`` to be empty.
 
 from __future__ import annotations
 
+import ast
+import json
 import re
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Fabrication: response describes an action or observation as already done
@@ -1079,6 +1082,74 @@ def make_video_generation_error_report_prompt(errors: list[str], user_input: str
         "not claim a file was generated.\n\nObserved tool result(s):\n"
         f"{observed}{anchor}"
     )
+
+
+_VIDEO_REPRO_REQUEST_RE = re.compile(
+    r"\b(?:again|twice|second time)\b.*\b(?:same|exact)\b.*\bseed\b"
+    r"|\b(?:same|exact)\b.*\bseed\b.*\b(?:again|twice|second time)\b",
+    re.I | re.S,
+)
+
+
+def is_video_reproducibility_request(user_input: str) -> bool:
+    """Return whether the user explicitly requests a same-seed rerender."""
+    return bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+
+
+def _video_result_seed(content: str) -> int | None:
+    try:
+        value = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        try:
+            value = ast.literal_eval(content)
+        except (SyntaxError, ValueError):
+            return None
+    seed = value.get("seed") if isinstance(value, dict) else None
+    return seed if isinstance(seed, int) and seed > 0 else None
+
+
+def make_video_reproducibility_prompt(
+    first_arguments: dict[str, Any], first_result: str, user_input: str = ""
+) -> str:
+    """Ground a requested second render in the first call's exact inputs."""
+    effective_seed = _video_result_seed(first_result)
+    arguments = dict(first_arguments)
+    arguments["seed"] = effective_seed
+    arguments.pop("save_path", None)
+    anchor = f"\n\nThe original request was:\n{user_input}" if user_input else ""
+    return (
+        "The first requested render succeeded. The task explicitly requires a second "
+        "render with the exact same generation parameters and the effective seed returned "
+        "by the first call. Call video_generate again now using exactly this argument map; "
+        "do not shorten or rewrite prompt/negative_prompt and do not change backend, model, "
+        "dimensions, frames, steps, CFG, sampler, scheduler, interpolation, or format:\n"
+        f"{json.dumps(arguments, sort_keys=True)}{anchor}"
+    )
+
+
+def find_video_reproducibility_issue(
+    user_input: str,
+    observations: list[tuple[dict[str, Any], str, bool]],
+) -> str | None:
+    """Validate count, effective seed reuse, and argument equality for rerenders."""
+    if not is_video_reproducibility_request(user_input):
+        return None
+    successful = [item for item in observations if not item[2]]
+    if len(successful) < 2:
+        return "fewer than two successful video_generate calls"
+    first_args, first_result, _ = successful[0]
+    latest_args, _, _ = successful[-1]
+    effective_seed = _video_result_seed(first_result)
+    if effective_seed is None:
+        return "the first video_generate result did not expose a positive effective seed"
+    if latest_args.get("seed") != effective_seed:
+        return "the repeat call did not reuse the first result's effective seed"
+    ignored = {"seed", "save_path"}
+    first_comparable = {key: value for key, value in first_args.items() if key not in ignored}
+    latest_comparable = {key: value for key, value in latest_args.items() if key not in ignored}
+    if latest_comparable != first_comparable:
+        return "the repeat call changed generation parameters"
+    return None
 
 
 def make_capability_denial_retry_prompt(

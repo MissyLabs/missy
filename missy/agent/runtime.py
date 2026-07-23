@@ -1412,7 +1412,9 @@ class AgentRuntime:
             find_unreported_calculator_expressions,
             find_unverified_desktop_action,
             find_unverified_filesystem_action,
+            find_video_reproducibility_issue,
             is_security_refusal,
+            is_video_reproducibility_request,
             make_calculator_completeness_retry_prompt,
             make_capability_denial_retry_prompt,
             make_desktop_request_retry_prompt,
@@ -1425,6 +1427,7 @@ class AgentRuntime:
             make_security_refusal_retry_prompt,
             make_video_generation_error_report_prompt,
             make_video_generation_retry_prompt,
+            make_video_reproducibility_prompt,
             make_web_request_retry_prompt,
             terminal_parameter_errors_are_reported,
         )
@@ -1511,6 +1514,9 @@ class AgentRuntime:
         _MAX_CALCULATOR_COMPLETENESS_RETRIES = 1
         _calculator_completeness_retries = 0
         _calculator_observations: list[tuple[str, str, bool]] = []
+        _video_generation_observations: list[tuple[dict[str, Any], str, bool]] = []
+        _MAX_VIDEO_REPRODUCIBILITY_RETRIES = 1
+        _video_reproducibility_retries = 0
         _MAX_DESKTOP_VERIFICATION_RETRIES = 1
         _desktop_verification_retries = 0
         _MAX_DESKTOP_REQUEST_RETRIES = 1
@@ -1715,6 +1721,10 @@ class AgentRuntime:
                                 _calculator_observations.append(
                                     (expression, tr.content or "", bool(tr.is_error))
                                 )
+                        if tc.name == "video_generate":
+                            _video_generation_observations.append(
+                                (dict(tc.arguments or {}), tr.content or "", bool(tr.is_error))
+                            )
 
                         # OpenClaw A3: mutation fingerprinting
                         _fp = _fingerprint_tc(tc.name, tc.arguments or {})
@@ -1875,6 +1885,17 @@ class AgentRuntime:
                         )
                     else:
                         verification = make_verification_prompt()
+                    successful_video_observations = [
+                        item for item in _video_generation_observations if not item[2]
+                    ]
+                    if (
+                        is_video_reproducibility_request(_tool_request_input)
+                        and len(successful_video_observations) == 1
+                    ):
+                        first_arguments, first_result, _ = successful_video_observations[0]
+                        verification += "\n\n" + make_video_reproducibility_prompt(
+                            first_arguments, first_result, _tool_request_input
+                        )
                     loop_messages.append({"role": "user", "content": verification})
 
                     # Continue loop to get model's next response
@@ -2237,6 +2258,47 @@ class AgentRuntime:
                     # observed result and must not be retried as an unfinished
                     # mutation once it has been reported truthfully.
                     _last_round_errors = []
+
+                _video_reproducibility_issue = find_video_reproducibility_issue(
+                    _tool_request_input, _video_generation_observations
+                )
+                if (
+                    _video_reproducibility_issue
+                    and _video_reproducibility_retries
+                    < _MAX_VIDEO_REPRODUCIBILITY_RETRIES
+                ):
+                    _video_reproducibility_retries += 1
+                    successful_video_observations = [
+                        item for item in _video_generation_observations if not item[2]
+                    ]
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    if successful_video_observations:
+                        first_arguments, first_result, _ = successful_video_observations[0]
+                        correction = make_video_reproducibility_prompt(
+                            first_arguments, first_result, _tool_request_input
+                        )
+                    else:
+                        correction = make_video_generation_retry_prompt(
+                            _tool_request_input
+                        )
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The reproducibility requirement is not yet satisfied: "
+                                f"{_video_reproducibility_issue}.\n\n{correction}"
+                            ),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.video_reproducibility_retry",
+                            result="warn",
+                            detail={"issue": _video_reproducibility_issue},
+                        )
+                    continue
 
                 # A long-lived Discord transcript may already contain the
                 # same desktop prompt and an earlier successful answer. Do
