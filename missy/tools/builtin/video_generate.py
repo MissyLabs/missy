@@ -1202,7 +1202,7 @@ class VideoGenerateTool(BaseTool):
                 if models_error:
                     if audio_prompt and audio_model == "stable-audio-3":
                         models_error += (
-                            '; older ComfyUI installs can use '
+                            "; older ComfyUI installs can use "
                             'audio_model="stable-audio-open-1.0" as a legacy fallback.'
                         )
                     return ToolResult(success=False, output=None, error=models_error)

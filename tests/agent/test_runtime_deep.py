@@ -878,8 +878,7 @@ class TestVideoGenerationCompletionGuards:
             second_args,
         ]
         assert not any(
-            event["event_type"] == "agent.response.video_reproducibility_retry"
-            for event in events
+            event["event_type"] == "agent.response.video_reproducibility_retry" for event in events
         )
 
     def test_reported_parameter_refusal_is_terminal(self):
@@ -934,12 +933,9 @@ class TestVideoGenerationCompletionGuards:
             result = rt.run("Generate a video of a sunset using the SVD backend.")
 
         assert "requires image_path" in result
-        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
-            "video_generate"
-        ]
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == ["video_generate"]
         assert any(
-            event["event_type"] == "agent.response.video_generation_retry"
-            for event in events
+            event["event_type"] == "agent.response.video_generation_retry" for event in events
         )
 
 
@@ -1742,6 +1738,7 @@ class TestWebRequestRetry:
             "browser_close",
         ]
         assert result == "Ready appeared and the browser session was closed."
+
 
 class TestDesktopRequestExecutionRetry:
     def test_replayed_keyboard_answer_executes_current_tools(self):

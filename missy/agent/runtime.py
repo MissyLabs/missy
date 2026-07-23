@@ -1901,11 +1901,8 @@ class AgentRuntime:
                         is_video_reproducibility_request(_tool_request_input)
                         and len(successful_video_observations) >= 2
                     ):
-                        verification += (
-                            "\n\n"
-                            + make_video_reproducibility_comparison_prompt(
-                                _video_generation_observations
-                            )
+                        verification += "\n\n" + make_video_reproducibility_comparison_prompt(
+                            _video_generation_observations
                         )
                     loop_messages.append({"role": "user", "content": verification})
 
@@ -2199,9 +2196,7 @@ class AgentRuntime:
                     loop_messages.append(
                         {
                             "role": "user",
-                            "content": make_video_generation_retry_prompt(
-                                _tool_request_input
-                            ),
+                            "content": make_video_generation_retry_prompt(_tool_request_input),
                         }
                     )
                     with contextlib.suppress(Exception):
@@ -2275,8 +2270,7 @@ class AgentRuntime:
                 )
                 if (
                     _video_reproducibility_issue
-                    and _video_reproducibility_retries
-                    < _MAX_VIDEO_REPRODUCIBILITY_RETRIES
+                    and _video_reproducibility_retries < _MAX_VIDEO_REPRODUCIBILITY_RETRIES
                 ):
                     _video_reproducibility_retries += 1
                     successful_video_observations = [
@@ -2289,9 +2283,7 @@ class AgentRuntime:
                             first_arguments, first_result, _tool_request_input
                         )
                     else:
-                        correction = make_video_generation_retry_prompt(
-                            _tool_request_input
-                        )
+                        correction = make_video_generation_retry_prompt(_tool_request_input)
                     loop_messages.append(
                         {
                             "role": "user",
@@ -2365,9 +2357,7 @@ class AgentRuntime:
                 # caught a coordinate click followed by a false success claim
                 # while the target dialog remained open. Require a later
                 # screen/tree/window observation before accepting completion.
-                _unverified_desktop_action = find_unverified_desktop_action(
-                    successful_tool_names
-                )
+                _unverified_desktop_action = find_unverified_desktop_action(successful_tool_names)
                 if _unverified_desktop_action:
                     if _desktop_verification_retries < _MAX_DESKTOP_VERIFICATION_RETRIES:
                         _desktop_verification_retries += 1

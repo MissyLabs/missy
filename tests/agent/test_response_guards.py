@@ -42,6 +42,9 @@ from missy.agent.response_guards import (
 
 
 class TestVideoGenerationGuards:
+    def test_non_string_input_is_not_a_reproducibility_request(self):
+        assert not is_video_reproducibility_request(object())
+
     def test_detects_same_seed_rerender_request(self):
         prompt = "Tell me the seed, then generate it AGAIN with that exact seed."
         assert is_video_reproducibility_request(prompt)
@@ -95,9 +98,10 @@ class TestVideoGenerationGuards:
         assert find_unmet_video_generation_request(prompt, [], {"video_generate"}) == [
             "video_generate"
         ]
-        assert find_unmet_video_generation_request(
-            prompt, ["video_generate"], {"video_generate"}
-        ) == []
+        assert (
+            find_unmet_video_generation_request(prompt, ["video_generate"], {"video_generate"})
+            == []
+        )
 
     def test_animation_request_requires_video_generate(self):
         assert find_unmet_video_generation_request(

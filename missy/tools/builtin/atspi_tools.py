@@ -183,12 +183,8 @@ def _get_focused_application(desktop: Any) -> Any:
                         child_name = str(child.name or "").casefold()
                     except Exception:  # noqa: BLE001
                         child_name = ""
-                    is_decorator = int(
-                        "mutter" in child_name or child_name.endswith("-frames")
-                    )
-                    title_matches.append(
-                        (_deepest_focused_node(child), -is_decorator, child)
-                    )
+                    is_decorator = int("mutter" in child_name or child_name.endswith("-frames"))
+                    title_matches.append((_deepest_focused_node(child), -is_decorator, child))
             except Exception:  # noqa: BLE001
                 continue
         if title_matches:

@@ -948,17 +948,13 @@ def find_unmet_web_requests(
             missing.add("browser_fill")
         last_fill = max(fill_indexes, default=latest_navigation)
         click_indexes = [
-            i
-            for i, name in enumerate(tool_names_used)
-            if name == "browser_click" and i > last_fill
+            i for i, name in enumerate(tool_names_used) if name == "browser_click" and i > last_fill
         ]
         if not click_indexes:
             missing.add("browser_click")
         last_click = max(click_indexes, default=len(tool_names_used))
         wait_indexes = [
-            i
-            for i, name in enumerate(tool_names_used)
-            if name == "browser_wait" and i > last_click
+            i for i, name in enumerate(tool_names_used) if name == "browser_wait" and i > last_click
         ]
         if not wait_indexes:
             missing.add("browser_wait")
@@ -971,10 +967,7 @@ def find_unmet_web_requests(
         if not content_indexes:
             missing.add("browser_get_content")
         last_content = max(content_indexes, default=len(tool_names_used))
-        if not any(
-            name == "browser_close"
-            for name in tool_names_used[last_content + 1 :]
-        ):
+        if not any(name == "browser_close" for name in tool_names_used[last_content + 1 :]):
             missing.add("browser_close")
 
     # Closing before a later browser operation does not close the resulting
@@ -1091,9 +1084,13 @@ _VIDEO_REPRO_REQUEST_RE = re.compile(
 )
 
 
-def is_video_reproducibility_request(user_input: str) -> bool:
-    """Return whether the user explicitly requests a same-seed rerender."""
-    return bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+def is_video_reproducibility_request(user_input: object) -> bool:
+    """Return whether the user explicitly requests a same-seed rerender.
+
+    Treat an invalid sanitizer/provider value as a non-match instead of letting
+    a response-completeness guard crash the entire agent loop.
+    """
+    return isinstance(user_input, str) and bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
 
 
 def _video_result_seed(content: str) -> int | None:
