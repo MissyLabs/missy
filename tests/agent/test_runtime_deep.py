@@ -1402,6 +1402,32 @@ class TestDesktopActionVerificationRetry:
         assert len(unresolved) == 1
         assert unresolved[0]["result"] == "deny"
 
+    def test_verification_gets_one_grace_turn_at_iteration_limit(self):
+        provider = _make_provider(reply="unexpected tool-free fallback")
+        click_tool = _make_mock_tool("x11_click")
+        read_tool = _make_mock_tool("x11_read_screen")
+        tool_reg = _make_tool_registry([click_tool, read_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("x11_click"),
+            _make_stop_response("Clicked successfully."),
+            _make_tool_call_response("x11_read_screen"),
+            _make_stop_response("Verified after the safety observation."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            # Three configured iterations reach the verifying read result,
+            # but a fourth provider turn is required to summarize it.
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            result = rt.run("Click Submit and verify the result.")
+
+        assert result == "Verified after the safety observation."
+        assert provider.complete_with_tools.call_count == 4
+        provider.complete.assert_not_called()
+
 
 class TestPromiseWithoutActionRetry:
     def test_promise_without_action_triggers_one_retry(self):
