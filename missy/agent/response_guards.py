@@ -895,24 +895,26 @@ def find_unmet_web_requests(
     )
     if browser_intent:
         expected.update({"browser_navigate", "browser_close"})
-    if "current url" in text or "page title" in text:
-        expected.add("browser_get_url")
     required_fill_calls = 0
-    if "fill" in text and ("form" in text or "name/email" in text):
-        expected.add("browser_fill")
-        required_fill_calls = 2 if "name/email" in text else 1
-    if "submit" in text:
-        expected.update({"browser_click", "browser_wait", "browser_get_content"})
-    if "screenshot" in text:
-        expected.add("browser_screenshot")
-    if "upload" in text and "discord" in text:
-        expected.add("discord_upload_file")
-    if "visible text" in text or "main content" in text:
-        expected.add("browser_get_content")
-    if "javascript" in text or "using js" in text:
-        expected.add("browser_evaluate")
-    if "wait until" in text or "wait for" in text:
-        expected.update({"browser_wait", "browser_get_content"})
+    submit_action = browser_intent and "submit" in text
+    if browser_intent:
+        if "current url" in text or "page title" in text:
+            expected.add("browser_get_url")
+        if "fill" in text and ("form" in text or "name/email" in text):
+            expected.add("browser_fill")
+            required_fill_calls = 2 if "name/email" in text else 1
+        if submit_action:
+            expected.update({"browser_click", "browser_wait", "browser_get_content"})
+        if "screenshot" in text:
+            expected.add("browser_screenshot")
+        if "upload" in text and "discord" in text:
+            expected.add("discord_upload_file")
+        if "visible text" in text or "main content" in text:
+            expected.add("browser_get_content")
+        if "javascript" in text or "using js" in text:
+            expected.add("browser_evaluate")
+        if "wait until" in text or "wait for" in text:
+            expected.update({"browser_wait", "browser_get_content"})
 
     if available is not None:
         expected.intersection_update(available)
@@ -929,7 +931,7 @@ def find_unmet_web_requests(
     # verify the confirmation, and closing/reopening between submit and wait
     # loses the submitted DOM state. Require one coherent sequence after the
     # latest navigation, including every separately requested field.
-    if "submit" in text and "browser_navigate" in used:
+    if submit_action and "browser_navigate" in used:
         latest_navigation = max(
             i for i, name in enumerate(tool_names_used) if name == "browser_navigate"
         )

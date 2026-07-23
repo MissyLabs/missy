@@ -2244,7 +2244,9 @@ class AgentRuntime:
                 # caught a coordinate click followed by a false success claim
                 # while the target dialog remained open. Require a later
                 # screen/tree/window observation before accepting completion.
-                _unverified_desktop_action = find_unverified_desktop_action(tool_names_used)
+                _unverified_desktop_action = find_unverified_desktop_action(
+                    successful_tool_names
+                )
                 if _unverified_desktop_action:
                     if _desktop_verification_retries < _MAX_DESKTOP_VERIFICATION_RETRIES:
                         _desktop_verification_retries += 1

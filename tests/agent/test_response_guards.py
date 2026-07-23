@@ -107,6 +107,14 @@ class TestWebRequestGuard:
         prompt = "Fetch this local test URL: http://127.0.0.1/page"
         assert find_unmet_web_requests(prompt, [], {"web_fetch"}) == ["web_fetch"]
 
+    def test_accessible_submit_button_is_not_a_browser_form_request(self):
+        prompt = "Click the accessible button named Submit."
+        assert find_unmet_web_requests(prompt, [], None) == []
+
+    def test_desktop_screenshot_is_not_a_browser_request(self):
+        prompt = "Open a text editor, type hello, and take a screenshot."
+        assert find_unmet_web_requests(prompt, [], None) == []
+
     def test_close_before_later_browser_action_is_not_terminal(self):
         prompt = "Open this page in the browser and report the page title."
         used = ["browser_navigate", "browser_close", "browser_get_url"]
@@ -222,6 +230,12 @@ class TestDesktopActionVerificationGuard:
 
     def test_non_desktop_tools_do_not_trigger(self):
         assert find_unverified_desktop_action(["calculator", "file_read"]) is None
+
+    def test_failed_desktop_action_is_excluded_by_successful_call_filter(self):
+        # Runtime supplies only successful tool names; a failed action must be
+        # handled by DONE criteria rather than demanding verification of an
+        # input event that never occurred.
+        assert find_unverified_desktop_action(["atspi_get_tree"]) is None
 
     def test_retry_prompt_names_action_and_requires_later_observation(self):
         prompt = make_desktop_verification_retry_prompt("x11_click", "Click the Run Test button")

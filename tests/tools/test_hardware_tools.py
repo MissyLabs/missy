@@ -2168,7 +2168,7 @@ class TestAtSpiGetTreeTool:
         assert result.success is True
         assert result.output["app_name"] == "Firefox"
 
-    def test_max_depth_clamped_to_5(self):
+    def test_max_depth_clamped_to_20(self):
         mock_atspi = _make_mock_pyatspi()
         mock_app = _make_mock_accessible(name="App")
         mock_desktop = MagicMock()
@@ -2182,13 +2182,13 @@ class TestAtSpiGetTreeTool:
         ):
             self.tool.execute(app_name="App", max_depth=100)
 
-        # max_depth should be clamped to 5
+        # max_depth should be clamped to 20
         call_kwargs = mock_walk.call_args[1]
         assert (
             call_kwargs.get(
                 "max_depth", mock_walk.call_args[0][1] if len(mock_walk.call_args[0]) > 1 else 100
             )
-            <= 5
+            <= 20
         )
 
     def test_max_depth_minimum_1(self):
@@ -2659,6 +2659,141 @@ class TestAtSpiHelpers:
             result = _get_focused_application(desktop)
 
         assert result is active
+
+    def test_get_focused_application_uses_focused_descendant_when_root_not_active(self):
+        from missy.tools.builtin.atspi_tools import _get_focused_application
+
+        mock_atspi = _make_mock_pyatspi()
+        mock_atspi.STATE_ACTIVE = 1
+        mock_atspi.STATE_FOCUSED = 2
+
+        root_state = MagicMock()
+        root_state.contains.return_value = False
+        focused_state = MagicMock()
+        focused_state.contains.side_effect = lambda state: state == 2
+        focused_field = MagicMock(childCount=0)
+        focused_field.getState.return_value = focused_state
+        app = MagicMock(childCount=1)
+        app.getState.return_value = root_state
+        app.getChildAtIndex.return_value = focused_field
+        desktop = MagicMock(childCount=1)
+        desktop.getChildAtIndex.return_value = app
+
+        with patch.dict("sys.modules", {"pyatspi": mock_atspi}):
+            result = _get_focused_application(desktop)
+
+        assert result is app
+
+    def test_get_focused_application_prefers_deeper_focused_widget(self):
+        from missy.tools.builtin.atspi_tools import _get_focused_application
+
+        mock_atspi = _make_mock_pyatspi()
+        mock_atspi.STATE_ACTIVE = 1
+        mock_atspi.STATE_FOCUSED = 2
+
+        def app_with_focus_at(depth):
+            focused_state = MagicMock()
+            focused_state.contains.side_effect = lambda state: state == 2
+            node = MagicMock(childCount=0)
+            node.getState.return_value = focused_state
+            for _ in range(depth):
+                state = MagicMock()
+                state.contains.return_value = False
+                parent = MagicMock(childCount=1)
+                parent.getState.return_value = state
+                parent.getChildAtIndex.return_value = node
+                node = parent
+            return node
+
+        shell = app_with_focus_at(1)
+        form = app_with_focus_at(5)
+        desktop = MagicMock(childCount=2)
+        desktop.getChildAtIndex.side_effect = [shell, form, shell, form]
+
+        with patch.dict("sys.modules", {"pyatspi": mock_atspi}):
+            result = _get_focused_application(desktop)
+
+        assert result is form
+
+    def test_get_focused_application_maps_x11_active_window_title(self):
+        from missy.tools.builtin.atspi_tools import _get_focused_application
+
+        mock_atspi = _make_mock_pyatspi()
+        mock_atspi.STATE_ACTIVE = 1
+        mock_atspi.STATE_FOCUSED = 2
+        inactive_state = MagicMock()
+        inactive_state.contains.return_value = False
+
+        form_window = MagicMock(name="form_window", childCount=0)
+        form_window.name = "AT-SPI Validation Form"
+        form_window.getState.return_value = inactive_state
+        form = MagicMock(name="form", childCount=1)
+        form.name = "fixture.py"
+        form.getState.return_value = inactive_state
+        form.getChildAtIndex.return_value = form_window
+
+        terminal = MagicMock(name="terminal", childCount=0)
+        terminal.name = "gnome-terminal-server"
+        terminal.getState.return_value = inactive_state
+        desktop = MagicMock(childCount=2)
+        desktop.getChildAtIndex.side_effect = [terminal, form, terminal, form]
+        active = MagicMock(returncode=0, stdout="AT-SPI Validation Form\n")
+
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch("missy.tools.builtin.atspi_tools.subprocess.run", return_value=active),
+        ):
+            result = _get_focused_application(desktop)
+
+        assert result is form
+
+    def test_get_focused_application_prefers_content_app_over_window_decorator(self):
+        from missy.tools.builtin.atspi_tools import _get_focused_application
+
+        mock_atspi = _make_mock_pyatspi()
+        mock_atspi.STATE_ACTIVE = 1
+        mock_atspi.STATE_FOCUSED = 2
+        inactive_state = MagicMock()
+        inactive_state.contains.return_value = False
+        focused_state = MagicMock()
+        focused_state.contains.side_effect = lambda state: state == 2
+
+        decorator_window = MagicMock(childCount=0)
+        decorator_window.name = "AT-SPI Validation Form"
+        decorator_window.getState.return_value = inactive_state
+        decorator = MagicMock(childCount=1)
+        decorator.name = "mutter-x11-frames"
+        decorator.getState.return_value = inactive_state
+        decorator.getChildAtIndex.return_value = decorator_window
+
+        focused_entry = MagicMock(childCount=0)
+        focused_entry.name = "Name"
+        focused_entry.getState.return_value = focused_state
+        form_window = MagicMock(childCount=1)
+        form_window.name = "AT-SPI Validation Form"
+        form_window.getState.return_value = inactive_state
+        form_window.getChildAtIndex.return_value = focused_entry
+        form = MagicMock(childCount=1)
+        form.name = "atspi_fixture.py"
+        form.getState.return_value = inactive_state
+        form.getChildAtIndex.return_value = form_window
+
+        desktop = MagicMock(childCount=2)
+        desktop.getChildAtIndex.side_effect = [decorator, form, decorator, form]
+        active = MagicMock(returncode=0, stdout="AT-SPI Validation Form\n")
+
+        with (
+            patch.dict("sys.modules", {"pyatspi": mock_atspi}),
+            patch.dict("os.environ", {}, clear=True),
+            patch("missy.tools.builtin.atspi_tools.os.path.exists", return_value=True),
+            patch(
+                "missy.tools.builtin.atspi_tools.subprocess.run", return_value=active
+            ) as mock_run,
+        ):
+            result = _get_focused_application(desktop)
+
+        assert result is form
+        assert mock_run.call_args.kwargs["env"]["DISPLAY"] == ":0"
 
     def test_get_focused_application_fallback_to_first_child(self):
         from missy.tools.builtin.atspi_tools import _get_focused_application

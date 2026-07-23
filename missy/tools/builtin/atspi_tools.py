@@ -17,6 +17,8 @@ installed so they never break the runtime on headless or minimal systems.
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -69,7 +71,9 @@ def _get_focused_application(desktop: Any) -> Any:
     """Return the currently focused application on the desktop.
 
     Iterates over desktop children and returns the first one whose state
-    set includes ``STATE_ACTIVE``.
+    set includes ``STATE_ACTIVE``. Some GTK/GNOME combinations never expose
+    that state on the application root, so a second pass finds an application
+    with a descendant carrying ``STATE_FOCUSED``.
 
     Args:
         desktop: The AT-SPI desktop object.
@@ -79,9 +83,39 @@ def _get_focused_application(desktop: Any) -> Any:
     """
     import pyatspi  # type: ignore[import]
 
-    for i in range(desktop.childCount):
+    desktop_children: list[Any] = []
+    for child_index in range(desktop.childCount):
         try:
-            child = desktop.getChildAtIndex(i)
+            desktop_children.append(desktop.getChildAtIndex(child_index))
+        except Exception:  # noqa: BLE001
+            continue
+
+    def _deepest_focused_node(node: Any, depth: int = 0) -> int:
+        # Keep traversal bounded for malformed or cyclic accessibility trees.
+        if node is None or depth > 32:
+            return -1
+        deepest = -1
+        try:
+            if node.getState().contains(pyatspi.STATE_FOCUSED):
+                deepest = depth
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            child_count = int(node.childCount)
+        except Exception:  # noqa: BLE001
+            return deepest
+        for child_index in range(min(max(child_count, 0), 4096)):
+            try:
+                deepest = max(
+                    deepest,
+                    _deepest_focused_node(node.getChildAtIndex(child_index), depth + 1),
+                )
+            except Exception:  # noqa: BLE001
+                continue
+        return deepest
+
+    for child in desktop_children:
+        try:
             if child is None:
                 continue
             state_set = child.getState()
@@ -89,14 +123,94 @@ def _get_focused_application(desktop: Any) -> Any:
                 return child
         except Exception:  # noqa: BLE001
             continue
-    # Fall back to first non-None child
-    for i in range(desktop.childCount):
+
+    # AT-SPI focus states can remain set on several applications at once. On
+    # X11, map the actual active window title back to the application tree
+    # before falling back to heuristic focus depth. This is a fixed read-only
+    # query; no model-controlled shell text is involved.
+    active_window_title = ""
+    try:
+        active_window_env = os.environ.copy()
+        if not active_window_env.get("DISPLAY"):
+            for display_number in range(10):
+                if os.path.exists(f"/tmp/.X11-unix/X{display_number}"):
+                    active_window_env["DISPLAY"] = f":{display_number}"
+                    break
+        completed = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowname"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            env=active_window_env,
+        )
+        if completed.returncode == 0:
+            active_window_title = completed.stdout.strip().casefold()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    def _contains_named_window(node: Any, depth: int = 0) -> bool:
+        if node is None or depth > 32:
+            return False
         try:
-            child = desktop.getChildAtIndex(i)
-            if child is not None:
-                return child
+            node_name = node.name
+            if (
+                active_window_title
+                and isinstance(node_name, str)
+                and node_name.strip().casefold() == active_window_title
+            ):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            child_count = int(node.childCount)
+        except Exception:  # noqa: BLE001
+            return False
+        for child_index in range(min(max(child_count, 0), 4096)):
+            try:
+                if _contains_named_window(node.getChildAtIndex(child_index), depth + 1):
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
+    if active_window_title:
+        title_matches: list[tuple[int, int, Any]] = []
+        for child in desktop_children:
+            try:
+                if _contains_named_window(child):
+                    try:
+                        child_name = str(child.name or "").casefold()
+                    except Exception:  # noqa: BLE001
+                        child_name = ""
+                    is_decorator = int(
+                        "mutter" in child_name or child_name.endswith("-frames")
+                    )
+                    title_matches.append(
+                        (_deepest_focused_node(child), -is_decorator, child)
+                    )
+            except Exception:  # noqa: BLE001
+                continue
+        if title_matches:
+            return max(title_matches, key=lambda candidate: candidate[:2])[2]
+
+    focused_app = None
+    focused_depth = -1
+    for child in desktop_children:
+        try:
+            candidate_depth = _deepest_focused_node(child)
+            if candidate_depth > focused_depth:
+                focused_app = child
+                focused_depth = candidate_depth
         except Exception:  # noqa: BLE001
             continue
+    if focused_app is not None:
+        return focused_app
+
+    # Fall back to first non-None child
+    for child in desktop_children:
+        if child is not None:
+            return child
     return None
 
 
@@ -297,8 +411,8 @@ class AtSpiGetTreeTool(BaseTool):
         },
         "max_depth": {
             "type": "integer",
-            "description": "Maximum tree depth to traverse (default 3, max 5).",
-            "default": 3,
+            "description": "Maximum tree depth to traverse (default 10, max 20).",
+            "default": 10,
         },
     }
 
@@ -306,7 +420,7 @@ class AtSpiGetTreeTool(BaseTool):
         self,
         *,
         app_name: str = "",
-        max_depth: int = 3,
+        max_depth: int = 10,
         **_: Any,
     ) -> ToolResult:
         try:
@@ -314,7 +428,7 @@ class AtSpiGetTreeTool(BaseTool):
         except ImportError:
             return ToolResult(success=False, output=None, error=_PYATSPI_MISSING)
 
-        max_depth = min(max(int(max_depth), 1), 5)
+        max_depth = min(max(int(max_depth), 1), 20)
 
         try:
             desktop = _get_desktop()
@@ -647,8 +761,14 @@ class AtSpiSetValueTool(BaseTool):
                         error="No focused application. Pass app_name to specify one.",
                     )
 
-            # Search for editable text elements by name
-            element = _find_element(app, name, role=None)
+            # Labels and their inputs commonly share the same accessible name.
+            # Prefer text/entry roles so a name-only search does not stop on
+            # the read-only label before reaching the editable control.
+            element = (
+                _find_element(app, name, role="text")
+                or _find_element(app, name, role="entry")
+                or _find_element(app, name, role=None)
+            )
             if element is None:
                 return ToolResult(
                     success=False,
@@ -671,7 +791,11 @@ class AtSpiSetValueTool(BaseTool):
                 current_len = 0
                 try:
                     text_iface = element.queryText()
-                    current_len = text_iface.getCharacterCount()
+                    character_count = getattr(text_iface, "characterCount", None)
+                    if isinstance(character_count, int):
+                        current_len = character_count
+                    else:
+                        current_len = text_iface.getCharacterCount()
                 except Exception:  # noqa: BLE001
                     logger.debug("AT-SPI character count query failed", exc_info=True)
                 if current_len > 0:
@@ -694,6 +818,26 @@ class AtSpiSetValueTool(BaseTool):
                         ),
                     )
 
+            verified_value: bool | None = None
+            readback: str | None = None
+            try:
+                observed = element.queryText().getText(0, -1)
+                if isinstance(observed, str):
+                    readback = observed
+                    verified_value = observed == value
+            except Exception:  # noqa: BLE001
+                logger.debug("AT-SPI value readback failed for %s", name, exc_info=True)
+
+            if verified_value is False:
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error=(
+                        f"AT-SPI reported setting {name!r}, but readback was {readback!r} "
+                        f"instead of {value!r}."
+                    ),
+                )
+
             return ToolResult(
                 success=True,
                 output={
@@ -701,6 +845,8 @@ class AtSpiSetValueTool(BaseTool):
                     "value_set": value,
                     "method": set_via,
                     "app": app.name,
+                    "verified": verified_value,
+                    "readback": readback,
                 },
             )
         except Exception as exc:  # noqa: BLE001
