@@ -34,6 +34,7 @@ from missy.agent.response_guards import (
     make_security_refusal_retry_prompt,
     make_video_generation_error_report_prompt,
     make_video_generation_retry_prompt,
+    make_video_reproducibility_comparison_prompt,
     make_video_reproducibility_prompt,
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
@@ -77,6 +78,17 @@ class TestVideoGenerationGuards:
             ),
         ]
         assert find_video_reproducibility_issue(request, observations) is None
+
+    def test_reproducibility_comparison_uses_decoded_frames(self):
+        observations = [
+            ({"backend": "wan"}, '{"path": "/tmp/first.mp4", "seed": 1}', False),
+            ({"backend": "wan", "seed": 1}, '{"path": "/tmp/second.mp4"}', False),
+        ]
+        prompt = make_video_reproducibility_comparison_prompt(observations)
+        assert "decoded video frames" in prompt
+        assert "framemd5" in prompt
+        assert "/tmp/first.mp4" in prompt
+        assert "/tmp/second.mp4" in prompt
 
     def test_render_request_requires_video_generate(self):
         prompt = "Generate a video of a sunset using the SVD backend."

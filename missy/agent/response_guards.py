@@ -1097,15 +1097,19 @@ def is_video_reproducibility_request(user_input: str) -> bool:
 
 
 def _video_result_seed(content: str) -> int | None:
-    try:
-        value = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        try:
-            value = ast.literal_eval(content)
-        except (SyntaxError, ValueError):
-            return None
+    value = _parse_video_result(content)
     seed = value.get("seed") if isinstance(value, dict) else None
     return seed if isinstance(seed, int) and seed > 0 else None
+
+
+def _parse_video_result(content: str) -> Any:
+    try:
+        return json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        try:
+            return ast.literal_eval(content)
+        except (SyntaxError, ValueError):
+            return None
 
 
 def make_video_reproducibility_prompt(
@@ -1150,6 +1154,27 @@ def find_video_reproducibility_issue(
     if latest_comparable != first_comparable:
         return "the repeat call changed generation parameters"
     return None
+
+
+def make_video_reproducibility_comparison_prompt(
+    observations: list[tuple[dict[str, Any], str, bool]],
+) -> str:
+    """Require decoded-frame comparison rather than container-only hashes."""
+    paths: list[str] = []
+    for _, content, is_error in observations:
+        value = _parse_video_result(content)
+        path = value.get("path") if not is_error and isinstance(value, dict) else None
+        if isinstance(path, str):
+            paths.append(path)
+    path_text = "\n".join(f"  - {path}" for path in paths[:2])
+    return (
+        "Before answering whether the two renders match, compare their decoded video "
+        "frames (for example with ffmpeg framemd5 or a decoded-stream hash), not only "
+        "the SHA256 of the MP4 container. Collision-safe MP4 files can differ in embedded "
+        "per-run metadata while containing exactly identical frames. Report container-byte "
+        "equality and decoded-frame equality separately. The two generated paths are:\n"
+        f"{path_text}"
+    )
 
 
 def make_capability_denial_retry_prompt(

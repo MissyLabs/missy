@@ -1427,6 +1427,7 @@ class AgentRuntime:
             make_security_refusal_retry_prompt,
             make_video_generation_error_report_prompt,
             make_video_generation_retry_prompt,
+            make_video_reproducibility_comparison_prompt,
             make_video_reproducibility_prompt,
             make_web_request_retry_prompt,
             terminal_parameter_errors_are_reported,
@@ -1895,6 +1896,16 @@ class AgentRuntime:
                         first_arguments, first_result, _ = successful_video_observations[0]
                         verification += "\n\n" + make_video_reproducibility_prompt(
                             first_arguments, first_result, _tool_request_input
+                        )
+                    elif (
+                        is_video_reproducibility_request(_tool_request_input)
+                        and len(successful_video_observations) >= 2
+                    ):
+                        verification += (
+                            "\n\n"
+                            + make_video_reproducibility_comparison_prompt(
+                                _video_generation_observations
+                            )
                         )
                     loop_messages.append({"role": "user", "content": verification})
 
