@@ -1501,8 +1501,22 @@ class AgentRuntime:
             _progress = NullReporter()
         _progress.on_start(user_input or "tool loop")
         try:
-            for iteration in range(self.config.max_iterations):
-                _progress.on_iteration(iteration, self.config.max_iterations)
+            # A desktop-completion guard can consume the final configured
+            # provider turn by requesting the required post-action
+            # observation. Reserve one conditional grace turn so the model
+            # can synthesize that observation instead of falling through to
+            # the tool-free iteration-limit fallback. The grace turn is not
+            # available to ordinary tool loops, preserving max_iterations for
+            # every task that did not trigger this safety correction.
+            _desktop_grace_limit = self.config.max_iterations + _MAX_DESKTOP_VERIFICATION_RETRIES
+            for iteration in range(_desktop_grace_limit):
+                if iteration >= self.config.max_iterations and _desktop_verification_retries == 0:
+                    break
+                _progress.on_iteration(
+                    iteration,
+                    self.config.max_iterations
+                    + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES),
+                )
 
                 # SR-3.4: check budget against cost already accumulated from
                 # prior calls *before* making another paid provider call.
