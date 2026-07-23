@@ -738,8 +738,18 @@ def find_unmet_desktop_requests(
         return []
     available = set(available_tool_names) if available_tool_names is not None else None
     used = set(tool_names_used)
+    browser_screenshot_request = bool(
+        re.search(r"(?i)\b(?:browser|webpage|page|dashboard|https?://)\b", user_input)
+        and re.search(r"(?i)\b(?:take|capture)\s+(?:a\s+)?screenshot\b", user_input)
+    )
     missing: list[str] = []
     for label, pattern, alternatives in _DESKTOP_REQUEST_RULES:
+        # "Take a screenshot" is shared wording between the browser and X11
+        # surfaces.  A rendered-page request must remain on Playwright; forcing
+        # x11_screenshot after browser_screenshot both captures the wrong
+        # surface and can upload a second, unrelated image.
+        if label == "desktop screenshot" and browser_screenshot_request:
+            continue
         if pattern.search(user_input) is None:
             continue
         usable = alternatives if available is None else alternatives.intersection(available)
@@ -839,6 +849,151 @@ def make_filesystem_verification_retry_prompt(action_name: str, user_input: str 
         "affected paths now with list_files (use a recursive listing when the request "
         "spans directories) or file_read. Do not repeat the mutation unless verification "
         f"shows it is necessary.{anchor}"
+    )
+
+
+_BROWSER_TOOL_NAMES = frozenset(
+    {
+        "browser_navigate",
+        "browser_click",
+        "browser_fill",
+        "browser_screenshot",
+        "browser_get_content",
+        "browser_evaluate",
+        "browser_wait",
+        "browser_get_url",
+        "browser_close",
+    }
+)
+
+
+def find_unmet_web_requests(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Return concrete web/browser tools still required by the request.
+
+    These rules cover explicit interaction language, not broad topical web
+    questions. They prevent a provider from substituting raw HTML for a form,
+    rendered DOM, JavaScript, or screenshot task and ensure every browser
+    workflow closes its persistent session.
+    """
+    if not isinstance(user_input, str) or not isinstance(tool_names_used, list):
+        return []
+    text = user_input.lower()
+    available = set(available_tool_names) if available_tool_names is not None else None
+    expected: set[str] = set()
+
+    if re.search(r"\bfetch\b.{0,100}\b(?:url|https?://)", text, re.DOTALL):
+        expected.add("web_fetch")
+
+    browser_intent = bool(
+        re.search(r"\bopen\b.{0,100}\b(?:browser|webpage|page|dashboard)\b", text, re.DOTALL)
+        or re.search(r"\b(?:fill|submit)\b.{0,120}\b(?:form|page|data)\b", text, re.DOTALL)
+        or "visible text from the main content" in text
+    )
+    if browser_intent:
+        expected.update({"browser_navigate", "browser_close"})
+    if "current url" in text or "page title" in text:
+        expected.add("browser_get_url")
+    required_fill_calls = 0
+    if "fill" in text and ("form" in text or "name/email" in text):
+        expected.add("browser_fill")
+        required_fill_calls = 2 if "name/email" in text else 1
+    if "submit" in text:
+        expected.update({"browser_click", "browser_wait", "browser_get_content"})
+    if "screenshot" in text:
+        expected.add("browser_screenshot")
+    if "upload" in text and "discord" in text:
+        expected.add("discord_upload_file")
+    if "visible text" in text or "main content" in text:
+        expected.add("browser_get_content")
+    if "javascript" in text or "using js" in text:
+        expected.add("browser_evaluate")
+    if "wait until" in text or "wait for" in text:
+        expected.update({"browser_wait", "browser_get_content"})
+
+    if available is not None:
+        expected.intersection_update(available)
+    used = set(tool_names_used)
+    missing = expected.difference(used)
+    if (
+        required_fill_calls
+        and tool_names_used.count("browser_fill") < required_fill_calls
+        and (available is None or "browser_fill" in available)
+    ):
+        missing.add("browser_fill")
+
+    # Form completion is order-sensitive. A content read before submit cannot
+    # verify the confirmation, and closing/reopening between submit and wait
+    # loses the submitted DOM state. Require one coherent sequence after the
+    # latest navigation, including every separately requested field.
+    if "submit" in text and "browser_navigate" in used:
+        latest_navigation = max(
+            i for i, name in enumerate(tool_names_used) if name == "browser_navigate"
+        )
+        fill_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_fill" and i > latest_navigation
+        ]
+        needed_fills = max(required_fill_calls, 1)
+        if len(fill_indexes) < needed_fills:
+            missing.add("browser_fill")
+        last_fill = max(fill_indexes, default=latest_navigation)
+        click_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_click" and i > last_fill
+        ]
+        if not click_indexes:
+            missing.add("browser_click")
+        last_click = max(click_indexes, default=len(tool_names_used))
+        wait_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_wait" and i > last_click
+        ]
+        if not wait_indexes:
+            missing.add("browser_wait")
+        last_wait = max(wait_indexes, default=len(tool_names_used))
+        content_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_get_content" and i > last_wait
+        ]
+        if not content_indexes:
+            missing.add("browser_get_content")
+        last_content = max(content_indexes, default=len(tool_names_used))
+        if not any(
+            name == "browser_close"
+            for name in tool_names_used[last_content + 1 :]
+        ):
+            missing.add("browser_close")
+
+    # Closing before a later browser operation does not close the resulting
+    # live session, so treat it as still missing.
+    if "browser_close" in expected and "browser_close" in used:
+        last_close = max(i for i, name in enumerate(tool_names_used) if name == "browser_close")
+        if any(name in _BROWSER_TOOL_NAMES for name in tool_names_used[last_close + 1 :]):
+            missing.add("browser_close")
+    return sorted(missing)
+
+
+def make_web_request_retry_prompt(missing: list[str], user_input: str = "") -> str:
+    """Return a correction requiring the missing browser workflow steps."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "You stopped before executing every concrete web/browser operation required "
+        f"by this request. Still missing in this task: {', '.join(missing)}. Call those "
+        "exact tools now, preserve the current browser session_id across calls, ground "
+        "the answer in their results, and make browser_close the last browser operation. "
+        "For a form submission, keep one coherent page session and execute every field "
+        "fill, then click, wait for confirmation, read the confirmation content, and only "
+        "then close; if the page was already closed or reopened, repeat that sequence. "
+        "Do not substitute web_fetch, shell, or desktop tools for rendered-page interaction."
+        f"{anchor}"
     )
 
 

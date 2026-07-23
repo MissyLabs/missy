@@ -18,6 +18,7 @@ from __future__ import annotations
 # doesn't work with Playwright's sync API.
 import concurrent.futures as _concurrent_futures  # noqa: E402
 import os
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -223,6 +224,49 @@ class TestBrowserSessionStart:
 
         mock_context.route.assert_called_once_with("**/*", _route_through_network_policy)
 
+    def test_failed_launch_stops_driver_and_clears_partial_state(self):
+        session = _make_session(headless=True)
+        mock_pw = MagicMock()
+        mock_pw.firefox.launch_persistent_context.side_effect = RuntimeError("launch failed")
+        fake_sync_api = MagicMock()
+        fake_sync_api.sync_playwright.return_value.start.return_value = mock_pw
+
+        with (
+            patch.object(session, "_ensure_display"),
+            patch.dict(
+                "sys.modules",
+                {"playwright": MagicMock(), "playwright.sync_api": fake_sync_api},
+            ),
+            pytest.raises(RuntimeError, match="launch failed"),
+        ):
+            session._start()
+
+        mock_pw.stop.assert_called_once()
+        assert session._pw is None
+        assert session._context is None
+
+    def test_profile_directory_is_isolated_by_browser_build(self):
+        session = _make_session(headless=True)
+        mock_pw = MagicMock()
+        mock_pw.firefox.executable_path = (
+            "/home/user/.cache/ms-playwright/firefox-1509/firefox/firefox"
+        )
+        mock_pw.firefox.launch_persistent_context.return_value = MagicMock()
+        fake_sync_api = MagicMock()
+        fake_sync_api.sync_playwright.return_value.start.return_value = mock_pw
+
+        with (
+            patch.object(session, "_ensure_display"),
+            patch.dict(
+                "sys.modules",
+                {"playwright": MagicMock(), "playwright.sync_api": fake_sync_api},
+            ),
+        ):
+            session._start()
+
+        kwargs = mock_pw.firefox.launch_persistent_context.call_args.kwargs
+        assert kwargs["user_data_dir"].endswith("/test/firefox-1509")
+
 
 # ---------------------------------------------------------------------------
 # BrowserSession.get_page — lines 82, 89
@@ -285,6 +329,31 @@ class TestGetPage:
 
         mock_context.new_page.assert_called_once()
         assert result is fresh_page
+
+    def test_operations_from_multiple_callers_stay_on_one_worker_thread(self):
+        session = _make_session()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        context = MagicMock()
+        context.pages = [page]
+        session._context = context
+
+        def invoke_from_caller() -> tuple[int, int]:
+            caller_thread = threading.get_ident()
+            worker_thread = session.run(lambda _page: threading.get_ident())
+            return caller_thread, worker_thread
+
+        try:
+            with _concurrent_futures.ThreadPoolExecutor(max_workers=2) as callers:
+                observations = list(callers.map(lambda _item: invoke_from_caller(), range(4)))
+        finally:
+            session.close()
+
+        caller_threads = {caller for caller, _worker in observations}
+        worker_threads = {worker for _caller, worker in observations}
+        assert len(caller_threads) >= 1
+        assert len(worker_threads) == 1
+        assert worker_threads.isdisjoint(caller_threads)
 
     def test_get_page_calls_new_page_when_pages_list_is_empty(self):
         """Line 89: when context.pages is empty, new_page() is called."""
@@ -394,7 +463,7 @@ class TestPageHelper:
         assert result is mock_page
 
     def test_page_default_args(self):
-        """_page() uses 'default' session and headless=False when called bare."""
+        """_page() uses the server-safe headless default when called bare."""
         mock_page = MagicMock()
         mock_session = MagicMock()
         mock_session.get_page.return_value = mock_page
@@ -402,7 +471,7 @@ class TestPageHelper:
         with patch.object(_registry, "get_or_create", return_value=mock_session) as mock_goc:
             _page()
 
-        mock_goc.assert_called_once_with("default", headless=False)
+        mock_goc.assert_called_once_with("default", headless=True)
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +504,8 @@ class TestSessionRegistry:
         with patch.object(Path, "mkdir"):
             sess = BrowserSession("s1")
         sess._context = MagicMock()
-        # get_page raises to exercise the except branch
-        with patch.object(sess, "get_page", side_effect=RuntimeError("boom")):
+        # The affine worker dispatcher raises to exercise the except branch.
+        with patch.object(sess, "run", side_effect=RuntimeError("boom")):
             reg._sessions["s1"] = sess
             result = reg.screenshot_active(str(tmp_path / "shot.png"))
         assert result is False
@@ -505,6 +574,15 @@ class TestClassifyBrowserError:
         exc = RuntimeError("BrowserType.launch_persistent_context: Protocol error (Browser.enable)")
         result = _classify_browser_error(exc)
         assert "sandbox/kernel launch failure" in result
+
+    def test_profile_version_error_is_not_mislabeled_as_sandbox_failure(self):
+        exc = RuntimeError(
+            "Sandbox: unshare(CLONE_NEWPID): EPERM\n"
+            "This profile was last used with a newer version of this application."
+        )
+        result = _classify_browser_error(exc)
+        assert "profile compatibility error" in result
+        assert "sandbox/kernel launch failure" not in result
 
     def test_unrelated_navigation_error_passed_through_unmodified(self):
         # A real interaction/navigation error (timeout, DNS failure,

@@ -545,13 +545,17 @@ DISCORD_SYSTEM_PROMPT = (
     "When a user asks you to look at something, take a picture, or see something, "
     "use vision_capture and then describe what you see. Use discord_upload_file "
     "to share captured images in the channel. "
-    "You do NOT have a web browser tool — do not reference browser_* tools "
-    "or claim to have browsed a page; use web_fetch for raw HTML instead. "
-    "web_fetch only retrieves raw HTML — it does not run JavaScript and "
-    "cannot see content that a page renders dynamically (e.g. JS-driven "
-    "search results, single-page apps). If a page needs that and web_fetch's "
-    "result looks incomplete or empty, say so explicitly rather than "
-    "answering as if you had full browser access to the rendered page. "
+    "For raw HTTP retrieval use web_fetch. For rendered pages or interaction, "
+    "use browser_navigate, browser_click, browser_fill, browser_screenshot, "
+    "browser_get_content, browser_evaluate, browser_wait, browser_get_url, and "
+    "browser_close. Browser navigation remains network-policy-gated; do not "
+    "substitute raw HTML from web_fetch when the task requires JavaScript, "
+    "visible DOM state, or form interaction. For JavaScript inspection of "
+    "named page elements, target the requested elements from their DOM "
+    "classes, ids, attributes, or text; never assume a generic HTML tag such "
+    "as tr merely because the user calls the elements rows. For forms, fill each "
+    "requested field separately, click submit, wait for the confirmation, read its "
+    "content, and only then close. Close the browser session when the task is finished. "
     "When you need real data (file contents, command output, etc.), use tools "
     "rather than guessing. "
     "CALCULATOR ERRORS: A calculator error is the result for that exact "
@@ -1403,6 +1407,7 @@ class AgentRuntime:
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
             find_unmet_desktop_requests,
+            find_unmet_web_requests,
             find_unreported_calculator_expressions,
             find_unverified_desktop_action,
             find_unverified_filesystem_action,
@@ -1417,6 +1422,7 @@ class AgentRuntime:
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
+            make_web_request_retry_prompt,
         )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
@@ -1507,6 +1513,13 @@ class AgentRuntime:
         _desktop_request_retries = 0
         _MAX_FILESYSTEM_VERIFICATION_RETRIES = 1
         _filesystem_verification_retries = 0
+        # Browser workflows commonly need several serial calls because some
+        # providers emit only one tool call per turn (observe, fill, submit,
+        # wait, verify, close). Keep this bounded, but allow each missing step
+        # to be requested rather than assuming one corrective turn can execute
+        # the whole remainder of the workflow.
+        _MAX_WEB_REQUEST_RETRIES = 4
+        _web_request_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1530,6 +1543,7 @@ class AgentRuntime:
                 + _MAX_DESKTOP_VERIFICATION_RETRIES
                 + _MAX_CALCULATOR_COMPLETENESS_RETRIES
                 + _MAX_FILESYSTEM_VERIFICATION_RETRIES
+                + 2 * _MAX_WEB_REQUEST_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
                 _desktop_grace_used = (
@@ -1543,6 +1557,11 @@ class AgentRuntime:
                         _filesystem_verification_retries,
                         _MAX_FILESYSTEM_VERIFICATION_RETRIES,
                     )
+                    # One correction can require a tool-call turn followed by
+                    # another provider turn that synthesizes or exposes the
+                    # next missing step. Reserve both rather than consuming the
+                    # task's normal iteration budget with the guard itself.
+                    + 2 * min(_web_request_retries, _MAX_WEB_REQUEST_RETRIES)
                 )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
                     break
@@ -2069,6 +2088,51 @@ class AgentRuntime:
                             result="warn",
                             detail={"missing_tools": sorted(_missing_explicit_tools)},
                         )
+
+                _missing_web_requests = find_unmet_web_requests(
+                    _tool_request_input, successful_tool_names, allowed_tool_names
+                )
+                if _missing_web_requests and not is_security_refusal(
+                    final_text, _tool_request_input
+                ):
+                    if _web_request_retries < _MAX_WEB_REQUEST_RETRIES:
+                        _web_request_retries += 1
+                        logger.warning(
+                            "Web/browser request missing successful tool steps %s; retrying.",
+                            _missing_web_requests,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_web_request_retry_prompt(
+                                    _missing_web_requests, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.web_request_retry",
+                                result="warn",
+                                detail={"missing_tools": _missing_web_requests},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.web_request_unresolved",
+                            result="warn",
+                            detail={"missing_tools": _missing_web_requests},
+                        )
+                    final_text = (
+                        "I could not complete the requested web/browser workflow because "
+                        "these required successful steps did not run: "
+                        + ", ".join(_missing_web_requests)
+                        + ". I cannot confirm the browser task as complete."
+                    )
 
                 # A multi-expression calculator request can execute every
                 # call and still lose earlier results from the final prose,

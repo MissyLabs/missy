@@ -14,6 +14,7 @@ from missy.agent.response_guards import (
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
     find_unmet_desktop_requests,
+    find_unmet_web_requests,
     find_unreported_calculator_expressions,
     find_unverified_desktop_action,
     find_unverified_filesystem_action,
@@ -28,6 +29,7 @@ from missy.agent.response_guards import (
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
+    make_web_request_retry_prompt,
 )
 
 
@@ -50,6 +52,73 @@ class TestFilesystemVerificationGuard:
         )
         assert "list_files" in prompt
         assert "Create README.md and src/main.txt" in prompt
+
+
+class TestWebRequestGuard:
+    def test_metadata_request_requires_navigation_url_read_and_close(self):
+        prompt = "Open this local webpage in the browser and report the current URL and page title."
+        assert find_unmet_web_requests(prompt, [], None) == [
+            "browser_close",
+            "browser_get_url",
+            "browser_navigate",
+        ]
+
+    def test_complete_form_workflow_is_satisfied(self):
+        prompt = "Open the local form page, fill fake name/email data, submit, and report text."
+        used = [
+            "browser_navigate",
+            "browser_fill",
+            "browser_fill",
+            "browser_click",
+            "browser_wait",
+            "browser_get_content",
+            "browser_close",
+        ]
+        assert find_unmet_web_requests(prompt, used, set(used)) == []
+
+    def test_name_and_email_require_two_successful_fill_calls(self):
+        prompt = "Open the form page, fill fake name/email data, and submit."
+        used = ["browser_navigate", "browser_fill", "browser_click", "browser_close"]
+        assert "browser_fill" in find_unmet_web_requests(prompt, used, set(used))
+
+    def test_form_confirmation_steps_must_follow_submit_in_one_session(self):
+        prompt = "Open the form page, fill fake name/email data, submit, and report text."
+        used = [
+            "browser_navigate",
+            "browser_fill",
+            "browser_fill",
+            "browser_click",
+            "browser_get_content",
+            "browser_close",
+            "browser_navigate",
+            "browser_wait",
+            "browser_close",
+        ]
+        missing = find_unmet_web_requests(prompt, used, set(used))
+        assert missing == [
+            "browser_click",
+            "browser_close",
+            "browser_fill",
+            "browser_get_content",
+            "browser_wait",
+        ]
+
+    def test_raw_fetch_request_requires_web_fetch(self):
+        prompt = "Fetch this local test URL: http://127.0.0.1/page"
+        assert find_unmet_web_requests(prompt, [], {"web_fetch"}) == ["web_fetch"]
+
+    def test_close_before_later_browser_action_is_not_terminal(self):
+        prompt = "Open this page in the browser and report the page title."
+        used = ["browser_navigate", "browser_close", "browser_get_url"]
+        assert find_unmet_web_requests(prompt, used, set(used)) == ["browser_close"]
+
+    def test_retry_prompt_names_tools_and_original_request(self):
+        prompt = make_web_request_retry_prompt(
+            ["browser_get_url", "browser_close"], "Open the page"
+        )
+        assert "browser_get_url" in prompt
+        assert "browser_close" in prompt
+        assert "Open the page" in prompt
 
 
 class TestCalculatorCompletenessGuard:
@@ -178,6 +247,13 @@ class TestDesktopRequestExecutionGuard:
             "desktop typing",
             "desktop screenshot",
         ]
+
+    def test_browser_screenshot_does_not_require_x11_screenshot(self):
+        prompt = (
+            "Open the local dashboard page, take a screenshot, and upload it to Discord. "
+            "URL: http://127.0.0.1/dashboard.html"
+        )
+        assert find_unmet_desktop_requests(prompt, ["browser_screenshot"]) == []
 
     def test_unavailable_tool_family_is_not_required(self):
         assert (

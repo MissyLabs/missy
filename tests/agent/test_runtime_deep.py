@@ -1551,6 +1551,83 @@ class TestFilesystemActionVerificationRetry:
         assert any(event["event_type"].startswith("agent.done_criteria") for event in events)
 
 
+class TestWebRequestRetry:
+    def test_browser_metadata_request_requires_observation_and_close(self):
+        provider = _make_provider()
+        navigate = _make_mock_tool("browser_navigate")
+        get_url = _make_mock_tool("browser_get_url")
+        close = _make_mock_tool("browser_close")
+        tool_reg = _make_tool_registry([navigate, get_url, close])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("browser_navigate", args={"url": "http://127.0.0.1/page"}),
+            _make_stop_response("Opened the page."),
+            CompletionResponse(
+                content="",
+                model="fake-model",
+                provider="fake",
+                usage={},
+                raw={},
+                tool_calls=[
+                    ToolCall(id="url", name="browser_get_url", arguments={}),
+                    ToolCall(id="close", name="browser_close", arguments={}),
+                ],
+                finish_reason="tool_calls",
+            ),
+            _make_stop_response("URL and title verified; session closed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(
+                "Open this local webpage in the browser and report the current URL and page title."
+            )
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "browser_navigate",
+            "browser_get_url",
+            "browser_close",
+        ]
+        assert result == "URL and title verified; session closed."
+        retries = [e for e in events if e["event_type"] == "agent.response.web_request_retry"]
+        assert len(retries) == 1
+        assert retries[0]["detail"] == {"missing_tools": ["browser_close", "browser_get_url"]}
+
+    def test_serial_browser_corrections_receive_bounded_grace_turns(self):
+        provider = _make_provider()
+        navigate = _make_mock_tool("browser_navigate")
+        get_content = _make_mock_tool("browser_get_content")
+        close = _make_mock_tool("browser_close")
+        tool_reg = _make_tool_registry([navigate, get_content, close])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("browser_navigate"),
+            _make_stop_response("Ready appeared."),
+            _make_tool_call_response("browser_get_content"),
+            _make_stop_response("Ready."),
+            _make_tool_call_response("browser_close"),
+            _make_stop_response("Ready appeared and the browser session was closed."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            result = rt.run("Open this page and wait until Ready appears, then report status.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "browser_navigate",
+            "browser_get_content",
+            "browser_close",
+        ]
+        assert result == "Ready appeared and the browser session was closed."
+
 class TestDesktopRequestExecutionRetry:
     def test_replayed_keyboard_answer_executes_current_tools(self):
         provider = _make_provider()

@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from missy.cli.main import cli
+from missy.cli.main import _agent_tool_policy_kwargs, cli
 from tests.cli.conftest import _make_cli_runner
 
 # ---------------------------------------------------------------------------
@@ -79,6 +79,11 @@ def _make_mock_config(**overrides) -> MagicMock:
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
+
+
+def test_agent_policy_kwargs_forward_configured_max_iterations():
+    cfg = _make_mock_config(max_iterations=25)
+    assert _agent_tool_policy_kwargs(cfg)["max_iterations"] == 25
 
 
 def _cfg_path() -> str:

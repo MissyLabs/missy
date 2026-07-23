@@ -333,10 +333,18 @@ def _agent_tool_policy_kwargs(
         if isinstance(configured_workspace, str) and configured_workspace
         else None
     )
+    configured_max_iterations = getattr(cfg, "max_iterations", 10)
+    if (
+        isinstance(configured_max_iterations, bool)
+        or not isinstance(configured_max_iterations, int)
+        or configured_max_iterations < 1
+    ):
+        configured_max_iterations = 10
 
     return {
         "agent_id": agent_id,
         "workspace_path": workspace_path,
+        "max_iterations": configured_max_iterations,
         "tool_policy": _policy(getattr(cfg, "tools", None)),
         "agent_tool_policy": _policy(getattr(agent_cfg, "tools", None)),
         "sandbox_tool_policy": _policy(getattr(sandbox, "tools", None)),

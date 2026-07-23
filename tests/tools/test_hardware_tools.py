@@ -506,6 +506,7 @@ class TestX11ReadScreenTool:
         assert result.output["question"] == "What do you see?"
 
     def test_native_coordinate_contract_and_ocr_boxes_reach_vision_and_result(self, tmp_path):
+        pytest.importorskip("pytesseract")
         from PIL import Image
 
         dest = str(tmp_path / "screen.png")
