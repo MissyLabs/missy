@@ -721,6 +721,9 @@ class TestVideoGenerateExecuteHappyPaths:
                 audio_prompt="gentle rain on leaves",
                 save_path=str(save_path),
                 seed=1234,
+                width=513,
+                video_frames=400,
+                motion_bucket_id=5000,
             )
 
         assert result.success is True, result.error
@@ -731,6 +734,11 @@ class TestVideoGenerateExecuteHappyPaths:
         assert result.output["frames"] == 97
         assert result.output["duration_seconds"] > 3.5
         assert result.output["seed"] == 1234
+        assert result.output["width"] == 512
+        assert result.output["motion_bucket_id"] == 1023
+        assert result.output["interpolate"] == 4
+        assert result.output["upscale"] is False
+        assert result.output["video_format"] == "h264-mp4"
         assert result.output["audio"] == {
             "source": "generated",
             "prompt": "gentle rain on leaves",
