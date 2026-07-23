@@ -99,7 +99,7 @@ def _get_focused_application(desktop: Any) -> Any:
             if node.getState().contains(pyatspi.STATE_FOCUSED):
                 deepest = depth
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Unable to inspect AT-SPI focus state", exc_info=True)
         try:
             child_count = int(node.childCount)
         except Exception:  # noqa: BLE001
@@ -161,7 +161,7 @@ def _get_focused_application(desktop: Any) -> Any:
             ):
                 return True
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Unable to inspect AT-SPI node name", exc_info=True)
         try:
             child_count = int(node.childCount)
         except Exception:  # noqa: BLE001
