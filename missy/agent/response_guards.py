@@ -1040,20 +1040,29 @@ _TERMINAL_PARAMETER_ERROR_RE = re.compile(
 )
 _ERROR_REPORT_RE = re.compile(
     r"\b(?:cannot|can't|could not|failed|error|invalid|unsupported|requires?|"
-    r"mutually exclusive|only|choose|instead|not allowed|refused|rejected)\b",
+    r"mutually exclusive|only|choose|instead|not allowed|refused|rejected|"
+    r"timed out|timeout|missing|unavailable|no gpu)\b",
     re.I,
 )
 
 
 def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -> bool:
-    """Return whether expected parameter refusals were honestly relayed.
+    """Return whether terminal tool failures were honestly relayed.
 
-    Operational failures such as timeouts, OOMs, and network errors remain
-    subject to the normal DONE-criteria retries.
+    Any ``video_generate`` failure is terminal once reported: blindly retrying
+    a minutes-long GPU operation can duplicate jobs, defeat an explicit timeout,
+    or churn on an operator-actionable missing-model/GPU error. Other tools are
+    terminal here only for deterministic parameter refusals.
     """
+    video_generation_errors = all(
+        error.casefold().startswith("video_generate:") for error in errors
+    )
     return bool(
         errors
-        and all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
+        and (
+            video_generation_errors
+            or all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
+        )
         and _ERROR_REPORT_RE.search(final_text)
     )
 

@@ -64,10 +64,16 @@ class TestVideoGenerationGuards:
         reply = "I can't apply both because those parameters are mutually exclusive."
         assert terminal_parameter_errors_are_reported(errors, reply)
 
-    def test_operational_failure_is_not_terminal(self):
-        assert not terminal_parameter_errors_are_reported(
+    def test_video_timeout_is_terminal_once_reported(self):
+        assert terminal_parameter_errors_are_reported(
             ["video_generate: generation timed out after 15 seconds"],
             "The generation timed out.",
+        )
+
+    def test_other_operational_failure_is_not_terminal(self):
+        assert not terminal_parameter_errors_are_reported(
+            ["shell_exec: command timed out after 15 seconds"],
+            "The command timed out.",
         )
 
 
