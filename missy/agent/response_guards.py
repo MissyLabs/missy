@@ -564,6 +564,93 @@ _DESKTOP_VERIFICATION_TOOLS = frozenset(
     }
 )
 
+_DESKTOP_REQUEST_RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
+    (
+        "keyboard shortcut",
+        re.compile(
+            r"(?i)\b(?:use|send|press)\s+(?:(?:the|your)\s+)?keyboard\s+shortcuts?\b|"
+            r"\bselect\s+all\b.{0,80}\bcopy\b"
+        ),
+        frozenset({"x11_key"}),
+    ),
+    (
+        "button click",
+        re.compile(r"(?i)\bclick\s+(?:the\s+)?(?:button|control|menu|checkbox|dialog)\b"),
+        frozenset({"atspi_click", "x11_click"}),
+    ),
+    (
+        "application launch",
+        re.compile(
+            r"(?i)\b(?:open|launch)\s+(?:a|an|the)\s+(?:simple\s+)?(?:x11\s+)?"
+            r"(?:text\s+editor|terminal|app|application)\b"
+        ),
+        frozenset({"desktop_launch_app", "x11_launch"}),
+    ),
+    (
+        "desktop typing",
+        re.compile(r"(?i)\btype\s+.{1,160}"),
+        frozenset({"x11_type"}),
+    ),
+    (
+        "desktop screenshot",
+        re.compile(r"(?i)\b(?:take|capture)\s+(?:a\s+)?screenshot\b"),
+        frozenset({"x11_screenshot"}),
+    ),
+    (
+        "screen read",
+        re.compile(
+            r"(?i)\b(?:read|inspect|describe)\s+(?:the\s+)?(?:current\s+)?"
+            r"(?:desktop\s+)?screen\b"
+        ),
+        frozenset({"x11_read_screen"}),
+    ),
+    (
+        "window listing",
+        re.compile(r"(?i)\b(?:report|list|show)\s+(?:the\s+)?(?:open\s+)?windows\b"),
+        frozenset({"x11_window_list"}),
+    ),
+)
+
+
+def find_unmet_desktop_requests(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Return imperative desktop requirements not executed this task.
+
+    Long-lived channel history can contain an identical earlier desktop
+    request and its successful answer. Providers sometimes replay that answer
+    without issuing a tool call in the current turn. These narrow rules bind
+    common imperative desktop wording to the concrete tool family that must
+    appear in the current task's audit trail.
+    """
+    if not isinstance(user_input, str) or not isinstance(tool_names_used, list):
+        return []
+    available = set(available_tool_names) if available_tool_names is not None else None
+    used = set(tool_names_used)
+    missing: list[str] = []
+    for label, pattern, alternatives in _DESKTOP_REQUEST_RULES:
+        if pattern.search(user_input) is None:
+            continue
+        usable = alternatives if available is None else alternatives.intersection(available)
+        if (available is None or usable) and (not usable or used.isdisjoint(usable)):
+            missing.append(label)
+    return missing
+
+
+def make_desktop_request_retry_prompt(missing: list[str], user_input: str = "") -> str:
+    """Return a correction requiring current-turn desktop execution."""
+    requirements = ", ".join(missing)
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "You answered an imperative desktop request without executing every required "
+        f"desktop operation in this task. Still missing: {requirements}. Do not reuse or "
+        "paraphrase an answer from an earlier channel turn. Call the matching X11, AT-SPI, "
+        "or desktop tool now and base your answer only on its current result."
+        f"{anchor}"
+    )
+
 
 def find_unverified_desktop_action(tool_names_used: list[str]) -> str | None:
     """Return the most recent desktop mutation lacking later observation.

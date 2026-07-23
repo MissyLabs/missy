@@ -244,7 +244,10 @@ class TestRuntimeToolCallLoop:
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
-            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            # The read occupies the last configured turn, so the request
+            # guard's conditional grace turn must remain available to
+            # synthesize its result.
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=2))
             result = rt.run("What is 2+2?")
 
         assert result == "The answer is 4."
@@ -1429,6 +1432,63 @@ class TestDesktopActionVerificationRetry:
         provider.complete.assert_not_called()
 
 
+class TestDesktopRequestExecutionRetry:
+    def test_replayed_keyboard_answer_executes_current_tools(self):
+        provider = _make_provider()
+        key_tool = _make_mock_tool("x11_key")
+        read_tool = _make_mock_tool("x11_read_screen")
+        tool_reg = _make_tool_registry([key_tool, read_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("Selected all text and copied it."),
+            _make_tool_call_response("x11_key", args={"keys": "ctrl+a,ctrl+c"}),
+            _make_stop_response("Selected all text and copied it."),
+            _make_tool_call_response("x11_read_screen"),
+            _make_stop_response("Verified the current desktop after the shortcut."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(
+                "Use keyboard shortcuts to select all text in the focused editor and copy it."
+            )
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "x11_key",
+            "x11_read_screen",
+        ]
+        assert result == "Verified the current desktop after the shortcut."
+        assert any(e["event_type"] == "agent.response.desktop_request_retry" for e in events)
+
+    def test_replayed_screen_description_executes_current_read(self):
+        provider = _make_provider()
+        read_tool = _make_mock_tool("x11_read_screen")
+        tool_reg = _make_tool_registry([read_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("The terminal is visible."),
+            _make_tool_call_response("x11_read_screen"),
+            _make_stop_response("Current read confirms the terminal is visible."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            result = rt.run(
+                "Read the current desktop screen and describe what application is visible."
+            )
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == ["x11_read_screen"]
+        assert result == "Current read confirms the terminal is visible."
+
+
 class TestPromiseWithoutActionRetry:
     def test_promise_without_action_triggers_one_retry(self):
         provider = _make_provider()
@@ -1649,11 +1709,15 @@ class TestFalseCapabilityDenialRetry:
     def test_headless_denial_triggers_retry_when_x11_tool_available(self):
         provider = _make_provider()
         x11_tool = _make_mock_tool("x11_launch")
-        tool_reg = _make_tool_registry([x11_tool])
+        window_tool = _make_mock_tool("x11_window_list")
+        tool_reg = _make_tool_registry([x11_tool, window_tool])
 
         provider.complete_with_tools.side_effect = [
             _make_stop_response("No X11, no display, no GUI -- I'm headless."),
+            _make_tool_call_response("x11_launch"),
             _make_stop_response("Launched successfully; 1 window open."),
+            _make_tool_call_response("x11_window_list"),
+            _make_stop_response("Verified launch; 1 window open."),
         ]
         registry = _make_registry({"fake": provider})
 
@@ -1670,7 +1734,7 @@ class TestFalseCapabilityDenialRetry:
             e for e in events if e["event_type"] == "agent.response.capability_denial_retry"
         ]
         assert len(retry_events) == 1
-        assert result == "Launched successfully; 1 window open."
+        assert result == "Verified launch; 1 window open."
 
     def test_headless_denial_not_retried_when_no_x11_tool_available(self):
         """The exact same denial phrase must NOT be flagged when no

@@ -13,9 +13,11 @@ from missy.agent.response_guards import (
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
+    find_unmet_desktop_requests,
     find_unverified_desktop_action,
     is_security_refusal,
     make_capability_denial_retry_prompt,
+    make_desktop_request_retry_prompt,
     make_desktop_verification_retry_prompt,
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
@@ -88,6 +90,37 @@ class TestDesktopActionVerificationGuard:
         assert "x11_click" in prompt
         assert "successful input event is not proof" in prompt.lower()
         assert "Click the Run Test button" in prompt
+
+
+class TestDesktopRequestExecutionGuard:
+    def test_keyboard_shortcut_requires_current_x11_key(self):
+        prompt = "Use keyboard shortcuts to select all text in the focused editor and copy it."
+        assert find_unmet_desktop_requests(prompt, []) == ["keyboard shortcut"]
+        assert find_unmet_desktop_requests(prompt, ["x11_key"]) == []
+
+    def test_screen_read_requires_current_x11_read_screen(self):
+        prompt = "Read the current desktop screen and describe what application is visible."
+        assert find_unmet_desktop_requests(prompt, []) == ["screen read"]
+        assert find_unmet_desktop_requests(prompt, ["x11_read_screen"]) == []
+
+    def test_compound_desktop_prompt_tracks_each_operation(self):
+        prompt = "Open a text editor, type hello, and take a screenshot."
+        assert find_unmet_desktop_requests(prompt, ["desktop_launch_app"]) == [
+            "desktop typing",
+            "desktop screenshot",
+        ]
+
+    def test_unavailable_tool_family_is_not_required(self):
+        assert (
+            find_unmet_desktop_requests("Read the current desktop screen.", [], {"calculator"})
+            == []
+        )
+
+    def test_retry_prompt_reanchors_original_request(self):
+        prompt = make_desktop_request_retry_prompt(["screen read"], "Read the screen")
+        assert "screen read" in prompt
+        assert "earlier channel turn" in prompt
+        assert "Read the screen" in prompt
 
 
 class TestDetectFabrication:
