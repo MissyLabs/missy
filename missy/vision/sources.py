@@ -396,6 +396,14 @@ class ScreenshotSource(ImageSource):
         env = dict(os.environ)
         if self._display:
             env["DISPLAY"] = self._display
+        elif not env.get("DISPLAY"):
+            # Gateway processes commonly run without DISPLAY even when a local
+            # X11 session is available. Discover only fixed Unix socket names;
+            # no user-controlled shell input is involved.
+            for display_number in range(10):
+                if Path(f"/tmp/.X11-unix/X{display_number}").exists():
+                    env["DISPLAY"] = f":{display_number}"
+                    break
 
         tools = [
             (["scrot", "-o", output_path], "scrot"),
