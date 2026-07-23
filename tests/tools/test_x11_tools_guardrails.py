@@ -296,6 +296,28 @@ class TestX11ScreenshotToolRedaction:
 
 
 class TestX11ReadScreenToolRedaction:
+    def test_native_ocr_box_text_is_censored_and_low_confidence_is_dropped(self, tmp_path):
+        from PIL import Image
+
+        from missy.tools.builtin.x11_tools import _extract_native_ocr_coordinates
+
+        path = str(tmp_path / "screen.png")
+        Image.new("RGB", (800, 600), "white").save(path)
+        ocr_data = {
+            "text": ["AKIAABCDEFGHIJKLMNOP", "noise"],
+            "conf": ["99", "12"],
+            "left": [10, 20],
+            "top": [30, 40],
+            "width": [200, 10],
+            "height": [20, 10],
+        }
+        with patch("pytesseract.image_to_data", return_value=ocr_data):
+            metadata = _extract_native_ocr_coordinates(path)
+
+        assert metadata["ocr_coordinates_available"] is True
+        assert len(metadata["ocr_text_boxes"]) == 1
+        assert "AKIAABCDEFGHIJKLMNOP" not in metadata["ocr_text_boxes"][0]["text"]
+
     def test_secret_in_vision_description_is_censored(self, tmp_path):
         path = str(tmp_path / "screen.png")
         tool = X11ReadScreenTool()

@@ -540,6 +540,69 @@ def make_explicit_tool_request_retry_prompt(
     )
 
 
+_DESKTOP_MUTATION_TOOLS = frozenset(
+    {
+        "x11_launch",
+        "x11_click",
+        "x11_type",
+        "x11_key",
+        "desktop_launch_app",
+        "desktop_focus_window",
+        "desktop_mouse_drag",
+        "atspi_click",
+        "atspi_set_value",
+    }
+)
+_DESKTOP_VERIFICATION_TOOLS = frozenset(
+    {
+        "x11_read_screen",
+        "x11_screenshot",
+        "x11_window_list",
+        "atspi_get_tree",
+        "atspi_get_text",
+        "desktop_status",
+    }
+)
+
+
+def find_unverified_desktop_action(tool_names_used: list[str]) -> str | None:
+    """Return the most recent desktop mutation lacking later observation.
+
+    A successful low-level click/key API result only proves input was emitted;
+    it does not prove the intended control received it or that the UI changed.
+    The tool loop uses this sequence check to require an observation *after*
+    the latest mutation before accepting a completion claim.
+    """
+    if not isinstance(tool_names_used, list):
+        return None
+    last_action_index = -1
+    last_action_name: str | None = None
+    for index, name in enumerate(tool_names_used):
+        if name in _DESKTOP_MUTATION_TOOLS:
+            last_action_index = index
+            last_action_name = name
+    if last_action_index < 0:
+        return None
+    if any(
+        name in _DESKTOP_VERIFICATION_TOOLS for name in tool_names_used[last_action_index + 1 :]
+    ):
+        return None
+    return last_action_name
+
+
+def make_desktop_verification_retry_prompt(action_name: str, user_input: str = "") -> str:
+    """Return a correction requiring post-action desktop evidence."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        f"Your last desktop action was {action_name}, but you made no later observation "
+        "to confirm it affected the intended control or changed the UI. A successful input "
+        "event is not proof of the requested outcome. Inspect the current state now with "
+        "x11_read_screen, x11_window_list, or the matching AT-SPI read/tree tool. If the "
+        "target state is not present, correct the target and retry the action, then observe "
+        f"again before reporting success.{anchor}"
+    )
+
+
 def make_capability_denial_retry_prompt(
     user_input: str = "", available_tool_names: set[str] | frozenset[str] | None = None
 ) -> str:

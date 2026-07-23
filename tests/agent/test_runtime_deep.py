@@ -1313,6 +1313,96 @@ class TestExplicitToolRequestRetry:
         )
 
 
+class TestDesktopActionVerificationRetry:
+    def test_desktop_action_requires_later_observation_before_completion(self):
+        provider = _make_provider()
+        click_tool = _make_mock_tool("x11_click")
+        read_tool = _make_mock_tool("x11_read_screen")
+        tool_reg = _make_tool_registry([click_tool, read_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("x11_click", args={"x": 10, "y": 20}),
+            _make_stop_response("Clicked successfully."),
+            _make_tool_call_response("x11_read_screen"),
+            _make_stop_response("Verified: the dialog closed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Click the Run Test button.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "x11_click",
+            "x11_read_screen",
+        ]
+        assert result == "Verified: the dialog closed."
+        retry = [
+            e for e in events if e["event_type"] == "agent.response.desktop_verification_retry"
+        ]
+        assert len(retry) == 1
+        assert retry[0]["detail"] == {"unverified_action": "x11_click"}
+
+    def test_existing_post_action_observation_does_not_retry(self):
+        provider = _make_provider()
+        click_tool = _make_mock_tool("atspi_click")
+        tree_tool = _make_mock_tool("atspi_get_tree")
+        tool_reg = _make_tool_registry([click_tool, tree_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("atspi_click"),
+            _make_tool_call_response("atspi_get_tree"),
+            _make_stop_response("Verified."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Click Submit and verify it.")
+
+        assert result == "Verified."
+        assert not any(
+            e["event_type"].startswith("agent.response.desktop_verification") for e in events
+        )
+
+    def test_repeated_unverified_completion_is_bounded_and_audited(self):
+        provider = _make_provider()
+        click_tool = _make_mock_tool("x11_click")
+        tool_reg = _make_tool_registry([click_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("x11_click"),
+            _make_stop_response("Clicked."),
+            _make_stop_response("Still claiming success."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Click Submit.")
+
+        assert "could not verify" in result
+        assert "cannot confirm the desktop task as complete" in result
+        assert "Still claiming success" not in result
+        unresolved = [
+            e for e in events if e["event_type"] == "agent.response.desktop_verification_unresolved"
+        ]
+        assert len(unresolved) == 1
+        assert unresolved[0]["result"] == "deny"
+
+
 class TestPromiseWithoutActionRetry:
     def test_promise_without_action_triggers_one_retry(self):
         provider = _make_provider()

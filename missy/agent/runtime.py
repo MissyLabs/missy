@@ -1400,8 +1400,10 @@ class AgentRuntime:
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            find_unverified_desktop_action,
             is_security_refusal,
             make_capability_denial_retry_prompt,
+            make_desktop_verification_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
             make_identity_confusion_retry_prompt,
@@ -1487,6 +1489,8 @@ class AgentRuntime:
         _security_refusal_retries = 0
         _MAX_EXPLICIT_TOOL_REQUEST_RETRIES = 1
         _explicit_tool_request_retries = 0
+        _MAX_DESKTOP_VERIFICATION_RETRIES = 1
+        _desktop_verification_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -2003,6 +2007,53 @@ class AgentRuntime:
                             result="warn",
                             detail={"missing_tools": sorted(_missing_explicit_tools)},
                         )
+
+                # A low-level desktop mutation reports whether input was
+                # emitted, not whether it reached the intended window/control
+                # or produced the requested state.  The live X11 validation
+                # caught a coordinate click followed by a false success claim
+                # while the target dialog remained open. Require a later
+                # screen/tree/window observation before accepting completion.
+                _unverified_desktop_action = find_unverified_desktop_action(tool_names_used)
+                if _unverified_desktop_action:
+                    if _desktop_verification_retries < _MAX_DESKTOP_VERIFICATION_RETRIES:
+                        _desktop_verification_retries += 1
+                        logger.warning(
+                            "Tool loop reported completion after desktop action %r "
+                            "without post-action observation; retrying once.",
+                            _unverified_desktop_action,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_desktop_verification_retry_prompt(
+                                    _unverified_desktop_action, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.desktop_verification_retry",
+                                result="warn",
+                                detail={"unverified_action": _unverified_desktop_action},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.desktop_verification_unresolved",
+                            result="deny",
+                            detail={"unverified_action": _unverified_desktop_action},
+                        )
+                    final_text = (
+                        "I sent the desktop action, but I could not verify that it affected "
+                        "the intended control or produced the requested UI state. I cannot "
+                        "confirm the desktop task as complete."
+                    )
 
                 # General response guards (missy/agent/response_guards.py):
                 # a tool-free response that reads like it fabricated a
