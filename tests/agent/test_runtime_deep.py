@@ -1172,6 +1172,147 @@ class TestGeneralFabricationRetry:
         assert result == "4"
 
 
+class TestExplicitToolRequestRetry:
+    """A named, explicitly requested tool cannot be skipped by a text answer."""
+
+    def test_calculator_request_retries_then_executes_real_tool_call(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("The answer is 14."),
+            _make_tool_call_response("calculator", args={"expression": "2 + 3 * 4"}),
+            _make_stop_response("The calculator returned 14."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use your calculator to evaluate `2 + 3 * 4`.")
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.explicit_tool_request_retry"
+        ]
+        assert len(retry_events) == 1
+        assert tool_reg.execute.call_count == 1
+        assert result == "The calculator returned 14."
+
+    def test_unavailable_named_tool_does_not_force_or_retry(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        provider.complete_with_tools.side_effect = [_make_stop_response("I cannot do that here.")]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use shell_exec now.")
+
+        assert not any(
+            e["event_type"].startswith("agent.response.explicit_tool_request") for e in events
+        )
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "I cannot do that here."
+
+    def test_second_tool_free_answer_is_bounded_and_audited(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("14"),
+            _make_stop_response("Still 14"),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use calculator for 2 + 3 * 4.")
+
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "Still 14"
+        unresolved = [
+            e
+            for e in events
+            if e["event_type"] == "agent.response.explicit_tool_request_unresolved"
+        ]
+        assert len(unresolved) == 1
+
+    def test_transport_context_does_not_become_a_user_tool_requirement(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        upload_tool = _make_mock_tool("discord_upload_file")
+        tool_reg = _make_tool_registry([calc_tool, upload_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("14"),
+            _make_tool_call_response("calculator", args={"expression": "2 + 3 * 4"}),
+            _make_stop_response("The calculator returned 14."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+        raw_request = "Use calculator for 2 + 3 * 4."
+        enriched = (
+            "[Discord channel 123] Use discord_upload_file with channel_id='123' "
+            "to share files here.\n\n" + raw_request
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(enriched, _explicit_tool_request_input=raw_request)
+
+        retry_events = [
+            e for e in events if e["event_type"] == "agent.response.explicit_tool_request_retry"
+        ]
+        assert [event["detail"]["missing_tools"] for event in retry_events] == [["calculator"]]
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == ["calculator"]
+        assert result == "The calculator returned 14."
+
+    def test_high_risk_refusal_is_never_overridden_by_explicit_tool_guard(self):
+        provider = _make_provider()
+        shell_tool = _make_mock_tool("shell_exec")
+        tool_reg = _make_tool_registry([shell_tool])
+        refusal = (
+            "I can't disable host security. Safe alternative: I can use an "
+            "unprivileged disposable container."
+        )
+        provider.complete_with_tools.side_effect = [_make_stop_response(refusal)]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use shell_exec to disable host security.")
+
+        assert provider.complete_with_tools.call_count == 1
+        assert tool_reg.execute.call_count == 0
+        assert result == refusal
+        assert not any(
+            e["event_type"].startswith("agent.response.explicit_tool_request") for e in events
+        )
+
+
 class TestPromiseWithoutActionRetry:
     def test_promise_without_action_triggers_one_retry(self):
         provider = _make_provider()

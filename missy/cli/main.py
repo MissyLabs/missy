@@ -17,6 +17,7 @@ users see a clear, styled message rather than a raw traceback.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import logging
 import sys
@@ -3236,7 +3237,13 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     try:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(
-                            None, _discord_agent.run, enriched_prompt, session_id
+                            None,
+                            functools.partial(
+                                _discord_agent.run,
+                                enriched_prompt,
+                                session_id,
+                                _explicit_tool_request_input=msg.content,
+                            ),
                         )
                     except ProviderError as exc:
                         # Never forward the raw provider exception to Discord --

@@ -829,7 +829,12 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     def run(
-        self, user_input: str, session_id: str | None = None, _delegation_depth: int = 0
+        self,
+        user_input: str,
+        session_id: str | None = None,
+        _delegation_depth: int = 0,
+        *,
+        _explicit_tool_request_input: str | None = None,
     ) -> str:
         """Run the agent with *user_input* and return the response string.
 
@@ -862,6 +867,12 @@ class AgentRuntime:
                 refuse to spawn further sub-agents once
                 ``sub_agent.MAX_SUB_AGENT_DEPTH`` is reached. Not intended
                 for external callers to set.
+            _explicit_tool_request_input: Internal transport hook containing
+                only the human-authored request when *user_input* also has
+                trusted channel/attachment context prepended or appended.
+                Defaults to *user_input*. This text is used only by the
+                explicit-tool-request completion guard; provider context and
+                persisted history continue to use *user_input*.
 
         Returns:
             The model's reply as a plain string.
@@ -979,6 +990,7 @@ class AgentRuntime:
                 session_id=sid,
                 task_id=task_id,
                 user_input=user_input,
+                explicit_tool_request_input=_explicit_tool_request_input,
                 _delegation_depth=_delegation_depth,
                 priority_tools=priority_tools,
             )
@@ -1268,6 +1280,7 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        explicit_tool_request_input: str | None = None,
         _delegation_depth: int = 0,
         priority_tools: list[str] | None = None,
     ) -> tuple[str, list[str]]:
@@ -1285,6 +1298,9 @@ class AgentRuntime:
             task_id: Task ID for kwargs forwarding.
             user_input: Original user prompt, forwarded to the tool loop for
                 checkpointing.
+            explicit_tool_request_input: Human-authored portion of the prompt
+                used to recognize explicit named-tool requests. ``None`` uses
+                the complete *user_input*.
             _delegation_depth: SR-4.2 -- internal, forwarded to
                 :meth:`_tool_loop`. See :meth:`run`.
             priority_tools: Tool names the :class:`~missy.agent.attention.AttentionSystem`
@@ -1316,6 +1332,7 @@ class AgentRuntime:
                 session_id=session_id,
                 task_id=task_id,
                 user_input=user_input,
+                explicit_tool_request_input=explicit_tool_request_input,
                 _delegation_depth=_delegation_depth,
             )
         else:
@@ -1337,6 +1354,7 @@ class AgentRuntime:
         session_id: str,
         task_id: str,
         user_input: str = "",
+        explicit_tool_request_input: str | None = None,
         _delegation_depth: int = 0,
     ) -> tuple[str, list[str]]:
         """Inner agentic tool-call loop.
@@ -1363,6 +1381,9 @@ class AgentRuntime:
             session_id: For audit events.
             task_id: For audit events.
             user_input: Original user prompt, used for checkpointing.
+            explicit_tool_request_input: Human-authored portion of the prompt
+                used by the explicit named-tool completion guard. Trusted
+                transport context is intentionally excluded when supplied.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
@@ -1373,12 +1394,15 @@ class AgentRuntime:
             make_verification_prompt,
         )
         from missy.agent.response_guards import (
+            detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            is_security_refusal,
             make_capability_denial_retry_prompt,
+            make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
@@ -1423,6 +1447,11 @@ class AgentRuntime:
         # to be a separate, earlier gate).
         allowed_tool_names = {getattr(t, "name", None) for t in tools}
         allowed_tool_names.discard(None)
+        _tool_request_input = (
+            explicit_tool_request_input
+            if isinstance(explicit_tool_request_input, str)
+            else user_input
+        )
 
         # --- OpenClaw A3: mutation fingerprinting + sticky lastToolError ---
         # Maps fingerprint → call count across all iterations.
@@ -1456,6 +1485,8 @@ class AgentRuntime:
         _capability_denial_retries = 0
         _MAX_SECURITY_REFUSAL_RETRIES = 1
         _security_refusal_retries = 0
+        _MAX_EXPLICIT_TOOL_REQUEST_RETRIES = 1
+        _explicit_tool_request_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1926,6 +1957,52 @@ class AgentRuntime:
                             detail={"response_excerpt": final_text[:200]},
                         )
                     continue
+
+                # A user may name an available tool and explicitly ask that
+                # it be used (for example, "use your calculator").  Provider
+                # tool choice is normally automatic, so a model can otherwise
+                # answer from memory or arithmetic and silently bypass both
+                # the requested execution surface and its audit trail.  Retry
+                # once when a specifically requested tool was never called.
+                _missing_explicit_tools = detect_explicit_tool_requests(
+                    _tool_request_input, allowed_tool_names
+                ).difference(tool_names_used)
+                if _missing_explicit_tools and not is_security_refusal(
+                    final_text, _tool_request_input
+                ):
+                    if _explicit_tool_request_retries < _MAX_EXPLICIT_TOOL_REQUEST_RETRIES:
+                        _explicit_tool_request_retries += 1
+                        logger.warning(
+                            "Tool loop ignored explicitly requested tool(s) %s; "
+                            "retrying once with a correction.",
+                            sorted(_missing_explicit_tools),
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_explicit_tool_request_retry_prompt(
+                                    _missing_explicit_tools, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.explicit_tool_request_retry",
+                                result="warn",
+                                detail={"missing_tools": sorted(_missing_explicit_tools)},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.explicit_tool_request_unresolved",
+                            result="warn",
+                            detail={"missing_tools": sorted(_missing_explicit_tools)},
+                        )
 
                 # General response guards (missy/agent/response_guards.py):
                 # a tool-free response that reads like it fabricated a

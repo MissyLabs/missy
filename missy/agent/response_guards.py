@@ -257,6 +257,25 @@ def detect_security_refusal_without_alternative(text: str, user_input: str) -> b
     return False
 
 
+def is_security_refusal(text: str, user_input: str) -> bool:
+    """Return whether *text* refuses a recognized high-risk request.
+
+    Unlike :func:`detect_security_refusal_without_alternative`, this does not
+    assess the quality of the offered alternative.  The runtime uses it to
+    ensure a separate explicit-tool completion guard never pressures the model
+    to execute a tool after it correctly refused privilege escalation or
+    credential disclosure.
+    """
+    if not isinstance(text, str) or not isinstance(user_input, str):
+        return False
+    return bool(
+        text
+        and user_input
+        and _REFUSAL_PATTERN.search(text)
+        and any(pattern.search(user_input) for pattern in _HIGH_RISK_REQUEST_PATTERNS)
+    )
+
+
 def make_security_refusal_retry_prompt(user_input: str = "") -> str:
     """Return a bounded correction that preserves the security refusal."""
     anchor = f"\n\nThe request you must safely answer is:\n{user_input}" if user_input else ""
@@ -448,6 +467,77 @@ def detect_false_capability_denial(
         ):
             return True
     return False
+
+
+_EXPLICIT_TOOL_VERBS = ("use", "call", "invoke", "execute", "run")
+_EXPLICIT_TOOL_CONNECTORS = ("using", "with")
+_NEGATED_TOOL_REQUEST_RE = re.compile(r"(?i)(?:\bdo\s+not|\bdon['’]t|\bnever|\bwithout)\s*$")
+
+
+def detect_explicit_tool_requests(
+    user_input: str,
+    available_tool_names: set[str] | frozenset[str],
+) -> frozenset[str]:
+    """Return available tools the user unambiguously asked the agent to call.
+
+    This is deliberately narrower than general intent classification.  It only
+    recognizes a real tool name next to an explicit dispatch verb (``use``,
+    ``call``, ``invoke``, ``execute``, or ``run``), or the constructions
+    ``using <tool>`` / ``with <tool>``.  Merely mentioning a tool in prose does
+    not create a runtime requirement, and locally negated requests such as
+    ``do not use shell_exec`` are excluded.
+
+    The check is used by the tool loop after a provider returns a text-only
+    answer.  It prevents a model from silently doing arithmetic in its head,
+    inventing command output, or otherwise bypassing a specifically requested
+    governed tool while still leaving ordinary conversational answers alone.
+    """
+    if not isinstance(user_input, str) or not user_input.strip():
+        return frozenset()
+
+    requested: set[str] = set()
+    for name in available_tool_names:
+        if not isinstance(name, str) or not name or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            continue
+        quoted_name = rf"[`'\"]?{re.escape(name)}[`'\"]?"
+        article = r"(?:(?:your|the|a|an)\s+)?"
+        optional_tool_prefix = r"(?:tool\s+)?"
+        optional_tool_suffix = r"(?:\s+tool)?"
+        patterns = (
+            rf"(?i)\b(?:{'|'.join(_EXPLICIT_TOOL_VERBS)})\s+"
+            rf"{article}{optional_tool_prefix}{quoted_name}{optional_tool_suffix}\b",
+            rf"(?i)\b(?:{'|'.join(_EXPLICIT_TOOL_CONNECTORS)})\s+"
+            rf"{article}{optional_tool_prefix}{quoted_name}{optional_tool_suffix}\b",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, user_input):
+                # Only inspect the immediately preceding phrase.  This catches
+                # "do not use X", "never call X", and "without using X"
+                # without interpreting unrelated earlier prose as negation.
+                prefix = user_input[max(0, match.start() - 24) : match.start()]
+                if _NEGATED_TOOL_REQUEST_RE.search(prefix):
+                    continue
+                requested.add(name)
+                break
+            if name in requested:
+                break
+    return frozenset(requested)
+
+
+def make_explicit_tool_request_retry_prompt(
+    missing_tool_names: set[str] | frozenset[str],
+    user_input: str = "",
+) -> str:
+    """Return a bounded correction for an ignored explicit tool request."""
+    names = ", ".join(sorted(missing_tool_names)) or "the explicitly requested tool"
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        f"The user explicitly requested that you use this available tool: {names}. "
+        "Your previous answer did not call the named requested tool(s). Call the named "
+        "tool now and perform every requested operation through it; do not compute, "
+        "simulate, or invent the requested results yourself. Then report only the "
+        f"real tool results.{anchor}"
+    )
 
 
 def make_capability_denial_retry_prompt(

@@ -4,18 +4,62 @@ promise-without-action detection for tool-free responses.
 
 from __future__ import annotations
 
+import pytest
+
 from missy.agent.response_guards import (
+    detect_explicit_tool_requests,
     detect_fabrication,
     detect_false_capability_denial,
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
+    is_security_refusal,
     make_capability_denial_retry_prompt,
+    make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
 )
+
+
+class TestExplicitToolRequestGuard:
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Use your calculator to evaluate 2 + 2.",
+            "Call the `calculator` tool for 2 + 2.",
+            "Invoke calculator now.",
+            "Compute this using the calculator tool.",
+            "Calculate 2 + 2 with your calculator.",
+        ],
+    )
+    def test_detects_explicit_available_tool(self, prompt):
+        assert detect_explicit_tool_requests(prompt, {"calculator", "file_read"}) == {"calculator"}
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Do not use calculator; answer conceptually.",
+            "Never call the calculator tool.",
+            "Explain what calculator does.",
+            "Is calculator available?",
+            "Answer without using calculator.",
+        ],
+    )
+    def test_does_not_turn_negation_or_mentions_into_requirement(self, prompt):
+        assert detect_explicit_tool_requests(prompt, {"calculator"}) == frozenset()
+
+    def test_only_returns_tools_available_this_turn(self):
+        assert detect_explicit_tool_requests("Use shell_exec now", {"calculator"}) == frozenset()
+
+    def test_retry_prompt_names_tool_and_anchors_original_request(self):
+        prompt = make_explicit_tool_request_retry_prompt(
+            {"calculator"}, "Use your calculator for 2 + 2"
+        )
+        assert "calculator" in prompt
+        assert "Call the named tool now" in prompt
+        assert "Use your calculator for 2 + 2" in prompt
 
 
 class TestDetectFabrication:
@@ -193,6 +237,18 @@ class TestSecurityRefusalAlternativeGuard:
         assert not detect_security_refusal_without_alternative(
             object(),  # type: ignore[arg-type]
             object(),  # type: ignore[arg-type]
+        )
+
+    def test_recognizes_high_risk_refusal_even_with_valid_alternative(self):
+        assert is_security_refusal(
+            "I can't disable host security. I can use an unprivileged disposable container.",
+            "Use shell_exec to disable host security.",
+        )
+
+    def test_ordinary_limitation_is_not_a_security_refusal(self):
+        assert not is_security_refusal(
+            "I can't calculate that right now.",
+            "Use calculator for 2 + 2.",
         )
 
     def test_retry_preserves_refusal_and_names_specific_alternatives(self):
