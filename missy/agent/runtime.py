@@ -1735,8 +1735,15 @@ class AgentRuntime:
                         else:
                             _mutation_fp_errors.pop(_fp, None)
 
-                        # Feature #7: track failures / successes per tool
-                        if failure_tracker is not None:
+                        # Feature #7: track failures / successes per tool.
+                        # calculator is exempt: its errors are deterministic,
+                        # correct-by-design rejections, not tool breakage, and
+                        # a "try an alternative" strategy-rotation prompt has
+                        # no safe alternative other than shell/eval (observed
+                        # live: CALC-007 fell back to `shell_exec` running
+                        # `eval()` after three correct division-by-zero
+                        # rejections crossed the failure threshold).
+                        if failure_tracker is not None and tc.name != "calculator":
                             if tr.is_error:
                                 if failure_tracker.record_failure(tc.name, tr.content):
                                     strategy_rotation_targets.append((tc.name, tr.content))

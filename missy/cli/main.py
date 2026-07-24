@@ -3270,7 +3270,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         from missy.providers.health import user_facing_provider_error
 
                         logger.warning("Discord provider error: %s", exc)
-                        response = user_facing_provider_error(exc)
+                        response = user_facing_provider_error(exc, user_input=msg.content)
                     except Exception as exc:
                         logger.exception("Discord agent error: %s", exc)
                         response = "Sorry, an unexpected error occurred. Please try again."
