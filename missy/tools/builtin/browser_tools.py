@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -122,7 +123,7 @@ def _route_through_network_policy(route: Any) -> None:
 
 
 class BrowserSession:
-    def __init__(self, session_id: str, headless: bool = False) -> None:
+    def __init__(self, session_id: str, headless: bool = True) -> None:
         import re
 
         # Validate session_id to prevent directory traversal.
@@ -139,6 +140,15 @@ class BrowserSession:
         self.session_id = session_id
         self.headless = headless
         self._lock = threading.Lock()
+        # Playwright's synchronous API is greenlet/thread-affine. Agent runs
+        # arrive from several async channel executor threads, so keeping the
+        # browser objects on whichever thread happened to make the first call
+        # makes the next call fail or cross threads. One worker per browser
+        # session preserves affinity across every tool invocation and keeps
+        # the sync API out of channel event loops.
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"missy-browser-{session_id}"
+        )
         self._pw = None
         self._context = None
         self._page = None
@@ -162,13 +172,38 @@ class BrowserSession:
             ) from exc
         self._ensure_display()
         self._pw = sync_playwright().start()
-        self._context = self._pw.firefox.launch_persistent_context(
-            user_data_dir=str(self._user_data_dir),
-            headless=self.headless,
-            args=["--no-remote"],
-            firefox_user_prefs=_FIREFOX_PREFS,
-            env={k: v for k, v in os.environ.items() if k in _SAFE_BROWSER_ENV_VARS},
-        )
+        try:
+            executable_path = getattr(self._pw.firefox, "executable_path", "")
+            build_name = "playwright-firefox"
+            if isinstance(executable_path, str) and executable_path:
+                candidate = Path(executable_path).parents[1].name
+                if candidate and all(ch.isalnum() or ch in "-_" for ch in candidate):
+                    build_name = candidate
+            # A persistent profile created by a newer bundled Firefox cannot
+            # be opened by an older Playwright revision. Keep profiles durable
+            # within one browser build while preventing upgrades/downgrades (or
+            # a system Firefox) from poisoning the shared session directory.
+            build_user_data_dir = self._user_data_dir / build_name
+            build_user_data_dir.mkdir(parents=True, exist_ok=True)
+            self._context = self._pw.firefox.launch_persistent_context(
+                user_data_dir=str(build_user_data_dir),
+                headless=self.headless,
+                args=["--no-remote"],
+                firefox_user_prefs=_FIREFOX_PREFS,
+                env={k: v for k, v in os.environ.items() if k in _SAFE_BROWSER_ENV_VARS},
+            )
+        except Exception:
+            # A failed launch still leaves sync_playwright's driver and event
+            # loop active on this worker. Retrying _start() without stopping
+            # it produces a misleading "Sync API inside the asyncio loop"
+            # error and can leak the half-launched browser process.
+            try:
+                self._pw.stop()
+            except Exception:
+                logger.debug("browser: failed-launch cleanup error", exc_info=True)
+            self._pw = None
+            self._context = None
+            raise
         # SR-1.6: gate EVERY network request this browser context makes --
         # not just the top-level page.goto() call the registry checks
         # before a tool even runs, but every subresource, redirect, and
@@ -178,7 +213,7 @@ class BrowserSession:
         # driving requests, which is most of the time.
         self._context.route("**/*", _route_through_network_policy)
 
-    def get_page(self) -> Any:
+    def _get_page_on_worker(self) -> Any:
         """Return the most recent open page in the context.
 
         Always checks the context for the latest page rather than
@@ -197,21 +232,44 @@ class BrowserSession:
                 self._page = self._context.new_page()
             return self._page
 
+    def get_page(self) -> Any:
+        """Return the current page, creating it on the session worker.
+
+        This compatibility method exposes the raw Playwright object; callers
+        that operate on it must already be on the session worker. Production
+        tools use :meth:`run` so the page never crosses thread boundaries.
+        """
+        return self._executor.submit(self._get_page_on_worker).result()
+
+    def run(self, operation: Any) -> Any:
+        """Execute ``operation(page)`` on this session's affine worker."""
+
+        def _invoke() -> Any:
+            return operation(self._get_page_on_worker())
+
+        return self._executor.submit(_invoke).result()
+
     def close(self) -> None:
-        with self._lock:
-            try:
-                if self._context:
-                    self._context.close()
-            except Exception as _ctx_exc:
-                logger.debug("browser: context close error: %s", _ctx_exc)
-            try:
-                if self._pw:
-                    self._pw.stop()
-            except Exception as _pw_exc:
-                logger.debug("browser: playwright stop error: %s", _pw_exc)
-            self._context = None
-            self._page = None
-            self._pw = None
+        def _close_on_worker() -> None:
+            with self._lock:
+                try:
+                    if self._context:
+                        self._context.close()
+                except Exception as _ctx_exc:
+                    logger.debug("browser: context close error: %s", _ctx_exc)
+                try:
+                    if self._pw:
+                        self._pw.stop()
+                except Exception as _pw_exc:
+                    logger.debug("browser: playwright stop error: %s", _pw_exc)
+                self._context = None
+                self._page = None
+                self._pw = None
+
+        try:
+            self._executor.submit(_close_on_worker).result()
+        finally:
+            self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 class _SessionRegistry:
@@ -219,7 +277,7 @@ class _SessionRegistry:
         self._sessions: dict[str, BrowserSession] = {}
         self._lock = threading.Lock()
 
-    def get_or_create(self, session_id: str, headless: bool = False) -> BrowserSession:
+    def get_or_create(self, session_id: str, headless: bool = True) -> BrowserSession:
         with self._lock:
             if session_id not in self._sessions:
                 self._sessions[session_id] = BrowserSession(session_id, headless=headless)
@@ -239,8 +297,7 @@ class _SessionRegistry:
             for session in reversed(list(self._sessions.values())):
                 if session._context is not None:
                     try:
-                        page = session.get_page()
-                        page.screenshot(path=path)
+                        session.run(lambda page: page.screenshot(path=path))
                         return True
                     except Exception:
                         return False
@@ -255,8 +312,21 @@ class _SessionRegistry:
 _registry = _SessionRegistry()
 
 
-def _page(session_id: str = "default", headless: bool = False) -> Any:
+def _page(session_id: str = "default", headless: bool = True) -> Any:
     return _registry.get_or_create(session_id, headless=headless).get_page()
+
+
+_DEFAULT_PAGE_HELPER = _page
+
+
+def _run_on_page(operation: Any, session_id: str = "default", headless: bool = True) -> Any:
+    """Run a page operation on the session's Playwright-affine worker."""
+    # Preserve the module-level page-provider seam used by embedders and
+    # deterministic tests. The built-in helper uses the affine worker; an
+    # explicitly replaced helper owns the threading contract for its page.
+    if _page is not _DEFAULT_PAGE_HELPER:
+        return operation(_page(session_id, headless=headless))
+    return _registry.get_or_create(session_id, headless=headless).run(operation)
 
 
 # FX-F: browser diagnostics must distinguish tool absence, browser
@@ -280,6 +350,11 @@ _SANDBOX_LAUNCH_ERROR_MARKERS: tuple[str, ...] = (
 _INSTALLATION_ERROR_MARKERS: tuple[str, ...] = (
     "executable doesn't exist",
     "playwright install",
+)
+
+_PROFILE_VERSION_ERROR_MARKERS: tuple[str, ...] = (
+    "profile was last used with a newer version",
+    "profile cannot be loaded",
 )
 
 # SR-1.6: markers Playwright/Firefox raises when a request is aborted via
@@ -343,6 +418,14 @@ def _classify_browser_error(exc: Exception) -> str:
             "browser binary Playwright expects."
         )
 
+    if any(marker in lowered for marker in _PROFILE_VERSION_ERROR_MARKERS):
+        return (
+            f"Browser profile compatibility error: {text}\n"
+            "The persistent profile belongs to an incompatible Firefox build. "
+            "Missy isolates Playwright profiles by browser build; retry with a "
+            "fresh build-specific session directory."
+        )
+
     if any(marker in lowered for marker in _SANDBOX_LAUNCH_ERROR_MARKERS):
         return (
             f"Browser sandbox/kernel launch failure: {text}\n"
@@ -379,7 +462,7 @@ class BrowserNavigateTool(BaseTool):
     permissions = ToolPermissions(network=True)
     parameters = {
         "url": {"type": "string", "description": "Full URL to navigate to.", "required": True},
-        "headless": {"type": "boolean", "description": "Hide browser window (default False)."},
+        "headless": {"type": "boolean", "description": "Hide browser window (default True)."},
         "wait_until": {
             "type": "string",
             "description": "'load', 'domcontentloaded', 'networkidle' (default 'domcontentloaded').",
@@ -408,17 +491,22 @@ class BrowserNavigateTool(BaseTool):
         self,
         *,
         url: str,
-        headless: bool = False,
+        headless: bool = True,
         wait_until: str = "domcontentloaded",
         session_id: str = "default",
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id, headless=headless)
-            pg.goto(url, wait_until=wait_until, timeout=30_000)
-            return ToolResult(
-                success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None
-            )
+
+            def _navigate(pg: Any) -> ToolResult:
+                pg.goto(url, wait_until=wait_until, timeout=30_000)
+                return ToolResult(
+                    success=True,
+                    output=f"URL: {pg.url}\nTitle: {pg.title()}",
+                    error=None,
+                )
+
+            return _run_on_page(_navigate, session_id, headless=headless)
         except Exception as exc:
             return _err(exc)
 
@@ -451,21 +539,26 @@ class BrowserClickTool(BaseTool):
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id)
-            t = timeout_ms
-            if text:
-                pg.get_by_text(text, exact=False).first.click(timeout=t)
-            elif role and name:
-                pg.get_by_role(role, name=name).click(timeout=t)
-            elif role:
-                pg.get_by_role(role).first.click(timeout=t)
-            elif selector:
-                pg.locator(selector).first.click(timeout=t)
-            else:
-                return ToolResult(
-                    success=False, output=None, error="Provide text, selector, or role."
-                )
-            return ToolResult(success=True, output=f"Clicked. URL: {pg.url}", error=None)
+
+            def _click(pg: Any) -> ToolResult:
+                t = timeout_ms
+                if text:
+                    pg.get_by_text(text, exact=False).first.click(timeout=t)
+                elif role and name:
+                    pg.get_by_role(role, name=name).click(timeout=t)
+                elif role:
+                    pg.get_by_role(role).first.click(timeout=t)
+                elif selector:
+                    pg.locator(selector).first.click(timeout=t)
+                else:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error="Provide text, selector, or role.",
+                    )
+                return ToolResult(success=True, output=f"Clicked. URL: {pg.url}", error=None)
+
+            return _run_on_page(_click, session_id)
         except Exception as exc:
             return _err(exc)
 
@@ -498,21 +591,26 @@ class BrowserFillTool(BaseTool):
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id)
-            if label:
-                loc = pg.get_by_label(label, exact=False).first
-            elif placeholder:
-                loc = pg.get_by_placeholder(placeholder, exact=False).first
-            elif selector:
-                loc = pg.locator(selector).first
-            else:
-                return ToolResult(
-                    success=False, output=None, error="Provide selector, label, or placeholder."
-                )
-            loc.fill(value)
-            if press_enter:
-                loc.press("Enter")
-            return ToolResult(success=True, output="Field filled.", error=None)
+
+            def _fill(pg: Any) -> ToolResult:
+                if label:
+                    loc = pg.get_by_label(label, exact=False).first
+                elif placeholder:
+                    loc = pg.get_by_placeholder(placeholder, exact=False).first
+                elif selector:
+                    loc = pg.locator(selector).first
+                else:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error="Provide selector, label, or placeholder.",
+                    )
+                loc.fill(value)
+                if press_enter:
+                    loc.press("Enter")
+                return ToolResult(success=True, output="Field filled.", error=None)
+
+            return _run_on_page(_fill, session_id)
         except Exception as exc:
             return _err(exc)
 
@@ -556,17 +654,20 @@ class BrowserScreenshotTool(BaseTool):
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id)
-            if selector:
-                pg.locator(selector).first.screenshot(path=path)
-            else:
-                pg.screenshot(path=path, full_page=full_page)
-            size = Path(path).stat().st_size
-            return ToolResult(
-                success=True,
-                output=f"Screenshot: {path} ({size:,} bytes) — {pg.title()}",
-                error=None,
-            )
+
+            def _screenshot(pg: Any) -> ToolResult:
+                if selector:
+                    pg.locator(selector).first.screenshot(path=path)
+                else:
+                    pg.screenshot(path=path, full_page=full_page)
+                size = Path(path).stat().st_size
+                return ToolResult(
+                    success=True,
+                    output=f"Screenshot: {path} ({size:,} bytes) — {pg.title()}",
+                    error=None,
+                )
+
+            return _run_on_page(_screenshot, session_id)
         except Exception as exc:
             return _err(exc)
 
@@ -592,19 +693,26 @@ class BrowserGetContentTool(BaseTool):
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id)
-            loc = pg.locator(selector).first
-            content = loc.inner_text() if content_type == "text" else loc.inner_html()
-            if len(content) > max_length:
-                content = content[:max_length] + f"\n[…{len(content):,} total chars]"
-            return ToolResult(success=True, output=content, error=None)
+
+            def _get_content(pg: Any) -> ToolResult:
+                loc = pg.locator(selector).first
+                content = loc.inner_text() if content_type == "text" else loc.inner_html()
+                if len(content) > max_length:
+                    content = content[:max_length] + f"\n[…{len(content):,} total chars]"
+                return ToolResult(success=True, output=content, error=None)
+
+            return _run_on_page(_get_content, session_id)
         except Exception as exc:
             return _err(exc)
 
 
 class BrowserEvaluateTool(BaseTool):
     name = "browser_evaluate"
-    description = "Run JavaScript in the browser and return the result."
+    description = (
+        "Run JavaScript in the browser and return the result. When inspecting "
+        "named elements, identify them from actual DOM classes, ids, attributes, "
+        "or text; do not assume a generic tag from the user's prose."
+    )
     permissions = ToolPermissions(network=True)
     parameters = {
         "script": {
@@ -617,8 +725,10 @@ class BrowserEvaluateTool(BaseTool):
 
     def execute(self, *, script: str, session_id: str = "default", **_kw) -> ToolResult:
         try:
-            pg = _page(session_id)
-            return ToolResult(success=True, output=str(pg.evaluate(script)), error=None)
+            return _run_on_page(
+                lambda pg: ToolResult(success=True, output=str(pg.evaluate(script)), error=None),
+                session_id,
+            )
         except Exception as exc:
             return _err(exc)
 
@@ -646,18 +756,25 @@ class BrowserWaitTool(BaseTool):
         **_kw,
     ) -> ToolResult:
         try:
-            pg = _page(session_id)
-            if for_selector:
-                pg.wait_for_selector(for_selector, timeout=30_000)
-                return ToolResult(success=True, output=f"'{for_selector}' appeared.", error=None)
-            if for_url:
-                pg.wait_for_url(for_url, timeout=30_000)
-                return ToolResult(success=True, output=f"URL: {pg.url}", error=None)
-            if for_text:
-                pg.get_by_text(for_text, exact=False).first.wait_for(timeout=30_000)
-                return ToolResult(success=True, output=f"Text '{for_text}' appeared.", error=None)
-            time.sleep(min(float(seconds), 30))
-            return ToolResult(success=True, output=f"Waited {seconds}s.", error=None)
+
+            def _wait(pg: Any) -> ToolResult:
+                if for_selector:
+                    pg.wait_for_selector(for_selector, timeout=30_000)
+                    return ToolResult(
+                        success=True, output=f"'{for_selector}' appeared.", error=None
+                    )
+                if for_url:
+                    pg.wait_for_url(for_url, timeout=30_000)
+                    return ToolResult(success=True, output=f"URL: {pg.url}", error=None)
+                if for_text:
+                    pg.get_by_text(for_text, exact=False).first.wait_for(timeout=30_000)
+                    return ToolResult(
+                        success=True, output=f"Text '{for_text}' appeared.", error=None
+                    )
+                time.sleep(min(float(seconds), 30))
+                return ToolResult(success=True, output=f"Waited {seconds}s.", error=None)
+
+            return _run_on_page(_wait, session_id)
         except Exception as exc:
             return _err(exc)
 
@@ -672,9 +789,13 @@ class BrowserGetUrlTool(BaseTool):
 
     def execute(self, *, session_id: str = "default", **_kw) -> ToolResult:
         try:
-            pg = _page(session_id)
-            return ToolResult(
-                success=True, output=f"URL: {pg.url}\nTitle: {pg.title()}", error=None
+            return _run_on_page(
+                lambda pg: ToolResult(
+                    success=True,
+                    output=f"URL: {pg.url}\nTitle: {pg.title()}",
+                    error=None,
+                ),
+                session_id,
             )
         except Exception as exc:
             return _err(exc)

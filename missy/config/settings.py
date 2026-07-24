@@ -594,6 +594,10 @@ class MissyConfig:
     sandbox: SandboxConfig | None = None
     container: ContainerConfig | None = None
     vision: VisionConfig = field(default_factory=VisionConfig)
+    # Maximum provider turns available to one agentic tool loop.  This was
+    # accepted in operator YAML by older examples but omitted from the parsed
+    # schema, so the gateway silently fell back to AgentConfig's value of 10.
+    max_iterations: int = 10
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
     # F19: global cross-session spend ceiling (0 = unlimited). Aggregates
     # every session/job/proactive run; period is "total" | "daily" | "monthly".
@@ -1224,6 +1228,7 @@ def load_config(path: str) -> MissyConfig:
             obs=_parse_obs(data.get("obs") or {}, vault_dir=vault_dir),
             vtube=_parse_vtube(data.get("vtube") or {}, vault_dir=vault_dir),
             desktop=_parse_desktop(data.get("desktop") or {}),
+            max_iterations=max(1, int(data.get("max_iterations", 10))),
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
             global_budget_period=str(data.get("global_budget_period", "total") or "total"),

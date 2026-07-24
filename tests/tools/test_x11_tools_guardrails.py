@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from missy.tools.builtin.x11_tools import (
     X11ClickTool,
     X11KeyTool,
@@ -297,6 +299,7 @@ class TestX11ScreenshotToolRedaction:
 
 class TestX11ReadScreenToolRedaction:
     def test_native_ocr_box_text_is_censored_and_low_confidence_is_dropped(self, tmp_path):
+        pytest.importorskip("pytesseract")
         from PIL import Image
 
         from missy.tools.builtin.x11_tools import _extract_native_ocr_coordinates

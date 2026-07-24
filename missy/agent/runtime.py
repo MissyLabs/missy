@@ -447,6 +447,7 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
+    workspace_path: str | None = None
     capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap
     agent_id: str = "default"
@@ -544,13 +545,17 @@ DISCORD_SYSTEM_PROMPT = (
     "When a user asks you to look at something, take a picture, or see something, "
     "use vision_capture and then describe what you see. Use discord_upload_file "
     "to share captured images in the channel. "
-    "You do NOT have a web browser tool — do not reference browser_* tools "
-    "or claim to have browsed a page; use web_fetch for raw HTML instead. "
-    "web_fetch only retrieves raw HTML — it does not run JavaScript and "
-    "cannot see content that a page renders dynamically (e.g. JS-driven "
-    "search results, single-page apps). If a page needs that and web_fetch's "
-    "result looks incomplete or empty, say so explicitly rather than "
-    "answering as if you had full browser access to the rendered page. "
+    "For raw HTTP retrieval use web_fetch. For rendered pages or interaction, "
+    "use browser_navigate, browser_click, browser_fill, browser_screenshot, "
+    "browser_get_content, browser_evaluate, browser_wait, browser_get_url, and "
+    "browser_close. Browser navigation remains network-policy-gated; do not "
+    "substitute raw HTML from web_fetch when the task requires JavaScript, "
+    "visible DOM state, or form interaction. For JavaScript inspection of "
+    "named page elements, target the requested elements from their DOM "
+    "classes, ids, attributes, or text; never assume a generic HTML tag such "
+    "as tr merely because the user calls the elements rows. For forms, fill each "
+    "requested field separately, click submit, wait for the confirmation, read its "
+    "content, and only then close. Close the browser session when the task is finished. "
     "When you need real data (file contents, command output, etc.), use tools "
     "rather than guessing. "
     "CALCULATOR ERRORS: A calculator error is the result for that exact "
@@ -1394,6 +1399,7 @@ class AgentRuntime:
             make_verification_prompt,
         )
         from missy.agent.response_guards import (
+            calculator_observations_are_reportable,
             detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
@@ -1401,16 +1407,30 @@ class AgentRuntime:
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
             find_unmet_desktop_requests,
+            find_unmet_video_generation_request,
+            find_unmet_web_requests,
+            find_unreported_calculator_expressions,
             find_unverified_desktop_action,
+            find_unverified_filesystem_action,
+            find_video_reproducibility_issue,
             is_security_refusal,
+            is_video_reproducibility_request,
+            make_calculator_completeness_retry_prompt,
             make_capability_denial_retry_prompt,
             make_desktop_request_retry_prompt,
             make_desktop_verification_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
+            make_filesystem_verification_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
+            make_video_generation_error_report_prompt,
+            make_video_generation_retry_prompt,
+            make_video_reproducibility_comparison_prompt,
+            make_video_reproducibility_prompt,
+            make_web_request_retry_prompt,
+            terminal_parameter_errors_are_reported,
         )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
@@ -1437,6 +1457,7 @@ class AgentRuntime:
             _checkpoint_id = None
 
         tool_names_used: list[str] = []
+        successful_tool_names: list[str] = []
         # Mutable message list for the loop; starts from what context manager gave us
         loop_messages: list[dict] = list(messages)
 
@@ -1491,10 +1512,27 @@ class AgentRuntime:
         _security_refusal_retries = 0
         _MAX_EXPLICIT_TOOL_REQUEST_RETRIES = 1
         _explicit_tool_request_retries = 0
+        _MAX_CALCULATOR_COMPLETENESS_RETRIES = 1
+        _calculator_completeness_retries = 0
+        _calculator_observations: list[tuple[str, str, bool]] = []
+        _video_generation_observations: list[tuple[dict[str, Any], str, bool]] = []
+        _MAX_VIDEO_REPRODUCIBILITY_RETRIES = 1
+        _video_reproducibility_retries = 0
         _MAX_DESKTOP_VERIFICATION_RETRIES = 1
         _desktop_verification_retries = 0
         _MAX_DESKTOP_REQUEST_RETRIES = 1
         _desktop_request_retries = 0
+        _MAX_FILESYSTEM_VERIFICATION_RETRIES = 1
+        _filesystem_verification_retries = 0
+        # Browser workflows commonly need several serial calls because some
+        # providers emit only one tool call per turn (observe, fill, submit,
+        # wait, verify, close). Keep this bounded, but allow each missing step
+        # to be requested rather than assuming one corrective turn can execute
+        # the whole remainder of the workflow.
+        _MAX_WEB_REQUEST_RETRIES = 4
+        _web_request_retries = 0
+        _MAX_VIDEO_GENERATION_RETRIES = 1
+        _video_generation_retries = 0
         _leaked_tool_call_retries = 0
 
         # Resolve progress reporter (graceful degradation for tests that bypass __init__)
@@ -1516,11 +1554,34 @@ class AgentRuntime:
                 self.config.max_iterations
                 + _MAX_DESKTOP_REQUEST_RETRIES
                 + _MAX_DESKTOP_VERIFICATION_RETRIES
+                + _MAX_CALCULATOR_COMPLETENESS_RETRIES
+                + _MAX_FILESYSTEM_VERIFICATION_RETRIES
+                + 2 * _MAX_WEB_REQUEST_RETRIES
+                + 2 * _MAX_VIDEO_GENERATION_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
-                _desktop_grace_used = min(
-                    _desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES
-                ) + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES)
+                _desktop_grace_used = (
+                    min(_desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES)
+                    + min(_desktop_verification_retries, _MAX_DESKTOP_VERIFICATION_RETRIES)
+                    + min(
+                        _calculator_completeness_retries,
+                        _MAX_CALCULATOR_COMPLETENESS_RETRIES,
+                    )
+                    + min(
+                        _filesystem_verification_retries,
+                        _MAX_FILESYSTEM_VERIFICATION_RETRIES,
+                    )
+                    # One correction can require a tool-call turn followed by
+                    # another provider turn that synthesizes or exposes the
+                    # next missing step. Reserve both rather than consuming the
+                    # task's normal iteration budget with the guard itself.
+                    + 2 * min(_web_request_retries, _MAX_WEB_REQUEST_RETRIES)
+                    + 2
+                    * min(
+                        _video_generation_retries,
+                        _MAX_VIDEO_GENERATION_RETRIES,
+                    )
+                )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
                     break
                 _progress.on_iteration(
@@ -1646,6 +1707,25 @@ class AgentRuntime:
                             )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
+                        if not tr.is_error:
+                            successful_tool_names.append(tc.name)
+
+                        # Preserve every calculator outcome for a deterministic
+                        # final-response completeness check.  In a sequence of
+                        # intentional error probes, the generic DONE-criteria
+                        # retry focuses on only the latest failed round and can
+                        # cause an otherwise correct final answer to omit an
+                        # earlier expression entirely.
+                        if tc.name == "calculator" and "expression" in (tc.arguments or {}):
+                            expression = tc.arguments.get("expression")
+                            if isinstance(expression, str):
+                                _calculator_observations.append(
+                                    (expression, tr.content or "", bool(tr.is_error))
+                                )
+                        if tc.name == "video_generate":
+                            _video_generation_observations.append(
+                                (dict(tc.arguments or {}), tr.content or "", bool(tr.is_error))
+                            )
 
                         # OpenClaw A3: mutation fingerprinting
                         _fp = _fingerprint_tc(tc.name, tc.arguments or {})
@@ -1797,7 +1877,33 @@ class AgentRuntime:
                             _cm.update(_checkpoint_id, loop_messages, tool_names_used, iteration)
 
                     # Inject verification prompt
-                    verification = make_verification_prompt()
+                    if _last_round_errors and all(
+                        error.casefold().startswith("video_generate:")
+                        for error in _last_round_errors
+                    ):
+                        verification = make_video_generation_error_report_prompt(
+                            _last_round_errors, _tool_request_input
+                        )
+                    else:
+                        verification = make_verification_prompt()
+                    successful_video_observations = [
+                        item for item in _video_generation_observations if not item[2]
+                    ]
+                    if (
+                        is_video_reproducibility_request(_tool_request_input)
+                        and len(successful_video_observations) == 1
+                    ):
+                        first_arguments, first_result, _ = successful_video_observations[0]
+                        verification += "\n\n" + make_video_reproducibility_prompt(
+                            first_arguments, first_result, _tool_request_input
+                        )
+                    elif (
+                        is_video_reproducibility_request(_tool_request_input)
+                        and len(successful_video_observations) >= 2
+                    ):
+                        verification += "\n\n" + make_video_reproducibility_comparison_prompt(
+                            _video_generation_observations
+                        )
                     loop_messages.append({"role": "user", "content": verification})
 
                     # Continue loop to get model's next response
@@ -2032,6 +2138,171 @@ class AgentRuntime:
                             detail={"missing_tools": sorted(_missing_explicit_tools)},
                         )
 
+                _missing_web_requests = find_unmet_web_requests(
+                    _tool_request_input, successful_tool_names, allowed_tool_names
+                )
+                if _missing_web_requests and not is_security_refusal(
+                    final_text, _tool_request_input
+                ):
+                    if _web_request_retries < _MAX_WEB_REQUEST_RETRIES:
+                        _web_request_retries += 1
+                        logger.warning(
+                            "Web/browser request missing successful tool steps %s; retrying.",
+                            _missing_web_requests,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_web_request_retry_prompt(
+                                    _missing_web_requests, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.web_request_retry",
+                                result="warn",
+                                detail={"missing_tools": _missing_web_requests},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.web_request_unresolved",
+                            result="warn",
+                            detail={"missing_tools": _missing_web_requests},
+                        )
+                    final_text = (
+                        "I could not complete the requested web/browser workflow because "
+                        "these required successful steps did not run: "
+                        + ", ".join(_missing_web_requests)
+                        + ". I cannot confirm the browser task as complete."
+                    )
+
+                _missing_video_generation = find_unmet_video_generation_request(
+                    _tool_request_input, tool_names_used, allowed_tool_names
+                )
+                if (
+                    _missing_video_generation
+                    and not is_security_refusal(final_text, _tool_request_input)
+                    and _video_generation_retries < _MAX_VIDEO_GENERATION_RETRIES
+                ):
+                    _video_generation_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_video_generation_retry_prompt(_tool_request_input),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.video_generation_retry",
+                            result="warn",
+                            detail={"missing_tools": _missing_video_generation},
+                        )
+                    continue
+
+                # A multi-expression calculator request can execute every
+                # call and still lose earlier results from the final prose,
+                # especially when several expected arithmetic-sandbox errors
+                # trigger the generic DONE-criteria retry.  Bind the answer to
+                # every current-task calculator observation before accepting
+                # it.  Once every observed semantic error is reported, it is a
+                # completed answer rather than an actionable tool failure.
+                _missing_calculator_results = find_unreported_calculator_expressions(
+                    _calculator_observations, final_text
+                )
+                if _missing_calculator_results:
+                    if _calculator_completeness_retries < _MAX_CALCULATOR_COMPLETENESS_RETRIES:
+                        _calculator_completeness_retries += 1
+                        logger.warning(
+                            "Calculator response omitted observed expression(s) %s; "
+                            "retrying once with grounded result evidence.",
+                            _missing_calculator_results,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_calculator_completeness_retry_prompt(
+                                    _calculator_observations,
+                                    _missing_calculator_results,
+                                    _tool_request_input,
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.calculator_completeness_retry",
+                                result="warn",
+                                detail={"missing_expressions": _missing_calculator_results},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.calculator_completeness_unresolved",
+                            result="warn",
+                            detail={"missing_expressions": _missing_calculator_results},
+                        )
+                elif calculator_observations_are_reportable(_calculator_observations) and all(
+                    name == "calculator" for name in tool_names_used
+                ):
+                    # The user received every exact calculator outcome.  An
+                    # arithmetic-domain error (unsupported AST, division by
+                    # zero, resource cap, syntax) is itself the requested
+                    # observed result and must not be retried as an unfinished
+                    # mutation once it has been reported truthfully.
+                    _last_round_errors = []
+
+                _video_reproducibility_issue = find_video_reproducibility_issue(
+                    _tool_request_input, _video_generation_observations
+                )
+                if (
+                    _video_reproducibility_issue
+                    and _video_reproducibility_retries < _MAX_VIDEO_REPRODUCIBILITY_RETRIES
+                ):
+                    _video_reproducibility_retries += 1
+                    successful_video_observations = [
+                        item for item in _video_generation_observations if not item[2]
+                    ]
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    if successful_video_observations:
+                        first_arguments, first_result, _ = successful_video_observations[0]
+                        correction = make_video_reproducibility_prompt(
+                            first_arguments, first_result, _tool_request_input
+                        )
+                    else:
+                        correction = make_video_generation_retry_prompt(_tool_request_input)
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The reproducibility requirement is not yet satisfied: "
+                                f"{_video_reproducibility_issue}.\n\n{correction}"
+                            ),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.video_reproducibility_retry",
+                            result="warn",
+                            detail={"issue": _video_reproducibility_issue},
+                        )
+                    continue
+
                 # A long-lived Discord transcript may already contain the
                 # same desktop prompt and an earlier successful answer. Do
                 # not accept replayed prose as current execution: bind narrow
@@ -2086,7 +2357,7 @@ class AgentRuntime:
                 # caught a coordinate click followed by a false success claim
                 # while the target dialog remained open. Require a later
                 # screen/tree/window observation before accepting completion.
-                _unverified_desktop_action = find_unverified_desktop_action(tool_names_used)
+                _unverified_desktop_action = find_unverified_desktop_action(successful_tool_names)
                 if _unverified_desktop_action:
                     if _desktop_verification_retries < _MAX_DESKTOP_VERIFICATION_RETRIES:
                         _desktop_verification_retries += 1
@@ -2126,6 +2397,44 @@ class AgentRuntime:
                         "the intended control or produced the requested UI state. I cannot "
                         "confirm the desktop task as complete."
                     )
+
+                _unverified_filesystem_action = find_unverified_filesystem_action(
+                    successful_tool_names
+                )
+                if _unverified_filesystem_action:
+                    if _filesystem_verification_retries < _MAX_FILESYSTEM_VERIFICATION_RETRIES:
+                        _filesystem_verification_retries += 1
+                        logger.warning(
+                            "Tool loop reported completion after filesystem action %r "
+                            "without post-action observation; retrying once.",
+                            _unverified_filesystem_action,
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_filesystem_verification_retry_prompt(
+                                    _unverified_filesystem_action, _tool_request_input
+                                ),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.filesystem_verification_retry",
+                                result="warn",
+                                detail={"unverified_action": _unverified_filesystem_action},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.filesystem_verification_unresolved",
+                            result="warn",
+                            detail={"unverified_action": _unverified_filesystem_action},
+                        )
 
                 # General response guards (missy/agent/response_guards.py):
                 # a tool-free response that reads like it fabricated a
@@ -2233,6 +2542,9 @@ class AgentRuntime:
                 # calls immediately preceding it contained an error --
                 # deterministic, tool-observed evidence, not the model's
                 # own say-so.
+                if terminal_parameter_errors_are_reported(_last_round_errors, final_text):
+                    _last_round_errors = []
+
                 if _last_round_errors:
                     if _done_verification_retries < _MAX_DONE_VERIFICATION_RETRIES:
                         _done_verification_retries += 1
@@ -3121,7 +3433,7 @@ class AgentRuntime:
                         logger.debug("Failed to load summaries", exc_info=True)
 
                 # Shape system prompt with persona and behavior layer.
-                base_system = self.config.system_prompt
+                base_system = self._effective_system_prompt()
                 if self._behavior is not None:
                     try:
                         behavior_context = {
@@ -3205,7 +3517,31 @@ class AgentRuntime:
                 logger.debug("ContextManager.build_messages failed: %s", exc)
 
         # Minimal fallback
-        return self.config.system_prompt, [{"role": "user", "content": user_input}]
+        return self._effective_system_prompt(), [{"role": "user", "content": user_input}]
+
+    def _effective_system_prompt(self) -> str:
+        """Return the system prompt with the configured workspace contract.
+
+        File and shell tools resolve relative paths against the gateway
+        process's current directory. That directory is an implementation
+        detail and may be the service or harness directory rather than the
+        operator-configured workspace. Give the model one trusted absolute
+        root so it supplies absolute file paths and an explicit ``cwd`` for
+        shell calls instead of guessing from the launcher directory.
+        """
+        workspace = self.config.workspace_path
+        if not workspace:
+            return self.config.system_prompt
+        return (
+            f"{self.config.system_prompt}\n\n"
+            "CONFIGURED WORKSPACE ROOT (trusted operator configuration): "
+            f"{workspace}\n"
+            "Treat this as the current project workspace. Resolve every relative "
+            "file request underneath this root, pass absolute paths to filesystem "
+            "tools, and pass this root as shell_exec cwd unless the user explicitly "
+            "names another policy-approved directory. Never infer the workspace from "
+            "the gateway process's launch directory."
+        )
 
     def _synthesize_memory(
         self,
@@ -4704,7 +5040,7 @@ class AgentRuntime:
             the system prompt first, followed by the user turn.
         """
         return [
-            Message(role="system", content=self.config.system_prompt),
+            Message(role="system", content=self._effective_system_prompt()),
             Message(role="user", content=user_input),
         ]
 

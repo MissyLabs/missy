@@ -131,11 +131,9 @@ def test_discord_capability_mode_includes_voice_tools():
     assert "discord_voice_leave" in decision.tools
     assert "discord_voice_say" in decision.tools
     assert "discord_voice_status" in decision.tools
-    # browser_* remains excluded from Discord's tool set; x11_* was
-    # explicitly reversed (see MISSY_DISCORD_TOOLS's module comment) --
-    # this specific bot's desktop control was commissioned for exactly
-    # this Discord-driven use case.
-    assert "browser_navigate" not in decision.tools
+    # Browser and X11 are both reachable for this allowlisted Discord bot;
+    # their independent network/desktop reference monitors remain in force.
+    assert "browser_navigate" in decision.tools
     assert "x11_click" in decision.tools
 
 

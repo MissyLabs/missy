@@ -46,7 +46,9 @@ MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
 # (feedback.md's "Discord-side UX" section) -- and the operator
 # confirmed this intent again directly, after observing Missy correctly
 # but unhelpfully deny desktop control in Discord despite the tools
-# working when called directly. The exposure this widens is narrow:
+# working when called directly. The accepted validation contract also
+# requires browser navigation, rendered-DOM inspection, and form interaction
+# over the same Discord surface. The exposure this widens is narrow:
 # `discord.accounts[].dm_policy: disabled` (no DMs at all), a single
 # allowlisted guild with `require_mention: true`, and in practice the
 # requests come from `owner_ids`. Every deeper guardrail this profile
@@ -63,6 +65,20 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "file_delete",
     "list_files",
     "web_fetch",
+    # Browser automation is exposed to the same allowlisted, mention-gated
+    # Discord surface as desktop control. Each navigation still traverses the
+    # network reference monitor (including redirects), screenshots/uploads
+    # retain their filesystem and confirmation gates, and JavaScript executes
+    # only in the isolated Playwright page context.
+    "browser_navigate",
+    "browser_click",
+    "browser_fill",
+    "browser_screenshot",
+    "browser_get_content",
+    "browser_evaluate",
+    "browser_wait",
+    "browser_get_url",
+    "browser_close",
     "shell_exec",
     "self_create_tool",
     "code_evolve",

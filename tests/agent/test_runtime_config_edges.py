@@ -165,6 +165,20 @@ class TestAgentConfigCustomValues:
         cfg = AgentConfig(system_prompt="Be brief.")
         assert cfg.system_prompt == "Be brief."
 
+    def test_workspace_path_defaults_to_none(self):
+        assert AgentConfig().workspace_path is None
+
+    def test_effective_prompt_names_configured_workspace(self):
+        runtime = AgentRuntime(
+            AgentConfig(system_prompt="Be brief.", workspace_path="/tmp/missy-workspace")
+        )
+        messages = runtime._build_messages("Inspect README.md")
+
+        assert messages[0].content.startswith("Be brief.")
+        assert "/tmp/missy-workspace" in messages[0].content
+        assert "shell_exec cwd" in messages[0].content
+        assert messages[1].content == "Inspect README.md"
+
     def test_custom_capability_mode(self):
         cfg = AgentConfig(capability_mode="safe-chat")
         assert cfg.capability_mode == "safe-chat"
@@ -489,12 +503,11 @@ class TestDiscordSystemPrompt:
         assert "x11_screenshot" in lower
         assert "desktop_status" in lower
 
-    def test_discord_prompt_still_denies_browser(self):
-        # browser_* tools remain out of scope for Discord (narrower than
-        # the desktop/OBS/VTube reversal above).
+    def test_discord_prompt_describes_policy_gated_browser(self):
         lower = DISCORD_SYSTEM_PROMPT.lower()
-        assert "browser" in lower
-        assert "do not" in lower
+        assert "browser_navigate" in lower
+        assert "network-policy-gated" in lower
+        assert "close the browser session" in lower
 
     def test_discord_prompt_different_from_default(self):
         default = AgentConfig().system_prompt
@@ -503,9 +516,9 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_missy(self):
         assert "Missy" in DISCORD_SYSTEM_PROMPT
 
-    def test_discord_prompt_no_gui_reference(self):
-        # Explicitly disallows GUI/X11/browser
-        assert "do NOT" in DISCORD_SYSTEM_PROMPT or "do not" in DISCORD_SYSTEM_PROMPT.lower()
+    def test_discord_prompt_forbids_raw_html_substitution(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "do not substitute raw html" in lower
 
     def test_discord_prompt_mentions_discord_upload_file(self):
         assert "discord_upload_file" in DISCORD_SYSTEM_PROMPT
@@ -537,24 +550,19 @@ class TestDiscordSystemPrompt:
         assert "not scene-change analysis" in lower
 
     def test_discord_prompt_discloses_web_fetch_js_limitation(self):
-        """FX-round2-F3 (narrow, safe half): the harness observed web_fetch
-        silently substituting for a JS-dependent page instead of
-        disclosing the limitation. This does not expand Discord's tool
-        access (a deliberate security boundary -- see
-        missy/policy/tool_policy_pipeline.py's MISSY_DISCORD_TOOLS) --
-        it only requires disclosing web_fetch's own real limitation."""
+        """The prompt distinguishes raw fetches from rendered browser work."""
         lower = DISCORD_SYSTEM_PROMPT.lower()
         assert "javascript" in lower
         assert "web_fetch" in DISCORD_SYSTEM_PROMPT
 
-    def test_discord_tools_now_include_desktop_gui_but_not_browser(self):
+    def test_discord_tools_include_desktop_gui_and_browser(self):
         """The FX-round2-F3 exclusion of x11_*/atspi_*/desktop_*/obs_*/
         vtube_* tools from Discord has been explicitly reversed by the
         operator: this bot's desktop/OBS/VTube integration was built
         specifically for Discord-driven control (see
         missy/policy/tool_policy_pipeline.py's MISSY_DISCORD_TOOLS
-        comment). browser_* remains excluded -- that boundary wasn't
-        part of this reversal."""
+        comment). The tool-specific validation contract likewise requires
+        the existing policy-checked browser tools over Discord."""
         from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
 
         assert "x11_screenshot" in MISSY_DISCORD_TOOLS
@@ -562,8 +570,18 @@ class TestDiscordSystemPrompt:
         assert "desktop_status" in MISSY_DISCORD_TOOLS
         assert "obs_status" in MISSY_DISCORD_TOOLS
         assert "vtube_status" in MISSY_DISCORD_TOOLS
-        for name in MISSY_DISCORD_TOOLS:
-            assert not name.startswith("browser_"), name
+        for name in (
+            "browser_navigate",
+            "browser_click",
+            "browser_fill",
+            "browser_screenshot",
+            "browser_get_content",
+            "browser_evaluate",
+            "browser_wait",
+            "browser_get_url",
+            "browser_close",
+        ):
+            assert name in MISSY_DISCORD_TOOLS
 
 
 class TestFullPromptToolSurfaceSalience:
@@ -852,11 +870,8 @@ class TestCapabilityMode:
         assert "calculator" in tool_names
         assert "shell_exec" not in tool_names
 
-    def test_discord_mode_includes_x11_tools_but_not_browser(self):
-        """Reversed from the prior exclusion: this bot's desktop control
-        was purpose-built for Discord (see tool_policy_pipeline.py's
-        MISSY_DISCORD_TOOLS comment), so x11_* tools are now visible in
-        Discord's capability mode; browser_* remains excluded."""
+    def test_discord_mode_includes_x11_and_browser_tools(self):
+        """The allowlisted Discord surface exposes both guarded tool families."""
         t_x11 = MagicMock()
         t_x11.name = "x11_screenshot"
         t_browser = MagicMock()
@@ -878,7 +893,7 @@ class TestCapabilityMode:
 
         tool_names = [t.name for t in tools]
         assert "x11_screenshot" in tool_names
-        assert "browser_screenshot" not in tool_names
+        assert "browser_screenshot" in tool_names
         assert "file_read" in tool_names
 
     def test_get_tools_returns_empty_list_when_registry_unavailable(self):

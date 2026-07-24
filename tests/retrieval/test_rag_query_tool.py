@@ -52,11 +52,23 @@ class TestIndexActions:
         assert not tool.execute(action="index_text", text="body").success
 
     def test_index_file(self, tmp_path) -> None:
-        tool, _ = _tool_with_engine()
+        tool, engine = _tool_with_engine()
         p = tmp_path / "doc.txt"
         p.write_text("indexed file content about vaults and secrets")
         res = tool.execute(action="index_file", path=str(p))
         assert res.success and res.output["chunks_indexed"] >= 1
+        assert res.output["path"] == str(p.resolve())
+        assert res.output["doc_id"] == str(p.resolve())
+        assert engine.query("indexed file content", top_k=1)[0].doc_id == str(p.resolve())
+
+    def test_index_file_preserves_explicit_custom_doc_id(self, tmp_path) -> None:
+        tool, engine = _tool_with_engine()
+        p = tmp_path / "doc.txt"
+        p.write_text("custom document identity")
+        res = tool.execute(action="index_file", path=str(p), doc_id="requested-id")
+        assert res.success
+        assert res.output["doc_id"] == "requested-id"
+        assert engine.query("custom identity", top_k=1)[0].doc_id == "requested-id"
 
     def test_index_file_missing_path_errors(self, tmp_path) -> None:
         tool, _ = _tool_with_engine()
@@ -102,6 +114,10 @@ class TestToolContract:
         schema = RagQueryTool().get_schema()
         assert schema["name"] == "rag_query"
         assert "action" in schema["parameters"]["properties"]
+        assert (
+            "resolved absolute file path"
+            in schema["parameters"]["properties"]["doc_id"]["description"]
+        )
 
     def test_lazy_engine_uses_index_dir(self, tmp_path) -> None:
         # A tool built without an engine lazily constructs one at the given dir.

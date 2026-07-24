@@ -294,6 +294,24 @@ class TestFileSourceNormalOperation:
 
 
 class TestScreenshotSourceToolName:
+    def test_take_screenshot_discovers_x11_display(self, tmp_path):
+        """A service process without DISPLAY uses an available X11 socket."""
+        output_file = tmp_path / "shot.png"
+
+        def fake_run(cmd, **kwargs):
+            result = MagicMock(returncode=0)
+            output_file.write_bytes(b"fake png")
+            assert kwargs["env"]["DISPLAY"] == ":0"
+            return result
+
+        source = ScreenshotSource()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("pathlib.Path.exists", return_value=True),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            assert source._take_screenshot(str(output_file)) == "scrot"
+
     def test_take_screenshot_returns_tool_name_on_success(self, tmp_path):
         """_take_screenshot() returns the name of the tool that succeeded."""
         output_file = tmp_path / "shot.png"

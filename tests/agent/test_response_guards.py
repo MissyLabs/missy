@@ -14,17 +14,273 @@ from missy.agent.response_guards import (
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
     find_unmet_desktop_requests,
+    find_unmet_video_generation_request,
+    find_unmet_web_requests,
+    find_unreported_calculator_expressions,
     find_unverified_desktop_action,
+    find_unverified_filesystem_action,
+    find_video_reproducibility_issue,
     is_security_refusal,
+    is_video_reproducibility_request,
+    make_calculator_completeness_retry_prompt,
     make_capability_denial_retry_prompt,
     make_desktop_request_retry_prompt,
     make_desktop_verification_retry_prompt,
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
+    make_filesystem_verification_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
+    make_video_generation_error_report_prompt,
+    make_video_generation_retry_prompt,
+    make_video_reproducibility_comparison_prompt,
+    make_video_reproducibility_prompt,
+    make_web_request_retry_prompt,
+    terminal_parameter_errors_are_reported,
 )
+
+
+class TestVideoGenerationGuards:
+    def test_non_string_input_is_not_a_reproducibility_request(self):
+        assert not is_video_reproducibility_request(object())
+
+    def test_detects_same_seed_rerender_request(self):
+        prompt = "Tell me the seed, then generate it AGAIN with that exact seed."
+        assert is_video_reproducibility_request(prompt)
+
+    def test_reproducibility_prompt_preserves_full_arguments(self):
+        arguments = {"backend": "wan", "prompt": "A spinning top", "steps": 20}
+        result = '{"seed": 12345, "path": "/tmp/a.mp4"}'
+        retry = make_video_reproducibility_prompt(arguments, result)
+        assert '"prompt": "A spinning top"' in retry
+        assert '"seed": 12345' in retry
+
+    def test_reproducibility_check_rejects_prompt_drift(self):
+        request = "Generate twice, again with the exact same seed."
+        observations = [
+            ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
+            (
+                {"backend": "wan", "prompt": "top", "seed": 12345},
+                '{"seed": 12345}',
+                False,
+            ),
+        ]
+        assert find_video_reproducibility_issue(request, observations) == (
+            "the repeat call changed generation parameters"
+        )
+
+    def test_reproducibility_check_accepts_exact_repeat(self):
+        request = "Generate twice, again with the exact same seed."
+        observations = [
+            ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
+            (
+                {"backend": "wan", "prompt": "A spinning top", "seed": 12345},
+                '{"seed": 12345}',
+                False,
+            ),
+        ]
+        assert find_video_reproducibility_issue(request, observations) is None
+
+    def test_reproducibility_comparison_uses_decoded_frames(self):
+        observations = [
+            ({"backend": "wan"}, '{"path": "/tmp/first.mp4", "seed": 1}', False),
+            ({"backend": "wan", "seed": 1}, '{"path": "/tmp/second.mp4"}', False),
+        ]
+        prompt = make_video_reproducibility_comparison_prompt(observations)
+        assert "decoded video frames" in prompt
+        assert "framemd5" in prompt
+        assert "/tmp/first.mp4" in prompt
+        assert "/tmp/second.mp4" in prompt
+
+    def test_render_request_requires_video_generate(self):
+        prompt = "Generate a video of a sunset using the SVD backend."
+        assert find_unmet_video_generation_request(prompt, [], {"video_generate"}) == [
+            "video_generate"
+        ]
+        assert (
+            find_unmet_video_generation_request(prompt, ["video_generate"], {"video_generate"})
+            == []
+        )
+
+    def test_animation_request_requires_video_generate(self):
+        assert find_unmet_video_generation_request(
+            "Animate this image into a short video.", [], {"video_generate"}
+        ) == ["video_generate"]
+
+    def test_retry_prompt_requires_exact_tool(self):
+        retry = make_video_generation_retry_prompt("Generate an SVD video")
+        assert "video_generate" in retry
+        assert "video_storyboard" in retry
+        assert "Generate an SVD video" in retry
+
+    def test_reported_parameter_constraint_is_terminal(self):
+        errors = [
+            "video_generate: audio_prompt and audio_path are mutually exclusive; pass only one."
+        ]
+        reply = "I can't apply both because those parameters are mutually exclusive."
+        assert terminal_parameter_errors_are_reported(errors, reply)
+
+    def test_video_timeout_is_terminal_once_reported(self):
+        assert terminal_parameter_errors_are_reported(
+            ["video_generate: generation timed out after 15 seconds"],
+            "The generation timed out.",
+        )
+
+    def test_other_operational_failure_is_not_terminal(self):
+        assert not terminal_parameter_errors_are_reported(
+            ["shell_exec: command timed out after 15 seconds"],
+            "The command timed out.",
+        )
+
+    def test_terminal_error_prompt_forbids_retry_and_preserves_evidence(self):
+        retry = make_video_generation_error_report_prompt(
+            ["video_generate: missing models/checkpoints/svd_xt.safetensors"],
+            "Animate the test image with SVD.",
+        )
+        assert "Do not retry" in retry
+        assert "svd_xt.safetensors" in retry
+        assert "Animate the test image with SVD." in retry
+
+
+class TestFilesystemVerificationGuard:
+    def test_latest_write_requires_later_observation(self):
+        assert find_unverified_filesystem_action(["file_write", "file_write"]) == "file_write"
+
+    def test_listing_after_mutation_satisfies_guard(self):
+        assert find_unverified_filesystem_action(["file_write", "list_files"]) is None
+
+    def test_read_after_mutation_satisfies_guard(self):
+        assert find_unverified_filesystem_action(["file_delete", "file_read"]) is None
+
+    def test_observation_before_latest_mutation_does_not_satisfy_guard(self):
+        assert find_unverified_filesystem_action(["list_files", "file_write"]) == "file_write"
+
+    def test_retry_prompt_anchors_original_request(self):
+        prompt = make_filesystem_verification_retry_prompt(
+            "file_write", "Create README.md and src/main.txt"
+        )
+        assert "list_files" in prompt
+        assert "Create README.md and src/main.txt" in prompt
+
+
+class TestWebRequestGuard:
+    def test_metadata_request_requires_navigation_url_read_and_close(self):
+        prompt = "Open this local webpage in the browser and report the current URL and page title."
+        assert find_unmet_web_requests(prompt, [], None) == [
+            "browser_close",
+            "browser_get_url",
+            "browser_navigate",
+        ]
+
+    def test_complete_form_workflow_is_satisfied(self):
+        prompt = "Open the local form page, fill fake name/email data, submit, and report text."
+        used = [
+            "browser_navigate",
+            "browser_fill",
+            "browser_fill",
+            "browser_click",
+            "browser_wait",
+            "browser_get_content",
+            "browser_close",
+        ]
+        assert find_unmet_web_requests(prompt, used, set(used)) == []
+
+    def test_name_and_email_require_two_successful_fill_calls(self):
+        prompt = "Open the form page, fill fake name/email data, and submit."
+        used = ["browser_navigate", "browser_fill", "browser_click", "browser_close"]
+        assert "browser_fill" in find_unmet_web_requests(prompt, used, set(used))
+
+    def test_form_confirmation_steps_must_follow_submit_in_one_session(self):
+        prompt = "Open the form page, fill fake name/email data, submit, and report text."
+        used = [
+            "browser_navigate",
+            "browser_fill",
+            "browser_fill",
+            "browser_click",
+            "browser_get_content",
+            "browser_close",
+            "browser_navigate",
+            "browser_wait",
+            "browser_close",
+        ]
+        missing = find_unmet_web_requests(prompt, used, set(used))
+        assert missing == [
+            "browser_click",
+            "browser_close",
+            "browser_fill",
+            "browser_get_content",
+            "browser_wait",
+        ]
+
+    def test_raw_fetch_request_requires_web_fetch(self):
+        prompt = "Fetch this local test URL: http://127.0.0.1/page"
+        assert find_unmet_web_requests(prompt, [], {"web_fetch"}) == ["web_fetch"]
+
+    def test_accessible_submit_button_is_not_a_browser_form_request(self):
+        prompt = "Click the accessible button named Submit."
+        assert find_unmet_web_requests(prompt, [], None) == []
+
+    def test_desktop_screenshot_is_not_a_browser_request(self):
+        prompt = "Open a text editor, type hello, and take a screenshot."
+        assert find_unmet_web_requests(prompt, [], None) == []
+
+    def test_close_before_later_browser_action_is_not_terminal(self):
+        prompt = "Open this page in the browser and report the page title."
+        used = ["browser_navigate", "browser_close", "browser_get_url"]
+        assert find_unmet_web_requests(prompt, used, set(used)) == ["browser_close"]
+
+    def test_retry_prompt_names_tools_and_original_request(self):
+        prompt = make_web_request_retry_prompt(
+            ["browser_get_url", "browser_close"], "Open the page"
+        )
+        assert "browser_get_url" in prompt
+        assert "browser_close" in prompt
+        assert "Open the page" in prompt
+
+
+class TestCalculatorCompletenessGuard:
+    def test_finds_an_earlier_omitted_error(self):
+        observations = [
+            ("abs(-5)", "Unsupported expression construct: Call", True),
+            ("x + 1", "Unsupported expression construct: Name", True),
+        ]
+        reply = "`x + 1` failed: Unsupported expression construct: Name"
+        assert find_unreported_calculator_expressions(observations, reply) == ["abs(-5)"]
+
+    def test_accepts_every_expression_and_observed_outcome(self):
+        observations = [
+            ("1 << 8", "256", False),
+            ("1 / 0", "division by zero", True),
+        ]
+        reply = "`1 << 8` = 256; `1 / 0` failed with division by zero."
+        assert find_unreported_calculator_expressions(observations, reply) == []
+
+    def test_empty_input_is_bound_to_its_error_marker(self):
+        observations = [("", "expression must not be empty", True)]
+        assert find_unreported_calculator_expressions(observations, "No value was returned") == [
+            "<empty or whitespace-only expression>"
+        ]
+        assert (
+            find_unreported_calculator_expressions(
+                observations, "The empty input failed: expression must not be empty."
+            )
+            == []
+        )
+
+    def test_retry_prompt_includes_all_grounded_outcomes_and_request(self):
+        observations = [
+            ("2 ** 100000", "Exponent 100000 exceeds the maximum allowed value of 1000.", True),
+            ("2 ** 10", "1024", False),
+        ]
+        prompt = make_calculator_completeness_retry_prompt(
+            observations, ["2 ** 100000"], "Calculate both with your calculator."
+        )
+        assert "2 ** 100000" in prompt
+        assert "2 ** 10" in prompt
+        assert "Exponent 100000" in prompt
+        assert "1024" in prompt
+        assert "Calculate both with your calculator." in prompt
 
 
 class TestExplicitToolRequestGuard:
@@ -85,6 +341,12 @@ class TestDesktopActionVerificationGuard:
     def test_non_desktop_tools_do_not_trigger(self):
         assert find_unverified_desktop_action(["calculator", "file_read"]) is None
 
+    def test_failed_desktop_action_is_excluded_by_successful_call_filter(self):
+        # Runtime supplies only successful tool names; a failed action must be
+        # handled by DONE criteria rather than demanding verification of an
+        # input event that never occurred.
+        assert find_unverified_desktop_action(["atspi_get_tree"]) is None
+
     def test_retry_prompt_names_action_and_requires_later_observation(self):
         prompt = make_desktop_verification_retry_prompt("x11_click", "Click the Run Test button")
         assert "x11_click" in prompt
@@ -109,6 +371,13 @@ class TestDesktopRequestExecutionGuard:
             "desktop typing",
             "desktop screenshot",
         ]
+
+    def test_browser_screenshot_does_not_require_x11_screenshot(self):
+        prompt = (
+            "Open the local dashboard page, take a screenshot, and upload it to Discord. "
+            "URL: http://127.0.0.1/dashboard.html"
+        )
+        assert find_unmet_desktop_requests(prompt, ["browser_screenshot"]) == []
 
     def test_unavailable_tool_family_is_not_required(self):
         assert (

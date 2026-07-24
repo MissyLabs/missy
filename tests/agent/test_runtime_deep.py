@@ -828,6 +828,117 @@ class TestDoneCriteriaEnforcement:
         assert result == "The answer is 4."
 
 
+class TestVideoGenerationCompletionGuards:
+    def test_same_seed_request_repeats_exact_arguments(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=True,
+            output={"seed": 12345, "path": "/tmp/video.mp4"},
+            error=None,
+        )
+        first_args = {
+            "backend": "wan",
+            "prompt": "A cinematic spinning top",
+            "steps": 20,
+        }
+        second_args = {**first_args, "seed": 12345}
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("video_generate", args=first_args, tool_id="video-1"),
+            _make_tool_call_response("video_generate", args=second_args, tool_id="video-2"),
+            _make_stop_response("Both exact-parameter renders completed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(
+                "Generate a spinning top, then generate it AGAIN with that exact seed "
+                "and the same parameters."
+            )
+
+        assert result == "Both exact-parameter renders completed."
+        observed_arguments = [
+            {
+                key: value
+                for key, value in call.kwargs.items()
+                if key not in {"session_id", "task_id"}
+            }
+            for call in tool_reg.execute.call_args_list
+        ]
+        assert observed_arguments == [
+            first_args,
+            second_args,
+        ]
+        assert not any(
+            event["event_type"] == "agent.response.video_reproducibility_retry" for event in events
+        )
+
+    def test_reported_parameter_refusal_is_terminal(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=False,
+            output=None,
+            error="audio_prompt and audio_path are mutually exclusive; pass only one.",
+        )
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("video_generate"),
+            _make_stop_response(
+                "I can't apply both soundtracks because those inputs are mutually exclusive."
+            ),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Generate a video with both audio sources.")
+
+        assert "mutually exclusive" in result
+        assert provider.complete_with_tools.call_count == 2
+        assert not any("done_criteria" in event["event_type"] for event in events)
+
+    def test_tool_free_render_explanation_is_retried_with_video_generate(self):
+        provider = _make_provider()
+        tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([tool])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("SVD normally needs an image."),
+            _make_tool_call_response("video_generate", args={"backend": "svd"}),
+            _make_stop_response("The tool confirmed that SVD requires image_path."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Generate a video of a sunset using the SVD backend.")
+
+        assert "requires image_path" in result
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == ["video_generate"]
+        assert any(
+            event["event_type"] == "agent.response.video_generation_retry" for event in events
+        )
+
+
 class TestPlaceholderArtifactRetry:
     """FX-round2-F1: a provider's "final" response is sometimes a raw
     internal placeholder artifact (e.g. "[Called tool: file_write]") that
@@ -1316,6 +1427,59 @@ class TestExplicitToolRequestRetry:
         )
 
 
+class TestCalculatorResponseCompletenessRetry:
+    def test_multi_error_reply_must_report_every_executed_expression(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        def _execute(name: str, **kwargs):
+            result = MagicMock()
+            result.success = False
+            result.output = None
+            if kwargs["expression"] == "abs(-5)":
+                result.error = "Unsupported expression construct: Call"
+            else:
+                result.error = "Unsupported expression construct: Name"
+            return result
+
+        tool_reg.execute.side_effect = _execute
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response(
+                "calculator", tool_id="calc-a", args={"expression": "abs(-5)"}
+            ),
+            _make_tool_call_response("calculator", tool_id="calc-b", args={"expression": "x + 1"}),
+            _make_stop_response("`x + 1` failed: Unsupported expression construct: Name"),
+            _make_stop_response(
+                "`abs(-5)` failed: Unsupported expression construct: Call; "
+                "`x + 1` failed: Unsupported expression construct: Name"
+            ),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Use your calculator to evaluate `abs(-5)` and `x + 1`.")
+
+        assert provider.complete_with_tools.call_count == 4
+        assert tool_reg.execute.call_count == 2
+        assert "abs(-5)" in result
+        assert "x + 1" in result
+        retries = [
+            event
+            for event in events
+            if event["event_type"] == "agent.response.calculator_completeness_retry"
+        ]
+        assert len(retries) == 1
+        assert retries[0]["detail"] == {"missing_expressions": ["abs(-5)"]}
+        assert not any(event["event_type"].startswith("agent.done_criteria") for event in events)
+
+
 class TestDesktopActionVerificationRetry:
     def test_desktop_action_requires_later_observation_before_completion(self):
         provider = _make_provider()
@@ -1430,6 +1594,150 @@ class TestDesktopActionVerificationRetry:
         assert result == "Verified after the safety observation."
         assert provider.complete_with_tools.call_count == 4
         provider.complete.assert_not_called()
+
+
+class TestFilesystemActionVerificationRetry:
+    def test_file_writes_require_later_listing_before_completion(self):
+        provider = _make_provider()
+        write_tool = _make_mock_tool("file_write")
+        list_tool = _make_mock_tool("list_files")
+        tool_reg = _make_tool_registry([write_tool, list_tool])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("file_write", args={"path": "/tmp/a", "content": "a"}),
+            _make_stop_response("Created the file."),
+            _make_tool_call_response("list_files", args={"path": "/tmp"}),
+            _make_stop_response("Verified the file exists."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Create /tmp/a.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "file_write",
+            "list_files",
+        ]
+        assert result == "Verified the file exists."
+        retry = [
+            event
+            for event in events
+            if event["event_type"] == "agent.response.filesystem_verification_retry"
+        ]
+        assert len(retry) == 1
+        assert retry[0]["detail"] == {"unverified_action": "file_write"}
+
+    def test_failed_write_is_left_to_done_criteria_not_verification_guard(self):
+        provider = _make_provider()
+        write_tool = _make_mock_tool("file_write")
+        tool_reg = _make_tool_registry([write_tool])
+        failed = MagicMock(success=False, output=None, error="policy denied")
+        tool_reg.execute.side_effect = lambda *_args, **_kwargs: failed
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("file_write"),
+            _make_stop_response("I could not write it: policy denied."),
+            _make_stop_response("The policy prevents this write."),
+            _make_stop_response("The policy prevents this write."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.run("Create /tmp/a.")
+
+        assert not any(
+            event["event_type"].startswith("agent.response.filesystem_verification")
+            for event in events
+        )
+        assert any(event["event_type"].startswith("agent.done_criteria") for event in events)
+
+
+class TestWebRequestRetry:
+    def test_browser_metadata_request_requires_observation_and_close(self):
+        provider = _make_provider()
+        navigate = _make_mock_tool("browser_navigate")
+        get_url = _make_mock_tool("browser_get_url")
+        close = _make_mock_tool("browser_close")
+        tool_reg = _make_tool_registry([navigate, get_url, close])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("browser_navigate", args={"url": "http://127.0.0.1/page"}),
+            _make_stop_response("Opened the page."),
+            CompletionResponse(
+                content="",
+                model="fake-model",
+                provider="fake",
+                usage={},
+                raw={},
+                tool_calls=[
+                    ToolCall(id="url", name="browser_get_url", arguments={}),
+                    ToolCall(id="close", name="browser_close", arguments={}),
+                ],
+                finish_reason="tool_calls",
+            ),
+            _make_stop_response("URL and title verified; session closed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(
+                "Open this local webpage in the browser and report the current URL and page title."
+            )
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "browser_navigate",
+            "browser_get_url",
+            "browser_close",
+        ]
+        assert result == "URL and title verified; session closed."
+        retries = [e for e in events if e["event_type"] == "agent.response.web_request_retry"]
+        assert len(retries) == 1
+        assert retries[0]["detail"] == {"missing_tools": ["browser_close", "browser_get_url"]}
+
+    def test_serial_browser_corrections_receive_bounded_grace_turns(self):
+        provider = _make_provider()
+        navigate = _make_mock_tool("browser_navigate")
+        get_content = _make_mock_tool("browser_get_content")
+        close = _make_mock_tool("browser_close")
+        tool_reg = _make_tool_registry([navigate, get_content, close])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("browser_navigate"),
+            _make_stop_response("Ready appeared."),
+            _make_tool_call_response("browser_get_content"),
+            _make_stop_response("Ready."),
+            _make_tool_call_response("browser_close"),
+            _make_stop_response("Ready appeared and the browser session was closed."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
+            result = rt.run("Open this page and wait until Ready appears, then report status.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "browser_navigate",
+            "browser_get_content",
+            "browser_close",
+        ]
+        assert result == "Ready appeared and the browser session was closed."
 
 
 class TestDesktopRequestExecutionRetry:

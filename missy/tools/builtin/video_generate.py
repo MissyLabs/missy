@@ -1200,6 +1200,11 @@ class VideoGenerateTool(BaseTool):
                 )
                 models_error = self._check_models(http, base_url, required_models)
                 if models_error:
+                    if audio_prompt and audio_model == "stable-audio-3":
+                        models_error += (
+                            "; older ComfyUI installs can use "
+                            'audio_model="stable-audio-open-1.0" as a legacy fallback.'
+                        )
                     return ToolResult(success=False, output=None, error=models_error)
 
                 uploaded_image = ""
@@ -1386,6 +1391,11 @@ class VideoGenerateTool(BaseTool):
                     "height": height * (2 if upscale else 1),
                     "seed": seed,
                     "steps": steps,
+                    "motion_bucket_id": motion_bucket_id if backend == "svd" else None,
+                    "augmentation_level": augmentation_level if backend == "svd" else None,
+                    "interpolate": interpolate,
+                    "upscale": upscale,
+                    "video_format": video_format,
                     "audio": audio_info,
                     "gpu": gpu,
                     "comfyui_host": base_url,

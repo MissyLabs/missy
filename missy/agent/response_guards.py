@@ -31,7 +31,10 @@ require ``tools_used`` to be empty.
 
 from __future__ import annotations
 
+import ast
+import json
 import re
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Fabrication: response describes an action or observation as already done
@@ -540,6 +543,115 @@ def make_explicit_tool_request_retry_prompt(
     )
 
 
+# ---------------------------------------------------------------------------
+# Calculator result completeness: multi-expression requests can execute every
+# call correctly and still return a final answer that only mentions the last
+# result/error after the generic DONE-criteria correction loop.
+# ---------------------------------------------------------------------------
+
+_CALCULATOR_ERROR_MARKERS = (
+    "unsupported expression construct:",
+    "exceeds the maximum allowed value of",
+    "division by zero",
+    "expression must not be empty",
+    "syntax error in expression",
+)
+_CALCULATOR_NUMERIC_RESULT_RE = re.compile(
+    r"[-+]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?|"
+    r"\(?[-+]?\d+(?:\.\d*)?[-+]\d+(?:\.\d*)?j\)?)",
+    re.IGNORECASE,
+)
+
+
+def calculator_observations_are_reportable(
+    observations: list[tuple[str, str, bool]],
+) -> bool:
+    """Return whether every observation is a documented calculator outcome."""
+    if not observations:
+        return False
+    for _expression, content, is_error in observations:
+        folded_content = (content or "").strip().casefold()
+        if is_error:
+            if not any(marker in folded_content for marker in _CALCULATOR_ERROR_MARKERS):
+                return False
+        elif _CALCULATOR_NUMERIC_RESULT_RE.fullmatch(folded_content) is None:
+            return False
+    return True
+
+
+def find_unreported_calculator_expressions(
+    observations: list[tuple[str, str, bool]],
+    response_text: str,
+) -> list[str]:
+    """Return executed calculator inputs whose outcome is absent from a reply.
+
+    ``observations`` contains ``(expression, tool_content, is_error)`` tuples
+    captured from the current task.  Both the expression and its observed
+    result/error must be represented in the final answer.  Empty and
+    whitespace-only expressions cannot be searched literally, so their
+    explicit calculator error marker is the evidence requirement instead.
+    """
+    if not observations:
+        return []
+    folded_response = (response_text or "").casefold()
+    missing: list[str] = []
+    seen: set[str] = set()
+    for expression, content, is_error in observations:
+        label = expression if expression.strip() else "<empty or whitespace-only expression>"
+        folded_content = (content or "").casefold()
+        if is_error:
+            applicable_markers = [
+                marker for marker in _CALCULATOR_ERROR_MARKERS if marker in folded_content
+            ]
+            # Unknown infrastructure/schema errors remain under the generic
+            # DONE-criteria gate.  This guard only understands the calculator's
+            # documented arithmetic-domain outcomes.
+            if not applicable_markers:
+                continue
+            outcome_reported = bool(applicable_markers) and any(
+                marker in folded_response for marker in applicable_markers
+            )
+        else:
+            result = (content or "").strip().casefold()
+            # Test doubles and infrastructure failures sometimes yield prose
+            # such as "calculator_result".  Production calculator successes
+            # are numeric; do not impose a semantic result check on anything
+            # outside that contract.
+            if _CALCULATOR_NUMERIC_RESULT_RE.fullmatch(result) is None:
+                continue
+            outcome_reported = bool(result) and result in folded_response
+        if label in seen:
+            continue
+        seen.add(label)
+        expression_reported = not expression.strip() or expression.casefold() in folded_response
+        if not expression_reported or not outcome_reported:
+            missing.append(label)
+    return missing
+
+
+def make_calculator_completeness_retry_prompt(
+    observations: list[tuple[str, str, bool]],
+    missing_expressions: list[str],
+    user_input: str = "",
+) -> str:
+    """Return a correction grounded in every current-task calculator result."""
+    rendered: list[str] = []
+    for expression, content, is_error in observations:
+        label = expression if expression.strip() else "<empty or whitespace-only expression>"
+        outcome = (content or "").split(". Report this error", 1)[0].strip()
+        rendered.append(f"- `{label}` -> {'ERROR' if is_error else 'RESULT'}: {outcome[:500]}")
+    missing = ", ".join(f"`{item}`" for item in missing_expressions)
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "Your previous final answer omitted one or more calculator outcomes "
+        f"that were actually observed in this task: {missing}. Do not call the "
+        "calculator again and do not rewrite any expression. Report every "
+        "executed expression with its exact result or error from this evidence:\n"
+        + "\n".join(rendered)
+        + anchor
+    )
+
+
 _DESKTOP_MUTATION_TOOLS = frozenset(
     {
         "x11_launch",
@@ -629,8 +741,18 @@ def find_unmet_desktop_requests(
         return []
     available = set(available_tool_names) if available_tool_names is not None else None
     used = set(tool_names_used)
+    browser_screenshot_request = bool(
+        re.search(r"(?i)\b(?:browser|webpage|page|dashboard|https?://)\b", user_input)
+        and re.search(r"(?i)\b(?:take|capture)\s+(?:a\s+)?screenshot\b", user_input)
+    )
     missing: list[str] = []
     for label, pattern, alternatives in _DESKTOP_REQUEST_RULES:
+        # "Take a screenshot" is shared wording between the browser and X11
+        # surfaces.  A rendered-page request must remain on Playwright; forcing
+        # x11_screenshot after browser_screenshot both captures the wrong
+        # surface and can upload a second, unrelated image.
+        if label == "desktop screenshot" and browser_screenshot_request:
+            continue
         if pattern.search(user_input) is None:
             continue
         usable = alternatives if available is None else alternatives.intersection(available)
@@ -687,6 +809,368 @@ def make_desktop_verification_retry_prompt(action_name: str, user_input: str = "
         "x11_read_screen, x11_window_list, or the matching AT-SPI read/tree tool. If the "
         "target state is not present, correct the target and retry the action, then observe "
         f"again before reporting success.{anchor}"
+    )
+
+
+_FILESYSTEM_MUTATION_TOOLS = frozenset({"file_write", "file_delete"})
+_FILESYSTEM_VERIFICATION_TOOLS = frozenset({"list_files", "file_read"})
+
+
+def find_unverified_filesystem_action(successful_tool_names: list[str]) -> str | None:
+    """Return the latest successful file mutation lacking later observation.
+
+    A successful write/delete syscall establishes that the operation returned
+    without error, but multi-path agent tasks still need a post-mutation view
+    before they can truthfully claim the requested tree is complete. Only
+    successful calls are supplied so a policy-denied mutation remains the
+    responsibility of the ordinary done-criteria error gate.
+    """
+    if not isinstance(successful_tool_names, list):
+        return None
+    last_action_index = -1
+    last_action_name: str | None = None
+    for index, name in enumerate(successful_tool_names):
+        if name in _FILESYSTEM_MUTATION_TOOLS:
+            last_action_index = index
+            last_action_name = name
+    if last_action_index < 0:
+        return None
+    if any(
+        name in _FILESYSTEM_VERIFICATION_TOOLS
+        for name in successful_tool_names[last_action_index + 1 :]
+    ):
+        return None
+    return last_action_name
+
+
+def make_filesystem_verification_retry_prompt(action_name: str, user_input: str = "") -> str:
+    """Return a correction requiring post-mutation filesystem evidence."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        f"Your last successful filesystem mutation was {action_name}, but you made no "
+        "later filesystem observation to confirm the requested final state. Verify the "
+        "affected paths now with list_files (use a recursive listing when the request "
+        "spans directories) or file_read. Do not repeat the mutation unless verification "
+        f"shows it is necessary.{anchor}"
+    )
+
+
+_BROWSER_TOOL_NAMES = frozenset(
+    {
+        "browser_navigate",
+        "browser_click",
+        "browser_fill",
+        "browser_screenshot",
+        "browser_get_content",
+        "browser_evaluate",
+        "browser_wait",
+        "browser_get_url",
+        "browser_close",
+    }
+)
+
+
+def find_unmet_web_requests(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Return concrete web/browser tools still required by the request.
+
+    These rules cover explicit interaction language, not broad topical web
+    questions. They prevent a provider from substituting raw HTML for a form,
+    rendered DOM, JavaScript, or screenshot task and ensure every browser
+    workflow closes its persistent session.
+    """
+    if not isinstance(user_input, str) or not isinstance(tool_names_used, list):
+        return []
+    text = user_input.lower()
+    available = set(available_tool_names) if available_tool_names is not None else None
+    expected: set[str] = set()
+
+    if re.search(r"\bfetch\b.{0,100}\b(?:url|https?://)", text, re.DOTALL):
+        expected.add("web_fetch")
+
+    browser_intent = bool(
+        re.search(r"\bopen\b.{0,100}\b(?:browser|webpage|page|dashboard)\b", text, re.DOTALL)
+        or re.search(r"\b(?:fill|submit)\b.{0,120}\b(?:form|page|data)\b", text, re.DOTALL)
+        or "visible text from the main content" in text
+    )
+    if browser_intent:
+        expected.update({"browser_navigate", "browser_close"})
+    required_fill_calls = 0
+    submit_action = browser_intent and "submit" in text
+    if browser_intent:
+        if "current url" in text or "page title" in text:
+            expected.add("browser_get_url")
+        if "fill" in text and ("form" in text or "name/email" in text):
+            expected.add("browser_fill")
+            required_fill_calls = 2 if "name/email" in text else 1
+        if submit_action:
+            expected.update({"browser_click", "browser_wait", "browser_get_content"})
+        if "screenshot" in text:
+            expected.add("browser_screenshot")
+        if "upload" in text and "discord" in text:
+            expected.add("discord_upload_file")
+        if "visible text" in text or "main content" in text:
+            expected.add("browser_get_content")
+        if "javascript" in text or "using js" in text:
+            expected.add("browser_evaluate")
+        if "wait until" in text or "wait for" in text:
+            expected.update({"browser_wait", "browser_get_content"})
+
+    if available is not None:
+        expected.intersection_update(available)
+    used = set(tool_names_used)
+    missing = expected.difference(used)
+    if (
+        required_fill_calls
+        and tool_names_used.count("browser_fill") < required_fill_calls
+        and (available is None or "browser_fill" in available)
+    ):
+        missing.add("browser_fill")
+
+    # Form completion is order-sensitive. A content read before submit cannot
+    # verify the confirmation, and closing/reopening between submit and wait
+    # loses the submitted DOM state. Require one coherent sequence after the
+    # latest navigation, including every separately requested field.
+    if submit_action and "browser_navigate" in used:
+        latest_navigation = max(
+            i for i, name in enumerate(tool_names_used) if name == "browser_navigate"
+        )
+        fill_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_fill" and i > latest_navigation
+        ]
+        needed_fills = max(required_fill_calls, 1)
+        if len(fill_indexes) < needed_fills:
+            missing.add("browser_fill")
+        last_fill = max(fill_indexes, default=latest_navigation)
+        click_indexes = [
+            i for i, name in enumerate(tool_names_used) if name == "browser_click" and i > last_fill
+        ]
+        if not click_indexes:
+            missing.add("browser_click")
+        last_click = max(click_indexes, default=len(tool_names_used))
+        wait_indexes = [
+            i for i, name in enumerate(tool_names_used) if name == "browser_wait" and i > last_click
+        ]
+        if not wait_indexes:
+            missing.add("browser_wait")
+        last_wait = max(wait_indexes, default=len(tool_names_used))
+        content_indexes = [
+            i
+            for i, name in enumerate(tool_names_used)
+            if name == "browser_get_content" and i > last_wait
+        ]
+        if not content_indexes:
+            missing.add("browser_get_content")
+        last_content = max(content_indexes, default=len(tool_names_used))
+        if not any(name == "browser_close" for name in tool_names_used[last_content + 1 :]):
+            missing.add("browser_close")
+
+    # Closing before a later browser operation does not close the resulting
+    # live session, so treat it as still missing.
+    if "browser_close" in expected and "browser_close" in used:
+        last_close = max(i for i, name in enumerate(tool_names_used) if name == "browser_close")
+        if any(name in _BROWSER_TOOL_NAMES for name in tool_names_used[last_close + 1 :]):
+            missing.add("browser_close")
+    return sorted(missing)
+
+
+def make_web_request_retry_prompt(missing: list[str], user_input: str = "") -> str:
+    """Return a correction requiring the missing browser workflow steps."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "You stopped before executing every concrete web/browser operation required "
+        f"by this request. Still missing in this task: {', '.join(missing)}. Call those "
+        "exact tools now, preserve the current browser session_id across calls, ground "
+        "the answer in their results, and make browser_close the last browser operation. "
+        "For a form submission, keep one coherent page session and execute every field "
+        "fill, then click, wait for confirmation, read the confirmation content, and only "
+        "then close; if the page was already closed or reopened, repeat that sequence. "
+        "Do not substitute web_fetch, shell, or desktop tools for rendered-page interaction."
+        f"{anchor}"
+    )
+
+
+_VIDEO_GENERATION_REQUEST_RE = re.compile(
+    r"\b(?:generate|create|make|animate|render|produce)\b[^\n]{0,100}\bvideo\b"
+    r"|\bvideo\b[^\n]{0,100}\b(?:using|with)\b[^\n]{0,40}\b(?:wan|svd|animatediff)\b"
+    r"|\banimate\b[^\n]{0,100}\b(?:image|clip)\b",
+    re.I,
+)
+
+
+def find_unmet_video_generation_request(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Require ``video_generate`` evidence for an actionable render request."""
+    if available_tool_names is not None and "video_generate" not in available_tool_names:
+        return []
+    if not _VIDEO_GENERATION_REQUEST_RE.search(user_input):
+        return []
+    return [] if "video_generate" in tool_names_used else ["video_generate"]
+
+
+def make_video_generation_retry_prompt(user_input: str = "") -> str:
+    """Return a correction requiring the requested render tool call."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "This request requires calling video_generate, including when the requested "
+        "parameter combination is expected to be rejected. Call video_generate once "
+        "with the requested backend and parameters, then report its actual result. Do "
+        "not substitute video_storyboard or explain a predicted validation error without "
+        f"executing the tool.{anchor}"
+    )
+
+
+_TERMINAL_PARAMETER_ERROR_RE = re.compile(
+    r"\b(?:mutually exclusive|requires? [`'\"]?[a-z_]+|text-to-video only|"
+    r"image-to-video only|must (?:be|provide|pass|specify|choose)|"
+    r"invalid (?:parameter|value|backend|model)|unsupported (?:parameter|value|backend))\b",
+    re.I,
+)
+_ERROR_REPORT_RE = re.compile(
+    r"\b(?:cannot|can't|could not|failed|error|invalid|unsupported|requires?|"
+    r"mutually exclusive|only|choose|instead|not allowed|refused|rejected|"
+    r"timed out|timeout|missing|unavailable|no gpu)\b",
+    re.I,
+)
+
+
+def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -> bool:
+    """Return whether terminal tool failures were honestly relayed.
+
+    Any ``video_generate`` failure is terminal once reported: blindly retrying
+    a minutes-long GPU operation can duplicate jobs, defeat an explicit timeout,
+    or churn on an operator-actionable missing-model/GPU error. Other tools are
+    terminal here only for deterministic parameter refusals.
+    """
+    video_generation_errors = all(
+        error.casefold().startswith("video_generate:") for error in errors
+    )
+    return bool(
+        errors
+        and (
+            video_generation_errors
+            or all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
+        )
+        and _ERROR_REPORT_RE.search(final_text)
+    )
+
+
+def make_video_generation_error_report_prompt(errors: list[str], user_input: str = "") -> str:
+    """Tell the model to relay a terminal render failure without retry churn."""
+    observed = "\n".join(f"  - {error[:500]}" for error in errors)
+    anchor = f"\n\nThe original request was:\n{user_input}" if user_input else ""
+    return (
+        "The requested video_generate call returned a terminal result. Do not retry "
+        "video_generate, switch backends, inspect the host with shell/file tools, or "
+        "substitute another video tool unless the user explicitly requested that fallback. "
+        "Reply now with the exact observed error and a concise actionable next step; do "
+        "not claim a file was generated.\n\nObserved tool result(s):\n"
+        f"{observed}{anchor}"
+    )
+
+
+_VIDEO_REPRO_REQUEST_RE = re.compile(
+    r"\b(?:again|twice|second time)\b.*\b(?:same|exact)\b.*\bseed\b"
+    r"|\b(?:same|exact)\b.*\bseed\b.*\b(?:again|twice|second time)\b",
+    re.I | re.S,
+)
+
+
+def is_video_reproducibility_request(user_input: object) -> bool:
+    """Return whether the user explicitly requests a same-seed rerender.
+
+    Treat an invalid sanitizer/provider value as a non-match instead of letting
+    a response-completeness guard crash the entire agent loop.
+    """
+    return isinstance(user_input, str) and bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+
+
+def _video_result_seed(content: str) -> int | None:
+    value = _parse_video_result(content)
+    seed = value.get("seed") if isinstance(value, dict) else None
+    return seed if isinstance(seed, int) and seed > 0 else None
+
+
+def _parse_video_result(content: str) -> Any:
+    try:
+        return json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        try:
+            return ast.literal_eval(content)
+        except (SyntaxError, ValueError):
+            return None
+
+
+def make_video_reproducibility_prompt(
+    first_arguments: dict[str, Any], first_result: str, user_input: str = ""
+) -> str:
+    """Ground a requested second render in the first call's exact inputs."""
+    effective_seed = _video_result_seed(first_result)
+    arguments = dict(first_arguments)
+    arguments["seed"] = effective_seed
+    arguments.pop("save_path", None)
+    anchor = f"\n\nThe original request was:\n{user_input}" if user_input else ""
+    return (
+        "The first requested render succeeded. The task explicitly requires a second "
+        "render with the exact same generation parameters and the effective seed returned "
+        "by the first call. Call video_generate again now using exactly this argument map; "
+        "do not shorten or rewrite prompt/negative_prompt and do not change backend, model, "
+        "dimensions, frames, steps, CFG, sampler, scheduler, interpolation, or format:\n"
+        f"{json.dumps(arguments, sort_keys=True)}{anchor}"
+    )
+
+
+def find_video_reproducibility_issue(
+    user_input: str,
+    observations: list[tuple[dict[str, Any], str, bool]],
+) -> str | None:
+    """Validate count, effective seed reuse, and argument equality for rerenders."""
+    if not is_video_reproducibility_request(user_input):
+        return None
+    successful = [item for item in observations if not item[2]]
+    if len(successful) < 2:
+        return "fewer than two successful video_generate calls"
+    first_args, first_result, _ = successful[0]
+    latest_args, _, _ = successful[-1]
+    effective_seed = _video_result_seed(first_result)
+    if effective_seed is None:
+        return "the first video_generate result did not expose a positive effective seed"
+    if latest_args.get("seed") != effective_seed:
+        return "the repeat call did not reuse the first result's effective seed"
+    ignored = {"seed", "save_path"}
+    first_comparable = {key: value for key, value in first_args.items() if key not in ignored}
+    latest_comparable = {key: value for key, value in latest_args.items() if key not in ignored}
+    if latest_comparable != first_comparable:
+        return "the repeat call changed generation parameters"
+    return None
+
+
+def make_video_reproducibility_comparison_prompt(
+    observations: list[tuple[dict[str, Any], str, bool]],
+) -> str:
+    """Require decoded-frame comparison rather than container-only hashes."""
+    paths: list[str] = []
+    for _, content, is_error in observations:
+        value = _parse_video_result(content)
+        path = value.get("path") if not is_error and isinstance(value, dict) else None
+        if isinstance(path, str):
+            paths.append(path)
+    path_text = "\n".join(f"  - {path}" for path in paths[:2])
+    return (
+        "Before answering whether the two renders match, compare their decoded video "
+        "frames (for example with ffmpeg framemd5 or a decoded-stream hash), not only "
+        "the SHA256 of the MP4 container. Collision-safe MP4 files can differ in embedded "
+        "per-run metadata while containing exactly identical frames. Report container-byte "
+        "equality and decoded-frame equality separately. The two generated paths are:\n"
+        f"{path_text}"
     )
 
 

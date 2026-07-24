@@ -139,8 +139,22 @@ class RagQueryTool(BaseTool):
         p = Path(str(path)).expanduser()
         if not p.exists():
             return ToolResult(success=False, output=None, error=f"file not found: {p}")
-        n = self._get_engine().index_file(p, doc_id=kwargs.get("doc_id"))
-        return ToolResult(success=True, output={"path": str(p), "chunks_indexed": n})
+        resolved_path = p.resolve()
+        supplied_doc_id = kwargs.get("doc_id")
+        effective_doc_id = (
+            str(supplied_doc_id).strip()
+            if isinstance(supplied_doc_id, str) and supplied_doc_id.strip()
+            else str(resolved_path)
+        )
+        n = self._get_engine().index_file(resolved_path, doc_id=effective_doc_id)
+        return ToolResult(
+            success=True,
+            output={
+                "path": str(resolved_path),
+                "doc_id": effective_doc_id,
+                "chunks_indexed": n,
+            },
+        )
 
     def get_schema(self) -> dict[str, Any]:
         return {
@@ -165,7 +179,12 @@ class RagQueryTool(BaseTool):
                     },
                     "doc_id": {
                         "type": "string",
-                        "description": "Document id for indexing actions.",
+                        "description": (
+                            "Document id for indexing actions. Required for index_text. "
+                            "For index_file, omit this unless the user explicitly supplied "
+                            "a custom id; omission uses the resolved absolute file path so "
+                            "same-named files in different directories cannot collide."
+                        ),
                     },
                     "text": {
                         "type": "string",

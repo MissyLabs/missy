@@ -540,6 +540,14 @@ class TestSettingsDefaults:
         c = load_config(str(cfg))
         assert c.max_spend_usd == 0.0
 
+    def test_max_iterations_is_parsed(self, tmp_path):
+        cfg = _write_cfg(tmp_path, "workspace_path: /tmp\nmax_iterations: 25\n")
+        assert load_config(str(cfg)).max_iterations == 25
+
+    def test_max_iterations_defaults_to_ten(self, tmp_path):
+        cfg = _write_cfg(tmp_path, "workspace_path: /tmp\n")
+        assert load_config(str(cfg)).max_iterations == 10
+
     def test_max_spend_parsed_as_float(self, tmp_path):
         """max_spend_usd is parsed as a float from YAML."""
         cfg = _write_cfg(tmp_path, "workspace_path: /tmp\nmax_spend_usd: 5\n")
