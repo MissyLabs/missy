@@ -1480,6 +1480,58 @@ class TestCalculatorResponseCompletenessRetry:
         assert not any(event["event_type"].startswith("agent.done_criteria") for event in events)
 
 
+class TestCalculatorExemptFromStrategyRotation:
+    """Regression test for a live CALC-007 finding: three consecutive,
+    correctly-rejected division-by-zero calls must never push the model
+    toward a shell/eval fallback via the generic strategy-rotation prompt."""
+
+    def test_three_consecutive_calculator_errors_never_inject_strategy_rotation(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        def _execute(name: str, **kwargs):
+            result = MagicMock()
+            result.success = False
+            result.output = None
+            result.error = "division by zero"
+            return result
+
+        tool_reg.execute.side_effect = _execute
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("calculator", tool_id="c1", args={"expression": "1 / 0"}),
+            _make_tool_call_response("calculator", tool_id="c2", args={"expression": "0 / 0"}),
+            _make_tool_call_response("calculator", tool_id="c3", args={"expression": "2 / 0"}),
+            _make_stop_response(
+                "`1 / 0` -> division by zero. `0 / 0` -> division by zero. "
+                "`2 / 0` -> division by zero."
+            ),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.run("Calculate `1 / 0`, `0 / 0`, and `2 / 0` with the calculator.")
+
+        assert tool_reg.execute.call_count == 3
+        assert not [e for e in events if e["event_type"] == "agent.tool.strategy_rotation"]
+        # The literal strategy-rotation prompt telling the model not to
+        # attempt calculator again must never reach the provider.
+        last_messages = provider.complete_with_tools.call_args_list[-1][0][0]
+
+        def _content(m):
+            return m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+
+        joined = " ".join(str(_content(m)) for m in last_messages)
+        assert "Do not attempt 'calculator' again" not in joined
+        assert "alternative approaches that do not use 'calculator'" not in joined
+
+
 class TestDesktopActionVerificationRetry:
     def test_desktop_action_requires_later_observation_before_completion(self):
         provider = _make_provider()

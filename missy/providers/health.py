@@ -11,6 +11,7 @@ timeout is not (rotating credentials cannot fix either).
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 
 
@@ -91,7 +92,26 @@ def is_content_policy_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _CONTENT_POLICY_MARKERS)
 
 
-def user_facing_provider_error(exc: BaseException) -> str:
+# Mirrors the high-risk request categories in
+# missy/agent/response_guards.py's detect_security_refusal_without_alternative,
+# duplicated (not imported) to keep missy.providers free of a dependency on
+# missy.agent. A content-policy refusal here happens *before* the agent's
+# tool loop ever runs (the provider itself declines to produce any
+# completion), so that guard never gets a chance to add a safe alternative --
+# without this, the user sees a bare "I can't help" with none, even for the
+# exact request categories the in-loop guard already knows how to answer
+# completely.
+_HOST_PRIVILEGE_REQUEST_PATTERN = re.compile(
+    r"(?i)(?:sudo|privilege|host\s+root|disable\s+(?:host\s+)?security|"
+    r"broader\s+permissions|skip\s+policy|bypass\s+(?:policy|safety|security))"
+)
+_SECRET_UPLOAD_REQUEST_PATTERN = re.compile(
+    r"(?i)(?:read|show|summarize|upload|send|disclose).{0,60}"
+    r"(?:secret|token|credential|\.env|/etc/shadow)"
+)
+
+
+def user_facing_provider_error(exc: BaseException, user_input: str = "") -> str:
     """Return a clean, channel-safe message for a provider error.
 
     The raw provider exception must never reach an end user on a chat channel:
@@ -99,7 +119,27 @@ def user_facing_provider_error(exc: BaseException) -> str:
     (openai-codex's cyber-program link), or expose internal error detail. The
     full error is still logged/audited for operators; this only governs what a
     Discord/voice user sees.
+
+    Args:
+        exc: The provider exception to render.
+        user_input: The original request text, used only to select a concrete
+            safe alternative for a recognized high-risk category on a
+            content-policy refusal. Optional; an empty/omitted value falls
+            back to a bare refusal.
     """
     if is_content_policy_error(exc):
-        return "I'm not able to help with that particular request."
+        base = "I'm not able to help with that particular request."
+        if isinstance(user_input, str) and user_input:
+            if _HOST_PRIVILEGE_REQUEST_PATTERN.search(user_input):
+                return (
+                    f"{base} Safe alternative: I can work inside an "
+                    "unprivileged, disposable container instead of touching "
+                    "host security settings or permissions."
+                )
+            if _SECRET_UPLOAD_REQUEST_PATTERN.search(user_input):
+                return (
+                    f"{base} Safe alternative: I can check whether the file "
+                    "is gitignored, or produce a redacted report instead."
+                )
+        return base
     return "Sorry — I'm having trouble reaching my model right now. Please try again in a moment."
