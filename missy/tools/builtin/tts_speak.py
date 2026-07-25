@@ -2,8 +2,9 @@
 
 Synthesizes text to speech using Piper neural TTS (primary) or espeak-ng
 (fallback) and plays it through the system's default audio output via
-GStreamer + PipeWire.  Works over SSH sessions when ``XDG_RUNTIME_DIR``
-is set correctly.
+GStreamer + PipeWire, or a specific PipeWire sink (``output_sink``) such
+as the virtual sink ``audio_route_tts`` creates for OBS/VTube Studio to
+capture.  Works over SSH sessions when ``XDG_RUNTIME_DIR`` is set correctly.
 
 Prerequisites::
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -40,6 +42,10 @@ logger = logging.getLogger(__name__)
 _PIPER_BIN = Path.home() / ".local" / "bin" / "piper"
 _PIPER_VOICES_DIR = Path.home() / ".local" / "share" / "piper-voices"
 _PIPER_DEFAULT_VOICE = "en_US-lessac-medium"
+
+# PipeWire/pactl sink names are plain identifiers -- reject anything else
+# rather than pass an unvalidated value into a GStreamer element property.
+_SINK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 #: Environment variables safe to pass to TTS/audio subprocesses.
@@ -188,8 +194,21 @@ def _synth_espeak(
         return "espeak-ng timed out"
 
 
-def _play_wav(wav_path: str, env: dict) -> str | None:
-    """Play a WAV file via GStreamer + PipeWire. Returns None on success, error on failure."""
+def _play_wav(wav_path: str, env: dict, output_sink: str | None = None) -> str | None:
+    """Play a WAV file via GStreamer + PipeWire. Returns None on success, error on failure.
+
+    Args:
+        wav_path: Path to the synthesized WAV file.
+        env: Sanitized subprocess environment.
+        output_sink: When given, routes playback to this specific PipeWire
+            sink (via ``pipewiresink``'s ``target-object`` property) instead
+            of the system default -- e.g. the virtual sink
+            ``audio_route_tts`` creates for OBS/VTube Studio to capture,
+            without touching what the operator's own speakers play.
+    """
+    pipewiresink_args = ["pipewiresink"]
+    if output_sink is not None:
+        pipewiresink_args.append(f"target-object={output_sink}")
     try:
         play = subprocess.run(
             [
@@ -203,7 +222,7 @@ def _play_wav(wav_path: str, env: dict) -> str | None:
                 "!",
                 "audioresample",
                 "!",
-                "pipewiresink",
+                *pipewiresink_args,
             ],
             capture_output=True,
             env=env,
@@ -254,6 +273,15 @@ class TTSSpeakTool(BaseTool):
             ),
             "default": "en_US-lessac-medium",
         },
+        "output_sink": {
+            "type": "string",
+            "description": (
+                "Optional PipeWire sink name to route playback to instead of the "
+                "system default output -- e.g. the virtual sink audio_route_tts "
+                "creates, so OBS/VTube Studio hear this speech without changing "
+                "what the operator's own speakers play. Omit for normal playback."
+            ),
+        },
     }
 
     def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
@@ -276,10 +304,18 @@ class TTSSpeakTool(BaseTool):
         text: str,
         speed: float = 1.0,
         voice: str = "en_US-lessac-medium",
+        output_sink: str | None = None,
         **_: Any,
     ) -> ToolResult:
         if not text.strip():
             return ToolResult(success=False, output=None, error="No text provided.")
+
+        if output_sink is not None and not _SINK_NAME_RE.fullmatch(output_sink):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Invalid output_sink {output_sink!r}: must be a plain PipeWire sink name.",
+            )
 
         speed = max(0.25, min(4.0, float(speed)))
         env = _piper_env()
@@ -306,7 +342,7 @@ class TTSSpeakTool(BaseTool):
                     )
 
             # 3. Play via GStreamer + PipeWire.
-            play_err = _play_wav(wav_path, env)
+            play_err = _play_wav(wav_path, env, output_sink=output_sink)
             if play_err is not None:
                 return ToolResult(success=False, output=None, error=play_err)
 

@@ -19,6 +19,7 @@ from missy.tools.builtin.vtube_tools import (
     VtubeListModelsTool,
     VtubeLoadModelTool,
     VtubeSetParameterTool,
+    VtubeSpeakTool,
     VtubeStatusTool,
     VtubeTriggerHotkeyTool,
 )
@@ -358,6 +359,161 @@ class TestVtubeSetParameterTool:
 
 
 # ---------------------------------------------------------------------------
+# VtubeSpeakTool -- speech with directly-injected, amplitude-driven lip sync
+# ---------------------------------------------------------------------------
+
+
+class TestVtubeSpeakTool:
+    def _fake_playback_process(self):
+        proc = MagicMock()
+        proc.wait.return_value = 0
+        proc.stderr = None
+        return proc
+
+    def test_speaks_with_synced_mouth_envelope(self):
+        responses = {
+            "AuthenticationRequest": {"authenticated": True, "reason": "ok"},
+            "InjectParameterDataRequest": {},
+        }
+        config = _mock_config()
+        patches, fake_ws = _patched(config, responses)
+        with (
+            patches[0],
+            patches[1] as mock_engine,
+            patches[2],
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch(
+                "missy.tools.builtin.vtube_tools._wav_envelope",
+                return_value=([0.1, 0.5, 0.9, 0.2], 0.2),
+            ),
+            patch("subprocess.Popen", return_value=self._fake_playback_process()) as mock_popen,
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeSpeakTool().execute(text="hello there")
+
+        assert result.success is True
+        inject_msgs = [m for m in fake_ws.sent if m["messageType"] == "InjectParameterDataRequest"]
+        # 4 envelope chunks + 1 final reset-to-zero on completion.
+        assert len(inject_msgs) == 5
+        assert all(m["data"]["parameterValues"][0]["id"] == "MouthOpen" for m in inject_msgs)
+        assert inject_msgs[-1]["data"]["parameterValues"][0]["value"] == 0.0
+        mock_popen.assert_called_once()
+        played_cmd = mock_popen.call_args.args[0]
+        assert "target-object=missy_tts_out" in played_cmd
+
+    def test_custom_output_sink_and_parameter_id_used(self):
+        responses = {
+            "AuthenticationRequest": {"authenticated": True, "reason": "ok"},
+            "InjectParameterDataRequest": {},
+        }
+        config = _mock_config()
+        patches, fake_ws = _patched(config, responses)
+        with (
+            patches[0],
+            patches[1] as mock_engine,
+            patches[2],
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch(
+                "missy.tools.builtin.vtube_tools._wav_envelope",
+                return_value=([0.3], 0.05),
+            ),
+            patch("subprocess.Popen", return_value=self._fake_playback_process()) as mock_popen,
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeSpeakTool().execute(
+                text="hi", output_sink="my_custom_sink", parameter_id="MouthSmile"
+            )
+
+        assert result.success is True
+        played_cmd = mock_popen.call_args.args[0]
+        assert "target-object=my_custom_sink" in played_cmd
+        inject_msgs = [m for m in fake_ws.sent if m["messageType"] == "InjectParameterDataRequest"]
+        assert all(m["data"]["parameterValues"][0]["id"] == "MouthSmile" for m in inject_msgs)
+
+    def test_invalid_output_sink_rejected_before_synthesis(self):
+        config = _mock_config()
+        with (
+            patch(
+                "missy.tools.builtin.vtube_tools.load_missy_config",
+                return_value=_make_missy_config(config),
+            ),
+            patch("missy.tools.builtin.tts_speak._synth_piper") as mock_synth,
+        ):
+            result = VtubeSpeakTool().execute(text="hello", output_sink="bad; rm -rf /")
+
+        assert result.success is False
+        assert "Invalid output_sink" in result.error
+        mock_synth.assert_not_called()
+
+    def test_empty_text_rejected(self):
+        config = _mock_config()
+        with patch(
+            "missy.tools.builtin.vtube_tools.load_missy_config",
+            return_value=_make_missy_config(config),
+        ):
+            result = VtubeSpeakTool().execute(text="   ")
+        assert result.success is False
+        assert "No text provided" in result.error
+
+    def test_fails_when_disabled(self):
+        with patch(
+            "missy.tools.builtin.vtube_tools.load_missy_config",
+            return_value=_make_missy_config(_mock_config(enabled=False)),
+        ):
+            result = VtubeSpeakTool().execute(text="hello")
+        assert result.success is False
+        assert "disabled" in result.error.lower()
+
+    def test_synthesis_failure_returns_clean_error(self):
+        config = _mock_config()
+        with (
+            patch(
+                "missy.tools.builtin.vtube_tools.load_missy_config",
+                return_value=_make_missy_config(config),
+            ),
+            patch("missy.policy.engine.get_policy_engine") as mock_engine,
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value="piper not found"),
+            patch(
+                "missy.tools.builtin.tts_speak._synth_espeak",
+                return_value="espeak-ng not installed",
+            ),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeSpeakTool().execute(text="hello there")
+
+        assert result.success is False
+        assert "TTS synthesis failed" in result.error
+
+    def test_playback_failure_returns_clean_error(self):
+        responses = {
+            "AuthenticationRequest": {"authenticated": True, "reason": "ok"},
+            "InjectParameterDataRequest": {},
+        }
+        config = _mock_config()
+        patches, _fake_ws = _patched(config, responses)
+        failing_proc = MagicMock()
+        failing_proc.wait.return_value = 1
+        failing_proc.stderr = MagicMock()
+        failing_proc.stderr.read.return_value = b"gst-launch-1.0 blew up"
+        with (
+            patches[0],
+            patches[1] as mock_engine,
+            patches[2],
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch(
+                "missy.tools.builtin.vtube_tools._wav_envelope",
+                return_value=([0.2], 0.05),
+            ),
+            patch("subprocess.Popen", return_value=failing_proc),
+        ):
+            mock_engine.return_value.check_network.return_value = True
+            result = VtubeSpeakTool().execute(text="hello there")
+
+        assert result.success is False
+        assert "audio playback failed" in result.error
+
+
+# ---------------------------------------------------------------------------
 # Permission declarations
 # ---------------------------------------------------------------------------
 
@@ -369,6 +525,11 @@ class TestVtubePermissions:
     )
     def test_declares_network_permission(self, tool_cls):
         assert tool_cls().permissions.network is True
+
+    def test_vtube_speak_declares_shell_and_network_permission(self):
+        permissions = VtubeSpeakTool().permissions
+        assert permissions.network is True
+        assert permissions.shell is True
 
 
 # ---------------------------------------------------------------------------
