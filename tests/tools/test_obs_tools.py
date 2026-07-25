@@ -741,6 +741,44 @@ class TestObsSetSourceTextTool:
         assert result.success is False
 
 
+class TestObsSetSourceTextToolSchemaOptionality:
+    """Regression coverage for a live finding: a model called this tool three
+    times in a row over Discord and got "Provide exactly one of 'text' or
+    'file_path'" every time. Direct execute()-level tests already prove the
+    validation logic is correct; these confirm the *schema actually sent to a
+    provider* never forces both/neither into `required` -- the one layer
+    those tests don't reach. No bug was found (both providers pass the
+    schema through unchanged), but nothing previously asserted that stays
+    true, so a future regression here would go undetected."""
+
+    def test_get_schema_marks_only_source_name_required(self):
+        schema = ObsSetSourceTextTool().get_schema()
+        assert schema["parameters"]["required"] == ["source_name"]
+        assert "text" in schema["parameters"]["properties"]
+        assert "file_path" in schema["parameters"]["properties"]
+
+    def test_codex_provider_schema_preserves_optionality(self):
+        from missy.config.settings import ProviderConfig
+        from missy.providers.codex_provider import CodexProvider
+
+        provider = CodexProvider(ProviderConfig(name="openai-codex", model="gpt-5.2"))
+        schemas = provider.get_tool_schema([ObsSetSourceTextTool()])
+        assert len(schemas) == 1
+        required = schemas[0]["parameters"]["required"]
+        assert required == ["source_name"]
+        assert "text" not in required
+        assert "file_path" not in required
+
+    def test_openai_schema_adapter_preserves_optionality(self):
+        from missy.providers.schema_adapter import normalize_for_provider
+
+        normalized = normalize_for_provider(ObsSetSourceTextTool().get_schema(), "openai")
+        required = normalized["function"]["parameters"]["required"]
+        assert required == ["source_name"]
+        assert "text" not in required
+        assert "file_path" not in required
+
+
 # ---------------------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------------------
