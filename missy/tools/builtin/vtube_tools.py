@@ -29,21 +29,44 @@ tracking" and audio-driven mouth movement. VTube Studio's public API has
 no direct "start/stop face tracking" request -- tracking is controlled by
 the app's own webcam/tracker settings or a hotkey the operator has bound
 in the VTS UI, reachable here only via :class:`VtubeTriggerHotkeyTool`.
-Real per-frame audio-synced lip flap is also not attempted here: VTube
-Studio has its own built-in microphone-based lip sync, and pointing it at
-a PipeWire virtual sink that Missy's TTS output is routed into (see
-``audio_route_tts`` in ``audio_route.py``) is far more reliable than Missy
-computing and streaming synthetic ``InjectParameterDataRequest`` calls in
-realtime against TTS playback timing. :class:`VtubeSetParameterTool` still
-exists for simple scripted/discrete puppeting (e.g. one-shot expression
-parameters), just not true audio-synced mouth flap.
+:class:`VtubeSetParameterTool` still exists for simple scripted/discrete
+puppeting (e.g. one-shot expression parameters).
+
+Audio-synced lip sync: direct parameter injection, not VTS's own mic
+--------------------------------------------------------------------
+An earlier version of this module preferred routing TTS audio into VTube
+Studio's own built-in microphone-based lip sync (via a PipeWire virtual
+sink from ``audio_route_tts``) over Missy computing and streaming
+synthetic ``InjectParameterDataRequest`` calls herself, reasoning that a
+real microphone input would be more reliable than a hand-rolled
+alternative. Live testing found the opposite on a Proton/Wine VTube
+Studio install: no evidence VTS ever captured the routed PipeWire monitor
+as a microphone input at all (no corresponding audio client ever appeared
+against the sink), and the one-time GUI toggle needed to pick that input
+device (VTS's "Show controls" setting) turned out to have no discoverable
+persisted state anywhere (config JSON, Wine registry, Steam Cloud) and no
+bound hotkey to restore it once hidden -- an unreliable, hard-to-recover
+dependency on a Windows app's audio-input handling under Wine.
+:class:`VtubeSpeakTool` instead synthesizes speech, computes its
+amplitude envelope directly, and streams ``MouthOpen`` (VTS's own
+standard input parameter, present for any model) over one persistent
+authenticated connection timed to playback -- confirmed live to produce
+real, continuously-varying mouth movement, with no dependency on VTS's
+own audio-input capture at all.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
+import re
+import subprocess
+import tempfile
+import time
 import uuid
+import wave
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -397,18 +420,16 @@ class VtubeTriggerHotkeyTool(BaseTool):
 class VtubeSetParameterTool(BaseTool):
     """Set a Live2D model parameter (e.g. for scripted/discrete puppeting).
 
-    Not intended for real-time audio-synced mouth movement -- see the
-    module docstring's "Known VTube Studio API gap" section for why
-    routing TTS audio into VTube Studio's own built-in lip sync (via
-    ``audio_route_tts``) is the recommended approach for that instead.
+    For continuous audio-synced mouth movement, use :class:`VtubeSpeakTool`
+    instead of scripting this per-frame -- see the module docstring's
+    "Audio-synced lip sync" section.
     """
 
     name = "vtube_set_parameter"
     description = (
         "Set a Live2D model parameter's value (e.g. 'MouthOpen', 'MouthSmile', "
-        "'EyeOpenLeft'). For continuous audio-synced lip sync, use VTube Studio's "
-        "own microphone lip sync fed by audio_route_tts instead of scripting this "
-        "per-frame."
+        "'EyeOpenLeft'). For speech with synced mouth movement, use vtube_speak "
+        "instead of scripting this per-frame."
     )
     permissions = ToolPermissions(network=True)
     parameters: dict[str, Any] = {
@@ -497,3 +518,308 @@ class VtubeListModelsTool(BaseTool):
             for m in models.get("availableModels", [])
         ]
         return ToolResult(success=True, output={"models": model_list, "count": len(model_list)})
+
+
+# ---------------------------------------------------------------------------
+# VtubeSpeakTool -- speech with directly-injected, amplitude-driven lip sync
+# ---------------------------------------------------------------------------
+
+_ENVELOPE_CHUNK_MS = 50
+_LIPSYNC_PARAMETER_ID = "MouthOpen"
+_MOUTH_CURVE_EXPONENT = 0.6  # compress peaks so speech doesn't slam to 1.0
+_MOUTH_PEAK_SCALE = 0.85
+_SINK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _wav_envelope(wav_path: str, chunk_ms: int) -> tuple[list[float], float]:
+    """Return (per-chunk RMS levels, total duration seconds) for a WAV file."""
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise VtubeError(
+            "numpy is required for vtube_speak's amplitude envelope. Install with: "
+            'pip install -e ".[voice]" (or [vision]/[retrieval], any of which include numpy)'
+        ) from exc
+
+    with wave.open(wav_path, "rb") as w:
+        rate = w.getframerate()
+        n_frames = w.getnframes()
+        raw = w.readframes(n_frames)
+        sampwidth = w.getsampwidth()
+        channels = w.getnchannels()
+    dtype = {1: np.int8, 2: np.int16, 4: np.int32}.get(sampwidth)
+    if dtype is None:
+        raise VtubeError(f"Unsupported WAV sample width: {sampwidth} bytes")
+    samples = np.frombuffer(raw, dtype=dtype).astype(np.float64)
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+    maxval = float(np.iinfo(dtype).max)
+    chunk_len = max(1, int(rate * chunk_ms / 1000))
+    n_chunks = max(1, len(samples) // chunk_len) if len(samples) else 0
+    levels: list[float] = []
+    for i in range(n_chunks):
+        chunk = samples[i * chunk_len : (i + 1) * chunk_len]
+        rms = float(np.sqrt(np.mean(chunk**2))) / maxval if len(chunk) else 0.0
+        levels.append(rms)
+    duration = n_frames / rate if rate else 0.0
+    return levels, duration
+
+
+def _normalize_envelope(levels: list[float]) -> list[float]:
+    """Scale raw RMS levels to a natural-looking MouthOpen range (0.0-0.85)."""
+    peak = max(levels) if levels else 0.0
+    if peak <= 0:
+        return [0.0 for _ in levels]
+    return [
+        min(1.0, (level / peak) ** _MOUTH_CURVE_EXPONENT) * _MOUTH_PEAK_SCALE for level in levels
+    ]
+
+
+async def _stream_mouth_envelope(
+    levels: list[float],
+    chunk_ms: int,
+    *,
+    host: str,
+    port: int,
+    token: str | None,
+    plugin_name: str,
+    plugin_developer: str,
+    parameter_id: str,
+) -> str:
+    """Stream ``levels`` to *parameter_id* over one persistent connection.
+
+    Returns the token used (so a freshly-acquired one can be persisted by
+    the caller, matching :func:`_vtube_request`'s contract).
+    """
+    import websockets
+
+    uri = f"ws://{host}:{port}"
+    async with websockets.connect(uri, max_size=8 * 1024 * 1024) as ws:
+        token_used = await _vts_authenticate(
+            ws, plugin_name=plugin_name, plugin_developer=plugin_developer, token=token
+        )
+        start = time.monotonic()
+        for i, level in enumerate(levels):
+            target_t = start + i * chunk_ms / 1000
+            now = time.monotonic()
+            if target_t > now:
+                await asyncio.sleep(target_t - now)
+            await _vts_send(
+                ws,
+                "InjectParameterDataRequest",
+                {
+                    "faceFound": False,
+                    "mode": "set",
+                    "parameterValues": [{"id": parameter_id, "value": level}],
+                },
+            )
+        # Always close the mouth on completion, even for an empty envelope.
+        await _vts_send(
+            ws,
+            "InjectParameterDataRequest",
+            {
+                "faceFound": False,
+                "mode": "set",
+                "parameterValues": [{"id": parameter_id, "value": 0.0}],
+            },
+        )
+        return token_used
+
+
+class VtubeSpeakTool(BaseTool):
+    """Speak text aloud and drive VTube Studio's mouth parameter directly.
+
+    Synthesizes with the same Piper/espeak-ng engines as ``tts_speak``,
+    plays the result through a PipeWire sink (so OBS/humans still hear it),
+    and concurrently streams the audio's own amplitude envelope to VTS's
+    ``MouthOpen`` input over one persistent connection -- see the module
+    docstring's "Audio-synced lip sync" section for why this replaced an
+    earlier attempt to route TTS into VTube Studio's own microphone input.
+    """
+
+    name = "vtube_speak"
+    description = (
+        "Speak text aloud with VTube Studio's avatar mouth moving in sync, by "
+        "injecting the synthesized audio's own amplitude directly into VTS's "
+        "MouthOpen parameter. Use this instead of tts_speak when the VTuber "
+        "avatar should visibly talk."
+    )
+    permissions = ToolPermissions(shell=True, network=True)
+    parameters: dict[str, Any] = {
+        "text": {
+            "type": "string",
+            "description": "The text to speak aloud.",
+            "required": True,
+        },
+        "speed": {
+            "type": "number",
+            "description": "Speech speed multiplier (default 1.0; >1 = faster, <1 = slower).",
+            "default": 1.0,
+        },
+        "voice": {
+            "type": "string",
+            "description": (
+                "Voice name. For Piper: 'en_US-lessac-medium' (default). "
+                "For espeak-ng fallback: 'en', 'en+f3', etc."
+            ),
+            "default": "en_US-lessac-medium",
+        },
+        "output_sink": {
+            "type": "string",
+            "description": (
+                "PipeWire sink to play through -- default matches audio_route_tts's "
+                "sink so OBS/humans hear it without touching the system default."
+            ),
+            "default": "missy_tts_out",
+        },
+        "parameter_id": {
+            "type": "string",
+            "description": "VTS input parameter to drive from audio amplitude.",
+            "default": _LIPSYNC_PARAMETER_ID,
+        },
+    }
+
+    def resolve_shell_command(self, kwargs: dict[str, Any]) -> str:
+        from missy.tools.builtin.tts_speak import _PIPER_BIN
+
+        return f"{_PIPER_BIN} && espeak-ng && gst-launch-1.0"
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        host = _vtube_host()
+        return [host] if host else []
+
+    def execute(
+        self,
+        *,
+        text: str,
+        speed: float = 1.0,
+        voice: str = "en_US-lessac-medium",
+        output_sink: str = "missy_tts_out",
+        parameter_id: str = _LIPSYNC_PARAMETER_ID,
+        **_: Any,
+    ) -> ToolResult:
+        if rate_error := _check_rate_limit(self.name):
+            return ToolResult(success=False, output=None, error=rate_error)
+
+        if not text.strip():
+            return ToolResult(success=False, output=None, error="No text provided.")
+
+        if not _SINK_NAME_RE.fullmatch(output_sink):
+            return ToolResult(
+                success=False,
+                output=None,
+                error=f"Invalid output_sink {output_sink!r}: must be a plain PipeWire sink name.",
+            )
+
+        config = _vtube_config()
+        if config is None or not config.enabled:
+            return ToolResult(
+                success=False,
+                output=None,
+                error="VTube Studio integration is disabled. Set vtube.enabled: true in config.yaml.",
+            )
+
+        from missy.policy.engine import get_policy_engine
+
+        try:
+            get_policy_engine().check_network(config.host, category="tool")
+        except Exception as exc:
+            return ToolResult(success=False, output=None, error=str(exc))
+
+        from missy.tools.builtin.tts_speak import (
+            _PIPER_DEFAULT_VOICE,
+            _piper_env,
+            _synth_espeak,
+            _synth_piper,
+        )
+
+        speed = max(0.25, min(4.0, float(speed)))
+        env = _piper_env()
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = tmp.name
+
+        try:
+            engine = "piper"
+            piper_voice = voice if voice != "en" else _PIPER_DEFAULT_VOICE
+            synth_err = _synth_piper(text, wav_path, piper_voice, speed)
+            if synth_err is not None:
+                engine = "espeak-ng"
+                logger.info("Piper unavailable (%s), falling back to espeak-ng", synth_err)
+                espeak_voice = voice if not voice.startswith("en_US") else "en"
+                espeak_speed = max(80, min(450, int(160 * speed)))
+                synth_err = _synth_espeak(text, wav_path, espeak_speed, 50, espeak_voice, env)
+                if synth_err is not None:
+                    return ToolResult(
+                        success=False, output=None, error=f"TTS synthesis failed: {synth_err}"
+                    )
+
+            try:
+                levels, duration = _wav_envelope(wav_path, _ENVELOPE_CHUNK_MS)
+            except VtubeError as exc:
+                return ToolResult(success=False, output=None, error=str(exc))
+            levels = _normalize_envelope(levels)
+
+            play_env = dict(env)
+            play_proc = subprocess.Popen(
+                [
+                    "gst-launch-1.0",
+                    "filesrc",
+                    f"location={wav_path}",
+                    "!",
+                    "wavparse",
+                    "!",
+                    "audioconvert",
+                    "!",
+                    "audioresample",
+                    "!",
+                    "pipewiresink",
+                    f"target-object={output_sink}",
+                ],
+                env=play_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                token_used = asyncio.run(
+                    _stream_mouth_envelope(
+                        levels,
+                        _ENVELOPE_CHUNK_MS,
+                        host=config.host,
+                        port=config.port,
+                        token=config.auth_token,
+                        plugin_name=config.plugin_name,
+                        plugin_developer=config.plugin_developer,
+                        parameter_id=parameter_id,
+                    )
+                )
+            except VtubeError as exc:
+                play_proc.wait(timeout=10)
+                return ToolResult(success=False, output=None, error=str(exc))
+
+            if token_used != config.auth_token:
+                _persist_token(token_used)
+
+            play_returncode = play_proc.wait(timeout=10)
+            if play_returncode != 0:
+                stderr = (play_proc.stderr.read() if play_proc.stderr else b"").decode(
+                    "utf-8", errors="replace"
+                )
+                return ToolResult(
+                    success=False, output=None, error=f"audio playback failed: {stderr.strip()}"
+                )
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, output=None, error="Playback did not finish in time.")
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(wav_path)
+
+        word_count = len(text.split())
+        return ToolResult(
+            success=True,
+            output=(
+                f"Spoke {word_count} words with synced mouth movement "
+                f"({duration:.2f}s, engine={engine}, voice={voice}, "
+                f"output_sink={output_sink}, parameter_id={parameter_id})."
+            ),
+        )

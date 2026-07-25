@@ -105,6 +105,7 @@ from missy.tools.builtin.vtube_tools import (
     VtubeListModelsTool,
     VtubeLoadModelTool,
     VtubeSetParameterTool,
+    VtubeSpeakTool,
     VtubeStatusTool,
     VtubeTriggerHotkeyTool,
 )
@@ -206,6 +207,7 @@ __all__ = [
     "VtubeListModelsTool",
     "VtubeTriggerHotkeyTool",
     "VtubeSetParameterTool",
+    "VtubeSpeakTool",
     "AudioRouteTtsTool",
     "AudioTestRouteTool",
     "register_builtin_tools",
@@ -298,6 +300,7 @@ _ALL_TOOL_CLASSES = [
     VtubeListModelsTool,
     VtubeTriggerHotkeyTool,
     VtubeSetParameterTool,
+    VtubeSpeakTool,
     AudioRouteTtsTool,
     AudioTestRouteTool,
 ]

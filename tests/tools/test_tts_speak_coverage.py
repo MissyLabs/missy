@@ -24,6 +24,7 @@ from missy.tools.builtin.tts_speak import (
     TTSSpeakTool,
     _ensure_runtime_dir,
     _find_piper_model,
+    _play_wav,
     _synth_piper,
 )
 
@@ -229,6 +230,78 @@ class TestSynthPiper:
             err = _synth_piper("hello", wav_path, "voice", speed=1.0)
 
         assert err == "piper produced no audio"
+
+
+# ---------------------------------------------------------------------------
+# _play_wav / TTSSpeakTool — output_sink routing (audio_route_tts integration)
+# ---------------------------------------------------------------------------
+
+
+class TestPlayWavOutputSink:
+    def test_no_output_sink_uses_bare_pipewiresink(self):
+        """Default behavior (no sink given) is unchanged: bare 'pipewiresink'."""
+        completed = MagicMock()
+        completed.returncode = 0
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            err = _play_wav("/tmp/x.wav", {}, output_sink=None)
+
+        assert err is None
+        cmd_used = mock_run.call_args.args[0]
+        assert cmd_used[-1] == "pipewiresink"
+
+    def test_output_sink_adds_target_object_property(self):
+        """A given sink is passed as pipewiresink's target-object property."""
+        completed = MagicMock()
+        completed.returncode = 0
+        with patch("subprocess.run", return_value=completed) as mock_run:
+            err = _play_wav("/tmp/x.wav", {}, output_sink="missy_tts_out")
+
+        assert err is None
+        cmd_used = mock_run.call_args.args[0]
+        assert cmd_used[-2] == "pipewiresink"
+        assert cmd_used[-1] == "target-object=missy_tts_out"
+
+
+class TestTTSSpeakToolOutputSinkValidation:
+    def test_invalid_sink_name_rejected_without_playing(self):
+        """A sink name with unsafe characters is rejected before synthesis/playback."""
+        tool = TTSSpeakTool()
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper") as mock_synth,
+            patch("missy.tools.builtin.tts_speak._play_wav") as mock_play,
+        ):
+            result = tool.execute(text="hello", output_sink="bad; rm -rf /")
+
+        assert result.success is False
+        assert "Invalid output_sink" in result.error
+        mock_synth.assert_not_called()
+        mock_play.assert_not_called()
+
+    def test_valid_sink_name_threaded_to_play_wav(self):
+        """A valid sink name reaches _play_wav unchanged."""
+        tool = TTSSpeakTool()
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None) as mock_play,
+            patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
+        ):
+            result = tool.execute(text="hello there", output_sink="missy_tts_out")
+
+        assert result.success is True
+        assert mock_play.call_args.kwargs["output_sink"] == "missy_tts_out"
+
+    def test_omitted_sink_defaults_to_none(self):
+        """Omitting output_sink entirely still plays through the system default."""
+        tool = TTSSpeakTool()
+        with (
+            patch("missy.tools.builtin.tts_speak._synth_piper", return_value=None),
+            patch("missy.tools.builtin.tts_speak._play_wav", return_value=None) as mock_play,
+            patch("missy.tools.builtin.tts_speak._piper_env", return_value={}),
+        ):
+            result = tool.execute(text="hello there")
+
+        assert result.success is True
+        assert mock_play.call_args.kwargs["output_sink"] is None
 
 
 # ---------------------------------------------------------------------------
