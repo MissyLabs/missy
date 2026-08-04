@@ -20,6 +20,7 @@ import contextlib
 import functools
 import json
 import logging
+import re
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -403,6 +404,90 @@ def _resolve_provider_name(cfg: Any, explicit: str | None = None) -> str:
     if default_provider:
         return default_provider
     return next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+
+
+#: Cap on distinct users remembered per Discord channel by
+#: _discord_remember_speaker() (oldest evicted first) -- bounds a
+#: long-lived, busy channel's cache instead of growing it unboundedly.
+_DISCORD_KNOWN_USERS_CAP = 25
+
+#: Matches a real Discord user mention: `<@ID>` or the legacy `<@!ID>`
+#: nickname-mention variant (both render identically in every modern
+#: client). Deliberately excludes role (`<@&ID>`) and channel (`<#ID>`)
+#: mentions -- only user IDs are meaningful to _discord_extract_mention_ids().
+_DISCORD_USER_MENTION_RE = re.compile(r"<@!?(\d{1,20})>")
+
+
+def _discord_remember_speaker(
+    known_users: dict[str, dict[str, str]], channel_id: str, user_id: str, display_name: str
+) -> None:
+    """Record that *user_id* spoke in *channel_id*, for Discord tagging context.
+
+    Discord's `<@USER_ID>` mention syntax requires a real numeric ID --
+    the model has no innate way to know one, so every message that flows
+    through the Discord loop remembers its author here (no extra Discord
+    API call), and :func:`_discord_known_users_context` surfaces the
+    result back into the prompt so the model can tag anyone recently
+    active in the channel. Mutates *known_users* in place.
+
+    Args:
+        known_users: The shared ``{channel_id: {user_id: display_name}}``
+            cache, owned by the caller (one instance per running gateway).
+        channel_id: The Discord channel snowflake ID.
+        user_id: The speaker's real Discord user ID.
+        display_name: The speaker's display name (global name or username).
+    """
+    if not user_id or not display_name:
+        return
+    bucket = known_users.setdefault(channel_id, {})
+    bucket.pop(user_id, None)  # re-insert at the end (most-recent)
+    bucket[user_id] = display_name
+    while len(bucket) > _DISCORD_KNOWN_USERS_CAP:
+        bucket.pop(next(iter(bucket)))
+
+
+def _discord_known_users_context(
+    known_users: dict[str, dict[str, str]], channel_id: str, exclude_id: str
+) -> str:
+    """Return a prompt-ready sentence listing recently active channel users.
+
+    Args:
+        known_users: The shared cache populated by
+            :func:`_discord_remember_speaker`.
+        channel_id: The Discord channel snowflake ID to look up.
+        exclude_id: A user ID to omit (typically the current message's
+            author, already described separately).
+
+    Returns:
+        A sentence naming other recently active users and their real IDs,
+        or ``""`` when none are known yet.
+    """
+    bucket = known_users.get(channel_id) or {}
+    pairs = [f"{name} (id: {uid})" for uid, name in bucket.items() if uid != exclude_id]
+    if not pairs:
+        return ""
+    return "Other users recently active in this channel: " + ", ".join(pairs) + ". "
+
+
+def _discord_extract_mention_ids(text: str) -> list[str]:
+    """Pull real `<@ID>`/`<@!ID>` user mentions out of *text*, deduplicated.
+
+    Used to allowlist exactly the mentions the model actually wrote into
+    its reply (via ``mention_user_ids``) -- Discord's ``send_message``
+    otherwise suppresses every mention by default (``allowed_mentions.
+    parse: []``), so a correctly-written ``<@ID>`` would silently render
+    as dead text without this.
+
+    Args:
+        text: The outbound message text to scan.
+
+    Returns:
+        A list of user ID strings, in first-seen order, deduplicated.
+    """
+    seen: dict[str, None] = {}
+    for match in _DISCORD_USER_MENTION_RE.finditer(text or ""):
+        seen.setdefault(match.group(1), None)
+    return list(seen)
 
 
 def _load_or_create_web_console_key() -> str:
@@ -3315,6 +3400,20 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             from missy.channels.discord.channel import DiscordChannel
             from missy.core.exceptions import ProviderError
 
+            # Discord tagging/mentions: `<@USER_ID>` is the only syntax that
+            # actually pings someone -- plain "@name" text renders inert. The
+            # model has no innate way to know a real numeric ID, so this
+            # cache remembers (channel_id -> {user_id: display_name}) for
+            # every author seen speaking in each channel, built for free as
+            # messages already flow through this loop (no extra Discord API
+            # calls). Surfaced into enriched_prompt below so the model can
+            # pick a real ID for anyone recently active; discord_lookup_user
+            # (a real guild-member-search tool) covers anyone not in it. See
+            # _discord_remember_speaker()/_discord_known_users_context()/
+            # _discord_extract_mention_ids() (module-level, independently
+            # tested) for the actual logic.
+            _discord_known_users: dict[str, dict[str, str]] = {}
+
             async def _process_channel(ch: DiscordChannel) -> None:
                 """Drain the channel queue and run the agent for each message."""
                 while not stop_event:
@@ -3326,15 +3425,44 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         logging.getLogger(__name__).debug("Discord queue error", exc_info=True)
                         break
 
-                    session_id = msg.metadata.get("discord_author", {}).get("id", "discord")
+                    author_meta = msg.metadata.get("discord_author", {}) or {}
+                    author_id = str(author_meta.get("id", "") or "")
+                    author_display = str(
+                        author_meta.get("global_name") or author_meta.get("username") or "someone"
+                    )
+                    session_id = author_id or "discord"
                     channel_id = msg.metadata.get("discord_channel_id", "")
+                    guild_id = msg.metadata.get("discord_guild_id", "")
+
+                    if author_id:
+                        _discord_remember_speaker(
+                            _discord_known_users, channel_id, author_id, author_display
+                        )
 
                     # Inject channel context so the agent knows which Discord
-                    # channel it is responding in (for discord_upload_file etc.).
+                    # channel it is responding in (for discord_upload_file etc.),
+                    # who is talking to it, and real user IDs it can use to
+                    # actually tag/mention/ping someone -- plain "@name" text
+                    # never pings; only the literal <@USER_ID> syntax does.
+                    mention_help = (
+                        f"This message is from {author_display} (Discord user ID: {author_id}). "
+                        "To mention/tag/ping a user in your reply, use the literal syntax "
+                        "<@USER_ID> with their real numeric Discord ID -- writing @name as "
+                        "plain text will NOT ping anyone. "
+                        + _discord_known_users_context(_discord_known_users, channel_id, author_id)
+                        + (
+                            f"To find the ID of someone not listed above, call "
+                            f"discord_lookup_user(guild_id='{guild_id}', query=<their name>) "
+                            "before replying."
+                            if guild_id
+                            else ""
+                        )
+                    )
                     discord_ctx = (
                         f"[Discord channel {channel_id}] "
                         f"Use discord_upload_file with channel_id='{channel_id}' "
-                        f"to share files here."
+                        f"to share files here. "
+                        f"{mention_help}"
                     )
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
 
@@ -3438,6 +3566,19 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         if msg.metadata.get("discord_author_is_bot"):
                             response = f"<@{msg.sender}> {response}"
                             mention_ids = [msg.sender]
+                        # General mention support: Discord silently drops any
+                        # <@ID> in the outbound text unless that exact ID is
+                        # allowlisted in allowed_mentions.users (send_message's
+                        # default is parse=[] -- deliberate, so a response can
+                        # never accidentally ping @everyone/@here or an
+                        # arbitrary ID beyond what actually appears in the
+                        # model's own reply text). Extracting and allowlisting
+                        # every real <@ID> the model wrote is what makes a
+                        # user-requested tag ("tell @bob...") actually ping
+                        # bob instead of rendering as dead text.
+                        response_mention_ids = _discord_extract_mention_ids(response)
+                        if response_mention_ids:
+                            mention_ids = list({*(mention_ids or []), *response_mention_ids})
                         sent_id = await ch.send_with_retry(
                             channel_id,
                             response,

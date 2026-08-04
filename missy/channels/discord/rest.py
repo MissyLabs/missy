@@ -542,6 +542,39 @@ class DiscordRestClient:
         response.raise_for_status()
         return response.json()
 
+    def search_guild_members(
+        self, guild_id: str, query: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Search guild members by username/nickname prefix.
+
+        Backs :class:`~missy.tools.builtin.discord_lookup_user.DiscordLookupUserTool`:
+        resolving a display name to the real numeric snowflake ID Discord's
+        ``<@ID>`` mention syntax requires (a bare ``@name`` in outbound
+        message content never pings anyone). Only useful for someone who
+        hasn't spoken recently in the channel -- the agent's own
+        conversation context already carries real IDs for recent speakers,
+        so this is the fallback path, not the common one.
+
+        Args:
+            guild_id: The guild snowflake ID to search within.
+            query: Username/nickname prefix to match (Discord does a
+                case-insensitive prefix match, not a substring search).
+            limit: Max results (1-1000 per Discord's API; default 10).
+
+        Returns:
+            A list of Discord Guild Member objects (each with a nested
+            ``user`` dict carrying ``id``/``username``/``global_name``).
+        """
+        _validate_snowflake(guild_id, "guild_id")
+        if not query:
+            raise ValueError("query must not be empty")
+        limit = max(1, min(1000, limit))
+        url = f"{BASE}/guilds/{guild_id}/members/search"
+        params: dict[str, Any] = {"query": query, "limit": limit}
+        response = self._request_with_retry("get", url, headers=self._headers(), params=params)
+        response.raise_for_status()
+        return response.json()
+
     def send_interaction_response(
         self,
         interaction_id: str,

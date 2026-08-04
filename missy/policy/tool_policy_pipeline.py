@@ -83,6 +83,12 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "self_create_tool",
     "code_evolve",
     "discord_upload_file",
+    # Read-only guild-member-search fallback for tagging someone who hasn't
+    # spoken recently in the channel (the common case -- tagging a recent
+    # speaker -- already has their real ID in conversation context, see
+    # cli/main.py's Discord message loop). No approval gate: it looks a
+    # name up, it doesn't post or ping anything by itself.
+    "discord_lookup_user",
     "discord_voice_join",
     "discord_voice_leave",
     "discord_voice_say",
