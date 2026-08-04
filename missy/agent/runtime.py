@@ -4824,6 +4824,15 @@ class AgentRuntime:
     def _get_provider(self) -> Any:
         """Resolve the configured provider with automatic fallback.
 
+        The sticky, configured default (``self.config.provider``, the
+        provider-preference hierarchy's "default") is always tried first.
+        When it's unavailable, the next pick is drawn from the weighted
+        balancing pool (:meth:`~missy.providers.registry.ProviderRegistry.select_weighted`,
+        proportional to each candidate's configured ``weight``) rather
+        than plain registration order, so an operator's weighting actually
+        governs which fallback gets used, not just insertion order in
+        ``config.yaml``.
+
         Returns:
             A :class:`~missy.providers.base.BaseProvider` instance.
 
@@ -4842,10 +4851,9 @@ class AgentRuntime:
                 self.config.provider,
             )
 
-        available = registry.get_available()
-        if available:
-            fallback = available[0]
-            logger.info("Using fallback provider %r.", fallback.name)
+        fallback = registry.select_weighted(exclude={self.config.provider})
+        if fallback is not None:
+            logger.info("Using weighted fallback provider %r.", fallback.name)
             return fallback
 
         raise ProviderError(
@@ -4999,50 +5007,72 @@ class AgentRuntime:
             # before spending it on a fallback provider.
             self._check_budget(session_id=session_id, task_id=task_id)
 
-            candidates = [
-                p
-                for p in registry.get_available()
-                if p.name != provider.name
-                and self._get_breaker_for(p.name).state != CircuitState.OPEN
-            ]
-
             def _is_tool_capable(p: Any) -> bool:
                 return type(p).complete_with_tools is not BaseProvider.complete_with_tools
 
+            # Candidate universe: every registered provider except the one
+            # that already failed, with an OPEN breaker excluded (breaker
+            # state is agent-runtime-owned, not something the registry
+            # itself knows about). When tools are required, tool-capable
+            # candidates are drained via weighted selection before any
+            # non-tool-capable one is even tried (a strict priority tier,
+            # not a tiebreak) -- weighting only governs balancing *within*
+            # a tier.
+            eligible_names = {
+                name
+                for name in registry.list_providers()
+                if name != registry_key and self._get_breaker_for(name).state != CircuitState.OPEN
+            }
             if requires_tools:
-                candidates.sort(key=lambda p: not _is_tool_capable(p))
+                tool_capable_names = {
+                    name
+                    for name in eligible_names
+                    if (candidate := registry.get(name)) is not None and _is_tool_capable(candidate)
+                }
+                partitions = [
+                    (tool_capable_names, False),
+                    (eligible_names - tool_capable_names, True),
+                ]
+            else:
+                partitions = [(eligible_names, False)]
 
+            tried: set[str] = {registry_key}
             last_exc: Exception = exc
-            for fallback in candidates:
-                degraded = requires_tools and not _is_tool_capable(fallback)
-                self._emit_event(
-                    session_id=session_id,
-                    task_id=task_id,
-                    event_type="agent.provider.fallback",
-                    result="allow",
-                    detail={
-                        "from_provider": provider.name,
-                        "to_provider": fallback.name,
-                        "reason": str(failure_class),
-                        "tool_compatibility_degraded": degraded,
-                    },
-                )
-                try:
-                    return _attempt(fallback), fallback
-                except (ProviderError, MissyError) as exc3:
-                    last_exc = exc3
+            for partition_names, degraded in partitions:
+                while True:
+                    fallback = registry.select_weighted(exclude=tried, only=partition_names)
+                    if fallback is None:
+                        break
+                    fallback_key = registry.key_for(fallback) or fallback.name
+                    tried.add(fallback_key)
                     self._emit_event(
                         session_id=session_id,
                         task_id=task_id,
-                        event_type="agent.provider.call_failed",
-                        result="error",
+                        event_type="agent.provider.fallback",
+                        result="allow",
                         detail={
-                            "provider": fallback.name,
-                            "failure_class": str(classify_provider_error(exc3)),
-                            "error": str(exc3),
+                            "from_provider": provider.name,
+                            "to_provider": fallback.name,
+                            "reason": str(failure_class),
+                            "tool_compatibility_degraded": degraded,
                         },
                     )
-                    continue
+                    try:
+                        return _attempt(fallback), fallback
+                    except (ProviderError, MissyError) as exc3:
+                        last_exc = exc3
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.provider.call_failed",
+                            result="error",
+                            detail={
+                                "provider": fallback.name,
+                                "failure_class": str(classify_provider_error(exc3)),
+                                "error": str(exc3),
+                            },
+                        )
+                        continue
 
             # last_exc already carries its own original traceback/context
             # from wherever it was first caught (it may be the outer `exc`

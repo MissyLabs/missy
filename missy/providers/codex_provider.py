@@ -298,6 +298,11 @@ class CodexProvider(BaseProvider):
             if config.key_rotation_strategy == "round_robin"
             else []
         )
+        # account_weights lets an operator send more traffic to one signed-in
+        # ChatGPT account than another (provider-preference hierarchy); empty
+        # means every account gets equal weight, unchanged from the original
+        # plain round-robin behavior.
+        _rr_weights = list(config.account_weights or []) if _rr_accounts else []
         self._rr = RoundRobinAccounts(
             _rr_accounts,
             make_rate_limiter=lambda: RateLimiter(
@@ -305,6 +310,7 @@ class CodexProvider(BaseProvider):
                 tokens_per_minute=self._tokens_per_minute,
                 max_wait_seconds=self._max_wait_seconds,
             ),
+            weights=_rr_weights or None,
         )
         self._accounts: list[Account] = self._rr._live_accounts
 

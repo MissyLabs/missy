@@ -273,6 +273,23 @@ class ProviderConfig:
             ``~/.missy/secrets/openai-oauth-<name>.json`` file (signed in
             via ``missy providers auth openai-codex --method oauth
             --account <name>``) rather than a literal secret in config.
+        weight: Relative weight (>= 0) for this provider in
+            :class:`~missy.providers.registry.ProviderRegistry`'s
+            weighted fallback/balancing pool (provider-preference
+            hierarchy). Equal weights across candidates degrade to plain
+            round-robin. A weight of ``0`` opts this provider out of ever
+            being chosen by weighted selection -- it remains reachable by
+            explicit name (e.g. as ``default_provider`` or via
+            ``--provider``), just never auto-selected as a balancing
+            fallback. Default ``1.0`` (every provider participates
+            equally unless explicitly weighted).
+        account_weights: Optional per-account weights parallel to
+            ``api_keys``/``oauth_accounts``, for weighted (rather than
+            plain) round-robin balancing across this *one* provider's
+            multiple accounts -- e.g. sending more traffic to one of two
+            OpenAI accounts. Must be empty (equal weight 1.0 for every
+            account, the original behavior) or exactly as long as
+            whichever of ``api_keys``/``oauth_accounts`` is in use.
     """
 
     name: str
@@ -291,6 +308,10 @@ class ProviderConfig:
     max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
     circuit_breaker_threshold: int = 5  # Consecutive failures before opening
     circuit_breaker_cooldown_seconds: float = 60.0  # OPEN -> HALF_OPEN delay
+    weight: float = 1.0  # Cross-provider weighted balancing weight (>= 0)
+    account_weights: list = field(
+        default_factory=list
+    )  # Per-account weights (parallel to api_keys/oauth_accounts)
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +597,16 @@ class MissyConfig:
         audit_log_path: Absolute path where audit events are persisted.
         discord: Optional Discord integration configuration.
         scheduling: Scheduled job execution policy.
+        default_provider: Registry key of the persisted, preferred default
+            provider (the "set a default" half of the provider-preference
+            hierarchy). Empty string (default) preserves the original
+            behavior of every provider-resolution call site: fall back to
+            the first provider listed under ``providers:`` in YAML order.
+            Set via ``missy providers switch NAME`` or the Web TUI's
+            "Make default" control, both of which persist this field so
+            the choice survives a restart -- unlike
+            :meth:`~missy.providers.registry.ProviderRegistry.set_default`,
+            which only ever mutated in-process registry bookkeeping.
     """
 
     network: NetworkPolicy
@@ -585,6 +616,7 @@ class MissyConfig:
     providers: dict[str, ProviderConfig]
     workspace_path: str
     audit_log_path: str
+    default_provider: str = ""
     discord: DiscordConfig | None = None
     scheduling: SchedulingPolicy = field(default_factory=SchedulingPolicy)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
@@ -979,6 +1011,25 @@ def _parse_providers(
                 f"{key_rotation_strategy!r}; must be 'failover' or 'round_robin'."
             )
         oauth_accounts = [str(a) for a in raw.get("oauth_accounts", [])]
+        weight = float(raw.get("weight", 1.0))
+        if weight < 0:
+            raise ConfigurationError(
+                f"Provider '{key}' has invalid weight {weight!r}; must be >= 0."
+            )
+        account_weights = [float(w) for w in raw.get("account_weights", [])]
+        if account_weights:
+            if any(w <= 0 for w in account_weights):
+                raise ConfigurationError(
+                    f"Provider '{key}' has invalid account_weights {account_weights!r}; "
+                    "every entry must be > 0."
+                )
+            expected_len = len(oauth_accounts) if oauth_accounts else len(api_keys)
+            if expected_len and len(account_weights) != expected_len:
+                raise ConfigurationError(
+                    f"Provider '{key}' has {len(account_weights)} account_weights but "
+                    f"{expected_len} accounts ({'oauth_accounts' if oauth_accounts else 'api_keys'}); "
+                    "these lists must be the same length."
+                )
         providers[key] = ProviderConfig(
             name=str(raw.get("name", key)),
             model=str(raw["model"]),
@@ -998,6 +1049,8 @@ def _parse_providers(
             circuit_breaker_cooldown_seconds=float(
                 raw.get("circuit_breaker_cooldown_seconds", 60.0)
             ),
+            weight=weight,
+            account_weights=account_weights,
         )
     return providers
 
@@ -1216,6 +1269,7 @@ def load_config(path: str) -> MissyConfig:
             providers=_parse_providers(data.get("providers") or {}, vault_dir=vault_dir),
             workspace_path=str(data.get("workspace_path", ".")),
             audit_log_path=str(data.get("audit_log_path", "~/.missy/audit.log")),
+            default_provider=str(data.get("default_provider", "") or ""),
             discord=discord_cfg,
             scheduling=_parse_scheduling(data.get("scheduling") or {}),
             heartbeat=_parse_heartbeat(data.get("heartbeat") or {}),

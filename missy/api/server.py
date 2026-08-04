@@ -215,6 +215,7 @@ def _make_handler(
     run_registry: RunRegistry,
     approval_gate: Any | None = None,
     discord_channels: list | None = None,
+    config_path: str | None = None,
 ):
     """Return a configured :class:`BaseHTTPRequestHandler` subclass.
 
@@ -868,6 +869,10 @@ def _make_handler(
                     config = None
                     with contextlib.suppress(Exception):
                         config = reg.get_config(name)
+                    try:
+                        weight = float(getattr(config, "weight", 1.0) or 1.0)
+                    except (TypeError, ValueError):
+                        weight = 1.0
                     result.append(
                         {
                             "name": name,
@@ -875,6 +880,9 @@ def _make_handler(
                             "enabled": enabled,
                             "is_default": name == reg.get_default_name(),
                             "model": str(getattr(config, "model", "") or ""),
+                            "weight": weight,
+                            "is_multi_account": bool(getattr(provider, "is_multi_account", False)),
+                            "account_count": int(getattr(provider, "account_count", 0) or 0),
                         }
                     )
             except Exception as exc:
@@ -908,6 +916,10 @@ def _make_handler(
             config = None
             with contextlib.suppress(Exception):
                 config = reg.get_config(name)
+            try:
+                weight = float(getattr(config, "weight", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                weight = 1.0
 
             detail: dict[str, Any] = {
                 "name": name,
@@ -927,6 +939,8 @@ def _make_handler(
                     "api_keys_count": len(getattr(config, "api_keys", []) or []),
                     "requests_per_minute": getattr(config, "requests_per_minute", None),
                     "tokens_per_minute": getattr(config, "tokens_per_minute", None),
+                    "weight": weight,
+                    "account_weights": list(getattr(config, "account_weights", []) or []),
                 },
             }
             diagnostics = getattr(provider, "diagnostics", None)
@@ -1091,6 +1105,7 @@ def _make_handler(
                 scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
                 candidate_store=candidate_store,
                 benchmark_store=benchmark_store,
+                config_path=config_path,
             )
             result = "allow" if status < 400 else "deny"
             severity = "info" if result == "allow" else "warning"
@@ -1875,6 +1890,10 @@ class ApiServer:
             ``/tool-candidates`` and candidate operator controls.
         benchmark_store: Optional benchmark result store used by the candidate
             benchmark-import operator control.
+        config_path: Optional path to ``config.yaml``, used only by the
+            ``provider.set_weight`` operator control to persist a new
+            provider weight (every other control here only mutates
+            in-process state).
     """
 
     def __init__(
@@ -1888,6 +1907,7 @@ class ApiServer:
         benchmark_store: BenchmarkStore | None = None,
         approval_gate: Any | None = None,
         discord_channels: list | None = None,
+        config_path: str | None = None,
     ) -> None:
         self.config = config
         self.runtime = runtime
@@ -1897,6 +1917,7 @@ class ApiServer:
         self.candidate_store = candidate_store
         self.benchmark_store = benchmark_store
         self.approval_gate = approval_gate
+        self.config_path = config_path
         # SR-1.12/task #12: shared reference to the live DiscordChannel
         # list. Channels are constructed later (async, after the API
         # server starts) so this is the *same* list object the caller
@@ -1958,6 +1979,7 @@ class ApiServer:
             run_registry=self._run_registry,
             approval_gate=self.approval_gate,
             discord_channels=self.discord_channels,
+            config_path=self.config_path,
         )
 
         self._server = ThreadingHTTPServer((self.config.host, self.config.port), handler_class)

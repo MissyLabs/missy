@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from missy.providers.round_robin import Account, AccountView, RoundRobinAccounts
 
 
@@ -334,3 +336,58 @@ class TestCodexIntegration:
 
         picks = [provider._select_account().api_key for _ in range(4)]
         assert picks == ["personal", "personal", "personal", "personal"]
+
+
+# ---------------------------------------------------------------------------
+# Per-account weights (provider-preference hierarchy)
+# ---------------------------------------------------------------------------
+
+
+class TestAccountWeights:
+    def test_unweighted_matches_plain_round_robin(self) -> None:
+        rr = _rr(["a", "b", "c"])
+        picks = [rr.select().index for _ in range(6)]
+        assert picks == [0, 1, 2, 0, 1, 2]
+
+    def test_higher_weight_selected_more_often(self) -> None:
+        rr = _rr(["a", "b"], weights=[3.0, 1.0])
+        picks = [rr.select().index for _ in range(8)]
+        assert picks.count(0) == 6
+        assert picks.count(1) == 2
+
+    def test_weights_length_mismatch_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _rr(["a", "b", "c"], weights=[1.0, 2.0])
+
+    def test_account_view_reports_weight(self) -> None:
+        rr = _rr(["a", "b"], weights=[2.0, 1.0])
+        views = {v.index: v for v in rr.accounts}
+        assert views[0].weight == 2.0
+        assert views[1].weight == 1.0
+
+    def test_select_returns_weight_on_account_view(self) -> None:
+        rr = _rr(["a", "b"], weights=[5.0, 1.0])
+        acc = rr.select()
+        assert acc.weight in (5.0, 1.0)
+
+    def test_empty_weights_list_is_equal_weighting(self) -> None:
+        rr = _rr(["a", "b", "c"], weights=[])
+        picks = [rr.select().index for _ in range(6)]
+        assert picks == [0, 1, 2, 0, 1, 2]
+
+    def test_weighted_openai_provider_balances_accounts(self) -> None:
+        from missy.config.settings import ProviderConfig
+        from missy.providers.openai_provider import OpenAIProvider
+
+        provider = OpenAIProvider(
+            ProviderConfig(
+                name="openai",
+                model="auto",
+                api_keys=["k1", "k2"],
+                key_rotation_strategy="round_robin",
+                account_weights=[3.0, 1.0],
+            )
+        )
+        picks = [provider._select_account().index for _ in range(8)]
+        assert picks.count(0) == 6
+        assert picks.count(1) == 2
