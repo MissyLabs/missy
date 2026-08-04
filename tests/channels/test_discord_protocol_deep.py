@@ -620,6 +620,52 @@ class TestGetGuildRoles:
 
 
 # ===========================================================================
+# search_guild_members (Discord user tagging)
+# ===========================================================================
+
+
+class TestSearchGuildMembers:
+    def test_calls_correct_url_and_params(self):
+        expected = [{"user": {"id": "u-1", "username": "bob"}}]
+        client, mock_http = _make_rest(get_response=_make_response(json_data=expected))
+        client.search_guild_members("111222333", "bob")
+        url = mock_http.get.call_args[0][0]
+        params = mock_http.get.call_args.kwargs["params"]
+        assert url == f"{BASE}/guilds/111222333/members/search"
+        assert params == {"query": "bob", "limit": 10}
+
+    def test_returns_member_list(self):
+        expected = [
+            {"user": {"id": "u-1", "username": "bob"}, "nick": "Bobby"},
+            {"user": {"id": "u-2", "username": "bob2"}},
+        ]
+        client, _ = _make_rest(get_response=_make_response(json_data=expected))
+        assert client.search_guild_members("111222333", "bob") == expected
+
+    def test_limit_clamped_to_max_1000(self):
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
+        client.search_guild_members("111222333", "bob", limit=5000)
+        assert mock_http.get.call_args.kwargs["params"]["limit"] == 1000
+
+    def test_limit_clamped_to_min_1(self):
+        client, mock_http = _make_rest(get_response=_make_response(json_data=[]))
+        client.search_guild_members("111222333", "bob", limit=0)
+        assert mock_http.get.call_args.kwargs["params"]["limit"] == 1
+
+    def test_invalid_guild_id_raises(self):
+        client, mock_http = _make_rest()
+        with pytest.raises(ValueError, match="guild_id"):
+            client.search_guild_members("not-a-snowflake", "bob")
+        mock_http.get.assert_not_called()
+
+    def test_empty_query_raises(self):
+        client, mock_http = _make_rest()
+        with pytest.raises(ValueError, match="query"):
+            client.search_guild_members("111222333", "")
+        mock_http.get.assert_not_called()
+
+
+# ===========================================================================
 # send_interaction_response
 # ===========================================================================
 

@@ -42,6 +42,7 @@ from missy.tools.builtin.desktop_tools import (
     DesktopStatusTool,
     InstallSoftwareConfirmedTool,
 )
+from missy.tools.builtin.discord_lookup_user import DiscordLookupUserTool
 from missy.tools.builtin.discord_upload import DiscordUploadTool
 from missy.tools.builtin.discord_voice import (
     DiscordVoiceJoinTool,
@@ -138,6 +139,7 @@ __all__ = [
     "CalculatorTool",
     "CodeEvolveTool",
     "DelegateTaskTool",
+    "DiscordLookupUserTool",
     "DiscordUploadTool",
     "DiscordVoiceJoinTool",
     "DiscordVoiceLeaveTool",
@@ -232,6 +234,7 @@ _ALL_TOOL_CLASSES = [
     CalculatorTool,
     CodeEvolveTool,
     DelegateTaskTool,
+    DiscordLookupUserTool,
     DiscordUploadTool,
     DiscordVoiceJoinTool,
     DiscordVoiceLeaveTool,
