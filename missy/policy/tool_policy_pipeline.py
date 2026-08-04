@@ -125,6 +125,14 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     # composition of two tools already exposed here, grants no new capability,
     # and its absence made the STORY-* Discord surface unreachable.
     "video_storyboard",
+    # provider_benchmark dispatches real completions to configured providers
+    # (real network calls, real cost) but grants no host/desktop control and
+    # is capped to a small number of providers per call -- comparable in
+    # scope to video_generate above. Its absence drove the agent to
+    # improvise a shell script checking `which openai`/`OPENAI_API_KEY`
+    # (entirely disconnected from how Missy actually authenticates its own
+    # providers) when a Discord user asked it to benchmark across providers.
+    "provider_benchmark",
     # Read-only / policy-inheriting agent tools that a Discord user legitimately
     # needs: memory retrieval is read-only, and delegate_task sub-agents inherit
     # (never widen) the parent's capability_mode/policy.

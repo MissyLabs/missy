@@ -87,6 +87,7 @@ from missy.tools.builtin.obs_tools import (
     ObsStopStreamingConfirmedTool,
     ObsSwitchSceneTool,
 )
+from missy.tools.builtin.provider_benchmark import ProviderBenchmarkTool
 from missy.tools.builtin.rag_query import RagQueryTool
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
@@ -165,6 +166,7 @@ __all__ = [
     "MemoryDescribeTool",
     "MemoryExpandTool",
     "MemorySearchTool",
+    "ProviderBenchmarkTool",
     "RagQueryTool",
     "SelfCreateTool",
     "ShellExecTool",
@@ -258,6 +260,7 @@ _ALL_TOOL_CLASSES = [
     MemoryDescribeTool,
     MemoryExpandTool,
     MemorySearchTool,
+    ProviderBenchmarkTool,
     RagQueryTool,
     SelfCreateTool,
     ShellExecTool,
