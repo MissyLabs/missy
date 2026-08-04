@@ -66,6 +66,15 @@ def _fake_registry(provider) -> MagicMock:
     registry = MagicMock()
     registry.get.return_value = provider
     registry.get_available.return_value = [provider]
+    registry.list_providers.return_value = [provider.name]
+    registry.key_for.return_value = provider.name
+    # No real fallback candidate exists in these tests (a single fake
+    # provider) -- match real ProviderRegistry.select_weighted()'s "no
+    # eligible candidate" contract of returning None, rather than an
+    # unconfigured MagicMock call auto-returning a truthy stand-in object
+    # that _call_provider_with_fallback would otherwise treat as a real,
+    # silently-succeeding fallback provider.
+    registry.select_weighted.return_value = None
     return registry
 
 

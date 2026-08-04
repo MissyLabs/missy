@@ -188,6 +188,30 @@ def _load_subsystems(config_path: str) -> Any:
     init_policy_engine(cfg)
     init_audit_logger(cfg.audit_log_path)
     init_registry(cfg)
+    # Provider-preference hierarchy: seed ProviderRegistry's own
+    # is_default/set_default bookkeeping from the persisted config at
+    # process startup (missy.config.hotreload._apply_config() does the
+    # equivalent on every subsequent hot-reload, since init_registry()
+    # there rebuilds a brand-new registry whose _default_name starts back
+    # at None). Without this, registry.get_default_name() stayed None
+    # until an operator manually ran `missy providers switch`/the Web
+    # TUI's "Make default" control at least once after every process
+    # start or reload, even though the persisted choice already correctly
+    # drove AgentConfig.provider for real dispatch -- the Web TUI's
+    # provider list would show no provider as "default" despite one being
+    # configured.
+    default_provider = str(getattr(cfg, "default_provider", "") or "").strip()
+    if default_provider:
+        try:
+            from missy.providers.registry import get_registry as _get_registry
+
+            _get_registry().set_default(default_provider)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not seed registry default provider %r at startup: %s",
+                default_provider,
+                exc,
+            )
     # docs/architecture.md documents this as part of the bootstrap sequence
     # (between provider registry and tool registry init), but it was never
     # actually called anywhere in the running app -- AgentRuntime._make_message_bus()
@@ -351,6 +375,34 @@ def _agent_tool_policy_kwargs(
         "subagent_tool_policy": _policy(getattr(agent_cfg, "subagent_tools", None)),
         "tool_intelligence": _intelligence(getattr(cfg, "tool_intelligence", None)),
     }
+
+
+def _resolve_provider_name(cfg: Any, explicit: str | None = None) -> str:
+    """Resolve which provider registry key a new AgentConfig should use.
+
+    Precedence (the provider-preference hierarchy's "default"):
+
+    1. *explicit* -- an operator-supplied ``--provider`` override for this
+       one call, always wins.
+    2. ``cfg.default_provider`` -- the persisted default set via
+       ``missy providers switch`` or the Web TUI's "Make default" control.
+    3. The first provider listed under ``providers:`` in ``config.yaml``
+       (legacy behavior, preserved when no default has ever been set).
+    4. ``"anthropic"`` when no providers are configured at all.
+
+    Args:
+        cfg: The loaded :class:`~missy.config.settings.MissyConfig`.
+        explicit: An operator-supplied override, if any.
+
+    Returns:
+        The provider registry key to use.
+    """
+    if explicit:
+        return explicit
+    default_provider = str(getattr(cfg, "default_provider", "") or "").strip()
+    if default_provider:
+        return default_provider
+    return next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
 
 
 def _load_or_create_web_console_key() -> str:
@@ -653,9 +705,7 @@ def ask(
         )
 
     # Resolve provider.
-    provider_name = provider or (
-        next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-    )
+    provider_name = _resolve_provider_name(cfg, provider)
 
     agent_cfg = AgentConfig(
         provider=provider_name,
@@ -731,9 +781,7 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
     except Exception:  # noqa: BLE001
         logger.debug("Hatching check skipped", exc_info=True)
 
-    provider_name = provider or (
-        next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-    )
+    provider_name = _resolve_provider_name(cfg, provider)
 
     agent_cfg = AgentConfig(
         provider=provider_name,
@@ -1499,6 +1547,7 @@ def providers_list_cmd(ctx: click.Context) -> None:
         return
 
     registry = get_registry()
+    default_name = str(getattr(cfg, "default_provider", "") or "").strip()
 
     table = Table(title="Configured Providers", show_lines=True)
     table.add_column("Name", style="bold")
@@ -1520,14 +1569,31 @@ def providers_list_cmd(ctx: click.Context) -> None:
             avail_text = Text("not loaded", style="dim")
 
         if getattr(provider, "is_multi_account", False):
-            balancing_text = Text(f"round_robin ({provider.account_count} accounts)", style="cyan")
+            account_weights = getattr(provider_cfg, "account_weights", None)
+            weight_note = " (weighted)" if account_weights else ""
+            balancing_text = Text(
+                f"round_robin ({provider.account_count} accounts){weight_note}", style="cyan"
+            )
         elif len(provider_cfg.api_keys) > 1:
             balancing_text = Text(f"failover ({len(provider_cfg.api_keys)} keys)", style="dim")
         else:
             balancing_text = Text("—", style="dim")
 
+        # Provider-preference hierarchy: surface the persisted default and
+        # any non-default cross-provider weight without adding new columns
+        # (a fixed-width test terminal wraps/truncates cells once the table
+        # gets too wide) -- most providers use the default weight of 1.0,
+        # so this stays a no-op for the common case.
+        name_text = Text(key + (" (default)" if key == default_name else ""))
+        try:
+            weight_value = float(getattr(provider_cfg, "weight", 1.0))
+        except (TypeError, ValueError):
+            weight_value = 1.0
+        if weight_value != 1.0:
+            balancing_text.append(f" · weight={weight_value:g}", style="dim")
+
         table.add_row(
-            key,
+            name_text,
             provider_cfg.model,
             provider_cfg.base_url or "[dim]—[/]",
             f"{provider_cfg.timeout}s",
@@ -1536,6 +1602,29 @@ def providers_list_cmd(ctx: click.Context) -> None:
         )
 
     console.print(table)
+
+
+def _persist_default_provider_best_effort(config_path: str, name: str) -> None:
+    """Persist NAME as ``default_provider`` in config.yaml; never raises.
+
+    A failure here (unreadable/unwritable config file, etc.) is surfaced
+    as a yellow warning, not a command failure -- the live provider switch
+    (daemon API call or local registry mutation) this accompanies already
+    succeeded by the time this runs, and durability is a "nice to have"
+    on top of that, not a precondition for it.
+    """
+    try:
+        from missy.config.writer import ConfigWriteError, set_default_provider
+
+        set_default_provider(config_path, name)
+    except ConfigWriteError as exc:
+        console.print(
+            f"[yellow]Warning:[/] could not persist default provider to config.yaml: {exc}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[yellow]Warning:[/] could not persist default provider to config.yaml: {exc}"
+        )
 
 
 @providers_group.command("switch")
@@ -1548,13 +1637,13 @@ def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_ke
     """Switch the active provider to NAME.
 
     If a `missy gateway start` daemon is reachable at --host/--port, this
-    switches *that daemon's* live default provider via its Web API (the only
-    process whose provider selection persists across subsequent requests).
-    Otherwise there is no running daemon to update, and this command falls
-    back to a local, single-process registry mutation with no lasting
-    effect (there is no ``default_provider`` config field to persist a
-    choice to) -- use ``--provider NAME`` on ``missy ask``/``missy run`` for
-    a one-off override instead.
+    switches *that daemon's* live default provider via its Web API.
+    Otherwise it falls back to a local, single-process registry mutation.
+    Either way, NAME is also persisted as ``default_provider`` in
+    config.yaml -- the provider-preference hierarchy's durable default,
+    picked up by every subsequent ``missy ask``/``missy run``/``missy
+    gateway start``, and by an already-running gateway's own config
+    hot-reload.
     """
     import httpx
 
@@ -1574,6 +1663,7 @@ def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_ke
 
     if resp is not None:
         if resp.status_code == 200:
+            _persist_default_provider_best_effort(ctx.obj["config_path"], name)
             _print_success(
                 f"Active provider switched to [bold]{name}[/] on the running gateway daemon."
             )
@@ -1602,11 +1692,57 @@ def providers_switch(ctx: click.Context, name: str, host: str, port: int, api_ke
         _print_error(str(exc))
         sys.exit(1)
 
+    _persist_default_provider_best_effort(ctx.obj["config_path"], name)
+
     _print_success(
-        f"Active provider switched to [bold]{name}[/] for this process only "
-        f"(no gateway daemon detected at http://{host}:{port} -- this does not persist; "
-        "pass --provider to `missy ask`/`missy run`, or run `missy gateway start` first "
-        "for a durable switch)."
+        f"Active provider switched to [bold]{name}[/] and persisted to config.yaml as the "
+        "durable default (a running `missy gateway start` daemon will pick this up via "
+        "config hot-reload)."
+    )
+
+
+@providers_group.command("weight")
+@click.argument("name")
+@click.argument("value", type=float)
+@_APPROVALS_HOST_OPTION
+@_APPROVALS_PORT_OPTION
+@_APPROVALS_API_KEY_OPTION
+@click.pass_context
+def providers_weight(
+    ctx: click.Context, name: str, value: float, host: str, port: int, api_key: str
+) -> None:
+    """Set NAME's relative weight to VALUE for weighted provider balancing.
+
+    Persists ``providers.<NAME>.weight`` in config.yaml. This governs how
+    often NAME is picked as a weighted fallback/balancing candidate
+    relative to other providers (see the ``providers list`` "Weight"
+    column) -- it does not affect whether NAME is used as the sticky
+    default (``missy providers switch``). A weight of 0 keeps NAME
+    reachable by explicit name but excludes it from weighted balancing
+    entirely. A running `missy gateway start` daemon picks this up
+    automatically via config hot-reload (no live API push needed --
+    ``ProviderRegistry`` is rebuilt from config on every reload).
+    """
+    from missy.config.writer import ConfigWriteError, set_provider_weight
+
+    if value < 0:
+        _print_error("Weight must be >= 0.")
+        sys.exit(1)
+
+    cfg = _load_subsystems(ctx.obj["config_path"])
+    if name not in cfg.providers:
+        _print_error(f"Provider {name!r} is not configured in config.yaml.")
+        sys.exit(1)
+
+    try:
+        set_provider_weight(ctx.obj["config_path"], name, value)
+    except ConfigWriteError as exc:
+        _print_error(f"Could not persist provider weight: {exc}")
+        sys.exit(1)
+
+    _print_success(
+        f"Persisted weight={value!r} for provider [bold]{name}[/] to config.yaml. "
+        "A running `missy gateway start` daemon will pick this up via config hot-reload."
     )
 
 
@@ -2720,9 +2856,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             try:
                 from missy.agent.runtime import AgentConfig, AgentRuntime
 
-                _provider_name = (
-                    next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-                )
+                _provider_name = _resolve_provider_name(cfg)
                 _agent_cfg = AgentConfig(
                     provider=_provider_name,
                     max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
@@ -2754,7 +2888,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # Build the shared agent runtime for all channels.
     from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
 
-    _provider_name = next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
+    _provider_name = _resolve_provider_name(cfg)
     # SR-4.7: thread the same real ApprovalGate constructed above (for
     # proactive triggers) into the agent runtimes so destructive/mutating
     # MCP tool calls have real confirmation infrastructure to block on,
@@ -2969,6 +3103,24 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             _proactive_runtime.config.max_spend_usd = new_max_spend
         if _voice_safe_chat_agent is not None:
             _voice_safe_chat_agent.config.max_spend_usd = new_max_spend
+        # Provider-preference hierarchy: default_provider is read once at
+        # gateway_start() bootstrap into each runtime's AgentConfig.provider
+        # (a plain, mutable field, not rebuilt on reload) -- same
+        # in-place-repoint gap as max_spend_usd above, and the same fix.
+        # Without this, `missy providers switch`/the Web TUI's "Make
+        # default" control persisting a new default_provider to config.yaml
+        # had no effect on an already-running gateway's actual dispatch
+        # until a full restart, even though ProviderRegistry itself (a
+        # fresh singleton every reload) already reflected the new weights/
+        # default_provider immediately.
+        new_default_provider = str(getattr(new_cfg, "default_provider", "") or "").strip()
+        if new_default_provider:
+            _agent.config.provider = new_default_provider
+            _discord_agent.config.provider = new_default_provider
+            if _proactive_runtime is not None:
+                _proactive_runtime.config.provider = new_default_provider
+            if _voice_safe_chat_agent is not None:
+                _voice_safe_chat_agent.config.provider = new_default_provider
         if scheduler_manager is not None:
             scheduler_manager._default_max_spend_usd = new_max_spend  # noqa: SLF001
             # SCHED-003: same in-place-repoint treatment for max_jobs --
@@ -3136,6 +3288,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 tool_registry=_api_tool_registry,
                 approval_gate=approval_gate,
                 discord_channels=discord_channels,
+                config_path=ctx.obj["config_path"],
             )
             api_server.start()
             if _api_key_is_configured:
@@ -3985,9 +4138,7 @@ def recover(
         from missy.core.exceptions import ProviderError
 
         cfg = _load_subsystems(ctx.obj["config_path"])
-        provider_name = provider or (
-            next(iter(cfg.providers), "anthropic") if cfg.providers else "anthropic"
-        )
+        provider_name = _resolve_provider_name(cfg, provider)
         agent_cfg = AgentConfig(
             provider=provider_name,
             max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
@@ -6595,9 +6746,8 @@ def api() -> None:
 )
 @click.option(
     "--provider",
-    default="anthropic",
-    show_default=True,
-    help="AI provider to use for chat requests.",
+    default=None,
+    help="AI provider to use for chat requests (overrides config default).",
 )
 @click.pass_context
 def api_start(
@@ -6605,7 +6755,7 @@ def api_start(
     host: str,
     port: int,
     api_key: str,
-    provider: str,
+    provider: str | None,
 ) -> None:
     """Start the REST API server.
 
@@ -6681,7 +6831,7 @@ def api_start(
         memory_store = None
 
     agent_config = AgentConfig(
-        provider=provider,
+        provider=_resolve_provider_name(cfg, provider),
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
     )
@@ -6696,6 +6846,7 @@ def api_start(
         tool_registry=tool_reg,
         candidate_store=candidate_store,
         benchmark_store=benchmark_store,
+        config_path=ctx.obj["config_path"],
     )
 
     try:

@@ -402,6 +402,7 @@ class TestProvidersSwitch:
             patch("missy.cli.main._load_subsystems", return_value=mock_config),
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
             patch("httpx.post", side_effect=httpx.ConnectError("refused")),
+            patch("missy.config.writer.set_default_provider"),
         ):
             result = runner.invoke(cli, ["providers", "switch", "openai"])
 
@@ -438,6 +439,7 @@ class TestProvidersSwitch:
         with (
             patch("missy.providers.registry.get_registry", return_value=mock_registry),
             patch("httpx.post", return_value=fake_response) as mock_post,
+            patch("missy.config.writer.set_default_provider"),
         ):
             result = runner.invoke(cli, ["providers", "switch", "openai"])
 
@@ -471,6 +473,74 @@ class TestProvidersSwitch:
         assert result.exit_code == 1
         assert "not registered" in combined_output(result).lower()
         mock_registry.set_default.assert_not_called()
+
+
+class TestProvidersWeight:
+    """`providers weight NAME VALUE` persists providers.<NAME>.weight."""
+
+    def test_persists_weight_to_config_file(self, runner: CliRunner) -> None:
+        from missy.config.settings import ProviderConfig
+
+        cfg_path = _write_config(
+            "providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n"
+        )
+        try:
+            mock_config = _make_mock_config(
+                providers={"openai": ProviderConfig(name="openai", model="gpt-5.5")}
+            )
+            with patch("missy.cli.main._load_subsystems", return_value=mock_config):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "providers", "weight", "openai", "2.5"]
+                )
+
+            assert result.exit_code == 0, combined_output(result)
+
+            import yaml
+
+            with open(cfg_path) as fh:
+                data = yaml.safe_load(fh)
+            assert data["providers"]["openai"]["weight"] == 2.5
+        finally:
+            import os
+
+            os.unlink(cfg_path)
+
+    def test_unconfigured_provider_exits_1(self, runner: CliRunner) -> None:
+        cfg_path = _write_config(_MINIMAL_CONFIG_YAML)
+        try:
+            mock_config = _make_mock_config(providers={})
+            with patch("missy.cli.main._load_subsystems", return_value=mock_config):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "providers", "weight", "ghost", "1.0"]
+                )
+
+            assert result.exit_code == 1
+            assert "ghost" in combined_output(result).lower()
+        finally:
+            import os
+
+            os.unlink(cfg_path)
+
+    def test_negative_weight_exits_1(self, runner: CliRunner) -> None:
+        from missy.config.settings import ProviderConfig
+
+        cfg_path = _write_config(
+            "providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n"
+        )
+        try:
+            mock_config = _make_mock_config(
+                providers={"openai": ProviderConfig(name="openai", model="gpt-5.5")}
+            )
+            with patch("missy.cli.main._load_subsystems", return_value=mock_config):
+                result = runner.invoke(
+                    cli, ["--config", cfg_path, "providers", "weight", "openai", "-1"]
+                )
+
+            assert result.exit_code != 0
+        finally:
+            import os
+
+            os.unlink(cfg_path)
 
 
 # ---------------------------------------------------------------------------

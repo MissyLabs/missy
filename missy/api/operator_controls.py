@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 _CONTROL_PROVIDER_SET_DEFAULT = "provider.set_default"
 _CONTROL_PROVIDER_ENABLE = "provider.enable"
 _CONTROL_PROVIDER_DISABLE = "provider.disable"
+_CONTROL_PROVIDER_SET_WEIGHT = "provider.set_weight"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
 _CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
@@ -35,6 +36,7 @@ def list_operator_controls(
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
     enable_targets, disable_targets = _provider_toggle_targets(provider_registry)
+    weight_targets = _provider_weight_targets(provider_registry)
     pause_targets, resume_targets = _scheduler_targets(scheduler)
     remove_targets = _scheduler_remove_targets(scheduler)
     candidate_targets = _candidate_targets(candidate_store)
@@ -72,6 +74,20 @@ def list_operator_controls(
                 "confirmation_template": "disable-provider:{target}",
                 "enabled": bool(provider_registry is not None and disable_targets),
                 "targets": disable_targets,
+            },
+            {
+                "id": _CONTROL_PROVIDER_SET_WEIGHT,
+                "label": "Set provider weight",
+                "description": (
+                    "Set a provider's relative weight for weighted fallback/balancing "
+                    "selection (provider-preference hierarchy). Does not affect the "
+                    "sticky default provider."
+                ),
+                "subsystem": "provider",
+                "requires_confirmation": True,
+                "confirmation_template": "set-weight:{target}:{value}",
+                "enabled": bool(provider_registry is not None and weight_targets),
+                "targets": weight_targets,
             },
             {
                 "id": _CONTROL_SCHEDULER_PAUSE,
@@ -157,17 +173,27 @@ def execute_operator_control(
     scheduler: SchedulerManager | None = None,
     candidate_store: CandidateStore | None = None,
     benchmark_store: BenchmarkStore | None = None,
+    config_path: str | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """Execute a confirmed operator control.
 
     Returns ``(status_code, response_data, audit_detail)``. Callers are
     responsible for attaching actor/source metadata and publishing the audit
     event.
+
+    Args:
+        config_path: Path to ``config.yaml``, used only by
+            ``provider.set_weight`` to persist the new weight (the Web
+            TUI's provider controls otherwise never write config.yaml).
     """
     if control_id == _CONTROL_PROVIDER_SET_DEFAULT:
         return _execute_provider_set_default(body, provider_registry=provider_registry)
     if control_id in {_CONTROL_PROVIDER_ENABLE, _CONTROL_PROVIDER_DISABLE}:
         return _execute_provider_toggle(control_id, body, provider_registry=provider_registry)
+    if control_id == _CONTROL_PROVIDER_SET_WEIGHT:
+        return _execute_provider_set_weight(
+            body, provider_registry=provider_registry, config_path=config_path
+        )
     if control_id in {_CONTROL_SCHEDULER_PAUSE, _CONTROL_SCHEDULER_RESUME}:
         return _execute_scheduler_control(control_id, body, scheduler=scheduler)
     if control_id == _CONTROL_SCHEDULER_REMOVE:
@@ -361,6 +387,82 @@ def _execute_provider_toggle(
             "previous_enabled": previous_enabled,
             "current_enabled": enable,
         },
+        detail,
+    )
+
+
+def _execute_provider_set_weight(
+    body: dict[str, Any],
+    *,
+    provider_registry: ProviderRegistry | None,
+    config_path: str | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    control_id = _CONTROL_PROVIDER_SET_WEIGHT
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if provider_registry is None:
+        detail["reason"] = "provider_registry_unavailable"
+        return 503, {"message": "Provider registry is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid provider target"}, detail
+
+    try:
+        value = float(body.get("value"))
+    except (TypeError, ValueError):
+        detail["reason"] = "invalid_value"
+        return 400, {"message": "weight 'value' must be a number"}, detail
+    if value < 0:
+        detail["reason"] = "invalid_value"
+        return 400, {"message": "weight must be >= 0"}, detail
+
+    try:
+        names = set(provider_registry.list_providers())
+    except Exception as exc:
+        detail["reason"] = "provider_list_failed"
+        detail["error"] = _safe_error(exc)
+        return 503, {"message": "Provider registry is unavailable"}, detail
+    if target not in names:
+        detail["reason"] = "unknown_provider"
+        return 404, {"message": f"Provider {target!r} is not registered"}, detail
+
+    # The confirmation string binds *both* the target and the exact value
+    # being set (unlike the target-only confirmations elsewhere in this
+    # module) so a stale/replayed confirmation from a prior weight can't
+    # accidentally reconfirm a different value the operator never actually
+    # saw and approved.
+    expected_confirmation = f"set-weight:{target}:{value:g}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = "set-weight:{target}:{value}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    if not config_path:
+        detail["reason"] = "config_path_unavailable"
+        return 503, {"message": "Config file path is not attached to this server"}, detail
+
+    from missy.config.writer import ConfigWriteError, set_provider_weight
+
+    try:
+        set_provider_weight(config_path, target, value)
+    except ConfigWriteError as exc:
+        detail["reason"] = "config_write_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    detail["reason"] = "confirmed"
+    detail["value"] = value
+    return (
+        200,
+        {"control": control_id, "target": target, "value": value},
         detail,
     )
 
@@ -783,6 +885,36 @@ def _provider_toggle_targets(
             }
         )
     return enable_targets, disable_targets
+
+
+def _provider_weight_targets(provider_registry: ProviderRegistry | None) -> list[dict[str, Any]]:
+    if provider_registry is None:
+        return []
+    try:
+        names = provider_registry.list_providers()
+    except Exception:
+        return []
+    targets: list[dict[str, Any]] = []
+    for name in names:
+        config = None
+        try:
+            config = provider_registry.get_config(name)
+        except Exception:
+            config = None
+        try:
+            weight = float(getattr(config, "weight", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            weight = 1.0
+        targets.append(
+            {
+                "name": name,
+                "current_weight": weight,
+                "available": True,
+                "is_current": False,
+                "confirmation": f"set-weight:{name}:{{value}}",
+            }
+        )
+    return targets
 
 
 def _candidate_targets(candidate_store: CandidateStore | None) -> dict[str, list[dict[str, Any]]]:

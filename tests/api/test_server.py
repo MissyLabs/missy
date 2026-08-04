@@ -1420,6 +1420,104 @@ class TestOperatorControls:
         finally:
             srv.stop()
 
+    def test_controls_lists_provider_weight_targets(self) -> None:
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["anthropic", "openai"]
+        mock_registry.get_default_name.return_value = "anthropic"
+        mock_registry.get.return_value = MagicMock(is_available=lambda: True)
+        from missy.config.settings import ProviderConfig
+
+        mock_registry.get_config.side_effect = lambda name: {
+            "anthropic": ProviderConfig(name="anthropic", model="m", weight=1.0),
+            "openai": ProviderConfig(name="openai", model="m", weight=2.5),
+        }[name]
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/controls", headers=HEADERS)
+            assert resp.status_code == 200
+            controls = resp.json()["data"]["controls"]
+            weight_control = next(c for c in controls if c["id"] == "provider.set_weight")
+            targets = {target["name"]: target for target in weight_control["targets"]}
+            assert targets["openai"]["current_weight"] == 2.5
+            assert targets["anthropic"]["current_weight"] == 1.0
+        finally:
+            srv.stop()
+
+    def test_set_provider_weight_requires_confirmation(self) -> None:
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["openai"]
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/provider.set_weight",
+                json={"target": "openai", "value": 2.0},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 409
+        finally:
+            srv.stop()
+
+    def test_set_provider_weight_persists_to_config_file(self, tmp_path) -> None:
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n",
+            encoding="utf-8",
+        )
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["openai"]
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(
+            config=cfg, provider_registry=mock_registry, config_path=str(config_path)
+        )
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/provider.set_weight",
+                json={"target": "openai", "value": 2.0, "confirm": "set-weight:openai:2"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["data"]["value"] == 2.0
+
+            import yaml
+
+            data = yaml.safe_load(config_path.read_text())
+            assert data["providers"]["openai"]["weight"] == 2.0
+        finally:
+            srv.stop()
+
+    def test_set_provider_weight_without_config_path_returns_503(self) -> None:
+        port = _free_port()
+        mock_registry = MagicMock()
+        mock_registry.list_providers.return_value = ["openai"]
+
+        cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
+        srv = ApiServer(config=cfg, provider_registry=mock_registry)
+        srv.start()
+        _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
+        try:
+            resp = httpx.post(
+                f"http://127.0.0.1:{port}/api/v1/controls/provider.set_weight",
+                json={"target": "openai", "value": 2.0, "confirm": "set-weight:openai:2"},
+                headers=HEADERS,
+            )
+            assert resp.status_code == 503
+        finally:
+            srv.stop()
+
     def test_browser_control_post_requires_csrf(self) -> None:
         port = _free_port()
         mock_registry = MagicMock()

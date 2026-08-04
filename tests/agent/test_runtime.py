@@ -46,8 +46,29 @@ def _make_registry(providers: dict | None = None) -> MagicMock:
     def _get_available():
         return [p for p in providers.values() if p.is_available()]
 
+    def _list_providers():
+        return sorted(providers)
+
+    def _key_for(provider):
+        for name, p in providers.items():
+            if p is provider:
+                return name
+        return None
+
+    def _select_weighted(*, exclude=None, only=None):
+        exclude = exclude or set()
+        candidates = [
+            (name, p)
+            for name, p in providers.items()
+            if name not in exclude and (only is None or name in only) and p.is_available()
+        ]
+        return candidates[0][1] if candidates else None
+
     registry.get.side_effect = _get
     registry.get_available.side_effect = _get_available
+    registry.list_providers.side_effect = _list_providers
+    registry.key_for.side_effect = _key_for
+    registry.select_weighted.side_effect = _select_weighted
     return registry
 
 

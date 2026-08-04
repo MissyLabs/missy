@@ -50,6 +50,10 @@ class Account:
         api_key: The credential for this account.
         rate_limiter: This account's own rate limiter, so it has an independent
             budget rather than sharing one with the other accounts.
+        weight: Relative weight (> 0) for this account in the smooth
+            weighted round-robin (provider-preference hierarchy,
+            ``ProviderConfig.account_weights``). Defaults to ``1.0``, in
+            which case selection is identical to plain round-robin.
         client: The provider-built SDK client for this account, cached lazily by
             the provider (``None`` until first use).
         consecutive_failures: Failures recorded since the last success (or
@@ -62,15 +66,20 @@ class Account:
             selector's ``max_backoff_seconds``) each time a post-cooldown
             probe also fails, mirroring exponential backoff elsewhere in the
             codebase.
+        current_weight: Smooth weighted round-robin bookkeeping (nginx-style
+            "current effective weight"); private selection state, not part
+            of any public view.
     """
 
     index: int
     api_key: str
     rate_limiter: Any
+    weight: float = 1.0
     client: Any | None = None
     consecutive_failures: int = field(default=0, repr=False)
     unhealthy_until: float = field(default=0.0, repr=False)
     backoff_seconds: float = field(default=0.0, repr=False)
+    current_weight: float = field(default=0.0, repr=False)
 
     def __repr__(self) -> str:
         return f"Account(index={self.index}, api_key=<redacted>, client_ready={self.client is not None})"
@@ -84,6 +93,7 @@ class AccountView:
     client_ready: bool
     healthy: bool = True
     consecutive_failures: int = 0
+    weight: float = 1.0
 
 
 class RoundRobinAccounts:
@@ -94,6 +104,11 @@ class RoundRobinAccounts:
             least *min_accounts* are supplied (a single key needs no balancing).
         make_rate_limiter: Zero-arg factory building a fresh, independent
             rate limiter for each account.
+        weights: Optional per-account weights parallel to *keys*
+            (``ProviderConfig.account_weights``). ``None`` or an empty list
+            gives every account weight ``1.0`` -- identical to plain
+            round-robin, the original behavior. When provided, must be the
+            same length as *keys*.
         min_accounts: Minimum keys required to enable balancing (default 2).
         failure_threshold: Consecutive failures on one account before it's
             skipped for a backoff window (default 5, matching
@@ -101,6 +116,10 @@ class RoundRobinAccounts:
         base_backoff_seconds: Initial backoff window once an account opens
             (default 60.0).
         max_backoff_seconds: Cap on the doubling backoff window (default 300.0).
+
+    Raises:
+        ValueError: If *weights* is non-empty and its length does not
+            match *keys*.
     """
 
     def __init__(
@@ -108,21 +127,32 @@ class RoundRobinAccounts:
         keys: list[str] | None,
         make_rate_limiter: Callable[[], Any],
         *,
+        weights: list[float] | None = None,
         min_accounts: int = 2,
         failure_threshold: int = 5,
         base_backoff_seconds: float = 60.0,
         max_backoff_seconds: float = 300.0,
     ) -> None:
         key_list = list(keys or [])
+        weight_list = list(weights) if weights else [1.0] * len(key_list)
+        if len(weight_list) != len(key_list):
+            raise ValueError(
+                f"weights must be the same length as keys ({len(key_list)}), "
+                f"got {len(weight_list)}."
+            )
         self._accounts: list[Account] = (
             [
-                Account(index=i, api_key=key, rate_limiter=make_rate_limiter())
+                Account(
+                    index=i,
+                    api_key=key,
+                    rate_limiter=make_rate_limiter(),
+                    weight=weight_list[i],
+                )
                 for i, key in enumerate(key_list)
             ]
             if len(key_list) >= min_accounts
             else []
         )
-        self._index = 0
         self._lock = threading.Lock()
         self._failure_threshold = failure_threshold
         self._base_backoff_seconds = base_backoff_seconds
@@ -139,6 +169,7 @@ class RoundRobinAccounts:
                     client_ready=account.client is not None,
                     healthy=account.unhealthy_until <= now,
                     consecutive_failures=account.consecutive_failures,
+                    weight=account.weight,
                 )
                 for account in self._accounts
             )
@@ -173,6 +204,7 @@ class RoundRobinAccounts:
             client_ready=account.client is not None,
             healthy=account.unhealthy_until <= time.monotonic(),
             consecutive_failures=account.consecutive_failures,
+            weight=account.weight,
         )
 
     def _select_live(self) -> Account | None:
@@ -182,19 +214,27 @@ class RoundRobinAccounts:
         the rotation among whichever accounts are healthy. When every account
         is unhealthy, fails open and returns the one recovering soonest
         rather than refusing to select at all.
+
+        Healthy accounts are picked via smooth weighted round-robin
+        (nginx-style: each account's ``current_weight`` accumulates its
+        configured weight every round; the highest is picked and then
+        debited by the round's total weight). With every account's weight
+        equal to ``1.0`` (the default) this produces the exact same strict
+        0, 1, 2, ... rotation as plain round-robin.
         """
         if not self._accounts:
             return None
         with self._lock:
-            n = len(self._accounts)
-            start = self._index
-            self._index = (start + 1) % n
             now = time.monotonic()
-            for offset in range(n):
-                candidate = self._accounts[(start + offset) % n]
-                if candidate.unhealthy_until <= now:
-                    return candidate
-            return min(self._accounts, key=lambda a: a.unhealthy_until)
+            healthy = [a for a in self._accounts if a.unhealthy_until <= now]
+            if not healthy:
+                return min(self._accounts, key=lambda a: a.unhealthy_until)
+            total = sum(a.weight for a in healthy)
+            for a in healthy:
+                a.current_weight += a.weight
+            picked = max(healthy, key=lambda a: a.current_weight)
+            picked.current_weight -= total
+            return picked
 
     def record_success(self, account: Account) -> None:
         """Report that a call on *account* succeeded, clearing its backoff state."""

@@ -150,6 +150,26 @@ def _apply_config(new_config) -> None:
     init_registry(new_config)
     logger.info("ConfigWatcher: policy engine and provider registry updated")
 
+    # Provider-preference hierarchy: init_registry() just installed a
+    # brand-new ProviderRegistry whose own is_default/set_default
+    # bookkeeping starts back at None regardless of what it was before
+    # this reload -- seed it from the persisted default_provider so an
+    # operator-driven config.yaml edit (or any other reload) doesn't
+    # silently blank out the Web TUI's "default" indicator until someone
+    # manually re-runs `missy providers switch`.
+    default_provider = str(getattr(new_config, "default_provider", "") or "").strip()
+    if default_provider:
+        try:
+            from missy.providers.registry import get_registry
+
+            get_registry().set_default(default_provider)
+        except Exception as exc:
+            logger.warning(
+                "ConfigWatcher: could not seed registry default provider %r: %s",
+                default_provider,
+                exc,
+            )
+
     # SR-4.6/observability: init_otel() was only ever called once, at
     # process bootstrap (missy/cli/main.py's _load_subsystems()) -- toggling
     # observability.otel_enabled (or changing otel_endpoint/otel_protocol)

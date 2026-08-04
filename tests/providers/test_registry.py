@@ -171,6 +171,95 @@ class TestGetAvailable:
 
 
 # ---------------------------------------------------------------------------
+# ProviderRegistry.select_weighted (provider-preference hierarchy)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectWeighted:
+    def test_no_providers_returns_none(self):
+        registry = ProviderRegistry()
+        assert registry.select_weighted() is None
+
+    def test_single_available_provider_is_returned(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m")
+        )
+        picked = registry.select_weighted()
+        assert picked is not None
+        assert picked.name == "p1"
+
+    def test_unavailable_providers_excluded(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "bad",
+            _make_provider("bad", available=False),
+            config=ProviderConfig(name="bad", model="m"),
+        )
+        assert registry.select_weighted() is None
+
+    def test_exclude_set_removes_candidate(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "only", _make_provider("only"), config=ProviderConfig(name="only", model="m")
+        )
+        assert registry.select_weighted(exclude={"only"}) is None
+
+    def test_only_set_restricts_candidates(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m")
+        )
+        registry.register(
+            "p2", _make_provider("p2"), config=ProviderConfig(name="p2", model="m")
+        )
+        picked = registry.select_weighted(only={"p2"})
+        assert picked is not None
+        assert picked.name == "p2"
+
+    def test_weight_zero_never_selected(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "zero",
+            _make_provider("zero"),
+            config=ProviderConfig(name="zero", model="m", weight=0.0),
+        )
+        registry.register(
+            "normal", _make_provider("normal"), config=ProviderConfig(name="normal", model="m")
+        )
+        picks = {registry.select_weighted().name for _ in range(6)}
+        assert picks == {"normal"}
+
+    def test_weight_governs_proportional_selection(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "heavy",
+            _make_provider("heavy"),
+            config=ProviderConfig(name="heavy", model="m", weight=3.0),
+        )
+        registry.register(
+            "light",
+            _make_provider("light"),
+            config=ProviderConfig(name="light", model="m", weight=1.0),
+        )
+        picks = [registry.select_weighted().name for _ in range(8)]
+        assert picks.count("heavy") == 6
+        assert picks.count("light") == 2
+
+    def test_all_weight_zero_fails_open_to_first_available(self):
+        registry = ProviderRegistry()
+        registry.register(
+            "a", _make_provider("a"), config=ProviderConfig(name="a", model="m", weight=0.0)
+        )
+        registry.register(
+            "b", _make_provider("b"), config=ProviderConfig(name="b", model="m", weight=0.0)
+        )
+        picked = registry.select_weighted()
+        assert picked is not None
+        assert picked.name in {"a", "b"}
+
+
+# ---------------------------------------------------------------------------
 # ProviderRegistry.from_config
 # ---------------------------------------------------------------------------
 

@@ -35,6 +35,7 @@ from .codex_provider import CodexProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 from .rate_limiter import RateLimiter
+from .weighted_selector import WeightedRoundRobin
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,11 @@ class ProviderRegistry:
         self._effective_provider_hosts: tuple[str, ...] = ()
         self._availability_cache: dict[str, tuple[bool, float]] = {}
         self._availability_inflight: dict[str, threading.Event] = {}
+        # Cross-provider weighted balancing state for select_weighted()
+        # (provider-preference hierarchy). Keyed by registry name, not
+        # rebuilt on every call, so rotation stays proportional across
+        # many selections.
+        self._weighted_rr = WeightedRoundRobin()
         # Guards every mutation of the dicts above, and every read that
         # iterates them (rather than a single dict.get()/[] lookup,
         # which CPython already makes atomic). Found live via a
@@ -331,11 +337,64 @@ class ProviderRegistry:
             A list of available :class:`~.base.BaseProvider` instances in
             registration order (dict insertion order, Python 3.7+).
         """
+        names = self._wait_for_available_names()
+        with self._lock:
+            return [self._providers[name] for name in names if name in self._providers]
+
+    def select_weighted(
+        self, *, exclude: set[str] | None = None, only: set[str] | None = None
+    ) -> BaseProvider | None:
+        """Return one available provider via weighted balancing.
+
+        The provider-preference hierarchy's "weighted providers" half:
+        among currently available, non-excluded (and, if *only* is given,
+        *only*-restricted) providers, picks the next one via smooth
+        weighted round-robin over each provider's configured
+        :attr:`~missy.config.settings.ProviderConfig.weight` (equal
+        weights degrade to plain round-robin). A provider configured with
+        ``weight = 0`` is never returned here (it stays reachable only by
+        explicit name, e.g. as ``default_provider``).
+
+        Args:
+            exclude: Registry keys to never select (e.g. the primary
+                provider that already failed this call).
+            only: When given, restricts selection to this subset of
+                registry keys (e.g. only tool-capable candidates) in
+                addition to the usual availability/exclude filtering.
+
+        Returns:
+            The selected provider, or ``None`` when no eligible candidate
+            is currently available.
+        """
+        names = self._wait_for_available_names(exclude=exclude)
+        if only is not None:
+            names = [name for name in names if name in only]
+        if not names:
+            return None
+        with self._lock:
+            weights = {name: config.weight for name, config in self._provider_configs.items()}
+            picked_name = self._weighted_rr.select(names, weights)
+            if picked_name is None:
+                # Every eligible candidate is weighted 0 -- fail open to
+                # registration order rather than refusing to pick at all.
+                picked_name = names[0]
+            return self._providers.get(picked_name)
+
+    def _wait_for_available_names(self, *, exclude: set[str] | None = None) -> list[str]:
+        """Return currently-available, non-excluded, non-disabled registry keys.
+
+        Shared by :meth:`get_available` and :meth:`select_weighted`:
+        triggers/waits (bounded by ``AVAILABILITY_BULK_DEADLINE_SECONDS``)
+        for a fresh availability probe on every eligible candidate, then
+        reads back whichever probes completed with a fresh, positive
+        result. Order matches registration (dict insertion) order.
+        """
+        exclude = exclude or set()
         with self._lock:
             snapshot = [
                 (name, provider)
                 for name, provider in self._providers.items()
-                if name not in self._runtime_disabled
+                if name not in self._runtime_disabled and name not in exclude
             ]
         deadline = time.monotonic() + self.AVAILABILITY_BULK_DEADLINE_SECONDS
         events = [self._ensure_availability_probe(name, provider) for name, provider in snapshot]
@@ -347,8 +406,8 @@ class ProviderRegistry:
         now = time.monotonic()
         with self._lock:
             return [
-                provider
-                for name, provider in snapshot
+                name
+                for name, _provider in snapshot
                 if (cached := self._availability_cache.get(name)) is not None
                 and now - cached[1] <= self.AVAILABILITY_CACHE_SECONDS
                 and cached[0]

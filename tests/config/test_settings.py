@@ -856,6 +856,143 @@ class TestLoadConfigProviders:
             for r in caplog.records
         )
 
+    # -----------------------------------------------------------------
+    # Provider-preference hierarchy: weight / account_weights /
+    # default_provider
+    # -----------------------------------------------------------------
+
+    def test_provider_weight_defaults_to_one(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].weight == 1.0
+
+    def test_provider_weight_parsed(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                weight: 2.5
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].weight == 2.5
+
+    def test_provider_negative_weight_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                weight: -1
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="weight"):
+            load_config(path)
+
+    def test_provider_account_weights_default_empty(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].account_weights == []
+
+    def test_provider_account_weights_parsed(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+                key_rotation_strategy: round_robin
+                account_weights: [3.0, 1.0]
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.providers["openai"].account_weights == [3.0, 1.0]
+
+    def test_provider_account_weights_length_mismatch_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+                key_rotation_strategy: round_robin
+                account_weights: [1.0, 2.0, 3.0]
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="account_weights"):
+            load_config(path)
+
+    def test_provider_account_weights_non_positive_raises(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+                api_keys: ["key-a", "key-b"]
+                key_rotation_strategy: round_robin
+                account_weights: [0.0, 1.0]
+            """,
+        )
+        with pytest.raises(ConfigurationError, match="account_weights"):
+            load_config(path)
+
+    def test_default_provider_defaults_to_empty_string(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.default_provider == ""
+
+    def test_default_provider_parsed(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            default_provider: openai
+            providers:
+              openai:
+                name: openai
+                model: "gpt-5.5"
+              anthropic:
+                name: anthropic
+                model: "claude-sonnet-4-6"
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.default_provider == "openai"
+
     def test_provider_base_url_optional(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
