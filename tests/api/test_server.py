@@ -1478,9 +1478,7 @@ class TestOperatorControls:
         mock_registry.list_providers.return_value = ["openai"]
 
         cfg = ApiConfig(host="127.0.0.1", port=port, api_key=API_KEY)
-        srv = ApiServer(
-            config=cfg, provider_registry=mock_registry, config_path=str(config_path)
-        )
+        srv = ApiServer(config=cfg, provider_registry=mock_registry, config_path=str(config_path))
         srv.start()
         _wait_for_server(f"http://127.0.0.1:{port}/api/v1/health")
         try:

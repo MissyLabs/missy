@@ -481,9 +481,7 @@ class TestProvidersWeight:
     def test_persists_weight_to_config_file(self, runner: CliRunner) -> None:
         from missy.config.settings import ProviderConfig
 
-        cfg_path = _write_config(
-            "providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n"
-        )
+        cfg_path = _write_config("providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n")
         try:
             mock_config = _make_mock_config(
                 providers={"openai": ProviderConfig(name="openai", model="gpt-5.5")}
@@ -524,9 +522,7 @@ class TestProvidersWeight:
     def test_negative_weight_exits_1(self, runner: CliRunner) -> None:
         from missy.config.settings import ProviderConfig
 
-        cfg_path = _write_config(
-            "providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n"
-        )
+        cfg_path = _write_config("providers:\n  openai:\n    name: openai\n    model: gpt-5.5\n")
         try:
             mock_config = _make_mock_config(
                 providers={"openai": ProviderConfig(name="openai", model="gpt-5.5")}

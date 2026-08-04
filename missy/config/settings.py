@@ -309,7 +309,9 @@ class ProviderConfig:
     circuit_breaker_threshold: int = 5  # Consecutive failures before opening
     circuit_breaker_cooldown_seconds: float = 60.0  # OPEN -> HALF_OPEN delay
     weight: float = 1.0  # Cross-provider weighted balancing weight (>= 0)
-    account_weights: list = field(default_factory=list)  # Per-account weights (parallel to api_keys/oauth_accounts)
+    account_weights: list = field(
+        default_factory=list
+    )  # Per-account weights (parallel to api_keys/oauth_accounts)
 
 
 # ---------------------------------------------------------------------------

@@ -182,9 +182,7 @@ class TestSelectWeighted:
 
     def test_single_available_provider_is_returned(self):
         registry = ProviderRegistry()
-        registry.register(
-            "p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m")
-        )
+        registry.register("p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m"))
         picked = registry.select_weighted()
         assert picked is not None
         assert picked.name == "p1"
@@ -207,12 +205,8 @@ class TestSelectWeighted:
 
     def test_only_set_restricts_candidates(self):
         registry = ProviderRegistry()
-        registry.register(
-            "p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m")
-        )
-        registry.register(
-            "p2", _make_provider("p2"), config=ProviderConfig(name="p2", model="m")
-        )
+        registry.register("p1", _make_provider("p1"), config=ProviderConfig(name="p1", model="m"))
+        registry.register("p2", _make_provider("p2"), config=ProviderConfig(name="p2", model="m"))
         picked = registry.select_weighted(only={"p2"})
         assert picked is not None
         assert picked.name == "p2"

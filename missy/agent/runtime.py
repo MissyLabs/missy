@@ -5002,8 +5002,7 @@ class AgentRuntime:
             eligible_names = {
                 name
                 for name in registry.list_providers()
-                if name != registry_key
-                and self._get_breaker_for(name).state != CircuitState.OPEN
+                if name != registry_key and self._get_breaker_for(name).state != CircuitState.OPEN
             }
             if requires_tools:
                 tool_capable_names = {
