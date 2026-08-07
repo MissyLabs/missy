@@ -138,6 +138,23 @@ class TestSetAgentRuntime:
 # ---------------------------------------------------------------------------
 
 
+class TestStartIsIdempotent:
+    @pytest.mark.asyncio
+    async def test_start_does_not_spawn_duplicate_gateway_task(self):
+        ch = _make_channel()
+        ch._gateway.run = AsyncMock(side_effect=asyncio.Event().wait)
+        ch._gateway.disconnect = AsyncMock()
+
+        await ch.start()
+        first_task = ch._gateway_task
+        await asyncio.sleep(0)
+        await ch.start()
+
+        assert ch._gateway_task is first_task
+        await ch.stop()
+        ch._gateway.run.assert_awaited_once()
+
+
 class TestStart:
     @pytest.mark.asyncio
     async def test_start_registers_slash_commands_when_app_id_set(self):

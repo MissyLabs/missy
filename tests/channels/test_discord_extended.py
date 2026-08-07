@@ -134,7 +134,9 @@ class TestGatewayConnect:
         with patch("websockets.connect", side_effect=_fake_connect) as mock_connect:
             await gw.connect()
 
-        mock_connect.assert_called_once_with("wss://resume.discord.gg", max_size=4 * 1024 * 1024)
+        mock_connect.assert_called_once_with(
+            "wss://resume.discord.gg?v=10&encoding=json", max_size=4 * 1024 * 1024
+        )
 
     @pytest.mark.asyncio
     async def test_connect_raises_when_websockets_missing(self):
@@ -303,6 +305,249 @@ class TestGatewayRunReconnect:
 
         await gw.run()
         # No infinite reconnect loop - should exit cleanly
+
+
+class TestGatewayReconnectStormPrevention:
+    """Regression tests for clean-close reconnect and IDENTIFY storms."""
+
+    def test_resume_url_keeps_gateway_version_and_encoding(self):
+        gw = _make_gateway()
+
+        assert gw._gateway_url_with_query("wss://resume.discord.gg") == (
+            "wss://resume.discord.gg?v=10&encoding=json"
+        )
+        assert (
+            gw._gateway_url_with_query("wss://resume.discord.gg/?encoding=json&v=10")
+            == "wss://resume.discord.gg/?encoding=json&v=10"
+        )
+
+    @pytest.mark.asyncio
+    async def test_authoritative_identify_allowance_waits_until_reset(self):
+        responses = iter(
+            [
+                {
+                    "url": "wss://gateway.discord.gg",
+                    "session_start_limit": {"remaining": 5, "reset_after": 2_000},
+                },
+                {
+                    "url": "wss://gateway.discord.gg",
+                    "session_start_limit": {"remaining": 999, "reset_after": 86_400_000},
+                },
+            ]
+        )
+        gw = DiscordGatewayClient(
+            bot_token="testtoken",
+            on_message=AsyncMock(),
+            gateway_info_provider=lambda: next(responses),
+        )
+
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(side_effect=lambda fn: fn())),
+            patch("asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patch("missy.channels.discord.gateway.random.uniform", return_value=1.0),
+        ):
+            await gw._wait_for_identify_allowance()
+
+        sleep.assert_awaited_once_with(3.0)
+        assert gw._identify_allowance_remaining == 999
+        assert gw._gateway_url == "wss://gateway.discord.gg?v=10&encoding=json"
+
+    @pytest.mark.asyncio
+    async def test_identify_allowance_fails_closed_on_malformed_response(self):
+        gw = DiscordGatewayClient(
+            bot_token="testtoken",
+            on_message=AsyncMock(),
+            gateway_info_provider=lambda: {"url": "wss://gateway.discord.gg"},
+        )
+
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(side_effect=lambda fn: fn())),
+            pytest.raises(RuntimeError, match="session_start_limit"),
+        ):
+            await gw._wait_for_identify_allowance()
+
+    @pytest.mark.asyncio
+    async def test_resume_skips_authoritative_identify_allowance_check(self):
+        gw = _make_gateway()
+        gw._discord_session_id = "session"
+        gw._sequence = 42
+        gw._wait_for_identify_allowance = AsyncMock()
+
+        async def _fake_connect():
+            gw._ws = AsyncMock()
+
+        async def _fake_loop():
+            gw._running = False
+
+        gw.connect = _fake_connect  # type: ignore[method-assign]
+        gw._receive_loop = _fake_loop  # type: ignore[method-assign]
+
+        await gw.run()
+
+        gw._wait_for_identify_allowance.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_clean_close_is_paced_before_reconnecting(self):
+        gw = _make_gateway()
+        gw._discord_session_id = "old-session"
+        gw._resume_gateway_url = "wss://resume.discord.gg"
+        gw._sequence = 42
+        connect_calls = 0
+        sleeps: list[float] = []
+
+        async def _fake_connect():
+            nonlocal connect_calls
+            connect_calls += 1
+            ws = AsyncMock()
+            ws.close_code = 1000
+            ws.close_reason = "normal closure"
+            gw._ws = ws
+
+        async def _fake_loop():
+            if connect_calls == 1:
+                # websockets ends async iteration normally for 1000/1001.
+                return
+            gw._running = False
+
+        async def _fake_sleep(delay: float):
+            sleeps.append(delay)
+
+        gw.connect = _fake_connect  # type: ignore[method-assign]
+        gw._receive_loop = _fake_loop  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", side_effect=_fake_sleep),
+            patch("missy.channels.discord.gateway.random.uniform", return_value=0.0),
+        ):
+            await gw.run()
+
+        assert connect_calls == 2
+        assert sleeps == [5.0]
+        assert gw._reconnect_count == 1
+        assert gw._discord_session_id == "old-session"
+        assert gw._resume_gateway_url == "wss://resume.discord.gg"
+        assert gw._sequence == 42
+
+    @pytest.mark.asyncio
+    async def test_code_less_disconnect_preserves_resume_state(self):
+        gw = _make_gateway()
+        gw._discord_session_id = "old-session"
+        gw._resume_gateway_url = "wss://resume.discord.gg"
+        gw._sequence = 42
+        connect_calls = 0
+
+        async def _fake_connect():
+            nonlocal connect_calls
+            connect_calls += 1
+            gw._ws = AsyncMock()
+
+        async def _fake_loop():
+            if connect_calls == 1:
+                return
+            gw._running = False
+
+        gw.connect = _fake_connect  # type: ignore[method-assign]
+        gw._receive_loop = _fake_loop  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("missy.channels.discord.gateway.random.uniform", return_value=0.0),
+        ):
+            await gw.run()
+
+        assert gw._discord_session_id == "old-session"
+        assert gw._resume_gateway_url == "wss://resume.discord.gg"
+        assert gw._sequence == 42
+
+    @pytest.mark.asyncio
+    async def test_invalid_sequence_close_discards_resume_state(self):
+        gw = _make_gateway()
+        gw._discord_session_id = "invalid-session"
+        gw._resume_gateway_url = "wss://resume.discord.gg"
+        gw._sequence = 42
+        connect_calls = 0
+
+        async def _fake_connect():
+            nonlocal connect_calls
+            connect_calls += 1
+            ws = AsyncMock()
+            ws.close_code = 4007
+            ws.close_reason = "Invalid seq"
+            gw._ws = ws
+
+        async def _fake_loop():
+            if connect_calls == 1:
+                return
+            gw._running = False
+
+        gw.connect = _fake_connect  # type: ignore[method-assign]
+        gw._receive_loop = _fake_loop  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", new_callable=AsyncMock),
+            patch("missy.channels.discord.gateway.random.uniform", return_value=0.0),
+        ):
+            await gw.run()
+
+        assert gw._discord_session_id is None
+        assert gw._resume_gateway_url is None
+        assert gw._sequence is None
+
+    @pytest.mark.asyncio
+    async def test_fatal_close_code_stops_automatic_reconnect(self):
+        gw = _make_gateway()
+        connect_calls = 0
+
+        class FatalGatewayClose(RuntimeError):
+            code = 4004
+            reason = "Authentication failed"
+
+        async def _fake_connect():
+            nonlocal connect_calls
+            connect_calls += 1
+            gw._ws = AsyncMock()
+
+        async def _fake_loop():
+            raise FatalGatewayClose("bad token")
+
+        gw.connect = _fake_connect  # type: ignore[method-assign]
+        gw._receive_loop = _fake_loop  # type: ignore[method-assign]
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as sleep:
+            await gw.run()
+
+        assert connect_calls == 1
+        sleep.assert_not_awaited()
+        assert gw._running is False
+        assert gw._terminal_close_code == 4004
+        assert gw._last_disconnect_error == (
+            "Gateway connection failed (code=4004): Authentication failed"
+        )
+
+    def test_reconnect_backoff_is_exponential_and_bounded(self):
+        gw = _make_gateway()
+        with patch("missy.channels.discord.gateway.random.uniform", return_value=0.0):
+            delays = []
+            for failures in (1, 2, 3, 4, 5, 6, 7, 20):
+                gw._consecutive_reconnect_failures = failures
+                delays.append(gw._reconnect_delay())
+
+        assert delays == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0, 300.0]
+
+    @pytest.mark.asyncio
+    async def test_reconnect_cleanup_resets_per_socket_heartbeat_state(self):
+        gw = _make_gateway()
+        gw._ws = AsyncMock()
+        gw._last_heartbeat_sent_at = 20.0
+        gw._last_heartbeat_ack_at = 10.0
+        gw._heartbeat_interval = 41.25
+
+        await gw._cleanup_connection()
+
+        assert gw._ws is None
+        assert gw._last_heartbeat_sent_at is None
+        assert gw._last_heartbeat_ack_at is None
+        assert gw._heartbeat_interval is None
 
 
 class TestGatewayReceiveLoop:
