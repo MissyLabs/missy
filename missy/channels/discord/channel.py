@@ -179,6 +179,7 @@ class DiscordChannel(BaseChannel):
             on_message=self._on_gateway_event,
             session_id=session_id,
             task_id=task_id,
+            gateway_info_provider=self._rest.get_gateway_bot,
         )
         self._slash_registration_status: dict[str, Any] = {
             "attempted": False,
@@ -222,8 +223,12 @@ class DiscordChannel(BaseChannel):
         """Start the Discord Gateway connection and register slash commands.
 
         This method is non-blocking: the Gateway runs as a background
-        asyncio task.
+        asyncio task. Repeated calls are idempotent so one channel instance
+        cannot accidentally create concurrent Gateway sessions.
         """
+        if self._gateway_task is not None and not self._gateway_task.done():
+            logger.warning("Discord channel start() ignored: Gateway task is already running")
+            return
         self._gateway_task = asyncio.create_task(self._gateway.run())
 
         # Register global slash commands if an application ID is configured.

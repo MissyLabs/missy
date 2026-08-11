@@ -35,9 +35,12 @@ import asyncio
 import contextlib
 import json
 import logging
+import random
 import time
+from collections import deque
 from collections.abc import Callable, Coroutine
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from missy.core.events import AuditEvent, event_bus
 
@@ -63,7 +66,34 @@ _INTENTS = 1 | 512 | 1024 | 4096 | 8192 | 32768
 # Maximum WebSocket frame size for the Gateway connection (4 MB).
 _MAX_WS_SIZE = 4 * 1024 * 1024
 
+# Reconnect attempts must be paced even when a WebSocket closes cleanly.  Discord
+# permits at most 1,000 IDENTIFY calls per 24 hours and resets the bot token when
+# that global limit is exceeded, so an unbounded reconnect loop is destructive.
+_RECONNECT_BASE_DELAY_SECONDS = 5.0
+_RECONNECT_MAX_DELAY_SECONDS = 300.0
+_RECONNECT_JITTER_RATIO = 0.2
+_STABLE_CONNECTION_SECONDS = 60.0
+
+# Discord resets a bot token after 1,000 IDENTIFY calls in 24 hours.  The
+# authoritative /gateway/bot allowance is checked before every new session and
+# a small reserve absorbs concurrent processes or an eventually-consistent
+# counter.  The local fallback protects direct users of DiscordGatewayClient.
+_IDENTIFY_SAFETY_RESERVE = 5
+_LOCAL_IDENTIFY_LIMIT = 950
+_IDENTIFY_WINDOW_SECONDS = 24 * 60 * 60
+
+# Discord explicitly marks these close codes as non-reconnectable.  Retrying
+# them cannot heal the connection and repeatedly consumes IDENTIFY calls.
+_FATAL_CLOSE_CODES = frozenset({4004, 4010, 4011, 4012, 4013, 4014})
+
+# These closes invalidate the old Gateway session.  Reconnecting with RESUME
+# would only provoke INVALID_SESSION, so discard the cached session first.
+# A *remote* 1000/1001 close doesn't itself invalidate Discord's session; only
+# client-initiated 1000/1001 closes do, and disconnect() never reconnects.
+_NON_RESUMABLE_CLOSE_CODES = frozenset({4003, 4007, 4009})
+
 AsyncMessageCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+GatewayInfoProvider = Callable[[], dict[str, Any]]
 
 
 class DiscordGatewayClient:
@@ -84,6 +114,7 @@ class DiscordGatewayClient:
         gateway_url: str = _GATEWAY_URL,
         session_id: str = "discord",
         task_id: str = "gateway",
+        gateway_info_provider: GatewayInfoProvider | None = None,
     ) -> None:
         if not bot_token.startswith("Bot "):
             bot_token = f"Bot {bot_token}"
@@ -92,6 +123,7 @@ class DiscordGatewayClient:
         self._gateway_url = gateway_url
         self._session_id_audit = session_id
         self._task_id_audit = task_id
+        self._gateway_info_provider = gateway_info_provider
 
         # Runtime state
         self._ws: Any = None  # websockets.WebSocketClientProtocol
@@ -114,6 +146,16 @@ class DiscordGatewayClient:
         self._resume_attempt_count: int = 0
         self._invalid_session_count: int = 0
         self._server_reconnect_count: int = 0
+        self._consecutive_reconnect_failures: int = 0
+        self._last_close_code: int | None = None
+        self._last_close_reason: str | None = None
+        self._terminal_close_code: int | None = None
+        self._terminal_close_reason: str | None = None
+        self._identify_count: int = 0
+        self._last_identify_at: float | None = None
+        self._identify_allowance_remaining: int | None = None
+        self._identify_allowance_reset_at: float | None = None
+        self._local_identify_times: deque[float] = deque()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -164,6 +206,19 @@ class DiscordGatewayClient:
             "resume_attempt_count": self._resume_attempt_count,
             "invalid_session_count": self._invalid_session_count,
             "server_reconnect_count": self._server_reconnect_count,
+            "consecutive_reconnect_failures": self._consecutive_reconnect_failures,
+            "last_close_code": self._last_close_code,
+            "last_close_reason": self._last_close_reason,
+            "terminal_close_code": self._terminal_close_code,
+            "terminal_close_reason": self._terminal_close_reason,
+            "identify_count": self._identify_count,
+            "last_identify_age_seconds": _age(self._last_identify_at),
+            "identify_allowance_remaining": self._identify_allowance_remaining,
+            "identify_allowance_resets_in_seconds": (
+                None
+                if self._identify_allowance_reset_at is None
+                else max(0.0, round(self._identify_allowance_reset_at - now, 3))
+            ),
         }
 
     def _ensure_diagnostic_state(self) -> None:
@@ -182,6 +237,16 @@ class DiscordGatewayClient:
             "_resume_attempt_count": 0,
             "_invalid_session_count": 0,
             "_server_reconnect_count": 0,
+            "_consecutive_reconnect_failures": 0,
+            "_last_close_code": None,
+            "_last_close_reason": None,
+            "_terminal_close_code": None,
+            "_terminal_close_reason": None,
+            "_identify_count": 0,
+            "_last_identify_at": None,
+            "_identify_allowance_remaining": None,
+            "_identify_allowance_reset_at": None,
+            "_local_identify_times": deque(),
         }
         for name, value in defaults.items():
             if not hasattr(self, name):
@@ -205,7 +270,11 @@ class DiscordGatewayClient:
                 "Install it with: pip install websockets>=12.0"
             ) from exc
 
-        url = self._resume_gateway_url or self._gateway_url
+        url = (
+            self._gateway_url_with_query(self._resume_gateway_url)
+            if self._resume_gateway_url
+            else self._gateway_url
+        )
         logger.debug("Discord Gateway: connecting to %s", url)
         self._ws = await websockets.connect(url, max_size=_MAX_WS_SIZE)
         self._emit_audit("discord.gateway.connect", "allow", {"url": url})
@@ -232,27 +301,284 @@ class DiscordGatewayClient:
     async def run(self) -> None:
         """Connect and run the event receive loop until disconnected.
 
-        Automatically reconnects on transient errors.  Call
-        :meth:`disconnect` to stop cleanly.
+        Transient disconnects use bounded exponential backoff with jitter.
+        Clean WebSocket closes are paced too: ``websockets`` ends its async
+        iterator normally for close codes 1000 and 1001, so handling only the
+        exception path would create a zero-delay reconnect loop.  Discord close
+        codes documented as non-reconnectable stop this run rather than burning
+        through the application's global IDENTIFY allowance.
         """
+        if self._running:
+            logger.warning("Discord Gateway run() ignored: client is already running")
+            return
+
         self._running = True
+        self._consecutive_reconnect_failures = 0
+        self._terminal_close_code = None
+        self._terminal_close_reason = None
+
         while self._running:
+            connected_at: float | None = None
+            close_code: int | None = None
+            close_reason: str | None = None
+            normal_close = False
+
             try:
+                if not (self._discord_session_id and self._sequence is not None):
+                    await self._wait_for_identify_allowance()
                 await self.connect()
+                connected_at = time.monotonic()
                 await self._receive_loop()
+                normal_close = True
+                close_code, close_reason = self._close_details()
             except Exception as exc:
                 if not self._running:
                     break
-                logger.warning("Gateway disconnected: %s — reconnecting in 5s", exc)
-                self._reconnect_count += 1
+                close_code, close_reason = self._close_details(exc)
+                if not close_reason:
+                    close_reason = str(exc) or type(exc).__name__
+            finally:
+                await self._cleanup_connection()
+
+            if not self._running:
+                break
+
+            self._last_close_code = close_code
+            self._last_close_reason = close_reason
+
+            if close_code in _FATAL_CLOSE_CODES:
+                self._terminal_close_code = close_code
+                self._terminal_close_reason = close_reason
                 self._last_disconnect_at = time.time()
-                self._last_disconnect_error = str(exc)
+                self._last_disconnect_error = self._format_close_error(
+                    close_code, close_reason, normal_close
+                )
                 self._emit_audit(
                     "discord.gateway.disconnect",
                     "error",
-                    {"error": str(exc), "reconnect_count": self._reconnect_count},
+                    {
+                        "error": self._last_disconnect_error,
+                        "close_code": close_code,
+                        "reconnect": False,
+                    },
                 )
-                await asyncio.sleep(5)
+                logger.error(
+                    "Discord Gateway closed with non-reconnectable code %s (%s); "
+                    "automatic reconnect stopped",
+                    close_code,
+                    close_reason or "no reason supplied",
+                )
+                self._running = False
+                break
+
+            # Preserve READY session state across remote 1000/1001 and
+            # code-less disconnects so the next connection tries RESUME.  A
+            # failed RESUME is safely resolved by Discord's INVALID_SESSION.
+            if close_code in _NON_RESUMABLE_CLOSE_CODES:
+                self._clear_resume_state()
+
+            connected_seconds = time.monotonic() - connected_at if connected_at is not None else 0.0
+            if connected_seconds >= _STABLE_CONNECTION_SECONDS:
+                self._consecutive_reconnect_failures = 0
+
+            self._consecutive_reconnect_failures += 1
+            self._reconnect_count += 1
+            self._last_disconnect_at = time.time()
+            self._last_disconnect_error = self._format_close_error(
+                close_code, close_reason, normal_close
+            )
+            delay = self._reconnect_delay()
+            self._emit_audit(
+                "discord.gateway.disconnect",
+                "error",
+                {
+                    "error": self._last_disconnect_error,
+                    "close_code": close_code,
+                    "reconnect": True,
+                    "reconnect_count": self._reconnect_count,
+                    "delay_seconds": round(delay, 3),
+                },
+            )
+            logger.warning(
+                "Gateway disconnected: %s — reconnecting in %.1fs",
+                self._last_disconnect_error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    async def _wait_for_identify_allowance(self) -> None:
+        """Wait until a fresh IDENTIFY is safe under Discord's daily limit.
+
+        ``GET /gateway/bot`` is authoritative and reflects the application's
+        global allowance.  The provider is injected by :class:`DiscordChannel`
+        so the request still passes through Missy's policy-enforced REST client.
+        Direct users without a provider receive a conservative in-process
+        rolling-window guard instead.
+        """
+        if self._gateway_info_provider is None:
+            await self._wait_for_local_identify_allowance()
+            return
+
+        while True:
+            info = await asyncio.to_thread(self._gateway_info_provider)
+            gateway_url = info.get("url")
+            if isinstance(gateway_url, str) and gateway_url:
+                self._gateway_url = self._gateway_url_with_query(gateway_url)
+
+            limit = info.get("session_start_limit")
+            if not isinstance(limit, dict):
+                raise RuntimeError("Discord /gateway/bot omitted session_start_limit")
+
+            remaining = limit.get("remaining")
+            reset_after_ms = limit.get("reset_after")
+            if (
+                not isinstance(remaining, int)
+                or isinstance(remaining, bool)
+                or not isinstance(reset_after_ms, (int, float))
+                or isinstance(reset_after_ms, bool)
+                or reset_after_ms < 0
+            ):
+                raise RuntimeError("Discord /gateway/bot returned invalid session_start_limit")
+
+            reset_seconds = float(reset_after_ms) / 1000.0
+            self._identify_allowance_remaining = remaining
+            self._identify_allowance_reset_at = time.time() + reset_seconds
+            if remaining > _IDENTIFY_SAFETY_RESERVE:
+                return
+
+            delay = max(1.0, reset_seconds) + random.uniform(1.0, 5.0)
+            logger.error(
+                "Discord IDENTIFY allowance is nearly exhausted (%d remaining); "
+                "waiting %.1fs for the daily reset",
+                remaining,
+                delay,
+            )
+            self._emit_audit(
+                "discord.gateway.identify_throttled",
+                "error",
+                {"remaining": remaining, "delay_seconds": round(delay, 3)},
+            )
+            await asyncio.sleep(delay)
+
+    async def _wait_for_local_identify_allowance(self) -> None:
+        """Conservatively guard IDENTIFY calls when no REST provider exists."""
+        while True:
+            now = time.monotonic()
+            cutoff = now - _IDENTIFY_WINDOW_SECONDS
+            while self._local_identify_times and self._local_identify_times[0] <= cutoff:
+                self._local_identify_times.popleft()
+            if len(self._local_identify_times) < _LOCAL_IDENTIFY_LIMIT:
+                self._identify_allowance_remaining = _LOCAL_IDENTIFY_LIMIT - len(
+                    self._local_identify_times
+                )
+                return
+
+            delay = max(
+                1.0,
+                self._local_identify_times[0] + _IDENTIFY_WINDOW_SECONDS - now,
+            )
+            self._identify_allowance_reset_at = time.time() + delay
+            logger.error(
+                "Local Discord IDENTIFY guard reached %d calls; waiting %.1fs",
+                _LOCAL_IDENTIFY_LIMIT,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    @staticmethod
+    def _gateway_url_with_query(url: str) -> str:
+        """Preserve Discord's required API version and encoding when resuming."""
+        parsed = urlsplit(url)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query.setdefault("v", "10")
+        query.setdefault("encoding", "json")
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+        )
+
+    async def _cleanup_connection(self) -> None:
+        """Release per-connection state without invalidating a resumable session."""
+        heartbeat_task = self._heartbeat_task
+        self._heartbeat_task = None
+        if heartbeat_task is not None and heartbeat_task is not asyncio.current_task():
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            # 4000 preserves a valid Discord session, unlike a normal 1000/1001
+            # close.  Calling close() on an already-closed websocket is safe.
+            with contextlib.suppress(Exception):
+                await ws.close(code=4000, reason="gateway reconnect")
+
+        # Heartbeat ACK timestamps belong to one physical WebSocket only.  If
+        # they leak into the next connection, its heartbeat loop can interpret
+        # the previous socket's missing ACK as an immediate new failure.
+        self._last_heartbeat_sent_at = None
+        self._last_heartbeat_ack_at = None
+        self._heartbeat_interval = None
+
+    def _close_details(self, exc: Exception | None = None) -> tuple[int | None, str | None]:
+        """Extract a Discord close code/reason across websockets versions."""
+        sources: list[Any] = []
+        if exc is not None:
+            received = getattr(exc, "rcvd", None)
+            if received is not None:
+                sources.append(received)
+            sources.append(exc)
+        if self._ws is not None:
+            sources.append(self._ws)
+
+        code: int | None = None
+        reason: str | None = None
+        for source in sources:
+            candidate = getattr(source, "code", None)
+            if code is None and isinstance(candidate, int) and not isinstance(candidate, bool):
+                code = candidate
+            candidate_reason = getattr(source, "reason", None)
+            if reason is None and isinstance(candidate_reason, str) and candidate_reason:
+                reason = candidate_reason
+
+            # Modern websockets connections expose close_code/close_reason;
+            # ConnectionClosed exceptions expose the received Close frame.
+            candidate = getattr(source, "close_code", None)
+            if code is None and isinstance(candidate, int) and not isinstance(candidate, bool):
+                code = candidate
+            candidate_reason = getattr(source, "close_reason", None)
+            if reason is None and isinstance(candidate_reason, str) and candidate_reason:
+                reason = candidate_reason
+
+        return code, reason
+
+    def _clear_resume_state(self) -> None:
+        """Forget a Discord session that cannot be resumed."""
+        self._discord_session_id = None
+        self._resume_gateway_url = None
+        self._sequence = None
+
+    def _reconnect_delay(self) -> float:
+        """Return bounded exponential backoff plus positive jitter."""
+        exponent = min(max(self._consecutive_reconnect_failures - 1, 0), 16)
+        base = min(
+            _RECONNECT_BASE_DELAY_SECONDS * (2**exponent),
+            _RECONNECT_MAX_DELAY_SECONDS,
+        )
+        return base + random.uniform(0.0, base * _RECONNECT_JITTER_RATIO)
+
+    @staticmethod
+    def _format_close_error(
+        close_code: int | None,
+        close_reason: str | None,
+        normal_close: bool,
+    ) -> str:
+        description = "Gateway closed cleanly" if normal_close else "Gateway connection failed"
+        if close_code is not None:
+            description += f" (code={close_code})"
+        if close_reason:
+            description += f": {close_reason}"
+        return description
 
     # ------------------------------------------------------------------
     # Internal loop
@@ -311,7 +637,10 @@ class DiscordGatewayClient:
                 "allow",
                 {"server_reconnect_count": self._server_reconnect_count},
             )
-            await self._ws.close()
+            # A normal 1000/1001 close invalidates the session.  Use a
+            # reconnectable application close code so the next connection can
+            # send RESUME instead of consuming a new IDENTIFY.
+            await self._ws.close(code=4000, reason="server requested reconnect")
 
         elif op == _OP_INVALID_SESSION:
             resumable: bool = bool(data)
@@ -331,7 +660,7 @@ class DiscordGatewayClient:
                 },
             )
             await asyncio.sleep(2)
-            await self._ws.close()
+            await self._ws.close(code=4000, reason="invalid session")
 
         else:
             logger.debug("Gateway: unhandled opcode %d", op)
@@ -394,6 +723,8 @@ class DiscordGatewayClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
 
+        self._last_heartbeat_sent_at = None
+        self._last_heartbeat_ack_at = None
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(interval))
 
     async def _heartbeat_loop(self, interval: float) -> None:
@@ -474,6 +805,17 @@ class DiscordGatewayClient:
             },
         }
         await self._ws.send(json.dumps(payload))
+        now_monotonic = time.monotonic()
+        self._local_identify_times.append(now_monotonic)
+        self._identify_count += 1
+        self._last_identify_at = time.time()
+        if self._identify_allowance_remaining is not None:
+            self._identify_allowance_remaining = max(0, self._identify_allowance_remaining - 1)
+        self._emit_audit(
+            "discord.gateway.identify_sent",
+            "allow",
+            {"identify_count": self._identify_count},
+        )
         logger.debug("Gateway: IDENTIFY sent")
 
     async def _send_resume(self) -> None:
