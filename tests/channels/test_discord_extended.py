@@ -35,6 +35,7 @@ import json
 import os
 import tempfile
 import time
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -548,6 +549,31 @@ class TestGatewayReconnectStormPrevention:
         assert gw._last_heartbeat_sent_at is None
         assert gw._last_heartbeat_ack_at is None
         assert gw._heartbeat_interval is None
+
+    @pytest.mark.asyncio
+    async def test_send_identify_does_not_grow_local_deque_with_authoritative_provider(self):
+        gw = DiscordGatewayClient(
+            bot_token="testtoken",
+            on_message=AsyncMock(),
+            gateway_info_provider=dict,
+        )
+        gw._ws = AsyncMock()
+
+        for _ in range(3):
+            await gw._send_identify()
+
+        assert gw._local_identify_times == deque()
+        assert gw._identify_count == 3
+
+    @pytest.mark.asyncio
+    async def test_send_identify_still_tracks_local_deque_without_provider(self):
+        gw = _make_gateway()
+        gw._ws = AsyncMock()
+
+        await gw._send_identify()
+
+        assert len(gw._local_identify_times) == 1
+        assert gw._identify_count == 1
 
 
 class TestGatewayReceiveLoop:
