@@ -805,8 +805,12 @@ class DiscordGatewayClient:
             },
         }
         await self._ws.send(json.dumps(payload))
-        now_monotonic = time.monotonic()
-        self._local_identify_times.append(now_monotonic)
+        if self._gateway_info_provider is None:
+            # Only the local fallback guard reads this deque, and only it
+            # prunes stale entries (in _wait_for_local_identify_allowance).
+            # Appending unconditionally here made it grow for the life of
+            # the process whenever an authoritative provider is configured.
+            self._local_identify_times.append(time.monotonic())
         self._identify_count += 1
         self._last_identify_at = time.time()
         if self._identify_allowance_remaining is not None:
