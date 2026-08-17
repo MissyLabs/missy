@@ -410,6 +410,22 @@ class TestDetectFabrication:
         text = "```text\nCONTAINER ID   IMAGE   STATUS\nabc123   nginx   Up 2 hours\n```"
         assert detect_fabrication(text, []) is True
 
+    def test_fake_tree_style_directory_listing(self):
+        """Real text captured live (qwen3.8-27b, SH-001 'print cwd and list
+        files' over shell_exec): a plausible-looking tree presented as real
+        output with zero tool calls behind it -- slipped past every other
+        pattern in this module (no fenced shell-prompt/tabular markers, no
+        first-person claim verb) until this dedicated check was added."""
+        text = (
+            "CWD is `/home/missy/workspace`, and here's everything in it:\n\n"
+            "```\n/home/missy/workspace\n"
+            "├── README.md                    (new, this session)\n"
+            "├── docs/usage.md                (new -- inside docs/)\n"
+            "├── src/main.txt                 (new -- inside src/)\n"
+            "└── tests/notes.txt              (new -- inside tests/)\n```"
+        )
+        assert detect_fabrication(text, []) is True
+
     def test_claims_of_completed_artifact(self):
         assert detect_fabrication("I generated the image and saved it to disk.", []) is True
 
