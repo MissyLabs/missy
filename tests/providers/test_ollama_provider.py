@@ -341,6 +341,102 @@ class TestOllamaCompleteWithTools:
         assert result.tool_calls == []
 
     @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_tool_call_salvaged_from_xml_function_tags_when_not_structured(self, mock_client_cls):
+        """A model whose chat template serializes tool calls as XML-ish
+        ``<function=name><parameter=...>`` tags (e.g. qwen3.8's Ollama
+        Modelfile TEMPLATE) instead of a bare JSON object is also recovered.
+
+        This is the exact leaked text captured live against
+        qwen3.8-27b-32k during PROV-013 harness validation -- Ollama's
+        structured tool_calls parser didn't recognize its own template's
+        leaked-as-content shape.
+        """
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "qwen3.8-27b-32k",
+            "message": {
+                "role": "assistant",
+                "content": (
+                    "<tool_call>\n<function=list_files>\n<parameter=path>\n"
+                    "/home/missy/workspace\n</parameter>\n</function>\n</tool_call>"
+                ),
+            },
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config())
+        result = p.complete_with_tools(
+            [Message(role="user", content="list")], [self._tool("list_files")]
+        )
+        assert result.finish_reason == "tool_calls"
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "list_files"
+        assert result.tool_calls[0].arguments == {"path": "/home/missy/workspace"}
+        assert result.content == ""
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_xml_function_tag_not_salvaged_when_name_is_not_an_offered_tool(self, mock_client_cls):
+        """The XML function-tag leak path honors the same name-allowlist
+        guard as the JSON leak path -- an unoffered tool name is never
+        promoted to an executed call."""
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "qwen3.8-27b-32k",
+            "message": {
+                "role": "assistant",
+                "content": (
+                    "<tool_call>\n<function=banana>\n<parameter=x>\n1\n"
+                    "</parameter>\n</function>\n</tool_call>"
+                ),
+            },
+            "prompt_eval_count": 5,
+            "eval_count": 5,
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config())
+        result = p.complete_with_tools(
+            [Message(role="user", content="x")], [self._tool("list_files")]
+        )
+        assert result.finish_reason == "stop"
+        assert result.tool_calls == []
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
+    def test_xml_function_tag_salvage_handles_multiple_parameters(self, mock_client_cls):
+        """Multiple ``<parameter=...>`` tags inside one leaked function call
+        are all recovered into the arguments dict."""
+        resp = MagicMock()
+        resp.json.return_value = {
+            "model": "qwen3.8-27b-32k",
+            "message": {
+                "role": "assistant",
+                "content": (
+                    "<tool_call>\n<function=file_write>\n<parameter=path>\n"
+                    "/tmp/x.txt\n</parameter>\n<parameter=content>\n"
+                    "hello world\n</parameter>\n</function>\n</tool_call>"
+                ),
+            },
+            "prompt_eval_count": 5,
+            "eval_count": 5,
+        }
+        resp.raise_for_status.return_value = None
+        mock_client_cls.return_value.post.return_value = resp
+
+        p = OllamaProvider(_make_config())
+        result = p.complete_with_tools(
+            [Message(role="user", content="write")], [self._tool("file_write")]
+        )
+        assert result.finish_reason == "tool_calls"
+        assert result.tool_calls[0].arguments == {
+            "path": "/tmp/x.txt",
+            "content": "hello world",
+        }
+
+    @patch("missy.providers.ollama_provider.PolicyHTTPClient")
     def test_tool_call_string_args_handled(self, mock_client_cls):
         """If arguments is a string instead of dict, treat as empty."""
         resp = MagicMock()

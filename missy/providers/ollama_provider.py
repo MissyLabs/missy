@@ -94,11 +94,53 @@ def _message_to_ollama_payload(msg: Message) -> dict[str, Any]:
     return payload
 
 
+def _content_or_thinking_fallback(message_obj: dict[str, Any]) -> str:
+    """Return ``message.content``, falling back to ``message.thinking``.
+
+    Reasoning models (e.g. Qwen3.8) can exhaust their response inside the
+    separate ``thinking`` field and leave ``content`` blank, particularly on
+    long/open-ended prompts. An empty content string is not just unhelpful --
+    it's actively broken for channels like Discord, which reject an empty
+    message body outright (``50006 Cannot send an empty message``). Falling
+    back to ``thinking`` means the caller always gets *something* usable
+    instead of a silent, repeatedly-retried failure.
+    """
+    content = message_obj.get("content", "")
+    if content and content.strip():
+        return content
+    thinking = message_obj.get("thinking", "")
+    return thinking if thinking and thinking.strip() else content
+
+
 # Matches a ``<tool_call> ... </tool_call>`` block (qwen/Hermes style) OR a bare
 # top-level JSON object, so we can recover a tool call a model emitted as plain
 # text instead of via Ollama's structured ``message.tool_calls`` field.
 _TOOL_CALL_TAG_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# Some qwen3-family chat templates (e.g. Qwen3.8's Ollama Modelfile TEMPLATE)
+# serialize tool calls as XML-ish function tags rather than a bare JSON
+# object, e.g.::
+#
+#     <tool_call>
+#     <function=list_files>
+#     <parameter=path>
+#     /home/missy/workspace
+#     </parameter>
+#     </function>
+#     </tool_call>
+#
+# This is the model's own template format for *replaying* prior tool calls
+# in history, so the model reproduces it when it leaks a live call as text
+# too. Ollama's structured tool_calls parser doesn't always recognize this
+# shape (confirmed via PROV-013 live testing against qwen3.8-27b), so it can
+# leak into `content` just like the JSON form above -- distinct regex,
+# distinct recovery path.
+_TOOL_CALL_FUNCTION_RE = re.compile(
+    r"<tool_call>\s*<function=([A-Za-z0-9_.\-]+)>(.*?)</function>\s*</tool_call>",
+    re.DOTALL,
+)
+_PARAMETER_RE = re.compile(r"<parameter=([A-Za-z0-9_.\-]+)>\s*(.*?)\s*</parameter>", re.DOTALL)
 
 
 def _salvage_tool_calls_from_content(
@@ -167,6 +209,18 @@ def _salvage_tool_calls_from_content(
             ToolCall(id=name[:8], name=name, arguments=args if isinstance(args, dict) else {})
         )
         cleaned = cleaned.replace(f"<tool_call>{raw}</tool_call>", "").replace(raw, "")
+
+    # XML function-tag leak (see _TOOL_CALL_FUNCTION_RE). Parameter values
+    # have no type information on this wire shape -- they arrive as plain
+    # strings regardless of the tool's actual schema type, same caveat
+    # PROV-013 documents for this recovery path in general.
+    for match in _TOOL_CALL_FUNCTION_RE.finditer(cleaned):
+        name = match.group(1)
+        if name not in valid_names:
+            continue
+        args = {pname: pvalue.strip() for pname, pvalue in _PARAMETER_RE.findall(match.group(2))}
+        recovered.append(ToolCall(id=name[:8], name=name, arguments=args))
+        cleaned = cleaned.replace(match.group(0), "")
 
     if recovered:
         logger.info(
@@ -304,6 +358,10 @@ class OllamaProvider(BaseProvider):
         #   "prompt_eval_count": N, "eval_count": N, ... }
         message_obj = data.get("message") or {}
         content_text: str = message_obj.get("content", "")
+        if not content_text or not content_text.strip():
+            content_text = self._reprompt_for_final_answer(
+                api_messages, model, session_id=session_id, task_id=task_id
+            ) or _content_or_thinking_fallback(message_obj)
 
         prompt_tokens = int(data.get("prompt_eval_count", 0))
         completion_tokens = int(data.get("eval_count", 0))
@@ -509,6 +567,11 @@ class OllamaProvider(BaseProvider):
             )
             return result
 
+        if not content_text or not content_text.strip():
+            content_text = self._reprompt_for_final_answer(
+                api_messages, self._model
+            ) or _content_or_thinking_fallback(message_obj)
+
         self._emit_event("", "", "allow", "completion successful")
         result = CompletionResponse(
             content=content_text,
@@ -568,6 +631,8 @@ class OllamaProvider(BaseProvider):
             )
             response.raise_for_status()
 
+            content_yielded = False
+            thinking_parts: list[str] = []
             for line in response.iter_lines():
                 if not line:
                     continue
@@ -578,9 +643,17 @@ class OllamaProvider(BaseProvider):
                 message_obj = chunk.get("message") or {}
                 token = message_obj.get("content", "")
                 if token:
+                    content_yielded = True
                     yield token
+                thinking_token = message_obj.get("thinking", "")
+                if thinking_token:
+                    thinking_parts.append(thinking_token)
                 if chunk.get("done"):
                     break
+            # See _content_or_thinking_fallback: a reasoning model can put its
+            # entire response in `thinking` and never emit `content` deltas.
+            if not content_yielded and thinking_parts:
+                yield "".join(thinking_parts)
         except ProviderError:
             raise
         except Exception as exc:
@@ -589,6 +662,63 @@ class OllamaProvider(BaseProvider):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _reprompt_for_final_answer(
+        self,
+        api_messages: list[dict[str, Any]],
+        model: str,
+        session_id: str = "",
+        task_id: str = "",
+    ) -> str:
+        """One-shot re-ask for a plain-language final answer.
+
+        A reasoning model can finish a turn with an empty ``content`` field,
+        having spent its entire response inside ``thinking`` instead (see
+        ``_content_or_thinking_fallback``). Raw thinking text reads as an
+        internal scratchpad -- third-person, meta-narration ("The user asked
+        X. The tool returned Y.") -- rather than a reply, so before falling
+        back to it we ask the model once, plainly, to state its answer in
+        normal conversational language. This costs one extra round trip only
+        on the empty-content edge case; any failure here is swallowed since
+        the caller still has the raw-thinking fallback as a safety net.
+
+        Args:
+            api_messages: The exact message list already sent this turn
+                (including the assistant's empty-content reply is not
+                necessary -- the model can answer from the prior context
+                plus this nudge).
+            model: Model name to use for the re-ask.
+            session_id: Optional session ID for audit/network-policy context.
+            task_id: Optional task ID for audit/network-policy context.
+
+        Returns:
+            The model's answer text, or ``""`` on any failure so the caller
+            falls through to its own fallback.
+        """
+        nudge = {
+            "role": "user",
+            "content": (
+                "Give your final answer now, directly and in your normal "
+                "conversational voice. Do not describe your reasoning or "
+                "narrate what you did -- just answer."
+            ),
+        }
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [*api_messages, nudge],
+            "stream": False,
+        }
+        try:
+            client = self._make_client(session_id=session_id, task_id=task_id)
+            response = client.post(f"{self._base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data: dict[str, Any] = response.json()
+        except Exception:
+            logger.debug("Ollama re-prompt for final answer failed", exc_info=True)
+            return ""
+        message_obj = data.get("message") or {}
+        content = message_obj.get("content", "")
+        return content.strip() if content and content.strip() else ""
 
     def _emit_event(
         self,
