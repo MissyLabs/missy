@@ -40,6 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
+from missy.api.agent_activity import query_agent_activity
 from missy.api.audit_browser import query_audit_events, redact_audit_value
 from missy.api.diagnostics import build_diagnostics
 from missy.api.operator_controls import execute_operator_control, list_operator_controls
@@ -390,6 +391,8 @@ def _make_handler(
                 return self._handle_list_tool_candidates(params)
             if method == "GET" and path == f"{_API_PREFIX}/audit":
                 return self._handle_audit_events(params)
+            if method == "GET" and path == f"{_API_PREFIX}/agents/activity":
+                return self._handle_agent_activity(params)
             if method == "GET" and path == f"{_API_PREFIX}/logs/tail":
                 return self._handle_logs_tail(params)
             if method == "GET" and path == f"{_API_PREFIX}/memory/search":
@@ -985,6 +988,10 @@ def _make_handler(
         def _handle_audit_events(self, params: dict) -> tuple[int, dict]:
             """GET /api/v1/audit — browse redacted audit events with filters."""
             return ApiResponse.ok(query_audit_events(params))
+
+        def _handle_agent_activity(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/agents/activity — current and recent agent work."""
+            return ApiResponse.ok(query_agent_activity(params))
 
         def _handle_logs_tail(self, params: dict) -> tuple[int, dict]:
             """GET /api/v1/logs/tail — redacted tail of the application log (F18).

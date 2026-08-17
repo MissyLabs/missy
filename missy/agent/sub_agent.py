@@ -30,10 +30,13 @@ Example::
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 MAX_SUB_AGENTS = 10
 MAX_CONCURRENT = 3
@@ -46,6 +49,8 @@ MAX_CONCURRENT = 3
 #: more calls), so this must be enforced regardless of how deep a
 #: determined/compromised prompt tries to nest.
 MAX_SUB_AGENT_DEPTH = 2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,8 +70,18 @@ class SubTask:
     description: str
     tool_hints: list[str] = field(default_factory=list)
     depends_on: list[int] = field(default_factory=list)
+    name: str = ""
+    agent_id: str = field(default_factory=lambda: f"subagent-{uuid.uuid4().hex[:12]}")
+    status: str = "pending"
+    started_at: str | None = None
+    finished_at: str | None = None
     result: str | None = None
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            words = self.description.strip().split()
+            self.name = " ".join(words[:6]) or f"Agent {self.id + 1}"
 
 
 def parse_subtasks(prompt: str) -> list[SubTask]:
@@ -132,10 +147,20 @@ class SubAgentRunner:
             deeper, eventually hitting :data:`MAX_SUB_AGENT_DEPTH`.
     """
 
-    def __init__(self, runtime, session_id: str, depth: int) -> None:
+    def __init__(
+        self,
+        runtime,
+        session_id: str,
+        depth: int,
+        *,
+        parent_agent_id: str = "",
+        parent_task_id: str = "",
+    ) -> None:
         self._runtime = runtime
         self._session_id = session_id
         self._depth = depth
+        self._parent_agent_id = parent_agent_id
+        self._parent_task_id = parent_task_id
         self._semaphore = threading.Semaphore(MAX_CONCURRENT)
 
     def run_subtask(self, subtask: SubTask, context: str = "") -> str:
@@ -159,15 +184,46 @@ class SubAgentRunner:
         # run_all() entirely) must still be bounded -- this semaphore is
         # what enforces MAX_CONCURRENT for that path too.
         with self._semaphore:
+            subtask.status = "running"
+            subtask.started_at = datetime.now(UTC).isoformat()
+            logger.info(
+                "Sub-agent %s (%s) started step %d at depth %d: %s",
+                subtask.agent_id,
+                subtask.name,
+                subtask.id,
+                self._depth,
+                subtask.description[:240],
+            )
             try:
-                result = self._runtime.run(
-                    prompt, session_id=self._session_id, _delegation_depth=self._depth
-                )
+                execution_scope = getattr(type(self._runtime), "agent_execution", None)
+                if callable(execution_scope):
+                    with self._runtime.agent_execution(
+                        agent_id=subtask.agent_id,
+                        name=subtask.name,
+                        parent_agent_id=self._parent_agent_id,
+                        parent_task_id=self._parent_task_id,
+                        depth=self._depth,
+                    ):
+                        result = self._runtime.run(
+                            prompt, session_id=self._session_id, _delegation_depth=self._depth
+                        )
+                else:
+                    result = self._runtime.run(
+                        prompt, session_id=self._session_id, _delegation_depth=self._depth
+                    )
                 subtask.result = result
+                subtask.status = "complete"
+                logger.info("Sub-agent %s completed step %d", subtask.agent_id, subtask.id)
                 return result
             except Exception as exc:
                 subtask.error = str(exc)
+                subtask.status = "error"
+                logger.exception(
+                    "Sub-agent %s failed step %d: %s", subtask.agent_id, subtask.id, exc
+                )
                 return f"[Error in subtask {subtask.id}: {exc}]"
+            finally:
+                subtask.finished_at = datetime.now(UTC).isoformat()
 
     def run_all(
         self,

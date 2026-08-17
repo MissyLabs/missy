@@ -32,6 +32,7 @@ def content() -> str:
           <button type="button" id="run-cancel" class="secondary" disabled>Stop watching</button>
         </div>
       </form>
+      <div id="run-agents" class="agent-grid run-agent-grid" aria-label="Agents in this run"></div>
       <div id="run-log" class="run-log" role="log" aria-live="polite" aria-relevant="additions" aria-atomic="false" aria-label="Run activity"></div>
       <pre id="run-response" class="detail" tabindex="0" aria-label="Latest agent response">No runs yet.</pre>
     </section>
@@ -147,6 +148,7 @@ document.getElementById('pairing').addEventListener('click', async event => {
 });
 
 let activeRunSource = null;
+let runAgents = new Map();
 function setRunStatus(text, cls) {
   const pill = document.getElementById('run-status');
   pill.textContent = text;
@@ -160,6 +162,24 @@ function appendRunEvent(label, detail, cls) {
   log.appendChild(row);
   log.scrollTop = log.scrollHeight;
 }
+function updateRunAgent(data, status, action) {
+  const id = data.agent_id || data.task_id || 'primary';
+  const agent = runAgents.get(id) || {
+    agent_id: id,
+    name: data.agent_name || id,
+    depth: data.delegation_depth || 0,
+    parent_agent_id: data.parent_agent_id || '',
+    goal: data.goal || '',
+    tools: []
+  };
+  agent.status = status || agent.status || 'running';
+  agent.action = action || agent.action || 'Thinking';
+  if (data.goal) agent.goal = data.goal;
+  if (data.tool && !agent.tools.includes(data.tool)) agent.tools.push(data.tool);
+  runAgents.set(id, agent);
+  const rows = Array.from(runAgents.values()).map(item => `<div class="agent-card"><div class="agent-card-head"><span class="led ${item.status === 'running' ? 'warn pulse' : (item.status === 'error' ? 'crit' : 'ok')}" aria-hidden="true"></span><strong>${esc(item.name)}</strong><span class="pill">${esc(item.status)}</span></div><p class="agent-goal">${esc(item.goal || 'Working on delegated task')}</p><div class="agent-action"><span class="muted">Now</span><strong>${esc(item.action)}</strong></div><div class="agent-meta"><span>depth ${esc(item.depth)}</span><span>${item.parent_agent_id ? 'parent ' + esc(item.parent_agent_id) : 'root agent'}</span></div></div>`);
+  document.getElementById('run-agents').innerHTML = rows.join('');
+}
 function closeRunStream() {
   if (activeRunSource) {
     activeRunSource.close();
@@ -172,6 +192,8 @@ function setRunBusy(busy) {
 }
 async function startRun(message) {
   closeRunStream();
+  runAgents = new Map();
+  document.getElementById('run-agents').innerHTML = '';
   document.getElementById('run-log').innerHTML = '';
   document.getElementById('run-response').textContent = 'Waiting for response...';
   setRunStatus('Starting...', 'warn');
@@ -197,13 +219,32 @@ async function startRun(message) {
   source.addEventListener('run.start', () => {
     appendRunEvent('Agent picked up the task');
   });
+  source.addEventListener('agent.start', event => {
+    const data = JSON.parse(event.data);
+    updateRunAgent(data, 'running', 'Thinking');
+    appendRunEvent('Agent started', `${data.agent_name || data.agent_id || 'agent'} · ${data.goal || 'working'}`);
+  });
   source.addEventListener('tool.request', event => {
     const data = JSON.parse(event.data);
-    appendRunEvent('Tool call', data.tool, 'tool');
+    updateRunAgent(data, 'running', `Running ${data.tool}`);
+    const args = (data.argument_keys || []).length ? ` (${data.argument_keys.join(', ')})` : '';
+    appendRunEvent(`${data.agent_name || data.agent_id || 'Agent'} tool call`, data.tool + args, 'tool');
   });
   source.addEventListener('tool.result', event => {
     const data = JSON.parse(event.data);
-    appendRunEvent('Tool result', `${data.tool} ${data.is_error ? 'failed' : 'ok'}`, data.is_error ? 'error' : 'tool');
+    const timing = data.duration_ms != null ? ` · ${data.duration_ms}ms` : '';
+    updateRunAgent(data, data.is_error ? 'error' : 'running', data.is_error ? `${data.tool} failed` : `Finished ${data.tool}; thinking`);
+    appendRunEvent(`${data.agent_name || data.agent_id || 'Agent'} tool result`, `${data.tool} ${data.is_error ? 'failed' : 'ok'}${timing}`, data.is_error ? 'error' : 'tool');
+  });
+  source.addEventListener('agent.complete', event => {
+    const data = JSON.parse(event.data);
+    updateRunAgent(data, 'complete', 'Complete');
+    appendRunEvent('Agent complete', data.agent_name || data.agent_id || 'agent', 'complete');
+  });
+  source.addEventListener('agent.error', event => {
+    const data = JSON.parse(event.data);
+    updateRunAgent(data, 'error', 'Failed');
+    appendRunEvent('Agent failed', `${data.agent_name || data.agent_id || 'agent'} · ${data.error || 'unknown error'}`, 'error');
   });
   source.addEventListener('run.complete', event => {
     const data = JSON.parse(event.data);

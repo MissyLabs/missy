@@ -35,10 +35,16 @@ logger = logging.getLogger(__name__)
 # Sentinel placed on a run's event queue to signal stream completion.
 _STREAM_DONE = object()
 
-# Bus topics forwarded into a run's event stream. Completion/error events are
-# emitted directly by this module (from the return value of ``runtime.run``)
-# rather than mirrored from the bus, so they are not included here.
-_RUN_TOPICS = ("agent.run.start", "tool.request", "tool.result")
+# Forward every agent and tool lifecycle topic. The terminal Web run event is
+# still synthesized from ``runtime.run`` so clients retain one stable run-level
+# completion signal in addition to per-agent lifecycle events.
+_RUN_TOPICS = (
+    "agent.run.start",
+    "agent.run.complete",
+    "agent.run.error",
+    "tool.request",
+    "tool.result",
+)
 
 # Bus topic carrying the resolved provider, tools used, and cost summary for
 # a finished run. Subscribed separately from ``_RUN_TOPICS`` because its
@@ -47,7 +53,9 @@ _RUN_TOPICS = ("agent.run.start", "tool.request", "tool.result")
 _SUMMARY_TOPIC = "agent.run.complete"
 
 _EVENT_NAME_BY_TOPIC = {
-    "agent.run.start": "run.start",
+    "agent.run.start": "agent.start",
+    "agent.run.complete": "agent.complete",
+    "agent.run.error": "agent.error",
     "tool.request": "tool.request",
     "tool.result": "tool.result",
 }
@@ -85,23 +93,34 @@ class RunHandle:
     resolved_provider: str = ""
     tools_used: list[str] = field(default_factory=list)
     cost: dict[str, Any] = field(default_factory=dict)
+    agents: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _state_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _queue: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=_MAX_QUEUE_EVENTS))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "run_id": self.run_id,
-            "session_id": self.session_id,
-            "provider": self.provider,
-            "status": self.status,
-            "task_id": self.task_id,
-            "created_at": self.created_at,
-            "finished_at": self.finished_at,
-            "response": self.response,
-            "error": self.error,
-            "resolved_provider": self.resolved_provider,
-            "tools_used": self.tools_used,
-            "cost": self.cost,
-        }
+        with self._state_lock:
+            agents = sorted(
+                (dict(agent) for agent in self.agents.values()),
+                key=lambda agent: (
+                    int(agent.get("depth") or 0),
+                    str(agent.get("started_at") or ""),
+                ),
+            )
+            return {
+                "run_id": self.run_id,
+                "session_id": self.session_id,
+                "provider": self.provider,
+                "status": self.status,
+                "task_id": self.task_id,
+                "created_at": self.created_at,
+                "finished_at": self.finished_at,
+                "response": self.response,
+                "error": self.error,
+                "resolved_provider": self.resolved_provider,
+                "tools_used": list(self.tools_used),
+                "cost": dict(self.cost),
+                "agents": agents,
+            }
 
     def push(self, event: dict[str, Any]) -> None:
         with contextlib.suppress(queue.Full):
@@ -193,6 +212,8 @@ class RunRegistry:
             def summary_handler(msg: BusMessage, *, _handle: RunHandle = handle) -> None:
                 if msg.payload.get("session_id") != _handle.session_id:
                     return
+                if _handle.task_id and str(msg.payload.get("task_id") or "") != _handle.task_id:
+                    return
                 _handle.resolved_provider = str(msg.payload.get("provider") or "")
                 _handle.tools_used = list(msg.payload.get("tools_used") or [])
                 _handle.cost = redact_audit_value(dict(msg.payload.get("cost") or {}))
@@ -277,11 +298,69 @@ class RunRegistry:
                 self._active_sessions.discard(handle.session_id)
 
     def _on_bus_message(self, handle: RunHandle, msg: BusMessage) -> None:
-        if handle.task_id is None and msg.payload.get("task_id"):
-            handle.task_id = str(msg.payload["task_id"])
-        event_name = _EVENT_NAME_BY_TOPIC.get(msg.topic, msg.topic)
         data = redact_audit_value(dict(msg.payload))
-        handle.push({"event": event_name, "data": data})
+        task_id = str(data.get("task_id") or "")
+        agent_id = str(
+            data.get("agent_id")
+            or ("primary" if handle.task_id is None or task_id == handle.task_id else task_id)
+        )
+        now = str(getattr(msg, "timestamp", "") or datetime.now(UTC).isoformat())
+
+        with handle._state_lock:
+            if handle.task_id is None and msg.topic == "agent.run.start" and task_id:
+                handle.task_id = task_id
+            agent = handle.agents.setdefault(
+                agent_id,
+                {
+                    "agent_id": agent_id,
+                    "name": str(data.get("agent_name") or agent_id),
+                    "role": str(data.get("role") or "agent"),
+                    "depth": int(data.get("delegation_depth") or 0),
+                    "parent_agent_id": str(data.get("parent_agent_id") or ""),
+                    "parent_task_id": str(data.get("parent_task_id") or ""),
+                    "session_id": handle.session_id,
+                    "task_id": task_id,
+                    "status": "pending",
+                    "goal": "",
+                    "current_action": "Waiting",
+                    "tools": [],
+                    "started_at": None,
+                    "updated_at": now,
+                    "finished_at": None,
+                    "error": None,
+                },
+            )
+            agent["updated_at"] = now
+            if msg.topic == "agent.run.start":
+                agent["status"] = "running"
+                agent["goal"] = str(data.get("goal") or "")
+                agent["current_action"] = "Thinking"
+                agent["started_at"] = now
+            elif msg.topic == "tool.request":
+                tool = str(data.get("tool") or "tool")
+                agent["current_action"] = f"Running {tool}"
+                if tool not in agent["tools"]:
+                    agent["tools"].append(tool)
+            elif msg.topic == "tool.result":
+                tool = str(data.get("tool") or "tool")
+                agent["current_action"] = (
+                    f"{tool} failed" if data.get("is_error") else f"Finished {tool}; thinking"
+                )
+            elif msg.topic == "agent.run.complete":
+                agent["status"] = "complete"
+                agent["current_action"] = "Complete"
+                agent["finished_at"] = now
+            elif msg.topic == "agent.run.error":
+                agent["status"] = "error"
+                agent["current_action"] = "Failed"
+                agent["error"] = str(data.get("error") or "")
+                agent["finished_at"] = now
+
+        # Keep the legacy root-level run.start event and add explicit agent
+        # lifecycle events for both the primary and every generated child.
+        if msg.topic == "agent.run.start" and task_id == handle.task_id:
+            handle.push({"event": "run.start", "data": data})
+        handle.push({"event": _EVENT_NAME_BY_TOPIC.get(msg.topic, msg.topic), "data": data})
 
     # ------------------------------------------------------------------
     # Streaming

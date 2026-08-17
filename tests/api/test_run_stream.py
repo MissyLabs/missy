@@ -167,6 +167,103 @@ class TestRunLifecycle:
         assert complete["data"]["cost"] == {"total_cost_usd": 0.0042}
         assert handle.to_dict()["resolved_provider"] == "anthropic"
 
+    def test_stream_and_snapshot_distinguish_generated_agents(
+        self, registry: RunRegistry, bus: MessageBus
+    ) -> None:
+        class MultiAgentRuntime:
+            def run(self, message: str, session_id: str | None = None) -> str:
+                base = {"session_id": session_id}
+                bus.publish(
+                    BusMessage(
+                        topic="agent.run.start",
+                        payload={
+                            **base,
+                            "task_id": "root-task",
+                            "agent_id": "main",
+                            "agent_name": "Missy",
+                            "role": "primary",
+                            "delegation_depth": 0,
+                            "goal": message,
+                        },
+                        source="agent",
+                    )
+                )
+                bus.publish(
+                    BusMessage(
+                        topic="agent.run.start",
+                        payload={
+                            **base,
+                            "task_id": "child-task",
+                            "agent_id": "subagent-1",
+                            "agent_name": "Researcher",
+                            "role": "subagent",
+                            "delegation_depth": 1,
+                            "parent_agent_id": "main",
+                            "parent_task_id": "root-task",
+                            "goal": "collect evidence",
+                        },
+                        source="agent",
+                    )
+                )
+                bus.publish(
+                    BusMessage(
+                        topic="tool.request",
+                        payload={
+                            **base,
+                            "task_id": "child-task",
+                            "agent_id": "subagent-1",
+                            "agent_name": "Researcher",
+                            "tool": "web_fetch",
+                            "argument_keys": ["url"],
+                        },
+                        source="tool:web_fetch",
+                    )
+                )
+                bus.publish(
+                    BusMessage(
+                        topic="agent.run.complete",
+                        payload={
+                            **base,
+                            "task_id": "child-task",
+                            "agent_id": "subagent-1",
+                            "agent_name": "Researcher",
+                            "provider": "mock",
+                            "tools_used": ["web_fetch"],
+                            "cost": {},
+                        },
+                        source="agent",
+                    )
+                )
+                bus.publish(
+                    BusMessage(
+                        topic="agent.run.complete",
+                        payload={
+                            **base,
+                            "task_id": "root-task",
+                            "agent_id": "main",
+                            "agent_name": "Missy",
+                            "provider": "mock",
+                            "tools_used": ["delegate_task"],
+                            "cost": {},
+                        },
+                        source="agent",
+                    )
+                )
+                return "done"
+
+        handle = registry.start(runtime=MultiAgentRuntime(), message="coordinate", session_id="s1")
+        events = list(registry.stream(handle.run_id))
+        event_names = [event["event"] for event in events]
+
+        assert event_names.count("agent.start") == 2
+        assert event_names.count("agent.complete") == 2
+        snapshot = handle.to_dict()
+        assert [agent["agent_id"] for agent in snapshot["agents"]] == ["main", "subagent-1"]
+        child = snapshot["agents"][1]
+        assert child["parent_agent_id"] == "main"
+        assert child["tools"] == ["web_fetch"]
+        assert snapshot["tools_used"] == ["delegate_task"]
+
     def test_late_join_terminal_event_carries_summary_fields(
         self, registry: RunRegistry, bus: MessageBus
     ) -> None:

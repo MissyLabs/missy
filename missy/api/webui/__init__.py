@@ -10,6 +10,7 @@ cookie-session auth + CSRF posture as the JSON API.
 from __future__ import annotations
 
 from missy.api.webui import (
+    agents,
     audit,
     dashboard,
     diagnostics,
@@ -24,6 +25,7 @@ from missy.api.webui.layout import render_login, render_message, render_shell
 # Ordered page registry: slug -> (nav label, module).
 PAGES = {
     "dashboard": ("Dashboard", dashboard),
+    "agents": ("Agents", agents),
     "memory": ("Memory", memory),
     "audit": ("Audit", audit),
     "logs": ("Logs", logs),

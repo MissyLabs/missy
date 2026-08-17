@@ -48,17 +48,39 @@ class DelegateTaskTool(BaseTool):
                 "to this tool per subtask, so independent ones actually run "
                 "concurrently instead of serially."
             ),
-            "required": True,
+            "required": False,
+        },
+        "agents": {
+            "type": "array",
+            "description": (
+                "Optional explicit agent definitions. Each item has a name, task, "
+                "and optional depends_on list of zero-based agent indexes. Use this "
+                "when distinct roles or dependencies matter; otherwise prompt is "
+                "automatically decomposed. At most 10 agents are created."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "task": {"type": "string"},
+                    "depends_on": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["task"],
+            },
+            "required": False,
         },
     }
 
     def execute(
         self,
         *,
-        prompt: str,
+        prompt: str = "",
         _runtime: object | None = None,
         _session_id: str = "",
         _depth: int = 0,
+        _parent_agent_id: str = "",
+        _parent_task_id: str = "",
+        agents: list[dict] | None = None,
         **_kwargs,
     ) -> ToolResult:
         from missy.agent.sub_agent import (
@@ -86,10 +108,46 @@ class DelegateTaskTool(BaseTool):
                 ),
             )
 
-        if not prompt or not prompt.strip():
-            return ToolResult(success=False, output="", error="prompt is required.")
+        if (not prompt or not prompt.strip()) and not agents:
+            return ToolResult(
+                success=False,
+                output="",
+                error="prompt is required unless explicit agents are provided.",
+            )
 
-        subtasks = parse_subtasks(prompt)
+        if agents:
+            subtasks = []
+            for index, spec in enumerate(agents[:MAX_SUB_AGENTS]):
+                if not isinstance(spec, dict) or not str(spec.get("task") or "").strip():
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"agents[{index}].task must be a non-empty string.",
+                    )
+                raw_dependencies = spec.get("depends_on") or []
+                if not isinstance(raw_dependencies, list) or any(
+                    isinstance(dep, bool) or not isinstance(dep, int) for dep in raw_dependencies
+                ):
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"agents[{index}].depends_on must be a list of integer indexes.",
+                    )
+                valid_dependencies = sorted(
+                    {dep for dep in raw_dependencies if 0 <= dep < len(agents) and dep != index}
+                )
+                from missy.agent.sub_agent import SubTask
+
+                subtasks.append(
+                    SubTask(
+                        id=index,
+                        description=str(spec["task"]).strip(),
+                        name=str(spec.get("name") or "").strip()[:80],
+                        depends_on=valid_dependencies,
+                    )
+                )
+        else:
+            subtasks = parse_subtasks(prompt)
         # SubAgentRunner.run_all() truncates its own local copy to
         # MAX_SUB_AGENTS when the caller passes more subtasks than that --
         # it never mutates *this* list, so `results` ends up shorter than
@@ -99,11 +157,25 @@ class DelegateTaskTool(BaseTool):
         # unhandled ValueError and crashing tool execution.
         if len(subtasks) > MAX_SUB_AGENTS:
             subtasks = subtasks[:MAX_SUB_AGENTS]
-        runner = SubAgentRunner(runtime=_runtime, session_id=_session_id, depth=_depth + 1)
+        logger.info(
+            "Agent %s task %s generated %d sub-agent(s) at depth %d",
+            _parent_agent_id or "unknown",
+            _parent_task_id or "unknown",
+            len(subtasks),
+            _depth + 1,
+        )
+        runner = SubAgentRunner(
+            runtime=_runtime,
+            session_id=_session_id,
+            depth=_depth + 1,
+            parent_agent_id=_parent_agent_id,
+            parent_task_id=_parent_task_id,
+        )
         results = runner.run_all(subtasks)
 
         lines = [
-            f"Step {t.id}{' [FAILED]' if t.error else ''}: {t.description}\n{r}"
+            f"Step {t.id} — Agent {t.name} ({t.agent_id})"
+            f"{' [FAILED]' if t.error else ''}: {t.description}\n{r}"
             for t, r in zip(subtasks, results, strict=True)
         ]
         any_failed = any(t.error for t in subtasks)

@@ -33,6 +33,7 @@ import contextlib
 import logging
 import re
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -664,6 +665,10 @@ class AgentRuntime:
         self._cost_tracking_enabled = self._cost_tracker_module_available()
         self._cost_trackers: dict[str, Any] = {}
         self._cost_trackers_lock = threading.Lock()
+        # Per-thread execution identity. Sub-agents share this runtime so they
+        # inherit its policy and budget, but each concurrent worker still needs
+        # a distinct identity for audit logs and operator visibility.
+        self._agent_execution_local = threading.local()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
         # Scan for incomplete checkpoints from previous runs
@@ -748,6 +753,53 @@ class AgentRuntime:
             bus.publish(BusMessage(topic=topic, payload=payload, source=source))
         except Exception:
             logger.debug("Failed to publish bus message for topic %r", topic, exc_info=True)
+
+    @contextlib.contextmanager
+    def agent_execution(
+        self,
+        *,
+        agent_id: str,
+        name: str,
+        parent_agent_id: str = "",
+        parent_task_id: str = "",
+        depth: int = 0,
+    ) -> Iterator[None]:
+        """Give one shared-runtime execution a distinct observable identity.
+
+        The context is thread-local because independent delegated agents run
+        concurrently through the same :class:`AgentRuntime` instance.
+        """
+        previous = getattr(self._agent_execution_local, "value", None)
+        self._agent_execution_local.value = {
+            "agent_id": str(agent_id),
+            "agent_name": str(name),
+            "parent_agent_id": str(parent_agent_id),
+            "parent_task_id": str(parent_task_id),
+            "delegation_depth": int(depth),
+            "role": "subagent" if depth else "primary",
+        }
+        try:
+            yield
+        finally:
+            if previous is None:
+                with contextlib.suppress(AttributeError):
+                    del self._agent_execution_local.value
+            else:
+                self._agent_execution_local.value = previous
+
+    def _current_agent_execution(self) -> dict[str, Any]:
+        local = getattr(self, "_agent_execution_local", None)
+        value = getattr(local, "value", None) if local is not None else None
+        if isinstance(value, dict):
+            return dict(value)
+        return {
+            "agent_id": str(self.config.agent_id or "default"),
+            "agent_name": str(self.config.agent_id or "Missy"),
+            "parent_agent_id": "",
+            "parent_task_id": "",
+            "delegation_depth": 0,
+            "role": "primary",
+        }
 
     # ------------------------------------------------------------------
     # Request tracker
@@ -934,13 +986,35 @@ class AgentRuntime:
         session = self._resolve_session(session_id)
         sid = str(session.id)
         task_id = str(self._session_mgr.generate_task_id())
+        agent_execution = self._current_agent_execution()
+        if _delegation_depth == 0:
+            agent_execution = {
+                "agent_id": str(self.config.agent_id or "default"),
+                "agent_name": str(self.config.agent_id or "Missy"),
+                "parent_agent_id": "",
+                "parent_task_id": "",
+                "delegation_depth": 0,
+                "role": "primary",
+            }
+            self._agent_execution_local.value = agent_execution
+        agent_execution["task_id"] = task_id
+        self._agent_execution_local.value = agent_execution
+
+        logger.info(
+            "Agent %s (%s) started task %s in session %s at depth %d",
+            agent_execution["agent_id"],
+            agent_execution["agent_name"],
+            task_id,
+            sid,
+            agent_execution["delegation_depth"],
+        )
 
         self._emit_event(
             session_id=sid,
             task_id=task_id,
             event_type="agent.run.start",
             result="allow",
-            detail={"user_input_length": len(user_input)},
+            detail={"user_input_length": len(user_input), "goal": user_input[:500]},
         )
         if _HAS_MESSAGE_BUS:
             self._bus_publish(
@@ -949,12 +1023,20 @@ class AgentRuntime:
                     "session_id": sid,
                     "task_id": task_id,
                     "user_input_length": len(user_input),
+                    "goal": user_input[:500],
+                    **agent_execution,
                 },
             )
 
         try:
             provider = self._get_provider()
         except ProviderError as exc:
+            logger.warning(
+                "Agent %s task %s failed during provider resolution: %s",
+                agent_execution["agent_id"],
+                task_id,
+                exc,
+            )
             self._emit_event(
                 session_id=sid,
                 task_id=task_id,
@@ -962,6 +1044,16 @@ class AgentRuntime:
                 result="error",
                 detail={"error": str(exc), "stage": "provider_resolution"},
             )
+            if _HAS_MESSAGE_BUS:
+                self._bus_publish(
+                    AGENT_RUN_ERROR,
+                    {
+                        "session_id": sid,
+                        "task_id": task_id,
+                        "error": str(exc),
+                        **agent_execution,
+                    },
+                )
             raise
 
         # Load history from memory store
@@ -1068,7 +1160,12 @@ class AgentRuntime:
             if _HAS_MESSAGE_BUS:
                 self._bus_publish(
                     AGENT_RUN_ERROR,
-                    {"session_id": sid, "task_id": task_id, "error": str(exc)},
+                    {
+                        "session_id": sid,
+                        "task_id": task_id,
+                        "error": str(exc),
+                        **agent_execution,
+                    },
                 )
             raise
         except Exception as exc:
@@ -1086,7 +1183,12 @@ class AgentRuntime:
             if _HAS_MESSAGE_BUS:
                 self._bus_publish(
                     AGENT_RUN_ERROR,
-                    {"session_id": sid, "task_id": task_id, "error": str(exc)},
+                    {
+                        "session_id": sid,
+                        "task_id": task_id,
+                        "error": str(exc),
+                        **agent_execution,
+                    },
                 )
             logger.exception("Unexpected error during completion")
             raise ProviderError(f"Unexpected error during completion: {exc}") from exc
@@ -1151,8 +1253,16 @@ class AgentRuntime:
                     "provider": provider.name,
                     "tools_used": all_tool_names_used,
                     "cost": cost_detail,
+                    **agent_execution,
                 },
             )
+        logger.info(
+            "Agent %s completed task %s with provider %s and %d tool call(s)",
+            agent_execution["agent_id"],
+            task_id,
+            provider.name,
+            len(all_tool_names_used),
+        )
 
         # Apply response shaping (humanistic behavior layer)
         if self._response_shaper is not None:
@@ -1709,15 +1819,30 @@ class AgentRuntime:
                         tool_names_used.append(tc.name)
                         _progress.on_tool_start(tc.name)
                         if _HAS_MESSAGE_BUS:
+                            agent_execution = self._current_agent_execution()
+                            agent_execution.pop("task_id", None)
                             self._bus_publish(
                                 TOOL_REQUEST,
                                 {
                                     "tool": tc.name,
+                                    "argument_keys": sorted((tc.arguments or {}).keys()),
                                     "session_id": session_id,
                                     "task_id": task_id,
+                                    **agent_execution,
                                 },
                                 source=f"tool:{tc.name}",
                             )
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.tool.start",
+                            result="allow",
+                            detail={
+                                "tool": tc.name,
+                                "argument_keys": sorted((tc.arguments or {}).keys()),
+                            },
+                        )
+                        tool_started = time.monotonic()
                         tr = self._execute_tool(
                             tc,
                             session_id=session_id,
@@ -1725,17 +1850,41 @@ class AgentRuntime:
                             allowed_tool_names=allowed_tool_names,
                             _delegation_depth=_delegation_depth,
                         )
+                        tool_duration_ms = round((time.monotonic() - tool_started) * 1000, 1)
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.tool.complete",
+                            result="error" if tr.is_error else "allow",
+                            detail={
+                                "tool": tc.name,
+                                "is_error": tr.is_error,
+                                "duration_ms": tool_duration_ms,
+                            },
+                        )
                         if _HAS_MESSAGE_BUS:
+                            agent_execution = self._current_agent_execution()
+                            agent_execution.pop("task_id", None)
                             self._bus_publish(
                                 _BUS_TOOL_RESULT,
                                 {
                                     "tool": tc.name,
                                     "is_error": tr.is_error,
+                                    "duration_ms": tool_duration_ms,
                                     "session_id": session_id,
                                     "task_id": task_id,
+                                    **agent_execution,
                                 },
                                 source=f"tool:{tc.name}",
                             )
+                        logger.info(
+                            "Agent %s task %s finished tool %s with status %s in %.1fms",
+                            self._current_agent_execution().get("agent_id", "unknown"),
+                            task_id,
+                            tc.name,
+                            "error" if tr.is_error else "ok",
+                            tool_duration_ms,
+                        )
                         _progress.on_tool_done(tc.name, "error" if tr.is_error else "ok")
                         tool_results.append(tr)
                         if not tr.is_error:
@@ -3207,9 +3356,12 @@ class AgentRuntime:
         # these are model-suppliable.
         if tool_call.name == "delegate_task":
             tool_args = dict(tool_args)
+            agent_execution = self._current_agent_execution()
             tool_args.setdefault("_runtime", self)
             tool_args.setdefault("_session_id", session_id)
             tool_args.setdefault("_depth", _delegation_depth)
+            tool_args.setdefault("_parent_agent_id", agent_execution.get("agent_id", ""))
+            tool_args.setdefault("_parent_task_id", task_id)
 
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).
@@ -5130,6 +5282,9 @@ class AgentRuntime:
             detail: Structured event data.
         """
         try:
+            execution = self._current_agent_execution()
+            execution.pop("task_id", None)
+            detail = {**execution, **detail}
             # SR-1.1: full-event signing now happens once, at the single
             # AuditLogger write chokepoint every published event passes
             # through (missy/observability/audit_logger.py), covering all

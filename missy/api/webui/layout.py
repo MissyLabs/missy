@@ -161,6 +161,24 @@ button.small{padding:.35rem .65rem;font-size:.78rem}
 .run-log .run-event.complete{border-left-color:var(--ok);color:var(--ok)}
 .run-console .detail{margin-top:.75rem}
 
+.agent-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}
+.agent-summary>div{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1rem}
+.agent-metric{display:block;font-family:var(--mono);font-size:2rem;font-weight:700;margin-top:.25rem}
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.7rem}
+.agent-card{display:block;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);color:var(--text);padding:.85rem;border-radius:3px;font:inherit;cursor:pointer;min-width:0}
+.agent-card:hover,.agent-card:focus-visible{border-color:var(--info);background:var(--panel-raised)}
+.agent-card-head{display:flex;align-items:center;gap:.5rem}.agent-card-head .pill{margin-left:auto}
+.agent-goal{color:var(--muted);font-size:.82rem;margin:.65rem 0;min-height:2.5em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.agent-action{display:flex;align-items:center;gap:.55rem;border-top:1px solid var(--line-soft);padding-top:.55rem;font-family:var(--mono);font-size:.78rem;min-width:0}
+.agent-action strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-tools{display:flex;gap:.3rem;flex-wrap:wrap;margin-top:.55rem;min-height:1.35rem;font-size:.72rem}
+.agent-tool{border:1px solid var(--line);border-radius:2px;color:var(--info);padding:.12rem .35rem;font-family:var(--mono)}
+.agent-meta{display:flex;gap:.55rem;flex-wrap:wrap;color:var(--muted-dim);font-family:var(--mono);font-size:.68rem;margin-top:.65rem}
+.agent-meta span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:12rem}
+.agent-timeline{display:grid;gap:.4rem;margin-top:.5rem}
+.timeline-item{display:grid;grid-template-columns:3.5rem minmax(0,1fr);gap:.35rem .5rem;border-left:2px solid var(--line);padding:.35rem .55rem;background:var(--void);font-family:var(--mono);font-size:.72rem}
+.timeline-item time{grid-column:2;color:var(--muted-dim);overflow:hidden;text-overflow:ellipsis}
+
 .op-form{display:grid;gap:.5rem;margin-top:.85rem;border-top:1px solid var(--line-soft);padding-top:.85rem}
 .op-form input,.op-form textarea{width:100%;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:3px;padding:.6rem;font:inherit;font-size:.85rem}
 .op-form textarea{resize:vertical;min-height:3.5rem}

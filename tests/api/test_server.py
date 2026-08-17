@@ -167,6 +167,35 @@ class TestHealth:
         assert resp.headers.get("Cache-Control") == "no-store"
 
 
+class TestAgentActivity:
+    def test_agent_activity_endpoint_returns_redacted_projection(
+        self, client: httpx.Client
+    ) -> None:
+        event_bus.publish(
+            AuditEvent.now(
+                session_id="web-agent-session",
+                task_id="web-agent-task",
+                event_type="agent.run.start",
+                category="provider",
+                result="allow",
+                detail={
+                    "agent_id": "subagent-test",
+                    "agent_name": "Test Agent",
+                    "role": "subagent",
+                    "delegation_depth": 1,
+                    "goal": "inspect the repository",
+                },
+            )
+        )
+
+        response = client.get("/agents/activity", params={"session_id": "web-agent-session"})
+
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["active_count"] == 1
+        assert payload["agents"][0]["agent_id"] == "subagent-test"
+
+
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Attention system** — 5 brain-inspired subsystems (alerting, orienting, sustained, selective, executive) that track urgency, extract topics, maintain focus, and prioritize tools
 - **Sleep mode** — context consolidation at 80% token capacity: summarizes old turns, extracts key facts, preserves recent context
 - **Unified memory** — merges learnings, summaries, and playbook into a single relevance-ranked, deduplicated context block
-- **Sub-agents** — spawn child agent instances for parallel work
+- **Sub-agents** — generate named child agents for parallel or dependency-ordered work, with distinct IDs and parent/depth lineage
 - **Approval gate** — human-in-the-loop confirmation for sensitive operations
 - **Interactive approval TUI** — real-time Rich terminal prompt for policy-denied operations (allow once / deny / allow always)
 - **Circuit breaker** — automatic backoff on provider failures (threshold=5, exponential to 300s)
@@ -108,6 +108,8 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 ### Observability
 - **Audit logger** — every policy decision, provider call, and tool execution as JSONL, signed by agent identity
 - **Application logs** — rotating Python/provider diagnostics at `~/.missy/missy.log` (`missy logs tail`)
+- **Agent activity console** — live per-agent goals, current actions, tools, timing, status, and parent/child lineage across every channel
+- **Live run stream** — primary and generated-agent lifecycle events plus tool argument keys, outcomes, and durations
 - **OpenTelemetry** — optional traces and metrics via OTLP (gRPC or HTTP)
 - **Cost tracking** — per-session spend monitoring with configurable caps
 
