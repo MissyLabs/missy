@@ -55,6 +55,15 @@ _FABRICATION_PATTERNS: list[re.Pattern[str]] = [
         r"```(?:bash|shell|console|sh|text|output)?\s*\n"
         r"(?:[$#>].*\n|(?:total \d|drwx|Filesystem|CONTAINER|NAME\s|PID\s|USER\s))"
     ),
+    # A tree-style directory/file listing (`├──`/`└──` box-drawing branches)
+    # -- an unmistakable "this is real filesystem output" visual signature,
+    # confirmed live (qwen3.8-27b, "print cwd and list files" over shell_exec)
+    # fabricating exactly this shape with zero tool calls behind it, past
+    # both this module's other patterns and detect_promise_without_action.
+    # Safe to match unconditionally (not just inside a fence): this function
+    # only ever runs when tools_used is empty, and Missy has no way to
+    # legitimately know a real directory tree without having called a tool.
+    re.compile(r"[├└]──"),
     # Claims a concrete artifact was produced/delivered.
     re.compile(
         r"(?i)\b(?:I(?:'ve| have)?\s+)?(?:generated|posted|created|saved|"
