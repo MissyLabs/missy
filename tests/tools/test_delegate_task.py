@@ -72,6 +72,24 @@ class TestDispatch:
         assert "result a" in r.output
         assert "result b" in r.output
 
+    def test_explicit_named_agents_are_generated_with_dependencies(self, tool):
+        runtime = MagicMock()
+        runtime.run.side_effect = ["research", "summary"]
+        result = tool.execute(
+            agents=[
+                {"name": "Researcher", "task": "collect evidence"},
+                {"name": "Writer", "task": "write summary", "depends_on": [0]},
+            ],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert result.success
+        assert "Agent Researcher (subagent-" in result.output
+        assert "Agent Writer (subagent-" in result.output
+        assert "Result of step 0: research" in runtime.run.call_args_list[1].args[0]
+
     def test_depth_incremented_for_children(self, tool):
         """The sub-agent's own delegate_task calls (if any) must see
         depth+1, not the same depth -- otherwise the depth guard never
@@ -118,10 +136,11 @@ class TestDispatch:
 
 
 class TestSchema:
-    def test_schema_declares_prompt_required(self, tool):
+    def test_schema_allows_prompt_or_explicit_agents(self, tool):
         schema = tool.get_schema()
         assert schema["name"] == "delegate_task"
-        assert "prompt" in schema["parameters"]["required"]
+        assert "prompt" not in schema["parameters"]["required"]
+        assert "agents" in schema["parameters"]["properties"]
 
     def test_description_encourages_batching_into_one_call(self, tool):
         """Regression test for the 5th tool-specific validation run's
@@ -134,3 +153,8 @@ class TestSchema:
         schema = tool.get_schema()
         assert "one call" in schema["description"].lower()
         assert "concurrent" in schema["parameters"]["properties"]["prompt"]["description"].lower()
+
+    def test_schema_accepts_explicit_agent_definitions(self, tool):
+        agents = tool.get_schema()["parameters"]["properties"]["agents"]
+        assert agents["type"] == "array"
+        assert agents["items"]["properties"]["depends_on"]["items"]["type"] == "integer"
