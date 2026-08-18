@@ -304,8 +304,8 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Decomposes a compound task into sub-agent steps, run against the *same* AgentRuntime/session as the caller (budget/policy stay aggregated, not per-child-independent) with genuine parallelism for independent steps, bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
-| **Key exports** | `SubAgentRunner`, `SubTask`, `parse_subtasks`, `MAX_SUB_AGENT_DEPTH` |
+| **Purpose** | Decomposes concrete workflows or builds a diversified specialist plan for advanced requests, validates the dependency DAG, executes independent work in parallel, applies configurable failure propagation, and optionally runs a synthesis agent. Every child uses the *same* AgentRuntime/session as the caller so budget and policy remain aggregated; nesting is bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
+| **Key exports** | `SubAgentRunner`, `SubTask`, `parse_subtasks`, `build_diverse_subtasks`, `validate_subtasks`, `DelegationPlanError`, `MAX_SUB_AGENT_DEPTH` |
 | **Internal deps** | `missy.agent.runtime` (via the runtime instance passed in, not an import) |
 
 ### missy.agent.approval
@@ -470,7 +470,7 @@ dependencies on other `missy` modules.
 | `incus_tools` | LXD/Incus container management |
 | `code_evolve` | Self-code modification (with approval) |
 | `self_create_tool` | Writes custom tool *proposal* scripts to `~/.missy/custom-tools/` for human review — not automatically loaded/registered/callable |
-| `delegate_task` | Decomposes a compound task into sub-agent steps via `SubAgentRunner`, reusing the caller's runtime/session for shared budget+policy; depth-limited, real concurrency for independent steps |
+| `delegate_task` | Decomposes concrete workflows or runs diversified specialist analysis with final synthesis via `SubAgentRunner`; validates dependencies, supports continue/skip-dependent/fail-fast policies, reuses the caller's runtime/session for shared budget+policy, and keeps depth/concurrency bounded |
 
 ### missy.tools.intelligence
 
