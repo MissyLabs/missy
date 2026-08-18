@@ -204,7 +204,7 @@ def test_collect_tool_policy_groups_extends_builtin_groups():
 
 
 def test_new_agent_tools_are_reachable_over_discord():
-    """Regression: F03/F04/F16 tools must be in the Discord allowlist.
+    """Regression: generated/retrieval/composition tools must reach Discord.
 
     rag_query (F03), graph_query (F04), and video_storyboard (F16) are
     registered as built-in tools, but the ``discord`` capability_mode only
@@ -215,13 +215,14 @@ def test_new_agent_tools_are_reachable_over_discord():
     """
     from missy.policy.tool_policy_pipeline import MISSY_DISCORD_TOOLS
 
-    for name in ("rag_query", "graph_query", "video_storyboard"):
+    for name in ("rag_query", "graph_query", "video_storyboard", "image_generate"):
         assert name in MISSY_DISCORD_TOOLS, f"{name} missing from MISSY_DISCORD_TOOLS"
 
     # And they actually survive the discord capability-mode policy resolution.
     layers = build_configured_tool_policy_layers(capability_mode="discord")
     decision = resolve_tool_policy(
-        ["rag_query", "graph_query", "video_storyboard", "x11_screenshot"], layers
+        ["rag_query", "graph_query", "video_storyboard", "image_generate", "x11_screenshot"],
+        layers,
     )
     # x11_screenshot is now also reachable over Discord -- this bot's
     # desktop control was commissioned specifically for Discord-driven
@@ -230,6 +231,7 @@ def test_new_agent_tools_are_reachable_over_discord():
         "rag_query",
         "graph_query",
         "video_storyboard",
+        "image_generate",
         "x11_screenshot",
     }
 

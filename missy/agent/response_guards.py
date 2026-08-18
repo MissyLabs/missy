@@ -1037,6 +1037,79 @@ def make_video_generation_retry_prompt(user_input: str = "") -> str:
     )
 
 
+_IMAGE_GENERATION_REQUEST_RE = re.compile(
+    r"\b(?:generate|create|make|draw|render|produce|design)\b[^\n]{0,140}"
+    r"\b(?:image|picture|illustration|artwork|poster|wallpaper|portrait)\b",
+    re.I,
+)
+
+
+def is_image_generation_request(user_input: str) -> bool:
+    """Return whether *user_input* asks for a newly generated still image."""
+    if not isinstance(user_input, str):
+        return False
+    # A video request may mention an input image. It belongs to the video
+    # workflow even if it also happens to match the broad still-image regex.
+    if _VIDEO_GENERATION_REQUEST_RE.search(user_input):
+        return False
+    return bool(_IMAGE_GENERATION_REQUEST_RE.search(user_input))
+
+
+def find_unmet_image_generation_request(
+    user_input: str,
+    tool_names_used: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Require real ``image_generate`` evidence for a still-image request."""
+    if available_tool_names is not None and "image_generate" not in available_tool_names:
+        return []
+    if not is_image_generation_request(user_input):
+        return []
+    return [] if "image_generate" in tool_names_used else ["image_generate"]
+
+
+def make_image_generation_retry_prompt(user_input: str = "") -> str:
+    """Return a correction requiring the native still-image tool."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        "This is a still-image creation request. Call image_generate now with a "
+        "faithful visual prompt and wait for its actual result. Do not substitute "
+        "video_generate, promise to extract a video frame, narrate a tool call in "
+        "brackets, or claim that no image tool is available."
+        f"{anchor}"
+    )
+
+
+def find_unmet_generated_image_delivery(
+    transport_input: str,
+    user_input: str,
+    successful_tool_names: list[str],
+    available_tool_names: set[str] | frozenset[str] | None = None,
+) -> list[str]:
+    """Require Discord upload after successful still-image generation."""
+    if not is_image_generation_request(user_input):
+        return []
+    if not isinstance(transport_input, str) or "[Discord channel " not in transport_input:
+        return []
+    if "image_generate" not in successful_tool_names:
+        return []
+    if available_tool_names is not None and "discord_upload_file" not in available_tool_names:
+        return []
+    return [] if "discord_upload_file" in successful_tool_names else ["discord_upload_file"]
+
+
+def make_generated_image_delivery_retry_prompt(transport_input: str = "") -> str:
+    """Require upload of the generated PNG to the active Discord channel."""
+    channel_match = re.search(r"\[Discord channel (\d+)\]", transport_input or "")
+    channel_instruction = f" with channel_id='{channel_match.group(1)}'" if channel_match else ""
+    return (
+        "The image was generated successfully but has not been delivered to the "
+        "Discord user. Call discord_upload_file now using the exact image path from "
+        f"the image_generate result{channel_instruction}. Do not merely print the path "
+        "or claim the upload happened."
+    )
+
+
 _TERMINAL_PARAMETER_ERROR_RE = re.compile(
     r"\b(?:mutually exclusive|requires? [`'\"]?[a-z_]+|text-to-video only|"
     r"image-to-video only|must (?:be|provide|pass|specify|choose)|"
@@ -1054,18 +1127,18 @@ _ERROR_REPORT_RE = re.compile(
 def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -> bool:
     """Return whether terminal tool failures were honestly relayed.
 
-    Any ``video_generate`` failure is terminal once reported: blindly retrying
-    a minutes-long GPU operation can duplicate jobs, defeat an explicit timeout,
-    or churn on an operator-actionable missing-model/GPU error. Other tools are
+    Any image/video generation failure is terminal once reported: blindly
+    retrying a GPU operation can duplicate jobs, defeat an explicit timeout, or
+    churn on an operator-actionable missing-model/GPU error. Other tools are
     terminal here only for deterministic parameter refusals.
     """
-    video_generation_errors = all(
-        error.casefold().startswith("video_generate:") for error in errors
+    media_generation_errors = all(
+        error.casefold().startswith(("video_generate:", "image_generate:")) for error in errors
     )
     return bool(
         errors
         and (
-            video_generation_errors
+            media_generation_errors
             or all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
         )
         and _ERROR_REPORT_RE.search(final_text)
@@ -1073,13 +1146,18 @@ def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -
 
 
 def make_video_generation_error_report_prompt(errors: list[str], user_input: str = "") -> str:
-    """Tell the model to relay a terminal render failure without retry churn."""
+    """Tell the model to relay a terminal media-render failure without retry churn."""
     observed = "\n".join(f"  - {error[:500]}" for error in errors)
     anchor = f"\n\nThe original request was:\n{user_input}" if user_input else ""
+    tool_name = (
+        "image_generate"
+        if errors and all(error.casefold().startswith("image_generate:") for error in errors)
+        else "video_generate"
+    )
     return (
-        "The requested video_generate call returned a terminal result. Do not retry "
-        "video_generate, switch backends, inspect the host with shell/file tools, or "
-        "substitute another video tool unless the user explicitly requested that fallback. "
+        f"The requested {tool_name} call returned a terminal result. Do not retry "
+        f"{tool_name}, switch models/backends, inspect the host with shell/file tools, or "
+        "substitute another media tool unless the user explicitly requested that fallback. "
         "Reply now with the exact observed error and a concise actionable next step; do "
         "not claim a file was generated.\n\nObserved tool result(s):\n"
         f"{observed}{anchor}"

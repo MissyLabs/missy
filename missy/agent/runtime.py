@@ -29,6 +29,7 @@ Example::
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import logging
 import re
@@ -110,9 +111,42 @@ _PLACEHOLDER_ARTIFACT_RE = re.compile(
 _LEAKED_TOOL_CALL_NARRATION_RE = re.compile(
     r"\[Called tool:.*?\}\s*\]"  # with-args form: ends at the first "}]"
     r"|\[Called tool:[^\]{}]*\]"  # names-only form (no braces/brackets inside)
-    r"|\[Tool call\]",
+    # Ollama-style narrated call. If a JSON object follows at the end of the
+    # response, remove it with the label so raw pseudo-protocol never leaks.
+    r"|\[Tool call(?:\s*:[^\]\r\n]+)?\](?:\s*\{.*\}\s*)?$",
     re.DOTALL,
 )
+
+
+def _image_result_path(content: str) -> str:
+    """Extract a generated image path from trusted internal tool output."""
+    try:
+        parsed = ast.literal_eval(content)
+    except (SyntaxError, ValueError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    path = parsed.get("path")
+    return path if isinstance(path, str) else ""
+
+
+def _grounded_image_response(
+    observations: list[tuple[dict[str, Any], str, bool]],
+    successful_tool_names: list[str],
+) -> str:
+    """Build a non-empty final reply solely from observed image tool results."""
+    if not observations:
+        return ""
+    _arguments, result, is_error = observations[-1]
+    if is_error:
+        detail = result.strip() or "the image tool returned an unspecified error"
+        return f"I could not generate the requested image: {detail}"
+    if "discord_upload_file" in successful_tool_names:
+        return "Generated and uploaded the image successfully."
+    path = _image_result_path(result)
+    if path:
+        return f"Generated the image successfully: {path}"
+    return "Generated the image successfully."
 
 
 def _strip_leaked_tool_call_narration(text: str) -> str:
@@ -123,7 +157,7 @@ def _strip_leaked_tool_call_narration(text: str) -> str:
     if every upstream retry guard was exhausted. Idempotent; a no-op for text
     that contains no such artifact.
     """
-    if "[Called tool:" not in text and "[Tool call]" not in text:
+    if "[Called tool:" not in text and "[Tool call" not in text:
         return text
     return _LEAKED_TOOL_CALL_NARRATION_RE.sub("", text).strip()
 
@@ -150,13 +184,17 @@ _PLACEHOLDER_RETRY_NUDGE = (
 # a literal <tool_call> tag reach here: it is never a legitimate reply
 # (the user should see prose or a real tool result, not raw internal
 # protocol syntax), so it must not be forwarded as-is.
-_LEAKED_TOOL_CALL_TAG_RE = re.compile(r"<tool_call>", re.IGNORECASE)
+_LEAKED_TOOL_CALL_TAG_RE = re.compile(
+    r"<tool_call>|\[Tool call\s*:[^\]\r\n]+\]",
+    re.IGNORECASE,
+)
 
 _MAX_LEAKED_TOOL_CALL_RETRIES = 1
 
 _LEAKED_TOOL_CALL_RETRY_NUDGE = (
     "[System reminder]: Your previous response contained a raw, unexecuted "
-    "<tool_call> block instead of a real reply -- that syntax never "
+    "tool-call block or bracketed tool narration instead of a real call -- "
+    "that text never "
     "actually ran. If you intend to call a tool, the tool-calling "
     "mechanism itself must emit and dispatch it, not your response text; "
     "produce either genuine prose describing what already happened, or "
@@ -405,7 +443,10 @@ class AgentConfig:
         "If it requires running a command, call shell_exec now. "
         "Available tools: file_read, file_write, file_delete, list_files, "
         "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
-        "provider_benchmark, delegate_task. For advanced, ambiguous, or "
+        "provider_benchmark, delegate_task, image_generate. For still-image "
+        "creation, call image_generate; never substitute video_generate or "
+        "claim that no image tool is available. Use its returned path directly; "
+        "do not call file_read on a generated binary PNG. For advanced, ambiguous, or "
         "high-impact requests with separable analysis, use one delegate_task "
         "call with strategy='diverse' so complementary specialists work in "
         "parallel and a lead agent synthesizes their findings. Use explicit "
@@ -521,8 +562,9 @@ DISCORD_SYSTEM_PROMPT = (
     "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
     "discord_upload_file, discord_lookup_user, Incus container management tools, vision tools, "
     "memory tools (memory_search, memory_describe, memory_expand), "
-    "delegate_task for multi-step sub-agent work, and the video tools "
-    "video_generate and video_edit. For advanced, ambiguous, or high-impact "
+    "delegate_task for multi-step sub-agent work, image_generate for still "
+    "images, and the video tools video_generate and video_edit. For advanced, "
+    "ambiguous, or high-impact "
     "requests with separable analysis, use one delegate_task call with "
     "strategy='diverse' so complementary specialists run in parallel and a "
     "lead agent synthesizes the result. Use explicit agents with dependencies "
@@ -558,6 +600,12 @@ DISCORD_SYSTEM_PROMPT = (
     "availability; call the relevant status tool before claiming something "
     "isn't possible or reporting an action as done. "
     "Use discord_upload_file to share files or images in the current channel. "
+    "STILL IMAGE GENERATION: Call image_generate for requests to create, draw, "
+    "render, or generate a still image, then call discord_upload_file with the "
+    "returned path to deliver it in this channel. Do not call file_read on the "
+    "generated binary PNG. Never substitute video_generate for a still image, "
+    "narrate a tool call in brackets, or claim no text-to-image tool is available "
+    "when image_generate is offered. "
     "TAGGING/MENTIONING USERS: To actually ping/tag/mention someone, your "
     "reply text MUST contain the literal syntax <@THEIR_USER_ID> with their "
     "real numeric Discord ID — plain text like '@bob' or '@Bob' NEVER "
@@ -1556,6 +1604,8 @@ class AgentRuntime:
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
             find_unmet_desktop_requests,
+            find_unmet_generated_image_delivery,
+            find_unmet_image_generation_request,
             find_unmet_video_generation_request,
             find_unmet_web_requests,
             find_unreported_calculator_expressions,
@@ -1571,7 +1621,9 @@ class AgentRuntime:
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
             make_filesystem_verification_retry_prompt,
+            make_generated_image_delivery_retry_prompt,
             make_identity_confusion_retry_prompt,
+            make_image_generation_retry_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
             make_video_generation_error_report_prompt,
@@ -1664,6 +1716,7 @@ class AgentRuntime:
         _MAX_CALCULATOR_COMPLETENESS_RETRIES = 1
         _calculator_completeness_retries = 0
         _calculator_observations: list[tuple[str, str, bool]] = []
+        _image_generation_observations: list[tuple[dict[str, Any], str, bool]] = []
         _video_generation_observations: list[tuple[dict[str, Any], str, bool]] = []
         _MAX_VIDEO_REPRODUCIBILITY_RETRIES = 1
         _video_reproducibility_retries = 0
@@ -1680,6 +1733,10 @@ class AgentRuntime:
         # the whole remainder of the workflow.
         _MAX_WEB_REQUEST_RETRIES = 4
         _web_request_retries = 0
+        _MAX_IMAGE_GENERATION_RETRIES = 1
+        _image_generation_retries = 0
+        _MAX_IMAGE_DELIVERY_RETRIES = 1
+        _image_delivery_retries = 0
         _MAX_VIDEO_GENERATION_RETRIES = 1
         _video_generation_retries = 0
         _leaked_tool_call_retries = 0
@@ -1706,6 +1763,8 @@ class AgentRuntime:
                 + _MAX_CALCULATOR_COMPLETENESS_RETRIES
                 + _MAX_FILESYSTEM_VERIFICATION_RETRIES
                 + 2 * _MAX_WEB_REQUEST_RETRIES
+                + 2 * _MAX_IMAGE_GENERATION_RETRIES
+                + 2 * _MAX_IMAGE_DELIVERY_RETRIES
                 + 2 * _MAX_VIDEO_GENERATION_RETRIES
             )
             for iteration in range(_desktop_grace_limit):
@@ -1725,6 +1784,12 @@ class AgentRuntime:
                     # next missing step. Reserve both rather than consuming the
                     # task's normal iteration budget with the guard itself.
                     + 2 * min(_web_request_retries, _MAX_WEB_REQUEST_RETRIES)
+                    + 2
+                    * min(
+                        _image_generation_retries,
+                        _MAX_IMAGE_GENERATION_RETRIES,
+                    )
+                    + 2 * min(_image_delivery_retries, _MAX_IMAGE_DELIVERY_RETRIES)
                     + 2
                     * min(
                         _video_generation_retries,
@@ -1914,6 +1979,10 @@ class AgentRuntime:
                             _video_generation_observations.append(
                                 (dict(tc.arguments or {}), tr.content or "", bool(tr.is_error))
                             )
+                        if tc.name == "image_generate":
+                            _image_generation_observations.append(
+                                (dict(tc.arguments or {}), tr.content or "", bool(tr.is_error))
+                            )
 
                         # OpenClaw A3: mutation fingerprinting
                         _fp = _fingerprint_tc(tc.name, tc.arguments or {})
@@ -2073,7 +2142,7 @@ class AgentRuntime:
 
                     # Inject verification prompt
                     if _last_round_errors and all(
-                        error.casefold().startswith("video_generate:")
+                        error.casefold().startswith(("video_generate:", "image_generate:"))
                         for error in _last_round_errors
                     ):
                         verification = make_video_generation_error_report_prompt(
@@ -2112,6 +2181,35 @@ class AgentRuntime:
                     response.finish_reason,
                 )
 
+                # A provider can successfully dispatch a media tool and then
+                # finish with an empty content field. This occurred in the
+                # real Ollama loop after image_generate (and an unnecessary
+                # file_read of the PNG), producing a blank CLI panel despite
+                # a valid image on disk. Recover only from trusted tool
+                # observations, never by inventing an outcome. The normal
+                # Discord delivery guard below still runs and requires an
+                # actual upload before accepting the response there.
+                if not final_text.strip() and _image_generation_observations:
+                    final_text = _grounded_image_response(
+                        _image_generation_observations,
+                        successful_tool_names,
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.empty_image_recovered",
+                            result="warn",
+                            detail={
+                                "image_generate_succeeded": not _image_generation_observations[-1][
+                                    2
+                                ],
+                                "discord_upload_succeeded": (
+                                    "discord_upload_file" in successful_tool_names
+                                ),
+                            },
+                        )
+
                 # FX-round2-F1: a provider's "final" response is sometimes
                 # a raw internal placeholder artifact (see
                 # _PLACEHOLDER_ARTIFACT_RE) instead of a real answer --
@@ -2149,15 +2247,15 @@ class AgentRuntime:
                             detail={"placeholder_text": final_text},
                         )
 
-                # XT-006: a literal, unexecuted <tool_call> tag leaked into
+                # XT-006: literal, unexecuted tool-call protocol leaked into
                 # the "final" text -- never a legitimate reply. See
                 # _LEAKED_TOOL_CALL_TAG_RE's docstring above.
                 if _LEAKED_TOOL_CALL_TAG_RE.search(final_text):
                     if _leaked_tool_call_retries < _MAX_LEAKED_TOOL_CALL_RETRIES:
                         _leaked_tool_call_retries += 1
                         logger.warning(
-                            "Tool loop final response contained a raw, unexecuted "
-                            "<tool_call> tag; retrying once with a correction."
+                            "Tool loop final response contained raw, unexecuted "
+                            "tool-call narration; retrying once with a correction."
                         )
                         loop_messages.append({"role": "assistant", "content": final_text})
                         loop_messages.append(
@@ -2180,6 +2278,11 @@ class AgentRuntime:
                             result="warn",
                             detail={"response_excerpt": final_text[:200]},
                         )
+                    final_text = (
+                        "I could not execute the requested tool call. The provider returned "
+                        "tool-call syntax as text instead of dispatching a real tool, so I "
+                        "cannot claim the requested action completed."
+                    )
 
                 # Identity-confusion guard (missy/agent/response_guards.py):
                 # 3rd tool-specific validation run (2026-07-14) found this
@@ -2376,6 +2479,83 @@ class AgentRuntime:
                         "these required successful steps did not run: "
                         + ", ".join(_missing_web_requests)
                         + ". I cannot confirm the browser task as complete."
+                    )
+
+                _missing_image_generation = find_unmet_image_generation_request(
+                    _tool_request_input, tool_names_used, allowed_tool_names
+                )
+                if _missing_image_generation and not is_security_refusal(
+                    final_text, _tool_request_input
+                ):
+                    if _image_generation_retries < _MAX_IMAGE_GENERATION_RETRIES:
+                        _image_generation_retries += 1
+                        logger.warning("Still-image request missing image_generate; retrying once.")
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_image_generation_retry_prompt(_tool_request_input),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.image_generation_retry",
+                                result="warn",
+                                detail={"missing_tools": _missing_image_generation},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.image_generation_unresolved",
+                            result="warn",
+                            detail={"missing_tools": _missing_image_generation},
+                        )
+                    final_text = (
+                        "I could not generate the requested image because image_generate "
+                        "did not execute. I cannot claim an image was created."
+                    )
+
+                _missing_image_delivery = find_unmet_generated_image_delivery(
+                    user_input,
+                    _tool_request_input,
+                    successful_tool_names,
+                    allowed_tool_names,
+                )
+                if _missing_image_delivery:
+                    if _image_delivery_retries < _MAX_IMAGE_DELIVERY_RETRIES:
+                        _image_delivery_retries += 1
+                        logger.warning("Generated Discord image was not uploaded; retrying once.")
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_generated_image_delivery_retry_prompt(user_input),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.image_delivery_retry",
+                                result="warn",
+                                detail={"missing_tools": _missing_image_delivery},
+                            )
+                        continue
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.image_delivery_unresolved",
+                            result="warn",
+                            detail={"missing_tools": _missing_image_delivery},
+                        )
+                    final_text = (
+                        "The image was generated, but discord_upload_file did not complete, "
+                        "so I cannot claim it was delivered to the channel."
                     )
 
                 _missing_video_generation = find_unmet_video_generation_request(
