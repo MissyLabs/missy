@@ -14,6 +14,8 @@ from missy.agent.response_guards import (
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
     find_unmet_desktop_requests,
+    find_unmet_generated_image_delivery,
+    find_unmet_image_generation_request,
     find_unmet_video_generation_request,
     find_unmet_web_requests,
     find_unreported_calculator_expressions,
@@ -29,7 +31,9 @@ from missy.agent.response_guards import (
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
     make_filesystem_verification_retry_prompt,
+    make_generated_image_delivery_retry_prompt,
     make_identity_confusion_retry_prompt,
+    make_image_generation_retry_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
     make_video_generation_error_report_prompt,
@@ -39,6 +43,64 @@ from missy.agent.response_guards import (
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
 )
+
+
+class TestImageGenerationGuards:
+    def test_exact_failed_request_requires_native_image_tool(self):
+        prompt = "generate me a cat image of a cat smoking a bong"
+        assert find_unmet_image_generation_request(prompt, [], {"image_generate"}) == [
+            "image_generate"
+        ]
+        assert find_unmet_image_generation_request(
+            prompt, ["video_generate"], {"image_generate", "video_generate"}
+        ) == ["image_generate"]
+        assert (
+            find_unmet_image_generation_request(prompt, ["image_generate"], {"image_generate"})
+            == []
+        )
+
+    def test_video_request_is_not_misrouted_to_still_image(self):
+        prompt = "Generate a video by animating this image."
+        assert (
+            find_unmet_image_generation_request(prompt, [], {"image_generate", "video_generate"})
+            == []
+        )
+
+    def test_discord_generation_requires_upload_after_success(self):
+        transport = (
+            "[Discord channel 1484360479852986499] Use discord_upload_file with "
+            "channel_id='1484360479852986499' to share files here."
+        )
+        prompt = "generate me a cat image"
+        available = {"image_generate", "discord_upload_file"}
+        assert find_unmet_generated_image_delivery(
+            transport, prompt, ["image_generate"], available
+        ) == ["discord_upload_file"]
+        assert (
+            find_unmet_generated_image_delivery(
+                transport,
+                prompt,
+                ["image_generate", "discord_upload_file"],
+                available,
+            )
+            == []
+        )
+
+    def test_retry_prompts_forbid_video_substitution_and_require_delivery(self):
+        generation = make_image_generation_retry_prompt("generate a cat image")
+        assert "image_generate" in generation
+        assert "video_generate" in generation
+        delivery = make_generated_image_delivery_retry_prompt(
+            "[Discord channel 123456789012345678]"
+        )
+        assert "discord_upload_file" in delivery
+        assert "123456789012345678" in delivery
+
+    def test_image_generation_timeout_is_terminal_once_reported(self):
+        assert terminal_parameter_errors_are_reported(
+            ["image_generate: generation timed out after 30 seconds"],
+            "The image generation timed out.",
+        )
 
 
 class TestVideoGenerationGuards:

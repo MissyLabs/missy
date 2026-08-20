@@ -2205,6 +2205,147 @@ class TestLeakedToolCallTagRetry:
         assert retry_events == []
         assert result == "4"
 
+    def test_exact_discord_leak_recovers_with_real_image_generation_and_upload(self):
+        provider = _make_provider()
+        image_tool = _make_mock_tool("image_generate")
+        upload_tool = _make_mock_tool("discord_upload_file")
+        video_tool = _make_mock_tool("video_generate")
+        tool_reg = _make_tool_registry([image_tool, upload_tool, video_tool])
+
+        def execute(name, **_kwargs):
+            if name == "image_generate":
+                return MagicMock(
+                    success=True,
+                    output={"path": "/tmp/generated-cat.png", "seed": 4242},
+                    error=None,
+                )
+            if name == "discord_upload_file":
+                return MagicMock(success=True, output="uploaded", error=None)
+            raise AssertionError(f"unexpected tool execution: {name}")
+
+        tool_reg.execute.side_effect = execute
+        leaked = (
+            "I'll try generating that with the ComfyUI-backed video tool and pull a "
+            "frame from it for you.\n\n"
+            "[Tool call: video_generate]\n"
+            '{"prompt": "a fluffy tabby cat holding a glass bong", "duration_seconds": 5}'
+        )
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response(leaked),
+            _make_tool_call_response(
+                "image_generate",
+                args={"prompt": "a comedic cartoon tabby cat holding a glass bong"},
+                tool_id="image-1",
+            ),
+            _make_stop_response("The image is generated."),
+            _make_tool_call_response(
+                "discord_upload_file",
+                args={
+                    "file_path": "/tmp/generated-cat.png",
+                    "channel_id": "1484360479852986499",
+                },
+                tool_id="upload-1",
+            ),
+            _make_stop_response("Generated and uploaded the image."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+        transport_prompt = (
+            "[Discord channel 1484360479852986499] Use discord_upload_file with "
+            "channel_id='1484360479852986499' to share files here.\n\n"
+            "generate me a cat image of a cat smoking a bong"
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            runtime._emit_event = lambda **kwargs: events.append(kwargs)
+            result = runtime.run(
+                transport_prompt,
+                _explicit_tool_request_input="generate me a cat image of a cat smoking a bong",
+            )
+
+        assert result == "Generated and uploaded the image."
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "image_generate",
+            "discord_upload_file",
+        ]
+        assert "video_generate" not in [call.args[0] for call in tool_reg.execute.call_args_list]
+        assert any(
+            event["event_type"] == "agent.response.leaked_tool_call_retry" for event in events
+        )
+        assert any(event["event_type"] == "agent.response.image_delivery_retry" for event in events)
+
+    def test_bracketed_named_tool_call_and_json_are_sanitized(self):
+        from missy.agent.runtime import _strip_leaked_tool_call_narration
+
+        text = (
+            "I will try it now.\n\n[Tool call: video_generate]\n"
+            '{"prompt": "cat", "duration_seconds": 5}'
+        )
+        cleaned = _strip_leaked_tool_call_narration(text)
+        assert cleaned == "I will try it now."
+        assert "video_generate" not in cleaned
+        assert "duration_seconds" not in cleaned
+
+    def test_empty_stop_after_generated_image_recovers_real_path(self):
+        """Live Ollama regression: generate, inspect PNG, then empty stop."""
+        provider = _make_provider()
+        image_tool = _make_mock_tool("image_generate")
+        read_tool = _make_mock_tool("file_read")
+        tool_reg = _make_tool_registry([image_tool, read_tool])
+
+        def execute(name, **_kwargs):
+            if name == "image_generate":
+                return MagicMock(
+                    success=True,
+                    output={
+                        "path": "/tmp/generated-cat.png",
+                        "seed": 8675309,
+                        "size_bytes": 502256,
+                    },
+                    error=None,
+                )
+            if name == "file_read":
+                return MagicMock(success=True, output="binary image data", error=None)
+            raise AssertionError(f"unexpected tool execution: {name}")
+
+        tool_reg.execute.side_effect = execute
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response(
+                "image_generate",
+                args={"prompt": "a cat smoking a bong"},
+                tool_id="image-1",
+            ),
+            _make_tool_call_response(
+                "file_read",
+                args={"path": "/tmp/generated-cat.png", "max_bytes": 1024},
+                tool_id="read-1",
+            ),
+            _make_stop_response(""),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            runtime._emit_event = lambda **kwargs: events.append(kwargs)
+            result = runtime.run("generate me a cat image of a cat smoking a bong")
+
+        assert result == "Generated the image successfully: /tmp/generated-cat.png"
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "image_generate",
+            "file_read",
+        ]
+        assert any(
+            event["event_type"] == "agent.response.empty_image_recovered" for event in events
+        )
+
 
 # ---------------------------------------------------------------------------
 # 7. Runtime with persona — persona shapes system prompt

@@ -23,6 +23,7 @@ import logging
 import re
 import sys
 import time
+from collections import deque
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -488,6 +489,77 @@ def _discord_extract_mention_ids(text: str) -> list[str]:
     for match in _DISCORD_USER_MENTION_RE.finditer(text or ""):
         seen.setdefault(match.group(1), None)
     return list(seen)
+
+
+#: Number of recent messages remembered per Discord channel by
+#: _discord_remember_channel_message() (oldest evicted first via the
+#: deque's maxlen) -- bounds prompt growth in a busy, long-lived channel.
+_DISCORD_CHANNEL_ACTIVITY_CAP = 12
+
+#: Each remembered message is truncated to this many characters before
+#: being cached, so one very long message can't blow out every
+#: subsequent turn's prompt budget for the rest of the channel's window.
+_DISCORD_CHANNEL_ACTIVITY_MSG_MAX_CHARS = 240
+
+
+def _discord_remember_channel_message(
+    activity: dict[str, deque], channel_id: str, speaker: str, text: str
+) -> None:
+    """Record one message spoken in *channel_id*, for cross-user channel context.
+
+    Missy's Discord sessions are keyed per-author (see ``session_id =
+    author_id`` in the message loop), so by default her memory of "what
+    was just discussed" for a given reply is scoped to that one user --
+    a second person commenting on a first person's earlier exchange gets
+    a reply from an agent with no idea the earlier exchange happened,
+    even though both messages are sitting in the same public channel
+    that everyone present can already read. This cache closes that gap
+    the same way :func:`_discord_remember_speaker` closes the tagging
+    gap: a bounded, channel-scoped, in-memory (not persisted, not
+    cross-channel) log of recent messages, surfaced back into the prompt
+    by :func:`_discord_channel_activity_context`. Mutates *activity* in
+    place.
+
+    Args:
+        activity: The shared ``{channel_id: deque[(speaker, text)]}``
+            cache, owned by the caller (one instance per running gateway).
+        channel_id: The Discord channel snowflake ID.
+        speaker: A display label for who said it (a user's display name,
+            or the bot's own name for its replies).
+        text: The message content.
+    """
+    if not channel_id or not speaker or not text:
+        return
+    trimmed = text.strip().replace("\n", " ")
+    if not trimmed:
+        return
+    if len(trimmed) > _DISCORD_CHANNEL_ACTIVITY_MSG_MAX_CHARS:
+        trimmed = trimmed[:_DISCORD_CHANNEL_ACTIVITY_MSG_MAX_CHARS].rstrip() + "…"
+    bucket = activity.setdefault(channel_id, deque(maxlen=_DISCORD_CHANNEL_ACTIVITY_CAP))
+    bucket.append((speaker, trimmed))
+
+
+def _discord_channel_activity_context(activity: dict[str, deque], channel_id: str) -> str:
+    """Return a prompt-ready summary of recent messages in *channel_id*.
+
+    Args:
+        activity: The shared cache populated by
+            :func:`_discord_remember_channel_message`.
+        channel_id: The Discord channel snowflake ID to look up.
+
+    Returns:
+        A block listing the channel's recent message history (oldest
+        first), or ``""`` when nothing is cached yet for this channel.
+    """
+    bucket = activity.get(channel_id)
+    if not bucket:
+        return ""
+    lines = [f"- {speaker}: {text}" for speaker, text in bucket]
+    return (
+        "Recent activity in this channel (for context -- other users may be "
+        "continuing this conversation, not just the person who just messaged "
+        "you):\n" + "\n".join(lines) + "\n"
+    )
 
 
 def _load_or_create_web_console_key() -> str:
@@ -3414,6 +3486,17 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             # tested) for the actual logic.
             _discord_known_users: dict[str, dict[str, str]] = {}
 
+            # Discord sessions are keyed per-author (see session_id below),
+            # so without this a reply to one user has no idea what was just
+            # said to a different user in the very same, publicly-readable
+            # channel (e.g. user A asks about cats, Missy answers, user B
+            # comments on cats -- a per-user-session-only agent has no idea
+            # cats were ever mentioned). This cache is channel-scoped (never
+            # crosses into another channel or DM) and in-memory only. See
+            # _discord_remember_channel_message()/_discord_channel_activity_context()
+            # (module-level, independently tested) for the actual logic.
+            _discord_channel_activity: dict[str, deque] = {}
+
             async def _process_channel(ch: DiscordChannel) -> None:
                 """Drain the channel queue and run the agent for each message."""
                 while not stop_event:
@@ -3458,13 +3541,24 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             else ""
                         )
                     )
+                    # Computed before this message is recorded below, so the
+                    # current message never appears inside its own "recent
+                    # activity" context.
+                    channel_activity_ctx = _discord_channel_activity_context(
+                        _discord_channel_activity, channel_id
+                    )
                     discord_ctx = (
                         f"[Discord channel {channel_id}] "
                         f"Use discord_upload_file with channel_id='{channel_id}' "
                         f"to share files here. "
-                        f"{mention_help}"
+                        f"{mention_help}\n"
+                        f"{channel_activity_ctx}"
                     )
                     enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
+
+                    _discord_remember_channel_message(
+                        _discord_channel_activity, channel_id, author_display, msg.content
+                    )
 
                     # DiscordChannel._handle_message() already policy-validated any
                     # image/text/zip attachments and attached their metadata to
@@ -3584,6 +3678,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             response,
                             mention_user_ids=mention_ids,
                         )
+                        if sent_id:
+                            _discord_remember_channel_message(
+                                _discord_channel_activity, channel_id, "Missy", response
+                            )
 
                         # Detect evolution proposals and add reaction buttons.
                         # Ground-truth comparison against the pre-run

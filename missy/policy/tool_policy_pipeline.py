@@ -117,13 +117,14 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "vision_devices",
     "vision_scene",
     # Media generation/editing: unlike the browser/x11/atspi tools above,
-    # these do NOT grant host GUI/desktop control -- video_generate talks to
-    # an external ComfyUI server over HTTP and video_edit shells out to
-    # ffmpeg with argv lists, both writing only to ~/.missy/videos. They are
-    # a normal Discord request ("make me a short video / caption this clip")
-    # and are strictly narrower in scope than shell_exec, which is already
-    # exposed here. Their absence made the entire VIDGEN/VIDEDIT Discord test
-    # surface unreachable and drove the model to fabricate results by hand.
+    # these do NOT grant host GUI/desktop control -- image_generate and
+    # video_generate talk to ComfyUI over HTTP and video_edit shells out to
+    # ffmpeg with argv lists, writing only to Missy's managed media folders.
+    # They are normal Discord requests and are strictly narrower in scope than
+    # shell_exec, which is already exposed here. Missing image_generate was
+    # observed driving the model to substitute video_generate and leak a fake
+    # bracketed tool call instead of producing the requested still image.
+    "image_generate",
     "video_generate",
     "video_edit",
     # video_storyboard (F16) orchestrates video_generate/video_edit under the

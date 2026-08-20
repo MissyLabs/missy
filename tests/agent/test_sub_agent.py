@@ -6,13 +6,18 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from missy.agent.sub_agent import (
     MAX_CONCURRENT,
     MAX_SUB_AGENT_DEPTH,
     MAX_SUB_AGENTS,
+    DelegationPlanError,
     SubAgentRunner,
     SubTask,
+    build_diverse_subtasks,
     parse_subtasks,
+    validate_subtasks,
 )
 
 
@@ -86,6 +91,135 @@ class TestSubTask:
     def test_with_tool_hints(self):
         t = SubTask(id=1, description="search", tool_hints=["web_fetch"])
         assert t.tool_hints == ["web_fetch"]
+
+
+class TestDiversePlans:
+    def test_builds_complementary_specialists_and_synthesis(self):
+        tasks = build_diverse_subtasks("Design a resilient migration plan")
+
+        assert [task.name for task in tasks] == [
+            "Requirements Analyst",
+            "Solution Architect",
+            "Risk Critic",
+            "Validation Specialist",
+            "Lead Synthesizer",
+        ]
+        assert all(not task.depends_on for task in tasks[:-1])
+        assert tasks[-1].depends_on == [0, 1, 2, 3]
+        assert tasks[-1].is_synthesis is True
+        assert len({task.focus for task in tasks[:-1]}) == 4
+
+    def test_can_omit_synthesis(self):
+        tasks = build_diverse_subtasks("Compare two approaches", include_synthesis=False)
+        assert len(tasks) == 4
+        assert not any(task.is_synthesis for task in tasks)
+
+    def test_specialist_mandates_are_injected_into_runtime_prompts(self):
+        prompts: list[str] = []
+
+        def _run(prompt, session_id="", _delegation_depth=0):
+            prompts.append(prompt)
+            return "finding"
+
+        runtime = MagicMock()
+        runtime.run.side_effect = _run
+        runner = SubAgentRunner(runtime=runtime, session_id="s", depth=1)
+        runner.run_all(build_diverse_subtasks("Solve the advanced request"))
+
+        specialist_prompts = [prompt for prompt in prompts if "Lead Synthesizer" not in prompt]
+        assert len(specialist_prompts) == 4
+        assert any("Requirements Analyst" in prompt for prompt in specialist_prompts)
+        assert any("Risk Critic" in prompt for prompt in specialist_prompts)
+        assert all("Success criteria:" in prompt for prompt in specialist_prompts)
+        synthesis_prompt = next(prompt for prompt in prompts if "Lead Synthesizer" in prompt)
+        assert all(f"Result of step {index}: finding" in synthesis_prompt for index in range(4))
+
+
+class TestDelegationPlanValidation:
+    def test_rejects_missing_dependency(self):
+        with pytest.raises(DelegationPlanError, match="missing dependencies"):
+            validate_subtasks([SubTask(id=0, description="bad", depends_on=[9])])
+
+    def test_rejects_self_dependency(self):
+        with pytest.raises(DelegationPlanError, match="depend on itself"):
+            validate_subtasks([SubTask(id=0, description="bad", depends_on=[0])])
+
+    def test_rejects_dependency_cycle(self):
+        tasks = [
+            SubTask(id=0, description="a", depends_on=[1]),
+            SubTask(id=1, description="b", depends_on=[0]),
+        ]
+        with pytest.raises(DelegationPlanError, match="dependency cycle"):
+            validate_subtasks(tasks)
+
+    def test_runner_validates_before_executing(self):
+        runtime = MagicMock()
+        runner = SubAgentRunner(runtime=runtime, session_id="s", depth=1)
+
+        with pytest.raises(DelegationPlanError):
+            runner.run_all([SubTask(id=0, description="bad", depends_on=[4])])
+        runtime.run.assert_not_called()
+
+
+class TestFailurePolicies:
+    @staticmethod
+    def _failing_runtime():
+        runtime = MagicMock()
+
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "upstream" in prompt:
+                raise RuntimeError("upstream failed")
+            return "ok"
+
+        runtime.run.side_effect = _run
+        return runtime
+
+    def test_skip_dependents_prevents_unsafe_downstream_execution(self):
+        runtime = self._failing_runtime()
+        runner = SubAgentRunner(
+            runtime=runtime,
+            session_id="s",
+            depth=1,
+            failure_policy="skip_dependents",
+        )
+        tasks = [
+            SubTask(id=0, description="upstream"),
+            SubTask(id=1, description="destructive downstream", depends_on=[0]),
+        ]
+
+        results = runner.run_all(tasks)
+
+        assert runtime.run.call_count == 1
+        assert tasks[1].status == "skipped"
+        assert "dependencies failed" in results[1]
+
+    def test_fail_fast_skips_every_remaining_wave(self):
+        runtime = self._failing_runtime()
+        runner = SubAgentRunner(
+            runtime=runtime,
+            session_id="s",
+            depth=1,
+            failure_policy="fail_fast",
+        )
+        tasks = [
+            SubTask(id=0, description="upstream"),
+            SubTask(id=1, description="second", depends_on=[0]),
+            SubTask(id=2, description="third", depends_on=[1]),
+        ]
+
+        runner.run_all(tasks)
+
+        assert runtime.run.call_count == 1
+        assert [task.status for task in tasks] == ["error", "skipped", "skipped"]
+
+    def test_invalid_failure_policy_is_rejected(self):
+        with pytest.raises(ValueError, match="failure_policy"):
+            SubAgentRunner(
+                runtime=MagicMock(),
+                session_id="s",
+                depth=1,
+                failure_policy="invented",
+            )
 
 
 class TestSubAgentRunner:

@@ -523,6 +523,13 @@ class TestDiscordSystemPrompt:
     def test_discord_prompt_mentions_discord_upload_file(self):
         assert "discord_upload_file" in DISCORD_SYSTEM_PROMPT
 
+    def test_discord_prompt_requires_native_still_image_generation_and_upload(self):
+        lower = DISCORD_SYSTEM_PROMPT.lower()
+        assert "image_generate" in lower
+        assert "still image" in lower
+        assert "never substitute video_generate" in lower
+        assert "returned path" in lower
+
     def test_discord_prompt_forbids_calculator_error_substitution(self):
         lower = DISCORD_SYSTEM_PROMPT.lower()
         assert "calculator error" in lower

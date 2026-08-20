@@ -34,7 +34,7 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 - **Attention system** — 5 brain-inspired subsystems (alerting, orienting, sustained, selective, executive) that track urgency, extract topics, maintain focus, and prioritize tools
 - **Sleep mode** — context consolidation at 80% token capacity: summarizes old turns, extracts key facts, preserves recent context
 - **Unified memory** — merges learnings, summaries, and playbook into a single relevance-ranked, deduplicated context block
-- **Sub-agents** — generate named child agents for parallel or dependency-ordered work, with distinct IDs and parent/depth lineage
+- **Sub-agents** — decompose workflows or run complementary requirements, architecture, risk, and verification specialists in parallel; validate dependency graphs, control failure propagation, and synthesize one final answer with distinct IDs and parent/depth lineage
 - **Approval gate** — human-in-the-loop confirmation for sensitive operations
 - **Interactive approval TUI** — real-time Rich terminal prompt for policy-denied operations (allow once / deny / allow always)
 - **Circuit breaker** — automatic backoff on provider failures (threshold=5, exponential to 300s)

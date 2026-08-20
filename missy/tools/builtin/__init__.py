@@ -54,6 +54,7 @@ from missy.tools.builtin.file_delete import FileDeleteTool
 from missy.tools.builtin.file_read import FileReadTool
 from missy.tools.builtin.file_write import FileWriteTool
 from missy.tools.builtin.graph_tools import GraphQueryTool
+from missy.tools.builtin.image_generate import ImageGenerateTool
 from missy.tools.builtin.incus_tools import (
     IncusConfigTool,
     IncusCopyMoveTool,
@@ -164,6 +165,7 @@ __all__ = [
     "FileReadTool",
     "FileWriteTool",
     "GraphQueryTool",
+    "ImageGenerateTool",
     "ListFilesTool",
     "MemoryDescribeTool",
     "MemoryExpandTool",
@@ -259,6 +261,7 @@ _ALL_TOOL_CLASSES = [
     IncusStorageTool,
     FileWriteTool,
     GraphQueryTool,
+    ImageGenerateTool,
     ListFilesTool,
     MemoryDescribeTool,
     MemoryExpandTool,

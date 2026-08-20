@@ -135,6 +135,114 @@ class TestDispatch:
         assert r.output.count("Step ") == MAX_SUB_AGENTS
 
 
+class TestAdvancedOrchestration:
+    def test_diverse_strategy_runs_specialists_then_synthesizes(self, tool):
+        runtime = MagicMock()
+
+        def _run(prompt, session_id="", _delegation_depth=0):
+            if "Lead Synthesizer" in prompt:
+                assert all(
+                    f"Result of step {index}: specialist finding" in prompt for index in range(4)
+                )
+                return "integrated final answer"
+            return "specialist finding"
+
+        runtime.run.side_effect = _run
+        result = tool.execute(
+            prompt="Develop an advanced launch strategy",
+            strategy="diverse",
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert result.success
+        assert runtime.run.call_count == 5
+        assert "strategy=diverse" in result.output
+        assert "succeeded=5" in result.output
+        assert "Final synthesis" in result.output
+        assert "integrated final answer" in result.output
+
+    def test_explicit_role_focus_criteria_and_tools_reach_agent(self, tool):
+        runtime = MagicMock()
+        runtime.run.return_value = "reviewed"
+
+        result = tool.execute(
+            agents=[
+                {
+                    "name": "Security Reviewer",
+                    "role": "adversarial reviewer",
+                    "focus": "authentication boundaries",
+                    "success_criteria": "list exploitable gaps",
+                    "tool_hints": ["file_read"],
+                    "task": "review the design",
+                }
+            ],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert result.success
+        prompt = runtime.run.call_args.args[0]
+        assert "Security Reviewer — adversarial reviewer" in prompt
+        assert "Focus: authentication boundaries" in prompt
+        assert "Success criteria: list exploitable gaps" in prompt
+        assert "Suggested tools: file_read" in prompt
+
+    @pytest.mark.parametrize(
+        "dependencies, expected",
+        [([3], "missing dependencies"), ([0], "depend on itself")],
+    )
+    def test_invalid_explicit_dependencies_are_rejected(self, tool, dependencies, expected):
+        runtime = MagicMock()
+        result = tool.execute(
+            agents=[{"task": "unsafe plan", "depends_on": dependencies}],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert not result.success
+        assert expected in result.error
+        runtime.run.assert_not_called()
+
+    def test_explicit_dependency_cycle_is_rejected(self, tool):
+        runtime = MagicMock()
+        result = tool.execute(
+            agents=[
+                {"task": "a", "depends_on": [1]},
+                {"task": "b", "depends_on": [0]},
+            ],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert not result.success
+        assert "dependency cycle" in result.error
+        runtime.run.assert_not_called()
+
+    def test_skip_dependents_reports_partial_failure(self, tool):
+        runtime = MagicMock()
+        runtime.run.side_effect = RuntimeError("boom")
+        result = tool.execute(
+            agents=[
+                {"task": "first"},
+                {"task": "second", "depends_on": [0]},
+            ],
+            failure_policy="skip_dependents",
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert not result.success
+        assert runtime.run.call_count == 1
+        assert "failed=1; skipped=1" in result.output
+        assert "[SKIPPED]" in result.output
+
+
 class TestSchema:
     def test_schema_allows_prompt_or_explicit_agents(self, tool):
         schema = tool.get_schema()
@@ -158,3 +266,14 @@ class TestSchema:
         agents = tool.get_schema()["parameters"]["properties"]["agents"]
         assert agents["type"] == "array"
         assert agents["items"]["properties"]["depends_on"]["items"]["type"] == "integer"
+
+    def test_schema_exposes_advanced_strategy_and_failure_control(self, tool):
+        properties = tool.get_schema()["parameters"]["properties"]
+        assert properties["strategy"]["enum"] == ["decompose", "diverse"]
+        assert properties["failure_policy"]["enum"] == [
+            "continue",
+            "skip_dependents",
+            "fail_fast",
+        ]
+        agent_properties = properties["agents"]["items"]["properties"]
+        assert {"role", "focus", "success_criteria", "tool_hints"} <= set(agent_properties)
