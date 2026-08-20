@@ -32,7 +32,7 @@ from missy.agent.attention import (
 from missy.agent.circuit_breaker import CircuitBreaker, CircuitState
 from missy.agent.context import ContextManager, TokenBudget
 from missy.agent.progress import AuditReporter, CLIReporter, NullReporter, ProgressReporter
-from missy.agent.runtime import AgentConfig, AgentRuntime
+from missy.agent.runtime import AgentConfig, AgentRuntime, _image_generation_history_key
 from missy.core.events import event_bus
 from missy.core.exceptions import MissyError, ProviderError
 from missy.providers import registry as registry_module
@@ -2345,6 +2345,51 @@ class TestLeakedToolCallTagRetry:
         assert any(
             event["event_type"] == "agent.response.empty_image_recovered" for event in events
         )
+
+    def test_same_seed_image_followup_receives_exact_prior_tool_arguments(self):
+        provider = _make_provider()
+        image_tool = _make_mock_tool("image_generate")
+        tool_reg = _make_tool_registry([image_tool])
+        tool_reg.execute.side_effect = None
+        tool_reg.execute.return_value = MagicMock(
+            success=True,
+            output={"path": "/tmp/fox.png", "seed": 12345, "width": 512, "height": 512},
+            error=None,
+        )
+        first_args = {"prompt": "A red fox in snow", "seed": 0, "width": 512, "height": 512}
+        repeated_args = {**first_args, "seed": 12345}
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("image_generate", args=first_args, tool_id="image-1"),
+            _make_stop_response("Generated the first image."),
+            _make_tool_call_response("image_generate", args=repeated_args, tool_id="image-2"),
+            _make_stop_response("Generated the exact repeat."),
+        ]
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            runtime.run("Generate an image of a red fox in snow.", session_id="same-image-session")
+            result = runtime.run(
+                "Generate that same fox image again with the exact seed from before.",
+                session_id="same-image-session",
+            )
+
+        second_turn_messages = provider.complete_with_tools.call_args_list[2].args[0]
+        trusted_context = "\n".join(message.content for message in second_turn_messages)
+        assert '"prompt": "A red fox in snow"' in trusted_context
+        assert '"seed": 12345' in trusted_context
+        assert result == "Generated the exact repeat."
+
+    def test_image_reproducibility_history_is_discord_channel_scoped(self):
+        session = "same-user"
+        assert _image_generation_history_key(
+            session, "[Discord channel public-one] request"
+        ) != _image_generation_history_key(session, "[Discord channel private-dm] request")
+        assert _image_generation_history_key(session, "plain CLI request") == session
+        assert _image_generation_history_key(session, object()) == session
 
 
 # ---------------------------------------------------------------------------

@@ -1012,6 +1012,11 @@ _VIDEO_GENERATION_REQUEST_RE = re.compile(
 )
 
 
+def is_video_generation_request(user_input: object) -> bool:
+    """Return whether *user_input* asks for generated video output."""
+    return isinstance(user_input, str) and bool(_VIDEO_GENERATION_REQUEST_RE.search(user_input))
+
+
 def find_unmet_video_generation_request(
     user_input: str,
     tool_names_used: list[str],
@@ -1020,7 +1025,7 @@ def find_unmet_video_generation_request(
     """Require ``video_generate`` evidence for an actionable render request."""
     if available_tool_names is not None and "video_generate" not in available_tool_names:
         return []
-    if not _VIDEO_GENERATION_REQUEST_RE.search(user_input):
+    if not is_video_generation_request(user_input):
         return []
     return [] if "video_generate" in tool_names_used else ["video_generate"]
 
@@ -1050,7 +1055,7 @@ def is_image_generation_request(user_input: str) -> bool:
         return False
     # A video request may mention an input image. It belongs to the video
     # workflow even if it also happens to match the broad still-image regex.
-    if _VIDEO_GENERATION_REQUEST_RE.search(user_input):
+    if is_video_generation_request(user_input):
         return False
     return bool(_IMAGE_GENERATION_REQUEST_RE.search(user_input))
 
@@ -1170,14 +1175,48 @@ _VIDEO_REPRO_REQUEST_RE = re.compile(
     re.I | re.S,
 )
 
+_IMAGE_REPRODUCIBLE_ARGUMENT_KEYS = frozenset(
+    {
+        "prompt",
+        "negative_prompt",
+        "checkpoint",
+        "width",
+        "height",
+        "steps",
+        "cfg",
+        "sampler",
+        "scheduler",
+        "seed",
+        "batch_size",
+        "allow_cpu",
+        "timeout",
+    }
+)
+
 
 def is_video_reproducibility_request(user_input: object) -> bool:
     """Return whether the user explicitly requests a same-seed rerender.
 
     Treat an invalid sanitizer/provider value as a non-match instead of letting
-    a response-completeness guard crash the entire agent loop.
+    a response-completeness guard crash the entire agent loop.  The same-seed
+    wording is shared by still-image generation, so require video intent here;
+    otherwise a request such as ``generate that same image again with the exact
+    seed`` can be incorrectly forced through ``video_generate``.
     """
-    return isinstance(user_input, str) and bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+    return (
+        isinstance(user_input, str)
+        and is_video_generation_request(user_input)
+        and bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+    )
+
+
+def is_image_reproducibility_request(user_input: object) -> bool:
+    """Return whether a still-image request asks to reuse an exact seed."""
+    return (
+        isinstance(user_input, str)
+        and is_image_generation_request(user_input)
+        and bool(_VIDEO_REPRO_REQUEST_RE.search(user_input))
+    )
 
 
 def _video_result_seed(content: str) -> int | None:
@@ -1194,6 +1233,71 @@ def _parse_video_result(content: str) -> Any:
             return ast.literal_eval(content)
         except (SyntaxError, ValueError):
             return None
+
+
+def effective_image_generation_arguments(arguments: dict[str, Any], result: str) -> dict[str, Any]:
+    """Return image arguments with effective values reported by the tool.
+
+    A random request seed of ``0`` is replaced by the positive seed returned
+    by ComfyUI.  Other normalized/clamped values are copied from the trusted
+    tool result so a later reproducibility check compares what actually ran,
+    not merely what the provider attempted to call.
+    """
+    effective = {
+        key: value for key, value in arguments.items() if key in _IMAGE_REPRODUCIBLE_ARGUMENT_KEYS
+    }
+    value = _parse_video_result(result)
+    if not isinstance(value, dict):
+        return effective
+    for key in (
+        "seed",
+        "width",
+        "height",
+        "steps",
+        "cfg",
+        "sampler",
+        "scheduler",
+        "checkpoint",
+    ):
+        if key in value:
+            effective[key] = value[key]
+    return effective
+
+
+def make_image_reproducibility_prompt(prior_arguments: dict[str, Any], user_input: str = "") -> str:
+    """Ground a same-seed image follow-up in the prior trusted call."""
+    arguments = dict(prior_arguments)
+    arguments.pop("save_path", None)
+    anchor = f"\n\nThe current request is:\n{user_input}" if user_input else ""
+    return (
+        "This request refers to the last successful still image in this session. "
+        "Call image_generate using exactly the prior effective argument map below; "
+        "do not rewrite the positive or negative prompt and do not change the "
+        "checkpoint, dimensions, steps, CFG, sampler, scheduler, batch size, or seed. "
+        "After it succeeds, deliver the new path normally:\n"
+        f"{json.dumps(arguments, sort_keys=True)}{anchor}"
+    )
+
+
+def find_image_reproducibility_issue(
+    user_input: str,
+    prior_arguments: dict[str, Any] | None,
+    observations: list[tuple[dict[str, Any], str, bool]],
+) -> str | None:
+    """Validate a same-seed image follow-up against its prior trusted call."""
+    if not is_image_reproducibility_request(user_input) or not prior_arguments:
+        return None
+    successful = [item for item in observations if not item[2]]
+    if not successful:
+        return "no successful image_generate call"
+    current_args, current_result, _ = successful[-1]
+    current_effective = effective_image_generation_arguments(current_args, current_result)
+    ignored = {"save_path"}
+    expected = {key: value for key, value in prior_arguments.items() if key not in ignored}
+    observed = {key: value for key, value in current_effective.items() if key not in ignored}
+    if observed != expected:
+        return "the repeat call changed image-generation parameters"
+    return None
 
 
 def make_video_reproducibility_prompt(

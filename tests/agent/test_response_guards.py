@@ -13,6 +13,8 @@ from missy.agent.response_guards import (
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
+    effective_image_generation_arguments,
+    find_image_reproducibility_issue,
     find_unmet_desktop_requests,
     find_unmet_generated_image_delivery,
     find_unmet_image_generation_request,
@@ -22,6 +24,8 @@ from missy.agent.response_guards import (
     find_unverified_desktop_action,
     find_unverified_filesystem_action,
     find_video_reproducibility_issue,
+    is_image_generation_request,
+    is_image_reproducibility_request,
     is_security_refusal,
     is_video_reproducibility_request,
     make_calculator_completeness_retry_prompt,
@@ -34,6 +38,7 @@ from missy.agent.response_guards import (
     make_generated_image_delivery_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_image_generation_retry_prompt,
+    make_image_reproducibility_prompt,
     make_promise_retry_prompt,
     make_security_refusal_retry_prompt,
     make_video_generation_error_report_prompt,
@@ -65,6 +70,44 @@ class TestImageGenerationGuards:
             find_unmet_image_generation_request(prompt, [], {"image_generate", "video_generate"})
             == []
         )
+
+    def test_same_seed_followup_is_grounded_in_exact_prior_arguments(self):
+        request = "Generate that same fox image again with the exact seed from before."
+        prior = {
+            "prompt": "A red fox in snow",
+            "negative_prompt": "blurry",
+            "seed": 12345,
+            "width": 512,
+            "height": 512,
+            "steps": 28,
+        }
+        assert is_image_reproducibility_request(request)
+        correction = make_image_reproducibility_prompt(prior, request)
+        assert '"prompt": "A red fox in snow"' in correction
+        assert '"seed": 12345' in correction
+
+        drifted = [
+            (
+                {**prior, "prompt": "fox"},
+                '{"seed": 12345, "width": 512, "height": 512, "steps": 28}',
+                False,
+            )
+        ]
+        assert find_image_reproducibility_issue(request, prior, drifted) == (
+            "the repeat call changed image-generation parameters"
+        )
+        exact = [(dict(prior), '{"seed": 12345}', False)]
+        assert find_image_reproducibility_issue(request, prior, exact) is None
+
+    def test_effective_image_arguments_replace_random_seed_and_clamped_values(self):
+        arguments = {"prompt": "fox", "seed": 0, "width": 50}
+        result = '{"seed": 9, "width": 256, "height": 512}'
+        assert effective_image_generation_arguments(arguments, result) == {
+            "prompt": "fox",
+            "seed": 9,
+            "width": 256,
+            "height": 512,
+        }
 
     def test_discord_generation_requires_upload_after_success(self):
         transport = (
@@ -108,8 +151,13 @@ class TestVideoGenerationGuards:
         assert not is_video_reproducibility_request(object())
 
     def test_detects_same_seed_rerender_request(self):
-        prompt = "Tell me the seed, then generate it AGAIN with that exact seed."
+        prompt = "Generate a video, tell me the seed, then render it AGAIN with that exact seed."
         assert is_video_reproducibility_request(prompt)
+
+    def test_still_image_same_seed_request_is_not_misrouted_to_video(self):
+        prompt = "Generate that same fox image again, but reuse the exact seed from before."
+        assert is_image_generation_request(prompt)
+        assert not is_video_reproducibility_request(prompt)
 
     def test_reproducibility_prompt_preserves_full_arguments(self):
         arguments = {"backend": "wan", "prompt": "A spinning top", "steps": 20}
@@ -119,7 +167,7 @@ class TestVideoGenerationGuards:
         assert '"seed": 12345' in retry
 
     def test_reproducibility_check_rejects_prompt_drift(self):
-        request = "Generate twice, again with the exact same seed."
+        request = "Generate a video twice, again with the exact same seed."
         observations = [
             ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
             (
@@ -133,7 +181,7 @@ class TestVideoGenerationGuards:
         )
 
     def test_reproducibility_check_accepts_exact_repeat(self):
-        request = "Generate twice, again with the exact same seed."
+        request = "Generate a video twice, again with the exact same seed."
         observations = [
             ({"backend": "wan", "prompt": "A spinning top"}, '{"seed": 12345}', False),
             (

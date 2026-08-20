@@ -76,6 +76,17 @@ logger = logging.getLogger(__name__)
 # Maximum size (chars) for a single tool result to prevent memory exhaustion.
 _MAX_TOOL_RESULT_CHARS = 200_000
 
+_DISCORD_CHANNEL_SCOPE_RE = re.compile(r"\[Discord channel ([^\]\r\n]+)\]")
+
+
+def _image_generation_history_key(session_id: str, transport_input: object) -> str:
+    """Scope reproducibility state to a session and, on Discord, a channel."""
+    if not isinstance(transport_input, str):
+        return session_id
+    match = _DISCORD_CHANNEL_SCOPE_RE.search(transport_input)
+    return f"{session_id}\x1fdiscord:{match.group(1)}" if match else session_id
+
+
 # FX-round2-F1: exact internal placeholder strings _dicts_to_messages() (see
 # below) substitutes for an assistant history entry with empty content, so
 # a provider re-serializing that history never sends an invalid empty
@@ -721,6 +732,12 @@ class AgentRuntime:
         self._cost_tracking_enabled = self._cost_tracker_module_available()
         self._cost_trackers: dict[str, Any] = {}
         self._cost_trackers_lock = threading.Lock()
+        # Exact effective arguments for the latest successful still image in
+        # each session. This grounds a later "same image / same seed" request
+        # in trusted tool evidence rather than lossy assistant prose.
+        self._last_image_generation_by_scope: dict[str, dict[str, Any]] = {}
+        self._last_image_generation_lock = threading.Lock()
+        self._max_stored_image_generations = 256
         # Per-thread execution identity. Sub-agents share this runtime so they
         # inherit its policy and budget, but each concurrent worker still needs
         # a distinct identity for audit logs and operator visibility.
@@ -1603,6 +1620,8 @@ class AgentRuntime:
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            effective_image_generation_arguments,
+            find_image_reproducibility_issue,
             find_unmet_desktop_requests,
             find_unmet_generated_image_delivery,
             find_unmet_image_generation_request,
@@ -1612,6 +1631,7 @@ class AgentRuntime:
             find_unverified_desktop_action,
             find_unverified_filesystem_action,
             find_video_reproducibility_issue,
+            is_image_reproducibility_request,
             is_security_refusal,
             is_video_reproducibility_request,
             make_calculator_completeness_retry_prompt,
@@ -1624,6 +1644,7 @@ class AgentRuntime:
             make_generated_image_delivery_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_image_generation_retry_prompt,
+            make_image_reproducibility_prompt,
             make_promise_retry_prompt,
             make_security_refusal_retry_prompt,
             make_video_generation_error_report_prompt,
@@ -1678,6 +1699,27 @@ class AgentRuntime:
             if isinstance(explicit_tool_request_input, str)
             else user_input
         )
+        _prior_image_generation: dict[str, Any] | None = None
+        _image_history = getattr(self, "_last_image_generation_by_scope", None)
+        _image_history_lock = getattr(self, "_last_image_generation_lock", None)
+        _image_history_key = _image_generation_history_key(session_id, user_input)
+        if isinstance(_image_history, dict):
+            if _image_history_lock is not None:
+                with _image_history_lock:
+                    prior = _image_history.get(_image_history_key)
+            else:
+                prior = _image_history.get(_image_history_key)
+            if isinstance(prior, dict):
+                _prior_image_generation = dict(prior)
+        if _prior_image_generation and is_image_reproducibility_request(_tool_request_input):
+            loop_messages.append(
+                {
+                    "role": "user",
+                    "content": make_image_reproducibility_prompt(
+                        _prior_image_generation, _tool_request_input
+                    ),
+                }
+            )
 
         # --- OpenClaw A3: mutation fingerprinting + sticky lastToolError ---
         # Maps fingerprint → call count across all iterations.
@@ -1720,6 +1762,8 @@ class AgentRuntime:
         _video_generation_observations: list[tuple[dict[str, Any], str, bool]] = []
         _MAX_VIDEO_REPRODUCIBILITY_RETRIES = 1
         _video_reproducibility_retries = 0
+        _MAX_IMAGE_REPRODUCIBILITY_RETRIES = 1
+        _image_reproducibility_retries = 0
         _MAX_DESKTOP_VERIFICATION_RETRIES = 1
         _desktop_verification_retries = 0
         _MAX_DESKTOP_REQUEST_RETRIES = 1
@@ -1983,6 +2027,23 @@ class AgentRuntime:
                             _image_generation_observations.append(
                                 (dict(tc.arguments or {}), tr.content or "", bool(tr.is_error))
                             )
+                            if not tr.is_error and isinstance(_image_history, dict):
+                                effective_arguments = effective_image_generation_arguments(
+                                    dict(tc.arguments or {}), tr.content or ""
+                                )
+                                if _image_history_lock is not None:
+                                    with _image_history_lock:
+                                        if _image_history_key not in _image_history and len(
+                                            _image_history
+                                        ) >= getattr(self, "_max_stored_image_generations", 256):
+                                            _image_history.pop(next(iter(_image_history)))
+                                        _image_history[_image_history_key] = effective_arguments
+                                else:
+                                    if _image_history_key not in _image_history and len(
+                                        _image_history
+                                    ) >= getattr(self, "_max_stored_image_generations", 256):
+                                        _image_history.pop(next(iter(_image_history)))
+                                    _image_history[_image_history_key] = effective_arguments
 
                         # OpenClaw A3: mutation fingerprinting
                         _fp = _fingerprint_tc(tc.name, tc.arguments or {})
@@ -2639,6 +2700,39 @@ class AgentRuntime:
                     # observed result and must not be retried as an unfinished
                     # mutation once it has been reported truthfully.
                     _last_round_errors = []
+
+                _image_reproducibility_issue = find_image_reproducibility_issue(
+                    _tool_request_input,
+                    _prior_image_generation,
+                    _image_generation_observations,
+                )
+                if (
+                    _image_reproducibility_issue
+                    and _image_reproducibility_retries < _MAX_IMAGE_REPRODUCIBILITY_RETRIES
+                ):
+                    _image_reproducibility_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The still-image reproducibility requirement is not yet "
+                                f"satisfied: {_image_reproducibility_issue}.\n\n"
+                                + make_image_reproducibility_prompt(
+                                    _prior_image_generation or {}, _tool_request_input
+                                )
+                            ),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.image_reproducibility_retry",
+                            result="warn",
+                            detail={"issue": _image_reproducibility_issue},
+                        )
+                    continue
 
                 _video_reproducibility_issue = find_video_reproducibility_issue(
                     _tool_request_input, _video_generation_observations
