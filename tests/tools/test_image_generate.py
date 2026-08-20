@@ -22,43 +22,42 @@ def _response(*, status: int = 200, data=None, content: bytes = b"") -> MagicMoc
     return response
 
 
-def _client(*, checkpoint_present: bool = True, image_bytes: bytes = b"png-data") -> MagicMock:
+def _client(
+    *,
+    checkpoint_present: bool = True,
+    image_bytes: bytes = b"png-data",
+    gpu: bool = True,
+    image_count: int = 1,
+) -> MagicMock:
     client = MagicMock()
     client.__enter__.return_value = client
     client.__exit__.return_value = False
 
     def get(url, **_kwargs):
         if url.endswith("/system_stats"):
-            return _response(
-                data={
-                    "devices": [
-                        {
-                            "name": "cuda:0 RTX",
-                            "type": "cuda",
-                            "vram_total": 8 * 2**30,
-                        }
-                    ]
-                }
+            devices = (
+                [{"name": "cuda:0 RTX", "type": "cuda", "vram_total": 8 * 2**30}]
+                if gpu
+                else [{"name": "generic cpu", "type": "cpu", "vram_total": 0}]
             )
+            return _response(data={"devices": devices})
         if url.endswith("/models/checkpoints"):
             checkpoints = ["v1-5-pruned-emaonly.safetensors"] if checkpoint_present else []
             return _response(data=checkpoints)
         if "/history/pid-image" in url:
+            images = [
+                {
+                    "filename": f"missy_image_0000{i}_.png",
+                    "subfolder": "",
+                    "type": "output",
+                }
+                for i in range(image_count)
+            ]
             return _response(
                 data={
                     "pid-image": {
                         "status": {"completed": True, "status_str": "success"},
-                        "outputs": {
-                            "save": {
-                                "images": [
-                                    {
-                                        "filename": "missy_image_00001_.png",
-                                        "subfolder": "",
-                                        "type": "output",
-                                    }
-                                ]
-                            }
-                        },
+                        "outputs": {"save": {"images": images}},
                     }
                 }
             )
@@ -165,3 +164,68 @@ class TestImageGenerateExecute:
         )
         assert tool.permissions.network
         assert tool.permissions.filesystem_write
+
+    def test_resolve_network_hosts_without_explicit_host_uses_env_candidate_list(self):
+        tool = ImageGenerateTool()
+        from missy.tools.builtin.video_generate import _comfyui_candidates_from_env
+
+        expected = [f"{host}:{port}" for host, port in _comfyui_candidates_from_env()]
+        assert tool.resolve_network_hosts({}) == expected
+
+    def test_cpu_only_server_is_refused_without_allow_cpu(self):
+        client = _client(gpu=False)
+        with patch("missy.gateway.client.PolicyHTTPClient", return_value=client):
+            result = ImageGenerateTool().execute(prompt="a cat")
+
+        assert not result.success
+        assert "GPU" in result.error
+        client.post.assert_not_called()
+
+    def test_allow_cpu_override_permits_cpu_server(self, tmp_path: Path):
+        client = _client(gpu=False, image_bytes=b"cpu-png")
+        output_path = tmp_path / "cpu.png"
+        with patch("missy.gateway.client.PolicyHTTPClient", return_value=client):
+            result = ImageGenerateTool().execute(
+                prompt="a cat", allow_cpu=True, save_path=str(output_path)
+            )
+
+        assert result.success, result.error
+        assert result.output["gpu"]["type"] == "cpu"
+
+    def test_parameters_are_clamped_to_valid_ranges(self, tmp_path: Path):
+        client = _client()
+        output_path = tmp_path / "clamped.png"
+        with patch("missy.gateway.client.PolicyHTTPClient", return_value=client):
+            result = ImageGenerateTool().execute(
+                prompt="a cat",
+                width=50,
+                height=5000,
+                steps=0,
+                cfg=-5,
+                batch_size=0,
+                timeout=1,
+                save_path=str(output_path),
+            )
+
+        assert result.success, result.error
+        assert result.output["width"] == 256
+        assert result.output["height"] == 1024
+        assert result.output["steps"] == 1
+        assert result.output["cfg"] == 0.0
+
+    def test_batch_size_greater_than_one_returns_multiple_collision_safe_paths(
+        self, tmp_path: Path
+    ):
+        client = _client(image_count=3, image_bytes=b"batch-png")
+        output_path = tmp_path / "batch.png"
+        with patch("missy.gateway.client.PolicyHTTPClient", return_value=client):
+            result = ImageGenerateTool().execute(
+                prompt="three cats", batch_size=3, save_path=str(output_path)
+            )
+
+        assert result.success, result.error
+        assert len(result.output["paths"]) == 3
+        assert len(set(result.output["paths"])) == 3
+        assert result.output["path"] == result.output["paths"][0]
+        for path in result.output["paths"]:
+            assert Path(path).exists()
