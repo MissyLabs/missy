@@ -122,7 +122,10 @@ class ImageGenerateTool(BaseTool):
         "or generate an image, picture, illustration, artwork, poster, or wallpaper; "
         "do not use video_generate for a still image. Returns actual local PNG path(s), "
         "the seed, dimensions, checkpoint, and generation metadata. On Discord, call "
-        "discord_upload_file with the returned path to deliver the image."
+        "discord_upload_file with the returned path to deliver the image. Unless the "
+        "user explicitly requests different generation settings, use the published "
+        "defaults exactly: 512x512, 28 steps, cfg 7.0, dpmpp_2m/karras, one image, "
+        "and a random seed."
     )
     permissions = ToolPermissions(network=True, filesystem_write=True)
 
@@ -356,28 +359,83 @@ class ImageGenerateTool(BaseTool):
                     "prompt": {"type": "string", "description": "Describe the still image."},
                     "negative_prompt": {
                         "type": "string",
-                        "description": "Visual qualities or objects to avoid.",
+                        "description": "Visual qualities or objects to avoid; omit to use the built-in default.",
+                        "default": _DEFAULT_NEGATIVE_PROMPT,
                     },
                     "checkpoint": {
                         "type": "string",
                         "description": f"ComfyUI checkpoint filename (default {_DEFAULT_CHECKPOINT}).",
+                        "default": _DEFAULT_CHECKPOINT,
                     },
-                    "width": {"type": "integer", "minimum": 256, "maximum": 1024},
-                    "height": {"type": "integer", "minimum": 256, "maximum": 1024},
-                    "steps": {"type": "integer", "minimum": 1, "maximum": 100},
-                    "cfg": {"type": "number", "minimum": 0, "maximum": 30},
-                    "sampler": {"type": "string"},
-                    "scheduler": {"type": "string"},
+                    "width": {
+                        "type": "integer",
+                        "minimum": 256,
+                        "maximum": 1024,
+                        "description": (
+                            "Output width in pixels. Use 512 unless the user explicitly "
+                            "requests a different width."
+                        ),
+                        "default": 512,
+                    },
+                    "height": {
+                        "type": "integer",
+                        "minimum": 256,
+                        "maximum": 1024,
+                        "description": (
+                            "Output height in pixels. Use 512 unless the user explicitly "
+                            "requests a different height."
+                        ),
+                        "default": 512,
+                    },
+                    "steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Sampling steps; omit to use 28.",
+                        "default": 28,
+                    },
+                    "cfg": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 30,
+                        "description": "Classifier-free guidance scale; omit to use 7.0.",
+                        "default": 7.0,
+                    },
+                    "sampler": {
+                        "type": "string",
+                        "description": "ComfyUI sampler; omit to use dpmpp_2m.",
+                        "default": "dpmpp_2m",
+                    },
+                    "scheduler": {
+                        "type": "string",
+                        "description": "ComfyUI scheduler; omit to use karras.",
+                        "default": "karras",
+                    },
                     "seed": {
                         "type": "integer",
                         "description": "Use 0 for a random seed; reuse a returned seed to reproduce.",
+                        "default": 0,
                     },
-                    "batch_size": {"type": "integer", "minimum": 1, "maximum": 4},
-                    "allow_cpu": {"type": "boolean"},
+                    "batch_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 4,
+                        "description": "Number of image variations; omit to generate one.",
+                        "default": 1,
+                    },
+                    "allow_cpu": {
+                        "type": "boolean",
+                        "description": "Allow CPU-only generation; disabled by default.",
+                        "default": False,
+                    },
                     "save_path": {"type": "string"},
-                    "comfyui_host": {"type": "string"},
-                    "comfyui_port": {"type": "integer"},
-                    "timeout": {"type": "integer", "minimum": 10, "maximum": 3600},
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 3600,
+                        "description": "Generation timeout in seconds; omit to use 600.",
+                        "default": 600,
+                    },
                 },
                 "required": ["prompt"],
                 "additionalProperties": False,

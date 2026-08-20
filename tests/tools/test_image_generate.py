@@ -229,3 +229,21 @@ class TestImageGenerateExecute:
         assert result.output["path"] == result.output["paths"][0]
         for path in result.output["paths"]:
             assert Path(path).exists()
+
+    def test_schema_publishes_defaults_but_hides_operator_connection_target(self):
+        schema = ImageGenerateTool().get_schema()["parameters"]
+        properties = schema["properties"]
+
+        assert properties["checkpoint"]["default"] == "v1-5-pruned-emaonly.safetensors"
+        assert properties["width"]["default"] == 512
+        assert properties["height"]["default"] == 512
+        assert properties["steps"]["default"] == 28
+        assert properties["cfg"]["default"] == 7.0
+        assert properties["sampler"]["default"] == "dpmpp_2m"
+        assert properties["scheduler"]["default"] == "karras"
+        assert properties["seed"]["default"] == 0
+        assert properties["batch_size"]["default"] == 1
+        assert properties["allow_cpu"]["default"] is False
+        assert properties["timeout"]["default"] == 600
+        assert "comfyui_host" not in properties
+        assert "comfyui_port" not in properties
