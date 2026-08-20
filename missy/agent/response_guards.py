@@ -1235,9 +1235,7 @@ def _parse_video_result(content: str) -> Any:
             return None
 
 
-def effective_image_generation_arguments(
-    arguments: dict[str, Any], result: str
-) -> dict[str, Any]:
+def effective_image_generation_arguments(arguments: dict[str, Any], result: str) -> dict[str, Any]:
     """Return image arguments with effective values reported by the tool.
 
     A random request seed of ``0`` is replaced by the positive seed returned
@@ -1266,9 +1264,7 @@ def effective_image_generation_arguments(
     return effective
 
 
-def make_image_reproducibility_prompt(
-    prior_arguments: dict[str, Any], user_input: str = ""
-) -> str:
+def make_image_reproducibility_prompt(prior_arguments: dict[str, Any], user_input: str = "") -> str:
     """Ground a same-seed image follow-up in the prior trusted call."""
     arguments = dict(prior_arguments)
     arguments.pop("save_path", None)

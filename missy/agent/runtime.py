@@ -86,6 +86,7 @@ def _image_generation_history_key(session_id: str, transport_input: object) -> s
     match = _DISCORD_CHANNEL_SCOPE_RE.search(transport_input)
     return f"{session_id}\x1fdiscord:{match.group(1)}" if match else session_id
 
+
 # FX-round2-F1: exact internal placeholder strings _dicts_to_messages() (see
 # below) substitutes for an assistant history entry with empty content, so
 # a provider re-serializing that history never sends an invalid empty
@@ -2032,19 +2033,15 @@ class AgentRuntime:
                                 )
                                 if _image_history_lock is not None:
                                     with _image_history_lock:
-                                        if (
-                                            _image_history_key not in _image_history
-                                            and len(_image_history)
-                                            >= getattr(self, "_max_stored_image_generations", 256)
-                                        ):
+                                        if _image_history_key not in _image_history and len(
+                                            _image_history
+                                        ) >= getattr(self, "_max_stored_image_generations", 256):
                                             _image_history.pop(next(iter(_image_history)))
                                         _image_history[_image_history_key] = effective_arguments
                                 else:
-                                    if (
-                                        _image_history_key not in _image_history
-                                        and len(_image_history)
-                                        >= getattr(self, "_max_stored_image_generations", 256)
-                                    ):
+                                    if _image_history_key not in _image_history and len(
+                                        _image_history
+                                    ) >= getattr(self, "_max_stored_image_generations", 256):
                                         _image_history.pop(next(iter(_image_history)))
                                     _image_history[_image_history_key] = effective_arguments
 

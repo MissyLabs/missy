@@ -2371,9 +2371,7 @@ class TestLeakedToolCallTagRetry:
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
         ):
             runtime = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
-            runtime.run(
-                "Generate an image of a red fox in snow.", session_id="same-image-session"
-            )
+            runtime.run("Generate an image of a red fox in snow.", session_id="same-image-session")
             result = runtime.run(
                 "Generate that same fox image again with the exact seed from before.",
                 session_id="same-image-session",
