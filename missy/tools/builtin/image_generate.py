@@ -199,27 +199,37 @@ class ImageGenerateTool(BaseTool):
                 base_url = ""
                 gpu: dict[str, Any] = {}
                 preflight_errors: list[str] = []
+                required_models = [("checkpoints", checkpoint)]
                 for index, (host, port) in enumerate(candidates):
                     candidate_url = f"http://{host}:{port}"
                     probe = VideoGenerateTool._preflight_gpu(http, candidate_url, allow_cpu)
-                    if isinstance(probe, dict):
-                        base_url, gpu = candidate_url, probe
-                        if index:
-                            gpu["fallback_from"] = [f"{h}:{p}" for h, p in candidates[:index]]
-                        break
-                    preflight_errors.append(f"{candidate_url}: {probe}")
+                    if not isinstance(probe, dict):
+                        preflight_errors.append(f"{candidate_url}: {probe}")
+                        continue
+
+                    model_error = VideoGenerateTool._check_models(
+                        http, candidate_url, required_models
+                    )
+                    if model_error:
+                        preflight_errors.append(f"{candidate_url}: {model_error}")
+                        continue
+
+                    base_url, gpu = candidate_url, probe
+                    if index:
+                        logger.warning(
+                            "image_generate: ComfyUI fell back to %s (earlier "
+                            "candidate(s) unusable: %s)",
+                            candidate_url,
+                            "; ".join(preflight_errors),
+                        )
+                        gpu["fallback_from"] = [f"{h}:{p}" for h, p in candidates[:index]]
+                    break
                 if not base_url:
                     return ToolResult(
                         success=False,
                         output=None,
                         error="No usable ComfyUI server. " + " | ".join(preflight_errors),
                     )
-
-                model_error = VideoGenerateTool._check_models(
-                    http, base_url, [("checkpoints", checkpoint)]
-                )
-                if model_error:
-                    return ToolResult(success=False, output=None, error=model_error)
 
                 graph = _build_image_workflow(
                     checkpoint=checkpoint,

@@ -149,6 +149,36 @@ class TestImageGenerateExecute:
         assert "v1-5-pruned-emaonly.safetensors" in result.error
         client.post.assert_not_called()
 
+    def test_falls_back_when_primary_server_lacks_checkpoint(self, tmp_path: Path):
+        client = _client(image_bytes=b"fallback-png")
+        default_get = client.get.side_effect
+
+        def get(url, **kwargs):
+            if url == "http://remote-gpu:8199/models/checkpoints":
+                return _response(data=[])
+            return default_get(url, **kwargs)
+
+        client.get.side_effect = get
+        output_path = tmp_path / "fallback.png"
+        candidates = [("remote-gpu", 8199), ("127.0.0.1", 8199)]
+
+        with (
+            patch("missy.gateway.client.PolicyHTTPClient", return_value=client),
+            patch(
+                "missy.tools.builtin.image_generate._comfyui_candidates_from_env",
+                return_value=candidates,
+            ),
+        ):
+            result = ImageGenerateTool().execute(
+                prompt="a cat", seed=4242, save_path=str(output_path)
+            )
+
+        assert result.success, result.error
+        assert result.output["comfyui_host"] == "http://127.0.0.1:8199"
+        assert result.output["gpu"]["fallback_from"] == ["remote-gpu:8199"]
+        assert client.post.call_args.args[0] == "http://127.0.0.1:8199/prompt"
+        assert output_path.read_bytes() == b"fallback-png"
+
     def test_schema_and_policy_resolvers_cover_real_targets(self, tmp_path: Path):
         tool = ImageGenerateTool()
         schema = tool.get_schema()
