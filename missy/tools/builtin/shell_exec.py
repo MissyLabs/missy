@@ -98,6 +98,9 @@ class ShellExecTool(BaseTool):
         "e.g. command='ls -la /home' or command='sudo systemctl status cups'. "
         "Supports pipes, redirection, and compound commands with && or ;. "
         "Always provide a non-empty command string. "
+        "Commands have a hard 8192-character limit; never embed large file contents in the "
+        "command. Use file_write for file contents, then use shell_exec only for short "
+        "commands that inspect, test, commit, or otherwise operate on that file. "
         "IMPORTANT: Heredocs (<<) and here-strings (<<<) are NOT allowed. "
         "To run multi-line scripts, first write the script to a file using file_write, "
         "then execute it (e.g. file_write the script to /tmp/script.py, then shell_exec 'python3 /tmp/script.py'). "
@@ -170,7 +173,12 @@ class ShellExecTool(BaseTool):
             return ToolResult(
                 success=False,
                 output=None,
-                error=f"Command exceeds maximum length ({_MAX_COMMAND_LENGTH} bytes).",
+                error=(
+                    f"Command exceeds maximum length ({_MAX_COMMAND_LENGTH} characters). "
+                    "Do not embed large file contents in shell_exec; write the content with "
+                    "file_write, then use a short shell_exec command to inspect or operate "
+                    "on the file."
+                ),
             )
 
         if _BACKGROUND_PID_VAR_RE.search(command):

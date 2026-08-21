@@ -90,6 +90,8 @@ class TestPropose:
         assert result.success
         assert "Evolution proposed" in result.output
         assert "missy evolve approve" in result.output
+        assert "react ✅" in result.output
+        assert "Typing 'approved' is not an approval action" in result.output
 
     def test_propose_missing_fields(self, tool):
         result = tool.execute(action="propose", title="T")
@@ -182,6 +184,18 @@ class TestResolveFilesystemTargets:
             [
                 {"file_path": "missy/a.py", "original_code": "x", "proposed_code": "y"},
                 {"file_path": "missy/b.py", "original_code": "x", "proposed_code": "y"},
+            ]
+        )
+        read_paths, write_paths = tool.resolve_filesystem_targets({"diffs": diffs_json})
+        assert read_paths == ["missy/a.py", "missy/b.py"]
+        assert write_paths == []
+
+    def test_propose_multi_deduplicates_repeated_file_paths(self, tool):
+        diffs_json = json.dumps(
+            [
+                {"file_path": "missy/a.py", "original_code": "a", "proposed_code": "b"},
+                {"file_path": "missy/a.py", "original_code": "c", "proposed_code": "d"},
+                {"file_path": "missy/b.py", "original_code": "e", "proposed_code": "f"},
             ]
         )
         read_paths, write_paths = tool.resolve_filesystem_targets({"diffs": diffs_json})
@@ -308,6 +322,40 @@ class TestRegistryPermissionEnforcement:
         assert not result.success
         assert result.policy_denied
 
+    def test_propose_multi_allows_multiple_diffs_for_one_authorized_file(
+        self, tmp_repo, store_path
+    ):
+        from missy.tools.registry import ToolRegistry
+
+        self._init_engine(tmp_repo)
+        registry = ToolRegistry()
+        registry.register(CodeEvolveTool())
+        diffs_json = json.dumps(
+            [
+                {
+                    "file_path": str(tmp_repo / "missy" / "example.py"),
+                    "original_code": "def greet():",
+                    "proposed_code": "def greet_user():",
+                },
+                {
+                    "file_path": str(tmp_repo / "missy" / "example.py"),
+                    "original_code": "return 'hello'",
+                    "proposed_code": "return 'hi'",
+                },
+            ]
+        )
+        with _patch_mgr(store_path, str(tmp_repo)):
+            result = registry.execute(
+                "code_evolve",
+                session_id="s1",
+                task_id="t1",
+                action="propose_multi",
+                title="Two edits in one file",
+                description="Both replacements are required",
+                diffs=diffs_json,
+            )
+        assert result.success, result.error
+
 
 # ---------------------------------------------------------------------------
 # list
@@ -392,6 +440,8 @@ class TestHumanOperatorOnlyActionsRefused:
         assert not result.success
         assert "authenticated human operator" in result.error
         assert "missy evolve approve abc123" in result.error
+        assert "explicit ✅ reaction controls" in result.error
+        assert "Plain text such as 'approved' is not an approval action" in result.error
         mock_mgr_cls.assert_not_called()
 
     def test_apply_refused_without_touching_manager(self, tool):

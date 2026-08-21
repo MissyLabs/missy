@@ -175,6 +175,20 @@ def _strip_leaked_tool_call_narration(text: str) -> str:
 
 _MAX_PLACEHOLDER_RETRIES = 1
 
+_ITERATION_LIMIT_FINALIZATION_PROMPT = (
+    "[System finalization]: The tool-call limit has been reached and no more tools are "
+    "available in this response. Do not emit tool-call syntax, internal tool narration, "
+    "or promise more work. Using only the observed tool results above, answer the original "
+    "request with a concise status. Clearly distinguish actions that succeeded from actions "
+    "that remain incomplete or unverified."
+)
+
+_ITERATION_LIMIT_UNRESOLVED_RESPONSE = (
+    "I reached the tool-use limit—the iteration limit for this task—before I could produce "
+    "a verified final result. Some operations ran, but I cannot confirm that the requested "
+    "task completed. Please ask me to continue from the saved work."
+)
+
 _PLACEHOLDER_RETRY_NUDGE = (
     "[System reminder]: Your previous response was not a real reply -- it was "
     "an internal placeholder artifact, not synthesized text. Produce an "
@@ -3084,18 +3098,53 @@ class AgentRuntime:
             "Agent hit max_iterations=%d without a final stop response.",
             self.config.max_iterations,
         )
-        # Make one final plain completion attempt
+        # Make one final plain completion attempt. The provider no longer has
+        # a tool schema on this path, so explicitly require synthesis from the
+        # observations already in the conversation. Without this instruction,
+        # openai-codex has emitted only ``[Called tool: ...]`` narration here;
+        # the channel sanitizer correctly removes that internal artifact but
+        # is then left with an empty response and can only show a generic
+        # error. This nudge makes the transition from tool use to final text
+        # explicit and the deterministic fallback below remains honest if the
+        # provider still fails to produce user-facing prose.
+        finalization_messages = [
+            *loop_messages,
+            {"role": "user", "content": _ITERATION_LIMIT_FINALIZATION_PROMPT},
+        ]
         try:
             fallback = self._single_turn(
                 provider=provider,
                 system_prompt=system_prompt,
-                messages=loop_messages,
+                messages=finalization_messages,
                 session_id=session_id,
                 task_id=task_id,
             )
-            return fallback.content, tool_names_used
+            fallback_text = _strip_leaked_tool_call_narration(fallback.content or "")
+            if fallback_text:
+                with contextlib.suppress(Exception):
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.response.iteration_limit_recovered",
+                        result="warn",
+                        detail={"tools_used": list(dict.fromkeys(tool_names_used))},
+                    )
+                return fallback_text, tool_names_used
         except Exception:
-            return "[Agent reached iteration limit without a final response.]", tool_names_used
+            logger.warning(
+                "Iteration-limit finalization call failed; returning grounded fallback.",
+                exc_info=True,
+            )
+
+        with contextlib.suppress(Exception):
+            self._emit_event(
+                session_id=session_id,
+                task_id=task_id,
+                event_type="agent.response.iteration_limit_unresolved",
+                result="warn",
+                detail={"tools_used": list(dict.fromkeys(tool_names_used))},
+            )
+        return _ITERATION_LIMIT_UNRESOLVED_RESPONSE, tool_names_used
 
     def _single_turn(
         self,

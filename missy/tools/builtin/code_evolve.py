@@ -11,10 +11,10 @@ Inline lifecycle available to the agent::
     1. Agent reads source via file_read to understand the code
     2. Agent calls code_evolve(action="propose", ...) to propose a fix
     3. Agent stops. Approving and applying a proposal requires an
-       authenticated human operator running
-       ``missy evolve approve <id>`` and ``missy evolve apply <id>``
-       from a terminal session on the host, or the equivalent
-       authenticated Web TUI control when available.
+       authenticated human operator using the configured-owner Discord
+       reaction buttons, running ``missy evolve approve <id>`` and
+       ``missy evolve apply <id>`` from a terminal session on the host,
+       or the equivalent authenticated Web TUI control when available.
 
 SR-1.2/1.3: a model, Discord user, scheduled job, or tool call must
 never approve its own code change. ``approve``, ``apply``, and
@@ -23,11 +23,10 @@ tool — they mutate Missy's own source and restart the process, and
 ``CodeEvolutionManager.approve()``/``apply()``/``rollback()`` perform no
 authentication of their own (they trust every caller). The only
 legitimate callers are the ``missy evolve`` CLI commands
-(``missy/cli/main.py``), which run under an interactive human operator's
-own shell session on the host — the same trust boundary every other
-local-first, single-operator Missy control surface relies on. If a Web
-API surface for evolve approval is ever added, it must reuse the API's
-existing authenticated-session boundary, not this tool.
+(``missy/cli/main.py``) and the Discord reaction handler, which only
+accepts user IDs in the operator-configured ``owner_ids`` allowlist.
+If another API surface for evolve approval is added, it must reuse an
+authenticated operator boundary, not this tool.
 
 Actions available to the agent:
     ``propose``
@@ -75,12 +74,16 @@ class CodeEvolveTool(BaseTool):
     description = (
         "Propose and review modifications to Missy's own source code. "
         "Use file_read first to understand the code, then propose a "
-        "change with exact original_code and proposed_code. "
+        "change with exact original_code and proposed_code. Proposals may "
+        "only modify existing files under the missy/ package; do not propose "
+        "new files or changes under tests/. Put multiple replacements for "
+        "one source file in separate diffs with the same file_path. "
         "Actions: propose, propose_multi, list, show, reject. "
         "Approving, applying, and rolling back a proposal requires an "
-        "authenticated human operator running `missy evolve approve/"
-        "apply/rollback <id>` from a terminal on the host -- this tool "
-        "cannot perform those actions and will refuse if asked. Never "
+        "authenticated human operator using the configured-owner Discord "
+        "reaction buttons or running `missy evolve approve/apply/rollback "
+        "<id>` from a terminal on the host -- this tool cannot perform "
+        "those actions and will refuse if asked. Never "
         "suggest writing directly to source files, editing the "
         "evolutions store, or any other route that bypasses that "
         "requirement; report the limitation and stop."
@@ -130,7 +133,10 @@ class CodeEvolveTool(BaseTool):
         },
         "file_path": {
             "type": "string",
-            "description": "Relative path from repo root to the file to modify (propose).",
+            "description": (
+                "Relative path from repo root to an existing file under missy/ "
+                "(propose). New files and tests/ paths are not supported."
+            ),
             "required": False,
         },
         "original_code": {
@@ -148,7 +154,9 @@ class CodeEvolveTool(BaseTool):
             "description": (
                 "JSON array of diffs for propose_multi. Each element: "
                 '{"file_path": "...", "original_code": "...", '
-                '"proposed_code": "...", "description": "..."}'
+                '"proposed_code": "...", "description": "..."}. Every '
+                "file_path must be an existing file under missy/; repeated "
+                "file_path values are allowed for independent replacements."
             ),
             "required": False,
         },
@@ -194,9 +202,17 @@ class CodeEvolveTool(BaseTool):
         docstring above).
         """
         read_paths: list[str] = []
+        seen_paths: set[str] = set()
+
+        def add_read_path(value: Any) -> None:
+            path = str(value)
+            if path and path not in seen_paths:
+                seen_paths.add(path)
+                read_paths.append(path)
+
         file_path = kwargs.get("file_path")
         if file_path:
-            read_paths.append(str(file_path))
+            add_read_path(file_path)
         diffs_raw = kwargs.get("diffs")
         if diffs_raw:
             try:
@@ -204,7 +220,12 @@ class CodeEvolveTool(BaseTool):
                 for d in parsed:
                     fp = d.get("file_path") if isinstance(d, dict) else None
                     if fp:
-                        read_paths.append(str(fp))
+                        # A multi-diff proposal may legitimately make several
+                        # independent replacements in one source file. Policy
+                        # needs to authorize that target once; returning it
+                        # repeatedly makes the registry reject the resolver
+                        # before CodeEvolutionManager can validate the diffs.
+                        add_read_path(fp)
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
         return read_paths, []
@@ -223,10 +244,12 @@ class CodeEvolveTool(BaseTool):
                     f"'{action}' requires an authenticated human operator (SR-1.2/1.3: "
                     "a model must never approve or apply its own code change). "
                     f"Ask the operator to run `missy evolve {action}{id_arg}` from a "
-                    "terminal on the host, or use the Web TUI evolve controls if "
-                    "available. There is no way to perform this action from within "
-                    "the conversation -- do not write to source files, the "
-                    "evolutions store, or any other file as a substitute."
+                    "terminal on the host. For a proposal posted to Discord, a "
+                    "configured owner may use its explicit ✅ reaction controls. "
+                    "Plain text such as 'approved' is not an approval action. There "
+                    "is no way for the model itself to perform this action -- do not "
+                    "write to source files, the evolutions store, or any other file "
+                    "as a substitute."
                 ),
             )
 
@@ -298,8 +321,9 @@ class CodeEvolveTool(BaseTool):
                     f"File: {prop.diffs[0].file_path}\n\n"
                     "This proposal is pending. Ask an operator to review and run "
                     f"`missy evolve approve {prop.id}` then `missy evolve apply {prop.id}` "
-                    "from a terminal on the host -- approval and apply are not "
-                    "available from this conversation."
+                    "from a terminal on the host. On Discord, a configured owner can "
+                    "instead react ✅ to this proposal response, then react ✅ to the "
+                    "follow-up apply prompt. Typing 'approved' is not an approval action."
                 ),
             )
         except ValueError as exc:
@@ -350,8 +374,10 @@ class CodeEvolveTool(BaseTool):
                     f"Files: {', '.join(files)}\n"
                     f"Status: {prop.status.value}\n\n"
                     "This proposal is pending. Ask an operator to review and run "
-                    f"`missy evolve approve {prop.id}` from a terminal on the host -- "
-                    "approval is not available from this conversation."
+                    f"`missy evolve approve {prop.id}` from a terminal on the host. "
+                    "On Discord, a configured owner can instead react ✅ to this "
+                    "proposal response, then react ✅ to the follow-up apply prompt. "
+                    "Typing 'approved' is not an approval action."
                 ),
             )
         except ValueError as exc:

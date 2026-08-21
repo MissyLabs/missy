@@ -440,9 +440,35 @@ class TestRuntimeIterationLimit:
             "fallback after limit",
             "[Agent reached iteration limit without a final response.]",
         )
+        fallback_messages = provider.complete.call_args.args[0]
+        assert "tool-call limit has been reached" in fallback_messages[-1].content
+        assert "Do not emit tool-call syntax" in fallback_messages[-1].content
 
-    def test_iteration_limit_fallback_returns_sentinel_on_exception(self):
-        """When fallback single-turn also fails, sentinel string is returned."""
+    def test_iteration_limit_tool_narration_returns_grounded_status(self):
+        """A narration-only finalizer must not collapse to the generic empty reply."""
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        provider.complete_with_tools.return_value = _make_tool_call_response("calculator")
+        provider.complete.return_value = _make_stop_response(
+            '[Called tool: shell_exec with args: {"command":"git status"}]'
+        )
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=2))
+            result = rt.run("complete a long repository task")
+
+        assert "tool-use limit" in result
+        assert "cannot confirm" in result
+        assert "I ran a tool but didn't produce any text" not in result
+        assert "[Called tool:" not in result
+
+    def test_iteration_limit_fallback_returns_grounded_status_on_exception(self):
+        """When finalization also fails, return an honest user-facing status."""
         provider = _make_provider()
         calc_tool = _make_mock_tool("calculator")
         tool_reg = _make_tool_registry([calc_tool])
@@ -459,7 +485,8 @@ class TestRuntimeIterationLimit:
             rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=2))
             result = rt.run("keep looping")
 
-        assert "iteration limit" in result.lower() or result.startswith("[Agent")
+        assert "tool-use limit" in result.lower()
+        assert "cannot confirm" in result.lower()
 
 
 # ---------------------------------------------------------------------------
