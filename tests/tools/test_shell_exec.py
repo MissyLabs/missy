@@ -26,6 +26,13 @@ class TestDirectExecution:
         assert result.success is False
         assert "empty" in result.error
 
+    def test_oversized_command_directs_large_content_to_file_write(self):
+        tool = ShellExecTool()
+        result = tool.execute(command="x" * 8193)
+        assert result.success is False
+        assert "8192 characters" in result.error
+        assert "file_write" in result.error
+
     def test_nonexistent_command(self):
         tool = ShellExecTool()
         result = tool.execute(command="__nonexistent_binary_xyz__")
