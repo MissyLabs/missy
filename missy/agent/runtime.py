@@ -184,9 +184,9 @@ _ITERATION_LIMIT_FINALIZATION_PROMPT = (
 )
 
 _ITERATION_LIMIT_UNRESOLVED_RESPONSE = (
-    "I reached the tool-use limit before I could produce a verified final result. Some "
-    "operations ran, but I cannot confirm that the requested task completed. Please ask me "
-    "to continue from the saved work."
+    "I reached the tool-use limit—the iteration limit for this task—before I could produce "
+    "a verified final result. Some operations ran, but I cannot confirm that the requested "
+    "task completed. Please ask me to continue from the saved work."
 )
 
 _PLACEHOLDER_RETRY_NUDGE = (
