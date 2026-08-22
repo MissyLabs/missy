@@ -285,7 +285,12 @@ class CodeEvolutionManager:
             abs_path = self._validate_path(diff.file_path)
             if not abs_path.exists():
                 raise ValueError(f"File does not exist: {diff.file_path}")
-            content = abs_path.read_text()
+            if not abs_path.is_file():
+                raise ValueError(f"Path is not a regular file: {diff.file_path}")
+            try:
+                content = abs_path.read_text()
+            except (OSError, UnicodeError) as exc:
+                raise ValueError(f"Could not read source file {diff.file_path}: {exc}") from exc
             if diff.original_code not in content:
                 raise ValueError(
                     f"Original code not found in {diff.file_path}. "

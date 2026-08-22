@@ -154,6 +154,38 @@ class TestPropose:
                 proposed_code="bar",
             )
 
+    def test_propose_rejects_directory_as_non_regular_file(self, mgr, tmp_repo):
+        (tmp_repo / "missy" / "not_a_source.py").mkdir()
+        with pytest.raises(ValueError, match="not a regular file"):
+            mgr.propose(
+                title="Directory target",
+                description="test",
+                file_path="missy/not_a_source.py",
+                original_code="foo",
+                proposed_code="bar",
+            )
+
+    def test_propose_converts_source_read_error_to_actionable_value_error(
+        self, mgr, tmp_repo, monkeypatch
+    ):
+        source = tmp_repo / "missy" / "example.py"
+        original_read_text = Path.read_text
+
+        def fail_target_read(path, *args, **kwargs):
+            if path == source:
+                raise OSError("fixture read failure")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_target_read)
+        with pytest.raises(ValueError, match="Could not read source file.*fixture read failure"):
+            mgr.propose(
+                title="Unreadable target",
+                description="test",
+                file_path="missy/example.py",
+                original_code="return 'hello'",
+                proposed_code="return 'hi'",
+            )
+
     def test_propose_persists_to_file(self, mgr, store_path):
         mgr.propose(
             title="Persisted",

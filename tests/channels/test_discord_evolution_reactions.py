@@ -32,7 +32,9 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,13 +59,21 @@ def mock_rest() -> MagicMock:
 
 
 @pytest.fixture()
-def channel(mock_rest: MagicMock) -> DiscordChannel:
+def reaction_state_path(tmp_path: Path) -> Path:
+    return tmp_path / "discord-evolution-reactions.json"
+
+
+@pytest.fixture()
+def channel(mock_rest: MagicMock, reaction_state_path: Path) -> DiscordChannel:
     acct = DiscordAccountConfig(
         token_env_var="DISCORD_BOT_TOKEN",
         account_id="bot-001",
         dm_policy=DiscordDMPolicy.OPEN,
     )
-    ch = DiscordChannel(account_config=acct)
+    ch = DiscordChannel(
+        account_config=acct,
+        evolution_reaction_state_path=reaction_state_path,
+    )
     ch._rest = mock_rest
     ch._bot_user_id = "bot-001"
     return ch
@@ -92,6 +102,64 @@ class TestAddEvolutionReactions:
         mock_rest.add_reaction.side_effect = Exception("no perms")
         channel.add_evolution_reactions("ch-1", "msg-1", "evo-xyz")
         assert "msg-1" not in channel._pending_evolutions
+
+    def test_pending_proposal_reaction_survives_restart(
+        self,
+        channel: DiscordChannel,
+        mock_rest: MagicMock,
+        reaction_state_path: Path,
+    ):
+        channel.add_evolution_reactions("ch-1", "msg-1", "evo-abc")
+
+        restarted = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+
+        assert restarted._pending_evolutions == {"msg-1": "evo-abc"}
+        assert restarted._pending_applies == {}
+
+    def test_corrupt_reaction_state_fails_closed(
+        self,
+        channel: DiscordChannel,
+        reaction_state_path: Path,
+    ):
+        reaction_state_path.write_text("{not-json", encoding="utf-8")
+
+        restarted = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+
+        assert restarted._pending_evolutions == {}
+        assert restarted._pending_applies == {}
+
+    def test_reaction_state_is_namespaced_per_account(
+        self,
+        channel: DiscordChannel,
+        reaction_state_path: Path,
+    ):
+        channel.add_evolution_reactions("ch-1", "msg-1", "evo-abc")
+        other_account = DiscordAccountConfig(
+            token_env_var="OTHER_DISCORD_TOKEN",
+            account_id="bot-002",
+            dm_policy=DiscordDMPolicy.OPEN,
+        )
+
+        other = DiscordChannel(
+            account_config=other_account,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+        other._rest = MagicMock()
+        other.add_evolution_reactions("ch-2", "msg-2", "evo-def")
+
+        restarted = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+        stored = json.loads(reaction_state_path.read_text(encoding="utf-8"))
+        assert restarted._pending_evolutions == {"msg-1": "evo-abc"}
+        assert set(stored["accounts"]) == {"bot-001", "bot-002"}
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +273,63 @@ class TestHandleReaction:
         assert channel._pending_applies.get("sent-msg-123") == "evo-1"
         assert mock_rest.add_reaction.call_count == 2
 
+    def test_approved_apply_reaction_survives_restart(
+        self,
+        channel: DiscordChannel,
+        mock_rest: MagicMock,
+        reaction_state_path: Path,
+    ):
+        channel.account_config.owner_ids = ["owner-1"]
+        channel.add_evolution_reactions("ch-1", "msg-1", "evo-1")
+        mock_mgr = MagicMock()
+        mock_mgr.approve.return_value = True
+        data = {
+            "message_id": "msg-1",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(channel._handle_reaction(data))
+
+        restarted = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+        assert restarted._pending_evolutions == {}
+        assert restarted._pending_applies == {"sent-msg-123": "evo-1"}
+        assert reaction_state_path.stat().st_mode & 0o777 == 0o600
+
+        restarted._rest = mock_rest
+        mock_mgr.apply.return_value = {
+            "success": True,
+            "message": "Evolution applied and committed: abc12345",
+            "commit_sha": "abc12345def",
+            "test_output": "",
+        }
+        apply_data = {
+            "message_id": "sent-msg-123",
+            "user_id": "owner-1",
+            "channel_id": "ch-1",
+            "emoji": {"name": "✅"},
+        }
+        with patch(
+            "missy.agent.code_evolution.CodeEvolutionManager",
+            return_value=mock_mgr,
+        ):
+            _run(restarted._handle_reaction(apply_data))
+
+        mock_mgr.apply.assert_called_once_with("evo-1")
+        final_restart = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+        assert final_restart._pending_applies == {}
+
     def test_reject_reaction_denied_for_non_owner(
         self, channel: DiscordChannel, mock_rest: MagicMock
     ):
@@ -287,7 +412,10 @@ class TestHandleReaction:
 
 class TestHandleEvolutionApplyReaction:
     def test_apply_succeeds_for_configured_owner(
-        self, channel: DiscordChannel, mock_rest: MagicMock
+        self,
+        channel: DiscordChannel,
+        mock_rest: MagicMock,
+        reaction_state_path: Path,
     ):
         channel.account_config.owner_ids = ["owner-1"]
         channel._pending_applies["apply-msg-1"] = "evo-1"
@@ -323,6 +451,11 @@ class TestHandleEvolutionApplyReaction:
         assert mock_rest.send_message.call_count == 2
         progress_content = mock_rest.send_message.call_args_list[0][0][1]
         assert "applying" in progress_content.lower()
+        restarted = DiscordChannel(
+            account_config=channel.account_config,
+            evolution_reaction_state_path=reaction_state_path,
+        )
+        assert restarted._pending_applies == {}
 
     def test_apply_dispatched_via_executor_not_blocking_event_loop(
         self, channel: DiscordChannel, mock_rest: MagicMock
