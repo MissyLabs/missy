@@ -34,8 +34,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
+import tempfile
+import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from missy.channels.base import BaseChannel, ChannelMessage
@@ -49,6 +54,10 @@ logger = logging.getLogger(__name__)
 #: How long a guild's resolved role-ID-to-name map stays cached before
 #: being re-fetched from Discord's REST API (allowed_roles enforcement).
 _GUILD_ROLES_CACHE_TTL_SECONDS = 300.0
+_EVOLUTION_REACTION_STATE_LOCK = threading.RLock()
+_DEFAULT_EVOLUTION_REACTION_STATE_PATH = Path(
+    "~/.missy/discord_evolution_reactions.json"
+).expanduser()
 
 
 class DiscordSendError(Exception):
@@ -75,6 +84,9 @@ class DiscordChannel(BaseChannel):
         session_id: Forwarded to audit events and the HTTP client.
         task_id: Forwarded to audit events and the HTTP client.
         queue_max: Maximum number of pending inbound messages.
+        evolution_reaction_state_path: Optional override for the durable
+            proposal/apply reaction-correlation store. Primarily useful for
+            isolated tests; production defaults to ``~/.missy``.
     """
 
     name = "discord"
@@ -85,6 +97,7 @@ class DiscordChannel(BaseChannel):
         session_id: str = "discord",
         task_id: str = "channel",
         queue_max: int = 256,
+        evolution_reaction_state_path: str | Path | None = None,
     ) -> None:
         self.account_config = account_config
         self._session_id = session_id
@@ -124,7 +137,14 @@ class DiscordChannel(BaseChannel):
         # Auto-thread threshold: create a thread after N messages in a channel.
         self._auto_thread_threshold: int = getattr(account_config, "auto_thread_threshold", 0)
 
-        # Pending evolution reactions: message_id -> proposal_id
+        self._evolution_reaction_state_path = Path(
+            evolution_reaction_state_path or _DEFAULT_EVOLUTION_REACTION_STATE_PATH
+        ).expanduser()
+
+        # Pending evolution reactions: message_id -> proposal_id.  Both maps
+        # are persisted because Discord reactions can arrive after a gateway
+        # restart; an in-memory-only authorization target silently strands a
+        # valid proposal as soon as the process is replaced.
         self._pending_evolutions: dict[str, str] = {}
 
         # Pending evolution *apply* reactions: message_id -> proposal_id.
@@ -134,6 +154,7 @@ class DiscordChannel(BaseChannel):
         # never be confused with each other -- a message_id is only ever
         # tracked in one of the two dicts at a time.
         self._pending_applies: dict[str, str] = {}
+        self._load_evolution_reaction_state()
 
         # allowed_roles enforcement: cache of guild_id -> (fetched_at,
         # {role_id: role_name}), refreshed via the REST API on a TTL so
@@ -1696,6 +1717,104 @@ class DiscordChannel(BaseChannel):
     # Evolution reaction workflow
     # ------------------------------------------------------------------
 
+    def _evolution_reaction_account_key(self) -> str:
+        """Return the stable per-account namespace for persisted reactions."""
+        return str(
+            self.account_config.account_id
+            or self.account_config.application_id
+            or self.account_config.token_env_var
+        )
+
+    @staticmethod
+    def _validated_reaction_map(value: Any) -> dict[str, str]:
+        """Accept only bounded Discord-message/proposal string mappings."""
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, str] = {}
+        for message_id, proposal_id in value.items():
+            if not isinstance(message_id, str) or not isinstance(proposal_id, str):
+                continue
+            if not message_id or not proposal_id or len(message_id) > 64 or len(proposal_id) > 128:
+                continue
+            result[message_id] = proposal_id
+        return result
+
+    def _load_evolution_reaction_state(self) -> None:
+        """Restore this account's pending reaction targets after restart.
+
+        The code-evolution store remains authoritative for lifecycle status:
+        handlers still call ``approve()``, ``reject()``, or ``apply()``, all of
+        which enforce the expected current state.  This file only restores the
+        Discord message-to-proposal correlation that is otherwise unavailable
+        after a gateway reconnect or process replacement.
+        """
+        path = self._evolution_reaction_state_path
+        if not path.is_file():
+            return
+        try:
+            with _EVOLUTION_REACTION_STATE_LOCK:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            accounts = data.get("accounts", {}) if isinstance(data, dict) else {}
+            account = accounts.get(self._evolution_reaction_account_key(), {})
+            if not isinstance(account, dict):
+                return
+            self._pending_evolutions = self._validated_reaction_map(
+                account.get("pending_evolutions")
+            )
+            self._pending_applies = self._validated_reaction_map(account.get("pending_applies"))
+        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError) as exc:
+            # Corrupt/unreadable authorization metadata fails closed: no
+            # reaction is actionable until a fresh proposal message is sent.
+            logger.warning("Discord: could not load evolution reaction state: %s", exc)
+            self._pending_evolutions = {}
+            self._pending_applies = {}
+
+    def _persist_evolution_reaction_state(self) -> bool:
+        """Atomically persist this account's two pending-reaction maps."""
+        path = self._evolution_reaction_state_path
+        tmp_path: Path | None = None
+        try:
+            with _EVOLUTION_REACTION_STATE_LOCK:
+                data: dict[str, Any] = {"schema_version": 1, "accounts": {}}
+                if path.is_file():
+                    try:
+                        loaded = json.loads(path.read_text(encoding="utf-8"))
+                        if isinstance(loaded, dict) and isinstance(loaded.get("accounts"), dict):
+                            data = loaded
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        # Replace corrupt state with the currently-known,
+                        # validated account state instead of propagating it.
+                        pass
+
+                accounts = data.setdefault("accounts", {})
+                accounts[self._evolution_reaction_account_key()] = {
+                    "pending_evolutions": dict(self._pending_evolutions),
+                    "pending_applies": dict(self._pending_applies),
+                }
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    json.dump(data, handle, indent=2, sort_keys=True)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    tmp_path = Path(handle.name)
+                tmp_path.chmod(0o600)
+                os.replace(tmp_path, path)
+            return True
+        except (OSError, TypeError, ValueError) as exc:
+            logger.error("Discord: could not persist evolution reaction state: %s", exc)
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+            return False
+
     def add_evolution_reactions(
         self,
         channel_id: str,
@@ -1775,9 +1894,21 @@ class DiscordChannel(BaseChannel):
                 message_id,
                 proposal_id,
             )
+            if not self._persist_evolution_reaction_state():
+                tracking.pop(message_id, None)
+                self._emit_audit(
+                    f"discord.{log_label}.state_persist_failed",
+                    "error",
+                    {
+                        "channel_id": channel_id,
+                        "message_id": message_id,
+                        "proposal_id": proposal_id,
+                    },
+                )
         except Exception as exc:
             logger.error("Discord: failed to add %s reactions: %s", log_label, exc)
             tracking.pop(message_id, None)
+            self._persist_evolution_reaction_state()
 
     async def _handle_reaction(self, data: dict[str, Any]) -> None:
         """Handle a MESSAGE_REACTION_ADD event for evolution approval/apply."""
@@ -1920,6 +2051,7 @@ class DiscordChannel(BaseChannel):
             # explanation at all.
             if resolved:
                 self._pending_evolutions.pop(message_id, None)
+                self._persist_evolution_reaction_state()
 
         except Exception as exc:
             logger.error("Discord: evolution reaction handling failed: %s", exc)
@@ -2063,6 +2195,7 @@ class DiscordChannel(BaseChannel):
 
             if resolved:
                 self._pending_applies.pop(message_id, None)
+                self._persist_evolution_reaction_state()
 
         except Exception as exc:
             logger.error("Discord: evolution apply reaction handling failed: %s", exc)
