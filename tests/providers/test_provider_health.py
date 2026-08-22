@@ -50,6 +50,16 @@ class TestClassifyProviderError:
         exc = ProviderError("Anthropic API error: 500 Internal Server Error")
         assert classify_provider_error(exc) == ProviderFailureClass.UNKNOWN
 
+    def test_content_policy_refusal_is_terminal_failure_class(self):
+        exc = ProviderError(
+            "openai-codex stream error: This content was flagged for possible cybersecurity risk"
+        )
+        assert classify_provider_error(exc) == ProviderFailureClass.CONTENT_POLICY
+
+    def test_content_policy_takes_precedence_over_operational_markers(self):
+        exc = ProviderError("content policy refusal after upstream timeout; see Trusted Access")
+        assert classify_provider_error(exc) == ProviderFailureClass.CONTENT_POLICY
+
     def test_case_insensitive(self):
         exc = ProviderError("ANTHROPIC AUTHENTICATION FAILED: BAD KEY")
         assert classify_provider_error(exc) == ProviderFailureClass.AUTH
@@ -69,6 +79,7 @@ class TestClassifyProviderError:
 
     def test_provider_failure_class_is_str_enum(self):
         assert ProviderFailureClass.AUTH == "auth"
+        assert str(ProviderFailureClass.CONTENT_POLICY) == "content_policy"
         assert str(ProviderFailureClass.RATE_LIMIT) == "rate_limit"
 
 
