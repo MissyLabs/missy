@@ -5430,7 +5430,7 @@ class AgentRuntime:
         """
         from missy.agent.circuit_breaker import CircuitState
         from missy.providers.base import BaseProvider
-        from missy.providers.health import classify_provider_error
+        from missy.providers.health import ProviderFailureClass, classify_provider_error
 
         def _attempt(target: Any) -> Any:
             breaker = self._get_breaker_for(target.name)
@@ -5453,7 +5453,6 @@ class AgentRuntime:
             # fallback candidate selection) -- resolved lazily so the
             # common success path never requires get_registry() to have
             # been initialised.
-            registry = get_registry()
             failure_class = classify_provider_error(exc)
             self._emit_event(
                 session_id=session_id,
@@ -5466,6 +5465,26 @@ class AgentRuntime:
                     "error": str(exc),
                 },
             )
+
+            # A provider safety refusal is a terminal policy decision, not
+            # an availability failure. Trying another provider here can both
+            # bypass the first provider's policy and monopolize a channel
+            # worker behind a slow fallback. Let the channel adapter render
+            # the existing sanitized refusal immediately instead.
+            if failure_class == ProviderFailureClass.CONTENT_POLICY:
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.fallback_suppressed",
+                    result="deny",
+                    detail={
+                        "provider": provider.name,
+                        "reason": str(failure_class),
+                    },
+                )
+                raise exc from None
+
+            registry = get_registry()
 
             # Retry-eligibility: an auth failure with more than one
             # configured API key is worth one immediate retry on the next

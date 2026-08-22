@@ -19,6 +19,7 @@ class ProviderFailureClass(StrEnum):
     """Coarse classification of a :class:`ProviderError`'s root cause."""
 
     AUTH = "auth"
+    CONTENT_POLICY = "content_policy"
     RATE_LIMIT = "rate_limit"
     TIMEOUT = "timeout"
     UNKNOWN = "unknown"
@@ -27,6 +28,22 @@ class ProviderFailureClass(StrEnum):
 _AUTH_MARKERS = ("authentication failed", "unauthorized", "invalid api key", "invalid x-api-key")
 _RATE_LIMIT_MARKERS = ("rate limit", "rate limited", "429", "too many requests")
 _TIMEOUT_MARKERS = ("timed out", "timeout")
+
+# Markers for a provider *content-policy / safety* refusal (as opposed to an
+# operational failure). These are message fragments the active backends emit
+# when the model declines on content grounds -- e.g. openai-codex/gpt-5.5's
+# "This content was flagged for possible cybersecurity risk ... Trusted Access
+# for Cyber program".
+_CONTENT_POLICY_MARKERS = (
+    "flagged for possible",
+    "cybersecurity risk",
+    "content policy",
+    "content_policy",
+    "trusted access",
+    "usage policies",
+    "safety system",
+    "content management policy",
+)
 
 
 def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
@@ -60,6 +77,8 @@ def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
         The best-effort :class:`ProviderFailureClass` for *exc*.
     """
     message = str(exc).lower()
+    if any(marker in message for marker in _CONTENT_POLICY_MARKERS):
+        return ProviderFailureClass.CONTENT_POLICY
     if any(marker in message for marker in _AUTH_MARKERS):
         return ProviderFailureClass.AUTH
     if any(marker in message for marker in _RATE_LIMIT_MARKERS):
@@ -67,23 +86,6 @@ def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
     if any(marker in message for marker in _TIMEOUT_MARKERS):
         return ProviderFailureClass.TIMEOUT
     return ProviderFailureClass.UNKNOWN
-
-
-# Markers for a provider *content-policy / safety* refusal (as opposed to an
-# operational failure). These are message fragments the active backends emit
-# when the model declines on content grounds -- e.g. openai-codex/gpt-5.5's
-# "This content was flagged for possible cybersecurity risk ... Trusted Access
-# for Cyber program".
-_CONTENT_POLICY_MARKERS = (
-    "flagged for possible",
-    "cybersecurity risk",
-    "content policy",
-    "content_policy",
-    "trusted access",
-    "usage policies",
-    "safety system",
-    "content management policy",
-)
 
 
 def is_content_policy_error(exc: BaseException) -> bool:

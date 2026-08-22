@@ -188,6 +188,52 @@ def _capture_events() -> tuple[list[AuditEvent], callable]:
 
 
 # ---------------------------------------------------------------------------
+# Content-policy refusals are terminal: never cross provider boundaries
+# ---------------------------------------------------------------------------
+
+
+class TestContentPolicyFallbackSuppression:
+    def test_content_policy_refusal_does_not_call_fallback_provider(self):
+        primary_cfg = ProviderConfig(name="primary", model="m", api_key="k1")
+        primary = _AlwaysFailProvider(
+            "primary",
+            primary_cfg,
+            "This content was flagged for possible cybersecurity risk",
+        )
+        fallback_cfg = ProviderConfig(name="fallback", model="m", api_key="k2")
+        fallback = _HealthyProvider("fallback", fallback_cfg)
+        rt = _bare_runtime("primary")
+        captured, uninstall = _capture_events()
+
+        try:
+            with (
+                patch(
+                    "missy.agent.runtime.get_registry",
+                    side_effect=AssertionError("content refusal must not consult fallbacks"),
+                ),
+                pytest.raises(ProviderError, match="flagged for possible"),
+            ):
+                rt._single_turn(
+                    provider=primary,
+                    system_prompt="sys",
+                    messages=[{"role": "user", "content": "hi"}],
+                    session_id="s1",
+                    task_id="t1",
+                )
+        finally:
+            uninstall()
+
+        assert primary.calls == 1
+        assert fallback.calls == 0
+        assert not [e for e in captured if e.event_type == "agent.provider.fallback"]
+        suppressed = [e for e in captured if e.event_type == "agent.provider.fallback_suppressed"]
+        assert len(suppressed) == 1
+        assert suppressed[0].result == "deny"
+        assert suppressed[0].detail["provider"] == "primary"
+        assert suppressed[0].detail["reason"] == "content_policy"
+
+
+# ---------------------------------------------------------------------------
 # Key rotation on auth failure
 # ---------------------------------------------------------------------------
 
