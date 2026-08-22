@@ -20,6 +20,7 @@ from missy.cli.main import (
     _DISCORD_CHANNEL_ACTIVITY_MSG_MAX_CHARS,
     _discord_channel_activity_context,
     _discord_clear_channel_activity,
+    _discord_remember_bot_response,
     _discord_remember_channel_message,
 )
 
@@ -144,3 +145,24 @@ class TestDiscordClearChannelActivity:
         assert _discord_clear_channel_activity(activity, "missing") == 0
         assert _discord_clear_channel_activity(activity, "") == 0
         assert list(activity["chan1"]) == [("Bob", "hello")]
+
+
+class TestDiscordRememberBotResponse:
+    def test_normal_response_is_cached(self):
+        activity: dict = {}
+
+        _discord_remember_bot_response(activity, "chan1", "ordinary reply")
+
+        assert list(activity["chan1"]) == [("Missy", "ordinary reply")]
+
+    def test_content_policy_refusal_is_not_cached(self):
+        activity: dict = {}
+
+        _discord_remember_bot_response(
+            activity,
+            "chan1",
+            "Safe alternative without reverse-shell behavior.",
+            content_policy_refusal=True,
+        )
+
+        assert activity == {}
