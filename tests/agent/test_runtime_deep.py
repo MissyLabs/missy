@@ -1550,6 +1550,47 @@ class TestGovernedObsStreamingDispatch:
         ]
         assert [event["detail"]["tool"] for event in bypass_denials] == ["desktop_launch_app"]
 
+    def test_first_governed_tool_error_is_terminal_without_approval_retry(self):
+        provider = _make_provider()
+        confirmed = _make_mock_tool("obs_start_streaming_confirmed")
+        tool_reg = _make_tool_registry([confirmed])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("obs_start_streaming_confirmed"),
+            AssertionError("provider must not be called after governed denial"),
+        ]
+
+        denied = MagicMock()
+        denied.success = False
+        denied.output = None
+        denied.error = (
+            "Approval for 'Start OBS streaming (go live)' was not granted: "
+            "Approval timed out after 60.0s"
+        )
+        tool_reg.execute.return_value = denied
+        tool_reg.execute.side_effect = None
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Go live on OBS now.")
+
+        assert provider.complete_with_tools.call_count == 1
+        assert tool_reg.execute.call_count == 1
+        assert "Approval timed out after 60.0s" in result
+        assert "did not retry the approval request or use an alternate route" in result
+        terminal = [
+            event
+            for event in events
+            if event["event_type"] == "agent.tool.governed_action_terminal"
+        ]
+        assert len(terminal) == 1
+        assert terminal[0]["detail"]["tool"] == "obs_start_streaming_confirmed"
+
 
 class TestCalculatorResponseCompletenessRetry:
     def test_multi_error_reply_must_report_every_executed_expression(self):

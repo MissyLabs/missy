@@ -2179,6 +2179,46 @@ class AgentRuntime:
                             }
                         )
 
+                    # A governed action's dedicated tool is the sole safe
+                    # execution path for this turn. Any error from it is
+                    # terminal: asking the provider to continue can make it
+                    # repeat an approval request (spamming the operator) or
+                    # search for the exact desktop/shell bypass that the
+                    # governed surface intentionally removed. Return an
+                    # evidence-grounded response directly after the first
+                    # denial, timeout, rate limit, or capability failure.
+                    _governed_action_error = next(
+                        (
+                            tr
+                            for tr in tool_results
+                            if _governed_action_tool
+                            and tr.name == _governed_action_tool
+                            and tr.is_error
+                        ),
+                        None,
+                    )
+                    if _governed_action_error is not None:
+                        error_text = (
+                            _governed_action_error.content or "The governed tool was denied."
+                        ).strip()
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.tool.governed_action_terminal",
+                                result="deny",
+                                detail={
+                                    "tool": _governed_action_tool,
+                                    "error_excerpt": error_text[:200],
+                                },
+                            )
+                        return (
+                            "I couldn't complete the requested action. "
+                            f"{error_text[:1000]} I did not retry the approval request "
+                            "or use an alternate route.",
+                            tool_names_used,
+                        )
+
                     # Feature #7: inject a strategy-rotation prompt for EVERY
                     # tool that crossed its failure threshold this round, not
                     # just whichever tool call happened to be last.
