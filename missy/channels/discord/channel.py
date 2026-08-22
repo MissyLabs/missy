@@ -140,6 +140,7 @@ class DiscordChannel(BaseChannel):
         self._evolution_reaction_state_path = Path(
             evolution_reaction_state_path or _DEFAULT_EVOLUTION_REACTION_STATE_PATH
         ).expanduser()
+        self._evolution_reaction_state_active = False
 
         # Pending evolution reactions: message_id -> proposal_id.  Both maps
         # are persisted because Discord reactions can arrive after a gateway
@@ -1755,9 +1756,10 @@ class DiscordChannel(BaseChannel):
             with _EVOLUTION_REACTION_STATE_LOCK:
                 data = json.loads(path.read_text(encoding="utf-8"))
             accounts = data.get("accounts", {}) if isinstance(data, dict) else {}
-            account = accounts.get(self._evolution_reaction_account_key(), {})
+            account = accounts.get(self._evolution_reaction_account_key())
             if not isinstance(account, dict):
                 return
+            self._evolution_reaction_state_active = True
             self._pending_evolutions = self._validated_reaction_map(
                 account.get("pending_evolutions")
             )
@@ -1771,6 +1773,14 @@ class DiscordChannel(BaseChannel):
 
     def _persist_evolution_reaction_state(self) -> bool:
         """Atomically persist this account's two pending-reaction maps."""
+        # Unit/direct callers sometimes seed the private in-memory maps to
+        # exercise a handler without ever registering real Discord reaction
+        # buttons.  Consuming such a synthetic map must not create an empty
+        # account record in the production state file.  Persistence becomes
+        # active only after real buttons are registered or this account's
+        # durable state was loaded.
+        if not self._evolution_reaction_state_active:
+            return True
         path = self._evolution_reaction_state_path
         tmp_path: Path | None = None
         try:
@@ -1894,8 +1904,10 @@ class DiscordChannel(BaseChannel):
                 message_id,
                 proposal_id,
             )
+            self._evolution_reaction_state_active = True
             if not self._persist_evolution_reaction_state():
                 tracking.pop(message_id, None)
+                self._evolution_reaction_state_active = False
                 self._emit_audit(
                     f"discord.{log_label}.state_persist_failed",
                     "error",
