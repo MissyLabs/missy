@@ -456,6 +456,7 @@ class TestHandleEvolutionApplyReaction:
             evolution_reaction_state_path=reaction_state_path,
         )
         assert restarted._pending_applies == {}
+        assert not reaction_state_path.exists()
 
     def test_apply_dispatched_via_executor_not_blocking_event_loop(
         self, channel: DiscordChannel, mock_rest: MagicMock
