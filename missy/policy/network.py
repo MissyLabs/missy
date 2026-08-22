@@ -133,9 +133,7 @@ class NetworkPolicyEngine:
         if not host:
             raise ValueError("host must be a non-empty string")
 
-        # Normalise: strip surrounding brackets from IPv6 literals such as
-        # [::1] that arrive from URL parsers.
-        host = host.strip("[]").lower()
+        host = self._normalise_host_endpoint(host)
 
         # Step 1 – default-allow mode bypasses all remaining checks,
         # including DNS resolution (an established, deliberately-tested
@@ -212,6 +210,52 @@ class NetworkPolicyEngine:
                 "or allowed_cidrs entry."
             ),
         )
+
+    @staticmethod
+    def _normalise_host_endpoint(value: str) -> str:
+        """Return the bare host from a host or ``host:port`` endpoint.
+
+        Dynamic tool policy resolvers declare concrete endpoints so an audit
+        can retain the service port (for example ``10.0.0.230:8199``).  The
+        network policy itself authorizes hosts and CIDRs, however, and passing
+        that endpoint verbatim to :mod:`ipaddress`/DNS makes a literal IP look
+        like an invalid hostname.  Accept the two unambiguous endpoint forms
+        here while keeping schemes, malformed ports, and ambiguous bracket
+        syntax fail-closed.
+        """
+        endpoint = value.strip()
+        if not endpoint:
+            raise ValueError("host must be a non-empty string")
+        if "://" in endpoint:
+            raise ValueError("host must not include a URL scheme")
+
+        if endpoint.startswith("["):
+            closing = endpoint.find("]")
+            if closing < 0:
+                raise ValueError("invalid bracketed IPv6 host")
+            host = endpoint[1:closing]
+            suffix = endpoint[closing + 1 :]
+            if suffix:
+                if not suffix.startswith(":"):
+                    raise ValueError("invalid bracketed host endpoint")
+                NetworkPolicyEngine._validate_port(suffix[1:])
+            return host.lower()
+
+        # A single colon is an unambiguous hostname/IPv4 port separator.
+        # Multiple colons are an unbracketed IPv6 literal and must remain
+        # intact for ipaddress.ip_address().
+        if endpoint.count(":") == 1:
+            host, port = endpoint.rsplit(":", 1)
+            if not host:
+                raise ValueError("host must be a non-empty string")
+            NetworkPolicyEngine._validate_port(port)
+            endpoint = host
+        return endpoint.lower()
+
+    @staticmethod
+    def _validate_port(value: str) -> None:
+        if not value.isdigit() or not 1 <= int(value) <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
 
     @staticmethod
     def _resolve_best_effort(

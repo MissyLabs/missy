@@ -126,6 +126,46 @@ class TestCIDRChecks:
             engine.check_host("10.0.0.1")
 
 
+class TestEndpointNormalization:
+    def test_ipv4_with_port_uses_cidr_without_dns(self):
+        engine = make_engine(allowed_cidrs=["10.0.0.0/8"])
+        with patch("missy.policy.network.socket.getaddrinfo") as mock_dns:
+            assert engine.check_host("10.0.0.230:8199") is True
+        mock_dns.assert_not_called()
+        assert event_bus.get_events()[0].detail["host"] == "10.0.0.230"
+
+    def test_bracketed_ipv6_with_port_uses_cidr(self):
+        engine = make_engine(allowed_cidrs=["::1/128"])
+        assert engine.check_host("[::1]:8199") is True
+
+    def test_hostname_with_port_matches_bare_allowlist(self):
+        engine = make_engine(allowed_hosts=["comfy.example.com"])
+        public_ip = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 8199))]
+        with patch("missy.policy.network.socket.getaddrinfo", return_value=public_ip):
+            assert engine.check_host("comfy.example.com:8199") is True
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "10.0.0.230:",
+            "10.0.0.230:not-a-port",
+            "10.0.0.230:0",
+            "10.0.0.230:65536",
+            "[::1",
+            "[::1]junk",
+            "http://10.0.0.230:8199",
+        ],
+    )
+    def test_malformed_endpoint_fails_before_dns(self, endpoint):
+        engine = make_engine(allowed_cidrs=["0.0.0.0/0", "::/0"])
+        with (
+            patch("missy.policy.network.socket.getaddrinfo") as mock_dns,
+            pytest.raises(ValueError),
+        ):
+            engine.check_host(endpoint)
+        mock_dns.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Exact host matching
 # ---------------------------------------------------------------------------
