@@ -562,6 +562,22 @@ def _discord_channel_activity_context(activity: dict[str, deque], channel_id: st
     )
 
 
+def _discord_clear_channel_activity(activity: dict[str, deque], channel_id: str) -> int:
+    """Drop bounded prompt context for one channel and return its message count.
+
+    A provider content-policy refusal can be caused by any message in this
+    cross-user cache, not only the current user's persisted turn. Keeping that
+    cache after a refusal reinjects the same blocked text into every later
+    request and makes unrelated messages fail too. The cache is ephemeral and
+    reconstructible, so clearing only the affected channel is the safest way
+    to break that refusal spiral without touching another channel.
+    """
+    if not channel_id:
+        return 0
+    bucket = activity.pop(channel_id, None)
+    return len(bucket) if bucket is not None else 0
+
+
 def _load_or_create_web_console_key() -> str:
     """Load the persistent Web TUI operator key, generating one on first run.
 
@@ -3642,9 +3658,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         # marketing URL (e.g. openai-codex's cyber-program
                         # link), or leak internal error detail. Log the full
                         # error for operators; show the user a clean message.
-                        from missy.providers.health import user_facing_provider_error
+                        from missy.providers.health import (
+                            is_content_policy_error,
+                            user_facing_provider_error,
+                        )
 
                         logger.warning("Discord provider error: %s", exc)
+                        if is_content_policy_error(exc):
+                            cleared = _discord_clear_channel_activity(
+                                _discord_channel_activity, channel_id
+                            )
+                            logger.warning(
+                                "Cleared %d cached Discord channel-activity messages "
+                                "after content-policy refusal in channel %s",
+                                cleared,
+                                channel_id,
+                            )
                         response = user_facing_provider_error(exc, user_input=msg.content)
                     except Exception as exc:
                         logger.exception("Discord agent error: %s", exc)

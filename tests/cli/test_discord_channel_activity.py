@@ -19,6 +19,7 @@ from missy.cli.main import (
     _DISCORD_CHANNEL_ACTIVITY_CAP,
     _DISCORD_CHANNEL_ACTIVITY_MSG_MAX_CHARS,
     _discord_channel_activity_context,
+    _discord_clear_channel_activity,
     _discord_remember_channel_message,
 )
 
@@ -124,3 +125,22 @@ class TestDiscordChannelActivityContext:
         result = _discord_channel_activity_context(activity, "chan1")
         assert "secret channel 1 topic" in result
         assert "unrelated channel 2 topic" not in result
+
+
+class TestDiscordClearChannelActivity:
+    def test_clears_only_the_affected_channel(self):
+        activity: dict = {}
+        _discord_remember_channel_message(activity, "chan1", "Bob", "blocked context")
+        _discord_remember_channel_message(activity, "chan1", "Missy", "prior reply")
+        _discord_remember_channel_message(activity, "chan2", "Alice", "unrelated context")
+
+        assert _discord_clear_channel_activity(activity, "chan1") == 2
+        assert "chan1" not in activity
+        assert list(activity["chan2"]) == [("Alice", "unrelated context")]
+
+    def test_missing_or_empty_channel_is_a_noop(self):
+        activity = {"chan1": deque([("Bob", "hello")])}
+
+        assert _discord_clear_channel_activity(activity, "missing") == 0
+        assert _discord_clear_channel_activity(activity, "") == 0
+        assert list(activity["chan1"]) == [("Bob", "hello")]
