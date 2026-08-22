@@ -111,6 +111,10 @@ _SECRET_UPLOAD_REQUEST_PATTERN = re.compile(
     r"(?i)(?:read|show|summarize|upload|send|disclose).{0,60}"
     r"(?:secret|token|credential|\.env|/etc/shadow)"
 )
+_MALICIOUS_PERSISTENCE_REQUEST_PATTERN = re.compile(
+    r"(?i)(?:backdoor|reverse\s+shell|"
+    r"(?:add|install|create|launch).{0,50}(?:system\s+startup|persistence))"
+)
 
 
 def user_facing_provider_error(exc: BaseException, user_input: str = "") -> str:
@@ -142,6 +146,13 @@ def user_facing_provider_error(exc: BaseException, user_input: str = "") -> str:
                 return (
                     f"{base} Safe alternative: I can check whether the file "
                     "is gitignored, or produce a redacted report instead."
+                )
+            if _MALICIOUS_PERSISTENCE_REQUEST_PATTERN.search(user_input):
+                return (
+                    f"{base} Safe alternative: I can help set up an isolated "
+                    "lab using a named, reviewable package with a documented "
+                    "benign test purpose, without persistence or reverse-shell "
+                    "behavior."
                 )
         return base
     return "Sorry — I'm having trouble reaching my model right now. Please try again in a moment."
