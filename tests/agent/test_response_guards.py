@@ -10,6 +10,7 @@ from missy.agent.response_guards import (
     detect_explicit_tool_requests,
     detect_fabrication,
     detect_false_capability_denial,
+    detect_governed_obs_streaming_tool_request,
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
@@ -36,6 +37,7 @@ from missy.agent.response_guards import (
     make_fabrication_retry_prompt,
     make_filesystem_verification_retry_prompt,
     make_generated_image_delivery_retry_prompt,
+    make_governed_action_retry_prompt,
     make_identity_confusion_retry_prompt,
     make_image_generation_retry_prompt,
     make_image_reproducibility_prompt,
@@ -430,6 +432,50 @@ class TestExplicitToolRequestGuard:
         assert "calculator" in prompt
         assert "Call the named tool now" in prompt
         assert "Use your calculator for 2 + 2" in prompt
+
+
+class TestGovernedObsStreamingRequest:
+    @pytest.mark.parametrize(
+        ("prompt", "expected"),
+        [
+            ("You have my go-ahead — go live on OBS now.", "obs_start_streaming_confirmed"),
+            ("Start the OBS stream.", "obs_start_streaming_confirmed"),
+            ("Stop streaming on OBS.", "obs_stop_streaming_confirmed"),
+            ("Go offline on OBS now.", "obs_stop_streaming_confirmed"),
+        ],
+    )
+    def test_maps_action_to_confirmed_tool(self, prompt, expected):
+        available = {
+            "obs_start_streaming_confirmed",
+            "obs_stop_streaming_confirmed",
+            "desktop_launch_app",
+            "shell_exec",
+        }
+        assert detect_governed_obs_streaming_tool_request(prompt, available) == expected
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Do not go live on OBS.",
+            "Never stop the OBS stream.",
+            "How can I go live on OBS?",
+            "Explain what the OBS streaming tool does.",
+        ],
+    )
+    def test_ignores_negated_or_informational_mentions(self, prompt):
+        available = {"obs_start_streaming_confirmed", "obs_stop_streaming_confirmed"}
+        assert detect_governed_obs_streaming_tool_request(prompt, available) is None
+
+    def test_requires_tool_to_be_available(self):
+        assert detect_governed_obs_streaming_tool_request("Go live on OBS.", set()) is None
+
+    def test_retry_prompt_forbids_alternate_surfaces(self):
+        prompt = make_governed_action_retry_prompt(
+            "obs_start_streaming_confirmed", "Go live on OBS."
+        )
+        assert "obs_start_streaming_confirmed" in prompt
+        assert "Do not use desktop" in prompt
+        assert "Go live on OBS." in prompt
 
 
 class TestDesktopActionVerificationGuard:

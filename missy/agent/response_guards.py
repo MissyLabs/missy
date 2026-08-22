@@ -553,6 +553,69 @@ def make_explicit_tool_request_retry_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Approval-gated OBS streaming intent: a natural-language request such as
+# "go live" must not be implemented through desktop clicks, shell commands,
+# or another less-governed surface. Map only confident action requests to the
+# dedicated tools whose execute() methods always enter ApprovalGate.
+# ---------------------------------------------------------------------------
+
+_OBS_STREAMING_REQUESTS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "obs_start_streaming_confirmed",
+        re.compile(
+            r"(?i)\b(?:go\s+live(?:\s+on\s+obs)?|"
+            r"(?:start|begin)\s+(?:(?:the|an?)\s+)?(?:obs\s+)?stream(?:ing)?)\b"
+        ),
+    ),
+    (
+        "obs_stop_streaming_confirmed",
+        re.compile(
+            r"(?i)\b(?:go\s+offline(?:\s+on\s+obs)?|"
+            r"(?:stop|end)\s+(?:(?:the|an?)\s+)?(?:obs\s+)?stream(?:ing)?)\b"
+        ),
+    ),
+)
+_NEGATED_GOVERNED_ACTION_RE = re.compile(
+    r"(?i)(?:\bdo\s+not|\bdon['’]t|\bnever|\bwithout|"
+    r"\bhow\s+(?:do|can|would|should)\s+(?:i|we|you))[^.!?]{0,24}$"
+)
+
+
+def detect_governed_obs_streaming_tool_request(
+    user_input: str,
+    available_tool_names: set[str] | frozenset[str],
+) -> str | None:
+    """Return the dedicated confirmed tool for an OBS streaming action.
+
+    The detector is intentionally narrow and ignores negated/informational
+    mentions. Returning a tool only when it is genuinely available keeps a
+    disabled capability from becoming a fabricated runtime requirement.
+    """
+    if not isinstance(user_input, str) or not user_input.strip():
+        return None
+    for tool_name, pattern in _OBS_STREAMING_REQUESTS:
+        if tool_name not in available_tool_names:
+            continue
+        for match in pattern.finditer(user_input):
+            prefix = user_input[max(0, match.start() - 48) : match.start()]
+            if not _NEGATED_GOVERNED_ACTION_RE.search(prefix):
+                return tool_name
+    return None
+
+
+def make_governed_action_retry_prompt(tool_name: str, user_input: str = "") -> str:
+    """Require the dedicated approval-gated surface, never an alternative."""
+    anchor = f"\n\nThe original request is:\n{user_input}" if user_input else ""
+    return (
+        f"This action must be attempted only through {tool_name}, which owns "
+        "the required human-approval check. Call that exact tool now and "
+        "report its result. Do not use desktop, accessibility, shell, browser, "
+        "or direct API actions as an alternative. If approval or capability is "
+        f"unavailable, report the tool's denial and stop.{anchor}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Calculator result completeness: multi-expression requests can execute every
 # call correctly and still return a final answer that only mentions the last
 # result/error after the generic DONE-criteria correction loop.
