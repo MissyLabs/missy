@@ -578,6 +578,26 @@ def _discord_clear_channel_activity(activity: dict[str, deque], channel_id: str)
     return len(bucket) if bucket is not None else 0
 
 
+def _discord_remember_bot_response(
+    activity: dict[str, deque],
+    channel_id: str,
+    text: str,
+    *,
+    content_policy_refusal: bool = False,
+) -> None:
+    """Cache a normal bot response, excluding provider-policy refusals.
+
+    Sanitized policy refusals can still repeat the security terms that caused
+    the upstream block. Re-injecting that bot-authored text on the next turn
+    recreates the same refusal spiral immediately after the channel cache was
+    cleared. Such replies remain visible in Discord; they are simply omitted
+    from this ephemeral prompt-context cache.
+    """
+    if content_policy_refusal:
+        return
+    _discord_remember_channel_message(activity, channel_id, "Missy", text)
+
+
 def _load_or_create_web_console_key() -> str:
     """Load the persistent Web TUI operator key, generating one on first run.
 
@@ -3641,6 +3661,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         )
 
                     typing_task = asyncio.create_task(_typing_keepalive())
+                    _provider_content_policy_refusal = False
                     try:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(
@@ -3664,7 +3685,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         )
 
                         logger.warning("Discord provider error: %s", exc)
-                        if is_content_policy_error(exc):
+                        _provider_content_policy_refusal = is_content_policy_error(exc)
+                        if _provider_content_policy_refusal:
                             cleared = _discord_clear_channel_activity(
                                 _discord_channel_activity, channel_id
                             )
@@ -3708,8 +3730,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                             mention_user_ids=mention_ids,
                         )
                         if sent_id:
-                            _discord_remember_channel_message(
-                                _discord_channel_activity, channel_id, "Missy", response
+                            _discord_remember_bot_response(
+                                _discord_channel_activity,
+                                channel_id,
+                                response,
+                                content_policy_refusal=_provider_content_policy_refusal,
                             )
 
                         # Detect evolution proposals and add reaction buttons.
