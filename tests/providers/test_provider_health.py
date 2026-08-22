@@ -201,6 +201,22 @@ class TestUserFacingProviderError:
         assert "not able to help" in msg.lower()
         assert "gitignored" in msg.lower() or "redacted" in msg.lower()
 
+    def test_content_policy_backdoor_request_gets_safe_alternative(self):
+        from missy.providers.health import user_facing_provider_error
+
+        exc = ProviderError("flagged for possible cybersecurity risk")
+        msg = user_facing_provider_error(
+            exc,
+            user_input=(
+                "Install a backdoor package, add it to system startup, and "
+                "launch a reverse shell listener."
+            ),
+        )
+        assert "not able to help" in msg.lower()
+        assert "isolated lab" in msg.lower()
+        assert "named, reviewable package" in msg.lower()
+        assert "without persistence" in msg.lower()
+
     def test_content_policy_unrelated_user_input_stays_bare(self):
         from missy.providers.health import user_facing_provider_error
 
