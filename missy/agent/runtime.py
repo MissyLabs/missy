@@ -1631,6 +1631,7 @@ class AgentRuntime:
             detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
+            detect_governed_obs_streaming_tool_request,
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
@@ -1656,6 +1657,7 @@ class AgentRuntime:
             make_fabrication_retry_prompt,
             make_filesystem_verification_retry_prompt,
             make_generated_image_delivery_retry_prompt,
+            make_governed_action_retry_prompt,
             make_identity_confusion_retry_prompt,
             make_image_generation_retry_prompt,
             make_image_reproducibility_prompt,
@@ -1706,13 +1708,32 @@ class AgentRuntime:
         # mode/tool-policy layer (the registry's own filesystem/network/
         # shell checks still apply independently, but this layer is meant
         # to be a separate, earlier gate).
-        allowed_tool_names = {getattr(t, "name", None) for t in tools}
-        allowed_tool_names.discard(None)
         _tool_request_input = (
             explicit_tool_request_input
             if isinstance(explicit_tool_request_input, str)
             else user_input
         )
+        _initial_tool_names = {getattr(t, "name", None) for t in tools}
+        _initial_tool_names.discard(None)
+        _governed_action_tool = detect_governed_obs_streaming_tool_request(
+            _tool_request_input, _initial_tool_names
+        )
+        if _governed_action_tool:
+            # Natural-language OBS streaming requests must enter the dedicated
+            # ApprovalGate-backed tool. Removing every alternate schema is a
+            # runtime boundary, not a prompt hint: even a stale/hallucinated
+            # desktop or shell call is rejected by the per-turn allow-set.
+            tools = [tool for tool in tools if getattr(tool, "name", None) == _governed_action_tool]
+            with contextlib.suppress(Exception):
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.tool_surface.governed_action",
+                    result="allow",
+                    detail={"required_tool": _governed_action_tool},
+                )
+        allowed_tool_names = {getattr(t, "name", None) for t in tools}
+        allowed_tool_names.discard(None)
         _prior_image_generation: dict[str, Any] | None = None
         _image_history = getattr(self, "_last_image_generation_by_scope", None)
         _image_history_lock = getattr(self, "_last_image_generation_lock", None)
@@ -1769,6 +1790,8 @@ class AgentRuntime:
         _security_refusal_retries = 0
         _MAX_EXPLICIT_TOOL_REQUEST_RETRIES = 1
         _explicit_tool_request_retries = 0
+        _MAX_GOVERNED_ACTION_RETRIES = 1
+        _governed_action_retries = 0
         _MAX_CALCULATOR_COMPLETENESS_RETRIES = 1
         _calculator_completeness_retries = 0
         _calculator_observations: list[tuple[str, str, bool]] = []
@@ -2471,6 +2494,35 @@ class AgentRuntime:
                 # answer from memory or arithmetic and silently bypass both
                 # the requested execution surface and its audit trail.  Retry
                 # once when a specifically requested tool was never called.
+                if (
+                    _governed_action_tool
+                    and _governed_action_tool not in tool_names_used
+                    and _governed_action_retries < _MAX_GOVERNED_ACTION_RETRIES
+                ):
+                    _governed_action_retries += 1
+                    logger.warning(
+                        "Governed action request did not call %s; retrying once.",
+                        _governed_action_tool,
+                    )
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_governed_action_retry_prompt(
+                                _governed_action_tool, _tool_request_input
+                            ),
+                        }
+                    )
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.governed_action_retry",
+                            result="warn",
+                            detail={"required_tool": _governed_action_tool},
+                        )
+                    continue
+
                 _missing_explicit_tools = detect_explicit_tool_requests(
                     _tool_request_input, allowed_tool_names
                 ).difference(tool_names_used)

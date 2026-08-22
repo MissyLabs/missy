@@ -1475,6 +1475,82 @@ class TestExplicitToolRequestRetry:
         )
 
 
+class TestGovernedObsStreamingDispatch:
+    def test_go_live_exposes_only_confirmed_tool_and_retries_tool_free_answer(self):
+        provider = _make_provider()
+        confirmed = _make_mock_tool("obs_start_streaming_confirmed")
+        alternate = _make_mock_tool("desktop_launch_app")
+        shell = _make_mock_tool("shell_exec")
+        tool_reg = _make_tool_registry([confirmed, alternate, shell])
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("Acknowledged."),
+            _make_tool_call_response("obs_start_streaming_confirmed"),
+            _make_stop_response("The confirmed OBS tool completed."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("You already have my go-ahead — go live on OBS now.")
+
+        offered_names = [
+            [getattr(tool, "name", None) for tool in call.args[1]]
+            for call in provider.complete_with_tools.call_args_list
+        ]
+        assert offered_names == [
+            ["obs_start_streaming_confirmed"],
+            ["obs_start_streaming_confirmed"],
+            ["obs_start_streaming_confirmed"],
+        ]
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "obs_start_streaming_confirmed"
+        ]
+        assert result == "The confirmed OBS tool completed."
+        assert any(event["event_type"] == "agent.tool_surface.governed_action" for event in events)
+        assert any(
+            event["event_type"] == "agent.response.governed_action_retry" for event in events
+        )
+
+    def test_hallucinated_desktop_bypass_is_denied_before_registry(self):
+        provider = _make_provider()
+        confirmed = _make_mock_tool("obs_start_streaming_confirmed")
+        alternate = _make_mock_tool("desktop_launch_app")
+        tool_reg = _make_tool_registry([confirmed, alternate])
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("desktop_launch_app", args={"app": "obs"}),
+            _make_tool_call_response("obs_start_streaming_confirmed"),
+            _make_stop_response("Approval was requested through the confirmed tool."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("Go live on OBS now.")
+
+        assert [call.args[0] for call in tool_reg.execute.call_args_list] == [
+            "obs_start_streaming_confirmed"
+        ]
+        assert result == "Approval was requested through the confirmed tool."
+        bypass_denials = [
+            event
+            for event in events
+            if event["event_type"] == "tool_execute"
+            and event["result"] == "deny"
+            and event["detail"].get("reason") == "not_in_per_turn_allow_set"
+        ]
+        assert [event["detail"]["tool"] for event in bypass_denials] == ["desktop_launch_app"]
+
+
 class TestCalculatorResponseCompletenessRetry:
     def test_multi_error_reply_must_report_every_executed_expression(self):
         provider = _make_provider()
