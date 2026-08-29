@@ -1031,6 +1031,7 @@ def _provider_field_targets(provider_registry: ProviderRegistry | None) -> list[
         names = provider_registry.list_providers()
     except Exception:
         return []
+
     def _int_field(config: Any, field: str) -> int:
         try:
             return int(getattr(config, field, None) or 0)

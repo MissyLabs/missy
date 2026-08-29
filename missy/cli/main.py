@@ -3485,9 +3485,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 host=_api_host,
                 port=_api_port,
                 api_key=_api_key,
-                web_session_ttl_seconds=int(
-                    _api_cfg.get("session_ttl_seconds", 30 * 24 * 60 * 60)
-                ),
+                web_session_ttl_seconds=int(_api_cfg.get("session_ttl_seconds", 30 * 24 * 60 * 60)),
                 # Persisted so a `missy gateway start` restart -- routine
                 # during config changes -- doesn't silently log the
                 # operator out of every open Web TUI tab.

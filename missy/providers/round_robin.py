@@ -211,11 +211,15 @@ class RoundRobinAccounts:
         return {
             "requests_per_minute": 0 if unlimited_rpm else sum(rpm_values),
             "request_capacity": (
-                float("inf") if unlimited_rpm else sum(a.rate_limiter.request_capacity for a in accounts)
+                float("inf")
+                if unlimited_rpm
+                else sum(a.rate_limiter.request_capacity for a in accounts)
             ),
             "tokens_per_minute": 0 if unlimited_tpm else sum(tpm_values),
             "token_capacity": (
-                float("inf") if unlimited_tpm else sum(a.rate_limiter.token_capacity for a in accounts)
+                float("inf")
+                if unlimited_tpm
+                else sum(a.rate_limiter.token_capacity for a in accounts)
             ),
         }
 

@@ -1182,9 +1182,7 @@ def _make_handler(
                                 "is_multi_account": bool(
                                     getattr(provider, "is_multi_account", False)
                                 ),
-                                "account_count": int(
-                                    getattr(provider, "account_count", 0) or 0
-                                ),
+                                "account_count": int(getattr(provider, "account_count", 0) or 0),
                                 "accounts_healthy": _healthy_account_count(provider),
                                 "rate_limit": _rate_limit_json(provider),
                                 "usage": usage,
