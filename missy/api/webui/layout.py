@@ -142,12 +142,54 @@ button.small{padding:.35rem .65rem;font-size:.78rem}
 .diag-check em{color:var(--warn);font-style:normal;font-size:.76rem;margin-left:auto;flex:none}
 
 /* Providers: card list with toggles */
-.provider-card{border-top:1px solid var(--line-soft);padding:.7rem 0;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.provider-card{border-top:1px solid var(--line-soft);padding:.7rem 0}
 .provider-card:first-child{border-top:0}
+.provider-card-row{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
 .provider-card .provider-name{min-width:0;text-align:left;background:transparent;border:0;color:var(--text);font:inherit;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:.5rem;padding:0}
 .provider-card .provider-name:hover{color:var(--info)}
 .provider-card .provider-meta{color:var(--muted);font-family:var(--mono);font-size:.78rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .provider-card .provider-actions{margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap}
+.provider-card .usage-mini{margin-top:.55rem;display:flex;align-items:center;gap:1.1rem;flex-wrap:wrap}
+.provider-card .usage-mini .usage-stat{min-width:2.6rem}
+.provider-card .usage-mini .usage-stat .value{font-size:.92rem}
+.provider-card .capacity-mini{flex:1 1 180px;min-width:160px;max-width:260px}
+
+/* Providers: usage stat cards, capacity gauges, and the usage-over-time chart */
+.usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.7rem}
+.usage-card{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem;min-width:0}
+.usage-card-head{display:flex;align-items:center;gap:.45rem;margin-bottom:.5rem}
+.usage-card-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.usage-stats{display:flex;flex-wrap:wrap;gap:.15rem 1rem;margin-bottom:.55rem}
+.usage-stat{min-width:3.4rem}
+.usage-stat .value{display:block;font-family:var(--mono);font-size:1.15rem;font-weight:700}
+.usage-stat .label{color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono)}
+.usage-bar-row{margin-top:.4rem}
+.usage-bar-row:first-child{margin-top:0}
+.usage-bar-label{display:flex;justify-content:space-between;color:var(--muted);font-size:.72rem;font-family:var(--mono);margin-bottom:.2rem}
+.usage-bar{height:.4rem;border-radius:2px;background:var(--line-soft);overflow:hidden}
+.usage-bar-fill{height:100%;background:var(--info);border-radius:2px;transition:width .2s ease}
+.usage-bar-fill.warn{background:var(--warn)}
+.usage-bar-fill.crit{background:var(--crit)}
+.usage-card-foot{margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--line-soft);display:flex;justify-content:flex-end}
+
+.usage-chart-wrap{overflow-x:auto}
+.usage-chart-wrap svg{display:block;min-width:480px}
+.usage-chart-empty{padding:2.5rem 1rem;text-align:center}
+.usage-legend{display:flex;flex-wrap:wrap;gap:.4rem 1rem;margin-top:.6rem}
+.usage-legend-item{display:flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.76rem;color:var(--muted);background:transparent;border:0;padding:0;cursor:pointer}
+.usage-legend-item.off{opacity:.35}
+.usage-legend-swatch{width:.6rem;height:.6rem;border-radius:1px;flex:none}
+.usage-metric-toggle{display:flex;gap:.3rem}
+.usage-metric-toggle button.active{color:var(--info);border-color:#1c4a75;background:rgba(79,179,255,.1)}
+
+.provider-edit-form .field-label{display:block;margin-bottom:.3rem}
+.provider-edit-form .op-form-grid input{width:100%}
+
+/* Providers: per-account breakdown inside the inspector */
+.account-list{display:grid;gap:.6rem;margin-top:.5rem}
+.account-card{border:1px solid var(--line);border-radius:3px;background:var(--void);padding:.7rem .8rem}
+.account-card-head{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.account-card-head strong{font-weight:700}
 
 .run-console{margin-bottom:1rem}
 .run-help,.run-form,.run-log,.run-console .detail{max-width:1100px}

@@ -682,3 +682,31 @@ def get_registry() -> ProviderRegistry:
             "Call missy.providers.registry.init_registry(config) first."
         )
     return registry
+
+
+class LiveProviderRegistry:
+    """Transparent proxy that always forwards to the current process-level registry.
+
+    ``init_registry()`` installs a brand-new :class:`ProviderRegistry`
+    instance on every config hot-reload rather than mutating the existing
+    one in place (see its docstring: "a subsequent call replaces the
+    existing registry atomically"). A caller that captured a direct
+    reference to the registry once -- e.g. :class:`~missy.api.server.ApiServer`,
+    constructed with ``provider_registry=get_registry()`` at gateway
+    startup -- keeps that stale pre-reload object forever: `missy providers
+    switch`/the Web TUI's provider controls (default, weight, enable/
+    disable, and editing model/timeout/rate-limit fields) would all persist
+    correctly to config.yaml and take effect for the *real* dispatch path
+    (which always calls :func:`get_registry` fresh), yet the Web TUI itself
+    would keep showing pre-reload values indefinitely, until a full
+    restart -- silently contradicting its own "a running gateway picks
+    this up via config hot-reload" messaging.
+
+    Pass an instance of this class wherever a live-updating registry
+    reference is needed instead of a one-time snapshot; every attribute
+    access transparently resolves against :func:`get_registry`'s current
+    value, so no call site needs to change.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(get_registry(), name)

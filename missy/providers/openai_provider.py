@@ -160,6 +160,41 @@ class OpenAIProvider(BaseProvider):
         """Return how many accounts this provider round-robins across (0 if not multi-account)."""
         return len(self._accounts)
 
+    def rate_limit_summary(self) -> dict[str, float] | None:
+        """Aggregate rate-limit budget across every balanced account.
+
+        Falls back to :meth:`BaseProvider.rate_limit_summary` when
+        round-robin balancing isn't active.
+        """
+        if not self.is_multi_account:
+            return super().rate_limit_summary()
+        return self._rr.capacity_summary()
+
+    def current_account_name(self) -> str | None:
+        """Return this thread's selected account's safe display label, if any.
+
+        Unlike Codex's OAuth accounts (named by the operator), a plain
+        OpenAI account here is just one raw API key in a list -- there's no
+        safe human name to show, so this returns a stable positional label
+        (``"account_1"``, ``"account_2"``, ...) instead of ever touching
+        the actual key.
+        """
+        account: _OpenAIAccount | None = getattr(self._account_local, "current", None)
+        return f"account_{account.index + 1}" if account is not None else None
+
+    def list_accounts(self) -> list[dict[str, Any]] | None:
+        """Return per-account health + rate-limit stats, labeled positionally.
+
+        Never surfaces ``Account.api_key`` -- for this provider that field
+        holds the actual bearer credential, not a safe display name.
+        """
+        if not self.is_multi_account:
+            return None
+        return [
+            {"name": f"account_{row['index'] + 1}", **row}
+            for row in self._rr.per_account_capacity()
+        ]
+
     def _select_account(self) -> _OpenAIAccount | None:
         """Return the account to use for the call in progress on this thread.
 

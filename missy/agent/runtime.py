@@ -1949,7 +1949,12 @@ class AgentRuntime:
                 )
 
                 # Record cost and enforce budget
-                self._record_cost(response, session_id=session_id)
+                self._record_cost(
+                    response,
+                    session_id=session_id,
+                    provider_name=provider.name,
+                    account_name=self._safe_current_account_name(provider),
+                )
                 self._check_budget(session_id=session_id, task_id=task_id)
 
                 if response.finish_reason == "tool_calls" and response.tool_calls:
@@ -3331,7 +3336,12 @@ class AgentRuntime:
             task_id=task_id,
             requires_tools=False,
         )
-        self._record_cost(result, session_id=session_id)
+        self._record_cost(
+            result,
+            session_id=session_id,
+            provider_name=_provider_used.name,
+            account_name=self._safe_current_account_name(_provider_used),
+        )
         self._check_budget(session_id=session_id, task_id=task_id)
         return result
 
@@ -5278,8 +5288,42 @@ class AgentRuntime:
 
         return censor_response(final_response)
 
-    def _record_cost(self, response, session_id: str = "") -> None:
-        """Record token usage in this session's cost tracker and persist to SQLite."""
+    @staticmethod
+    def _safe_current_account_name(provider) -> str:
+        """Return *provider*'s selected account name for the just-completed call, or "".
+
+        Read immediately after ``_call_provider_with_fallback()`` returns,
+        on the same thread that made the call -- account selection is
+        thread-local (see :meth:`~missy.providers.base.BaseProvider.current_account_name`),
+        so this is race-free without needing the call itself to return the
+        account inline.
+        """
+        try:
+            return provider.current_account_name() or ""
+        except Exception:
+            return ""
+
+    def _record_cost(
+        self,
+        response,
+        session_id: str = "",
+        provider_name: str = "",
+        account_name: str = "",
+    ) -> None:
+        """Record token usage in this session's cost tracker and persist to SQLite.
+
+        Args:
+            response: The completed provider response.
+            session_id: Calling session identifier.
+            provider_name: Registry name of the provider that actually
+                served this call (the post-fallback provider, not
+                necessarily the session's configured default), so
+                persisted usage can be aggregated per provider.
+            account_name: Safe display name of the specific balanced
+                account (see :meth:`~missy.providers.base.BaseProvider.current_account_name`)
+                that served this call, for a provider round-robining across
+                multiple accounts. Empty for single-account providers.
+        """
         tracker = self._get_cost_tracker(session_id)
         if tracker is None:
             return
@@ -5308,6 +5352,8 @@ class AgentRuntime:
                             prompt_tokens=rec.prompt_tokens,
                             completion_tokens=rec.completion_tokens,
                             cost_usd=rec.cost_usd,
+                            provider=provider_name,
+                            account=account_name,
                         )
                 except Exception as exc:
                     logger.debug("Failed to persist cost to store: %s", exc)

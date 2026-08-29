@@ -186,6 +186,58 @@ class BaseProvider(ABC):
         """
         return {}
 
+    def rate_limit_summary(self) -> dict[str, float] | None:
+        """Return this provider's current rate-limit budget, or ``None``.
+
+        Default implementation reports :attr:`rate_limiter`'s live capacity
+        (single-credential providers). Multi-account providers (round-robin
+        balancing across several keys/OAuth accounts) override this to
+        aggregate every account's independent budget instead -- see
+        :meth:`missy.providers.round_robin.RoundRobinAccounts.capacity_summary`.
+
+        Returns:
+            A dict with ``requests_per_minute``/``request_capacity`` and
+            ``tokens_per_minute``/``token_capacity`` (``0``/``inf``
+            respectively mean unlimited), or ``None`` when this provider has
+            no rate limiter configured at all.
+        """
+        if self.rate_limiter is None:
+            return None
+        return {
+            "requests_per_minute": self.rate_limiter.requests_per_minute,
+            "request_capacity": self.rate_limiter.request_capacity,
+            "tokens_per_minute": self.rate_limiter.tokens_per_minute,
+            "token_capacity": self.rate_limiter.token_capacity,
+        }
+
+    def current_account_name(self) -> str | None:
+        """Return the balanced account that served this thread's in-progress/just-completed call.
+
+        Default implementation for single-account providers: always
+        ``None``. Multi-account providers (round-robin balancing across
+        several keys/OAuth accounts) override this to report which account
+        was selected on the calling thread, read immediately after a
+        ``complete()``/``complete_with_tools()``/``stream()`` call returns
+        -- account selection is thread-local and set once per call, so this
+        is safe to read from the same thread right after the call without a
+        race. Used to attribute persisted per-call cost/usage records to a
+        specific account (see :meth:`list_accounts`), never logged or
+        returned as a bare secret.
+        """
+        return None
+
+    def list_accounts(self) -> list[dict[str, Any]] | None:
+        """Return per-account health + rate-limit stats, or ``None`` if not multi-account.
+
+        Default implementation for single-account providers. Multi-account
+        providers override this to report one dict per balanced account:
+        ``name`` (a safe display identifier -- never a raw credential),
+        ``index``, ``healthy``, ``consecutive_failures``, ``weight``,
+        ``client_ready``, and ``rate_limit`` (that account's own
+        independent budget, same shape as :meth:`rate_limit_summary`).
+        """
+        return None
+
     def diagnostics(self) -> dict[str, Any]:
         """Return a redacted, local-only provider health snapshot.
 

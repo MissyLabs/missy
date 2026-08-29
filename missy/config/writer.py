@@ -25,6 +25,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -131,6 +132,80 @@ def set_provider_weight(config_path: str, name: str, weight: float) -> None:
     provider_entry["weight"] = weight
     _atomic_write_yaml(path, data)
     logger.info("Persisted providers.%s.weight=%r to %s", name, weight, path)
+
+
+#: Provider config fields the Web TUI's provider inspector may edit
+#: directly, and how to coerce/validate a submitted value for each.
+#: Deliberately excludes anything credential-shaped (api_key, api_keys,
+#: oauth_accounts) -- those are set via `missy providers auth`/vault
+#: references, never round-tripped through this plain-YAML writer.
+EDITABLE_PROVIDER_FIELDS: dict[str, str] = {
+    "model": "str",
+    "fast_model": "str",
+    "premium_model": "str",
+    "base_url": "str",
+    "timeout": "int",
+    "requests_per_minute": "int",
+    "tokens_per_minute": "int",
+}
+
+
+def set_provider_field(config_path: str, name: str, field: str, value: Any) -> Any:
+    """Persist a single editable field for provider *name* in ``config.yaml``.
+
+    Args:
+        config_path: Path to ``config.yaml``.
+        name: Provider key under the ``providers:`` section. Must already
+            exist there.
+        field: One of :data:`EDITABLE_PROVIDER_FIELDS`'s keys.
+        value: The new value. Coerced to that field's expected type
+            (``str`` fields accept an empty string to clear the override;
+            ``int`` fields must be a non-negative integer, with ``0``
+            meaning "unlimited" for the rate-limit fields and "use the
+            provider's own default" for ``timeout``).
+
+    Returns:
+        The coerced value that was actually written.
+
+    Raises:
+        ConfigWriteError: If *field* isn't editable, the value fails
+            coercion/validation, *name* isn't a configured provider, or the
+            file cannot be read/parsed/written.
+    """
+    kind = EDITABLE_PROVIDER_FIELDS.get(field)
+    if kind is None:
+        raise ConfigWriteError(
+            f"Field {field!r} is not editable. Allowed: "
+            f"{', '.join(sorted(EDITABLE_PROVIDER_FIELDS))}."
+        )
+    if kind == "str":
+        coerced: Any = str(value).strip()
+    else:
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigWriteError(f"{field} must be an integer, got {value!r}.") from exc
+        if coerced < 0:
+            raise ConfigWriteError(f"{field} must be >= 0, got {coerced!r}.")
+
+    path = Path(config_path).expanduser()
+    data = _load_raw(path)
+    providers = data.get("providers")
+    if not isinstance(providers, dict) or name not in providers:
+        raise ConfigWriteError(f"Provider {name!r} is not configured in {path}.")
+    provider_entry = providers[name]
+    if not isinstance(provider_entry, dict):
+        raise ConfigWriteError(f"Provider {name!r}'s config in {path} is not a mapping.")
+    if provider_entry.get(field) == coerced:
+        return coerced
+    try:
+        backup_config(path)
+    except Exception as exc:
+        logger.warning("Could not back up config before write: %s", exc)
+    provider_entry[field] = coerced
+    _atomic_write_yaml(path, data)
+    logger.info("Persisted providers.%s.%s=%r to %s", name, field, coerced, path)
+    return coerced
 
 
 def set_account_weights(config_path: str, name: str, weights: list[float]) -> None:
