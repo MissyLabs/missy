@@ -18,6 +18,7 @@ _CONTROL_PROVIDER_SET_DEFAULT = "provider.set_default"
 _CONTROL_PROVIDER_ENABLE = "provider.enable"
 _CONTROL_PROVIDER_DISABLE = "provider.disable"
 _CONTROL_PROVIDER_SET_WEIGHT = "provider.set_weight"
+_CONTROL_PROVIDER_SET_FIELD = "provider.set_field"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
 _CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
@@ -37,6 +38,7 @@ def list_operator_controls(
     providers = _provider_targets(provider_registry)
     enable_targets, disable_targets = _provider_toggle_targets(provider_registry)
     weight_targets = _provider_weight_targets(provider_registry)
+    field_targets = _provider_field_targets(provider_registry)
     pause_targets, resume_targets = _scheduler_targets(scheduler)
     remove_targets = _scheduler_remove_targets(scheduler)
     candidate_targets = _candidate_targets(candidate_store)
@@ -88,6 +90,20 @@ def list_operator_controls(
                 "confirmation_template": "set-weight:{target}:{value}",
                 "enabled": bool(provider_registry is not None and weight_targets),
                 "targets": weight_targets,
+            },
+            {
+                "id": _CONTROL_PROVIDER_SET_FIELD,
+                "label": "Edit provider configuration",
+                "description": (
+                    "Set model, fast_model, premium_model, base_url, timeout, "
+                    "requests_per_minute, or tokens_per_minute for a provider. "
+                    "Never used for credentials -- use `missy providers auth` for those."
+                ),
+                "subsystem": "provider",
+                "requires_confirmation": True,
+                "confirmation_template": "set-field:{target}:{field}:{value}",
+                "enabled": bool(provider_registry is not None and field_targets),
+                "targets": field_targets,
             },
             {
                 "id": _CONTROL_SCHEDULER_PAUSE,
@@ -192,6 +208,10 @@ def execute_operator_control(
         return _execute_provider_toggle(control_id, body, provider_registry=provider_registry)
     if control_id == _CONTROL_PROVIDER_SET_WEIGHT:
         return _execute_provider_set_weight(
+            body, provider_registry=provider_registry, config_path=config_path
+        )
+    if control_id == _CONTROL_PROVIDER_SET_FIELD:
+        return _execute_provider_set_field(
             body, provider_registry=provider_registry, config_path=config_path
         )
     if control_id in {_CONTROL_SCHEDULER_PAUSE, _CONTROL_SCHEDULER_RESUME}:
@@ -463,6 +483,93 @@ def _execute_provider_set_weight(
     return (
         200,
         {"control": control_id, "target": target, "value": value},
+        detail,
+    )
+
+
+def _execute_provider_set_field(
+    body: dict[str, Any],
+    *,
+    provider_registry: ProviderRegistry | None,
+    config_path: str | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    control_id = _CONTROL_PROVIDER_SET_FIELD
+    target = str(body.get("target") or "").strip()
+    field = str(body.get("field") or "").strip()
+    detail = _audit_detail(control_id, target, field=field)
+    if provider_registry is None:
+        detail["reason"] = "provider_registry_unavailable"
+        return 503, {"message": "Provider registry is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid provider target"}, detail
+
+    from missy.config.writer import EDITABLE_PROVIDER_FIELDS
+
+    if field not in EDITABLE_PROVIDER_FIELDS:
+        detail["reason"] = "invalid_field"
+        return (
+            400,
+            {
+                "message": (
+                    f"Field {field!r} is not editable. "
+                    f"Allowed: {', '.join(sorted(EDITABLE_PROVIDER_FIELDS))}."
+                )
+            },
+            detail,
+        )
+
+    raw_value = body.get("value")
+    if raw_value is None:
+        raw_value = ""
+    value_str = str(raw_value)
+    detail["value"] = value_str
+
+    try:
+        names = set(provider_registry.list_providers())
+    except Exception as exc:
+        detail["reason"] = "provider_list_failed"
+        detail["error"] = _safe_error(exc)
+        return 503, {"message": "Provider registry is unavailable"}, detail
+    if target not in names:
+        detail["reason"] = "unknown_provider"
+        return 404, {"message": f"Provider {target!r} is not registered"}, detail
+
+    # Binds target, field, AND value so a stale/replayed confirmation from a
+    # different field or a different value on the same field can't
+    # accidentally reconfirm an edit the operator never actually saw.
+    expected_confirmation = f"set-field:{target}:{field}:{value_str}"
+    provided_confirmation = str(body.get("confirm") or "")
+    if provided_confirmation != expected_confirmation:
+        detail["reason"] = "confirmation_required"
+        detail["confirmation_template"] = "set-field:{target}:{field}:{value}"
+        return (
+            409,
+            {
+                "message": "Explicit confirmation is required",
+                "confirmation": expected_confirmation,
+            },
+            detail,
+        )
+
+    if not config_path:
+        detail["reason"] = "config_path_unavailable"
+        return 503, {"message": "Config file path is not attached to this server"}, detail
+
+    from missy.config.writer import ConfigWriteError, set_provider_field
+
+    try:
+        coerced = set_provider_field(config_path, target, field, raw_value)
+    except ConfigWriteError as exc:
+        detail["reason"] = "config_write_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+
+    detail["reason"] = "confirmed"
+    detail["value"] = coerced
+    return (
+        200,
+        {"control": control_id, "target": target, "field": field, "value": coerced},
         detail,
     )
 
@@ -912,6 +1019,46 @@ def _provider_weight_targets(provider_registry: ProviderRegistry | None) -> list
                 "available": True,
                 "is_current": False,
                 "confirmation": f"set-weight:{name}:{{value}}",
+            }
+        )
+    return targets
+
+
+def _provider_field_targets(provider_registry: ProviderRegistry | None) -> list[dict[str, Any]]:
+    if provider_registry is None:
+        return []
+    try:
+        names = provider_registry.list_providers()
+    except Exception:
+        return []
+    def _int_field(config: Any, field: str) -> int:
+        try:
+            return int(getattr(config, field, None) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    targets: list[dict[str, Any]] = []
+    for name in names:
+        config = None
+        try:
+            config = provider_registry.get_config(name)
+        except Exception:
+            config = None
+        targets.append(
+            {
+                "name": name,
+                "current": {
+                    "model": str(getattr(config, "model", "") or ""),
+                    "fast_model": str(getattr(config, "fast_model", "") or ""),
+                    "premium_model": str(getattr(config, "premium_model", "") or ""),
+                    "base_url": str(getattr(config, "base_url", "") or ""),
+                    "timeout": _int_field(config, "timeout"),
+                    "requests_per_minute": _int_field(config, "requests_per_minute"),
+                    "tokens_per_minute": _int_field(config, "tokens_per_minute"),
+                },
+                "available": True,
+                "is_current": False,
+                "confirmation": f"set-field:{name}:{{field}}:{{value}}",
             }
         )
     return targets

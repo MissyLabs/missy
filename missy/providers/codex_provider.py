@@ -324,6 +324,40 @@ class CodexProvider(BaseProvider):
         """Return how many OAuth accounts this provider round-robins across (0 if not multi-account)."""
         return len(self._accounts)
 
+    def rate_limit_summary(self) -> dict[str, float] | None:
+        """Aggregate rate-limit budget across every balanced OAuth account.
+
+        Falls back to :meth:`BaseProvider.rate_limit_summary` (this
+        provider's own ``self.rate_limiter``, always ``None`` here) when
+        round-robin balancing isn't active, so a single-account Codex
+        provider reports "no rate limiter configured" honestly rather than
+        an empty multi-account summary.
+        """
+        if not self.is_multi_account:
+            return super().rate_limit_summary()
+        return self._rr.capacity_summary()
+
+    def current_account_name(self) -> str | None:
+        """Return this thread's selected OAuth account name, if any."""
+        return self._current_account_name()
+
+    def list_accounts(self) -> list[dict[str, Any]] | None:
+        """Return per-OAuth-account health + rate-limit stats.
+
+        ``Account.api_key`` holds the account *name* for this provider
+        (never the bearer token -- see the ``Account`` dataclass docstring
+        in ``round_robin.py``), so it's safe to surface directly as
+        ``name`` here.
+        """
+        if not self.is_multi_account:
+            return None
+        by_index = {row["index"]: row for row in self._rr.per_account_capacity()}
+        return [
+            {"name": account.api_key, **by_index[account.index]}
+            for account in self._accounts
+            if account.index in by_index
+        ]
+
     def _select_account(self) -> _CodexAccount | None:
         """Return the OAuth account to use for the call in progress on this thread.
 

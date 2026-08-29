@@ -31,6 +31,7 @@ import contextlib
 import hmac
 import json
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -90,6 +91,16 @@ class ApiConfig:
             request to be rejected with ``401``.
         max_request_bytes: Hard cap on request body size in bytes.
         rate_limit_rpm: Maximum requests per IP per 60-second window.
+        web_session_ttl_seconds: How long a Web TUI login stays valid
+            (sliding window, refreshed on every authenticated request).
+            Defaults to 30 days -- a self-hosted, single-operator console
+            should stay logged in like any normal "remember me" browser
+            session rather than demanding a fresh login every 8 hours.
+        web_session_store_path: Where to persist sessions to disk so a
+            ``missy gateway start`` restart doesn't silently log out every
+            open Web TUI tab. ``None`` (the default) keeps sessions
+            in-memory only, wiped on restart -- used by tests and any
+            caller that wants the original ephemeral behavior.
     """
 
     host: str = "127.0.0.1"
@@ -98,7 +109,8 @@ class ApiConfig:
     max_request_bytes: int = _MAX_REQUEST_BYTES
     rate_limit_rpm: int = 60
     web_ui_enabled: bool = True
-    web_session_ttl_seconds: int = 8 * 60 * 60
+    web_session_ttl_seconds: int = 30 * 24 * 60 * 60
+    web_session_store_path: str | None = None
     web_cookie_name: str = "missy_operator_session"
 
 
@@ -124,6 +136,111 @@ class ApiResponse:
     def error(message: str, status: int = 400) -> tuple[int, dict]:
         """Return an error envelope with the given HTTP status code."""
         return status, {"status": "error", "error": message}
+
+
+def _provider_accounts_json(
+    provider: Any, provider_name: str, memory_store: Any
+) -> list[dict[str, Any]] | None:
+    """Return per-account health/capacity/usage for a multi-account provider, or ``None``.
+
+    ``None`` means "this provider doesn't round-robin across multiple
+    accounts" (single-key/OAuth providers, or a multi-account provider
+    running with ``key_rotation_strategy: failover``) -- the Web TUI
+    renders that case as "no per-account breakdown", not an empty list.
+    """
+    list_accounts = getattr(provider, "list_accounts", None)
+    if not callable(list_accounts):
+        return None
+    try:
+        accounts = list_accounts()
+    except Exception:
+        return None
+    if not accounts:
+        return None
+
+    usage_by_account: dict[str, dict] = {}
+    if memory_store is not None:
+        with contextlib.suppress(Exception):
+            for row in memory_store.get_cost_totals_by_account(provider_name):
+                if row.get("account"):
+                    usage_by_account[row["account"]] = row
+
+    zero_usage = {
+        "call_count": 0,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+        "total_cost_usd": 0.0,
+        "last_call": None,
+    }
+    return [
+        {
+            "name": account.get("name", ""),
+            "index": account.get("index"),
+            "healthy": bool(account.get("healthy", True)),
+            "consecutive_failures": int(account.get("consecutive_failures", 0) or 0),
+            "weight": account.get("weight", 1.0),
+            "client_ready": bool(account.get("client_ready", False)),
+            "rate_limit": account.get("rate_limit"),
+            "usage": usage_by_account.get(account.get("name", ""), zero_usage),
+        }
+        for account in accounts
+    ]
+
+
+def _healthy_account_count(provider: Any) -> int | None:
+    """Return how many of a multi-account provider's accounts are currently healthy.
+
+    ``None`` for a non-multi-account provider (no health concept applies).
+    Cheap: reads each account's cached backoff state, no DB query -- meant
+    for the main provider card, where a per-account breakdown would be too
+    much detail (that lives in the provider inspector via
+    :func:`_provider_accounts_json`).
+    """
+    list_accounts = getattr(provider, "list_accounts", None)
+    if not callable(list_accounts):
+        return None
+    try:
+        accounts = list_accounts()
+    except Exception:
+        return None
+    if not accounts:
+        return None
+    return sum(1 for account in accounts if account.get("healthy", True))
+
+
+def _rate_limit_json(provider: Any) -> dict[str, Any] | None:
+    """Return *provider*'s live rate-limit budget as JSON-safe data, or ``None``.
+
+    :meth:`~missy.providers.base.BaseProvider.rate_limit_summary` reports an
+    unlimited bucket as ``float("inf")`` (``0`` configured rpm/tpm) -- valid
+    Python but not valid JSON (``json.dumps`` emits the non-standard
+    ``Infinity`` token, which ``JSON.parse`` in a browser rejects outright).
+    This swaps any infinite capacity for ``null`` plus an explicit
+    ``*_unlimited`` flag so the Web TUI can render "unlimited" without ever
+    receiving a value it can't parse.
+    """
+    summary_fn = getattr(provider, "rate_limit_summary", None)
+    if not callable(summary_fn):
+        return None
+    try:
+        summary = summary_fn()
+    except Exception:
+        return None
+    if not summary:
+        return None
+    request_capacity = summary.get("request_capacity")
+    token_capacity = summary.get("token_capacity")
+    request_unlimited = request_capacity is None or math.isinf(request_capacity)
+    token_unlimited = token_capacity is None or math.isinf(token_capacity)
+    return {
+        "requests_per_minute": summary.get("requests_per_minute") or 0,
+        "request_capacity": None if request_unlimited else request_capacity,
+        "request_unlimited": request_unlimited,
+        "tokens_per_minute": summary.get("tokens_per_minute") or 0,
+        "token_capacity": None if token_unlimited else token_capacity,
+        "token_unlimited": token_unlimited,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +492,8 @@ def _make_handler(
                 return self._handle_status()
             if method == "GET" and path == f"{_API_PREFIX}/providers":
                 return self._handle_list_providers()
+            if method == "GET" and path == f"{_API_PREFIX}/providers/usage":
+                return self._handle_provider_usage(params)
             if method == "GET" and path == f"{_API_PREFIX}/tools":
                 return self._handle_list_tools()
             if method == "GET" and path == f"{_API_PREFIX}/diagnostics":
@@ -697,7 +816,17 @@ def _make_handler(
                 subsystem="auth",
                 severity="info",
             )
-            cookie = self._make_cookie(api_config.web_cookie_name, session.token)
+            # Without max_age, SimpleCookie omits Max-Age entirely, making
+            # this a browser *session* cookie -- the browser discards it
+            # the moment the tab/window closes, forcing a fresh login every
+            # time regardless of how generous web_session_ttl_seconds is
+            # server-side. Matching the cookie's lifetime to the actual
+            # server-side TTL is what makes "stay logged in" real.
+            cookie = self._make_cookie(
+                api_config.web_cookie_name,
+                session.token,
+                max_age=api_config.web_session_ttl_seconds,
+            )
             self._redirect("/", extra_headers={"Set-Cookie": cookie})
 
         def _handle_web_logout(self) -> None:
@@ -950,7 +1079,124 @@ def _make_handler(
             if callable(diagnostics):
                 with contextlib.suppress(Exception):
                     detail["diagnostics"] = redact_audit_value(diagnostics())
+            detail["rate_limit"] = _rate_limit_json(provider)
+            if memory_store is not None:
+                with contextlib.suppress(Exception):
+                    for row in memory_store.get_cost_totals_by_provider():
+                        if row.get("provider") == name:
+                            detail["usage"] = row
+                            break
+            detail["accounts"] = _provider_accounts_json(provider, name, memory_store)
             return ApiResponse.ok(detail)
+
+        def _handle_provider_usage(self, params: dict) -> tuple[int, dict]:
+            """GET /api/v1/providers/usage — per-provider usage stats + a time series.
+
+            Query params:
+                days (int, optional, default 14, max 90): How many trailing
+                    days of daily usage buckets to include in ``series``.
+
+            Response data fields:
+                providers (list): One entry per registered provider, merging
+                    live status (enabled/available/default/weight/rate-limit
+                    capacity) with lifetime usage totals (calls, tokens,
+                    cost) persisted from ``costs``. A provider with zero
+                    recorded calls still appears, zeroed out.
+                series (list): Daily ``{date, provider, call_count,
+                    total_tokens, total_cost_usd}`` buckets for the trailing
+                    window, oldest first — the data behind the usage graph.
+                totals (dict): Dashboard-wide aggregate across every
+                    provider (same shape as ``GET /costs/summary``'s
+                    ``totals``).
+                unattributed_usage (dict, optional): Usage recorded before
+                    per-provider attribution existed (or by a pre-upgrade
+                    database) that can't be assigned to any provider name.
+                    Omitted entirely when zero.
+            """
+            try:
+                days = max(1, min(int(params.get("days", 14)), 90))
+            except (TypeError, ValueError):
+                days = 14
+
+            reg = provider_registry
+            usage_by_provider: dict[str, dict] = {}
+            totals = {
+                "call_count": 0,
+                "session_count": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_cost_usd": 0.0,
+            }
+            series: list = []
+            unattributed: dict | None = None
+            if memory_store is not None:
+                try:
+                    for row in memory_store.get_cost_totals_by_provider():
+                        if row.get("provider"):
+                            usage_by_provider[row["provider"]] = row
+                        elif row.get("call_count"):
+                            unattributed = row
+                    totals = memory_store.get_cost_totals()
+                    series = memory_store.get_cost_series_by_provider(days=days)
+                except Exception as exc:
+                    logger.warning("Provider usage query error: %s", exc)
+
+            providers: list = []
+            if reg is not None:
+                try:
+                    for name in reg.list_providers():
+                        provider = reg.get(name)
+                        available = False
+                        with contextlib.suppress(Exception):
+                            available = provider.is_available() if provider else False
+                        enabled = True
+                        with contextlib.suppress(Exception):
+                            enabled = bool(reg.is_enabled(name))
+                        config = None
+                        with contextlib.suppress(Exception):
+                            config = reg.get_config(name)
+                        try:
+                            weight = float(getattr(config, "weight", 1.0) or 1.0)
+                        except (TypeError, ValueError):
+                            weight = 1.0
+                        usage = usage_by_provider.get(
+                            name,
+                            {
+                                "provider": name,
+                                "call_count": 0,
+                                "total_prompt_tokens": 0,
+                                "total_completion_tokens": 0,
+                                "total_tokens": 0,
+                                "total_cost_usd": 0.0,
+                                "last_call": None,
+                            },
+                        )
+                        providers.append(
+                            {
+                                "name": name,
+                                "available": available,
+                                "enabled": enabled,
+                                "is_default": name == reg.get_default_name(),
+                                "model": str(getattr(config, "model", "") or ""),
+                                "weight": weight,
+                                "is_multi_account": bool(
+                                    getattr(provider, "is_multi_account", False)
+                                ),
+                                "account_count": int(
+                                    getattr(provider, "account_count", 0) or 0
+                                ),
+                                "accounts_healthy": _healthy_account_count(provider),
+                                "rate_limit": _rate_limit_json(provider),
+                                "usage": usage,
+                            }
+                        )
+                except Exception as exc:
+                    logger.warning("Error listing providers for usage: %s", exc)
+
+            data = {"days": days, "providers": providers, "series": series, "totals": totals}
+            if unattributed:
+                data["unattributed_usage"] = unattributed
+            return ApiResponse.ok(data)
 
         def _handle_list_tools(self) -> tuple[int, dict]:
             """GET /api/v1/tools — list registered tools with schemas."""
@@ -1933,7 +2179,9 @@ class ApiServer:
         self.discord_channels = discord_channels
 
         self._session_registry = _SessionRegistry()
-        self._web_sessions = WebSessionStore(config.web_session_ttl_seconds)
+        self._web_sessions = WebSessionStore(
+            config.web_session_ttl_seconds, store_path=config.web_session_store_path
+        )
         self._run_registry = RunRegistry()
         self._rate_tracker: dict[str, list[float]] = {}
         self._rate_lock = threading.Lock()

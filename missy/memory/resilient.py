@@ -421,6 +421,64 @@ class ResilientMemoryStore:
                 "total_cost_usd": 0.0,
             }
 
+    def get_cost_totals_by_provider(self) -> list:
+        """Return lifetime usage totals per provider from the primary store.
+
+        Returns:
+            A list of per-provider aggregate dicts, or ``[]`` on primary
+            failure (cost records are not held in the in-memory fallback
+            cache).
+        """
+        try:
+            result = self._primary.get_cost_totals_by_provider()
+            self._on_success()
+            self._mark_read("get_cost_totals_by_provider", "primary")
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            self._mark_read("get_cost_totals_by_provider", "unavailable")
+            return []
+
+    def get_cost_totals_by_account(self, provider: str) -> list:
+        """Return lifetime usage totals per account for *provider*, from the primary store.
+
+        Args:
+            provider: Registry name of the provider to break down by account.
+
+        Returns:
+            A list of per-account aggregate dicts, or ``[]`` on primary
+            failure.
+        """
+        try:
+            result = self._primary.get_cost_totals_by_account(provider)
+            self._on_success()
+            self._mark_read("get_cost_totals_by_account", "primary")
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            self._mark_read("get_cost_totals_by_account", "unavailable")
+            return []
+
+    def get_cost_series_by_provider(self, days: int = 14) -> list:
+        """Return daily per-provider usage buckets from the primary store.
+
+        Args:
+            days: How many trailing days to include.
+
+        Returns:
+            A list of ``{date, provider, call_count, total_tokens,
+            total_cost_usd}`` dicts, or ``[]`` on primary failure.
+        """
+        try:
+            result = self._primary.get_cost_series_by_provider(days=days)
+            self._on_success()
+            self._mark_read("get_cost_series_by_provider", "primary")
+            return result
+        except Exception as exc:
+            self._on_failure(exc)
+            self._mark_read("get_cost_series_by_provider", "unavailable")
+            return []
+
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------

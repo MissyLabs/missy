@@ -234,6 +234,7 @@ ComfyUI itself is external infrastructure, not part of the Missy codebase — in
 | Vault key | `~/.missy/secrets/vault.key` |
 | Vault data | `~/.missy/secrets/vault.enc` |
 | Web TUI operator key | `~/.missy/secrets/web_console.key` (auto-generated on first `missy gateway start`) |
+| Web TUI browser sessions | `~/.missy/secrets/web_sessions.json` (persists logins across gateway restarts) |
 | Agent identity | `~/.missy/identity.pem` |
 | Prompt patches | `~/.missy/patches.json` |
 | Playbook | `~/.missy/playbook.json` |
@@ -349,12 +350,16 @@ discord:
 
 # Web TUI / REST API — auto-started by `missy gateway start` (read from raw
 # YAML, not a dataclass). api_key defaults to the persisted key at
-# ~/.missy/secrets/web_console.key when unset.
+# ~/.missy/secrets/web_console.key when unset. Browser login sessions are
+# persisted to ~/.missy/secrets/web_sessions.json (0600) so a gateway
+# restart doesn't log the operator out; session_ttl_seconds is a sliding
+# window refreshed on every authenticated request (default 30 days).
 api:
   enabled: true
   host: "127.0.0.1"
   port: 8080
   api_key: ""
+  session_ttl_seconds: 2592000
 
 container:
   enabled: false

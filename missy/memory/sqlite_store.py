@@ -352,7 +352,9 @@ class SQLiteMemoryStore:
                 prompt_tokens     INTEGER NOT NULL DEFAULT 0,
                 completion_tokens INTEGER NOT NULL DEFAULT 0,
                 cost_usd          REAL NOT NULL DEFAULT 0.0,
-                timestamp         TEXT NOT NULL
+                timestamp         TEXT NOT NULL,
+                provider          TEXT NOT NULL DEFAULT '',
+                account           TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_costs_session
                 ON costs(session_id);
@@ -409,6 +411,20 @@ class SQLiteMemoryStore:
             CREATE INDEX IF NOT EXISTS idx_large_content_session
                 ON large_content(session_id);
         """)
+        # `CREATE TABLE IF NOT EXISTS` above is a no-op against a `costs`
+        # table that already existed before the `provider` column was
+        # added, so a pre-existing memory.db needs an explicit ALTER TABLE
+        # to pick it up -- otherwise every provider-scoped usage query
+        # would raise "no such column: provider" against an installation
+        # that predates this change.
+        existing_cost_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(costs)").fetchall()
+        }
+        if "provider" not in existing_cost_columns:
+            conn.execute("ALTER TABLE costs ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+        if "account" not in existing_cost_columns:
+            conn.execute("ALTER TABLE costs ADD COLUMN account TEXT NOT NULL DEFAULT ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_costs_provider ON costs(provider)")
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -890,6 +906,8 @@ class SQLiteMemoryStore:
         prompt_tokens: int,
         completion_tokens: int,
         cost_usd: float,
+        provider: str = "",
+        account: str = "",
     ) -> None:
         """Persist a cost record for a provider call.
 
@@ -899,12 +917,19 @@ class SQLiteMemoryStore:
             prompt_tokens: Number of input tokens.
             completion_tokens: Number of output tokens.
             cost_usd: Computed cost in USD.
+            provider: Registry name of the provider that served the call
+                (e.g. ``"openai-codex"``), so usage can be aggregated per
+                provider rather than only per model string.
+            account: Safe display name of the specific balanced account
+                (see :meth:`~missy.providers.base.BaseProvider.current_account_name`)
+                that served the call, for providers round-robining across
+                multiple accounts. Empty for single-account providers.
         """
         conn = self._conn()
         conn.execute(
             """INSERT INTO costs
-               (id, session_id, model, prompt_tokens, completion_tokens, cost_usd, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (id, session_id, model, prompt_tokens, completion_tokens, cost_usd, timestamp, provider, account)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(uuid.uuid4()),
                 session_id,
@@ -913,6 +938,8 @@ class SQLiteMemoryStore:
                 completion_tokens,
                 cost_usd,
                 datetime.now(UTC).isoformat(),
+                provider,
+                account,
             ),
         )
         conn.commit()
@@ -1007,6 +1034,135 @@ class SQLiteMemoryStore:
             "total_completion_tokens": row["total_completion_tokens"],
             "total_cost_usd": row["total_cost_usd"],
         }
+
+    def get_cost_totals_by_provider(self) -> list[dict]:
+        """Return lifetime usage totals grouped by provider, busiest first.
+
+        Rows recorded before ``provider`` was threaded through
+        :meth:`record_cost` (or a pre-migration database) carry an empty
+        ``provider`` string rather than being silently dropped -- callers
+        should render that bucket as "unknown source" rather than treating
+        it as an error.
+
+        Returns:
+            List of dicts with ``provider``, ``call_count``,
+            ``total_prompt_tokens``, ``total_completion_tokens``,
+            ``total_tokens``, ``total_cost_usd``, and ``last_call``.
+        """
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT provider,
+                      COUNT(*) as call_count,
+                      COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                      COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
+                      COALESCE(SUM(cost_usd), 0.0) as total_cost_usd,
+                      MAX(timestamp) as last_call
+               FROM costs
+               GROUP BY provider
+               ORDER BY total_cost_usd DESC, call_count DESC"""
+        ).fetchall()
+        return [
+            {
+                "provider": r["provider"] or "",
+                "call_count": r["call_count"],
+                "total_prompt_tokens": r["total_prompt_tokens"],
+                "total_completion_tokens": r["total_completion_tokens"],
+                "total_tokens": r["total_prompt_tokens"] + r["total_completion_tokens"],
+                "total_cost_usd": r["total_cost_usd"],
+                "last_call": r["last_call"],
+            }
+            for r in rows
+        ]
+
+    def get_cost_totals_by_account(self, provider: str) -> list[dict]:
+        """Return lifetime usage totals grouped by account, for one provider.
+
+        Only meaningful for a provider that round-robins across multiple
+        accounts (``ProviderConfig.key_rotation_strategy == "round_robin"``)
+        -- for a single-account provider every row's ``account`` is empty.
+        Rows recorded before ``account`` was threaded through
+        :meth:`record_cost` (or before the provider adopted round-robin)
+        carry an empty ``account`` string rather than being silently
+        dropped -- callers should render that bucket as "unattributed"
+        rather than treating it as an error.
+
+        Args:
+            provider: Registry name of the provider to break down by
+                account (e.g. ``"openai-codex"``).
+
+        Returns:
+            List of dicts with ``account``, ``call_count``,
+            ``total_prompt_tokens``, ``total_completion_tokens``,
+            ``total_tokens``, ``total_cost_usd``, and ``last_call``.
+        """
+        conn = self._conn()
+        rows = conn.execute(
+            """SELECT account,
+                      COUNT(*) as call_count,
+                      COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+                      COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
+                      COALESCE(SUM(cost_usd), 0.0) as total_cost_usd,
+                      MAX(timestamp) as last_call
+               FROM costs
+               WHERE provider = ?
+               GROUP BY account
+               ORDER BY total_cost_usd DESC, call_count DESC""",
+            (provider,),
+        ).fetchall()
+        return [
+            {
+                "account": r["account"] or "",
+                "call_count": r["call_count"],
+                "total_prompt_tokens": r["total_prompt_tokens"],
+                "total_completion_tokens": r["total_completion_tokens"],
+                "total_tokens": r["total_prompt_tokens"] + r["total_completion_tokens"],
+                "total_cost_usd": r["total_cost_usd"],
+                "last_call": r["last_call"],
+            }
+            for r in rows
+        ]
+
+    def get_cost_series_by_provider(self, days: int = 14) -> list[dict]:
+        """Return daily usage buckets per provider for the last *days* days.
+
+        Buckets by the ISO-8601 date prefix of each record's ``timestamp``
+        (records are stored as ``datetime.now(UTC).isoformat()``, so a
+        plain string prefix comparison sorts and filters correctly without
+        needing SQLite date-function parsing).
+
+        Args:
+            days: How many trailing days to include (default 14).
+
+        Returns:
+            List of dicts with ``date`` (``YYYY-MM-DD``), ``provider``,
+            ``call_count``, ``total_tokens``, and ``total_cost_usd``, one
+            row per (date, provider) pair that had at least one call,
+            ordered oldest first.
+        """
+        conn = self._conn()
+        cutoff = (datetime.now(UTC) - timedelta(days=max(1, days))).date().isoformat()
+        rows = conn.execute(
+            """SELECT substr(timestamp, 1, 10) as date,
+                      provider,
+                      COUNT(*) as call_count,
+                      COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0) as total_tokens,
+                      COALESCE(SUM(cost_usd), 0.0) as total_cost_usd
+               FROM costs
+               WHERE substr(timestamp, 1, 10) >= ?
+               GROUP BY date, provider
+               ORDER BY date ASC""",
+            (cutoff,),
+        ).fetchall()
+        return [
+            {
+                "date": r["date"],
+                "provider": r["provider"] or "",
+                "call_count": r["call_count"],
+                "total_tokens": r["total_tokens"],
+                "total_cost_usd": r["total_cost_usd"],
+            }
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------
     # Summary DAG operations

@@ -184,10 +184,71 @@ class RoundRobinAccounts:
         """True when 2+ accounts are configured for balancing."""
         return bool(self._accounts)
 
+    def capacity_summary(self) -> dict[str, float]:
+        """Aggregate rate-limit budget across every account (credential-free).
+
+        Each account has its own independent :class:`RateLimiter`; this sums
+        their configured limits and current live capacity so a caller (the
+        Web TUI's provider usage view) can show "how much usage is
+        available" for a multi-account provider as one combined bar, the
+        same shape as a single-account provider's own rate limiter exposes.
+        Unlimited (0) on any one account makes the whole sum unlimited,
+        matching :class:`RateLimiter`'s own 0-means-unlimited convention.
+        """
+        with self._lock:
+            accounts = list(self._accounts)
+        if not accounts:
+            return {
+                "requests_per_minute": 0,
+                "request_capacity": float("inf"),
+                "tokens_per_minute": 0,
+                "token_capacity": float("inf"),
+            }
+        rpm_values = [a.rate_limiter.requests_per_minute for a in accounts]
+        tpm_values = [a.rate_limiter.tokens_per_minute for a in accounts]
+        unlimited_rpm = any(v == 0 for v in rpm_values)
+        unlimited_tpm = any(v == 0 for v in tpm_values)
+        return {
+            "requests_per_minute": 0 if unlimited_rpm else sum(rpm_values),
+            "request_capacity": (
+                float("inf") if unlimited_rpm else sum(a.rate_limiter.request_capacity for a in accounts)
+            ),
+            "tokens_per_minute": 0 if unlimited_tpm else sum(tpm_values),
+            "token_capacity": (
+                float("inf") if unlimited_tpm else sum(a.rate_limiter.token_capacity for a in accounts)
+            ),
+        }
+
     @property
     def count(self) -> int:
         """How many accounts are balanced across (0 when inactive)."""
         return len(self._accounts)
+
+    def per_account_capacity(self) -> list[dict]:
+        """Return each account's health + rate-limit budget, credential-free.
+
+        Deliberately omits any account *name* -- ``Account.api_key`` holds
+        an actual secret for some providers (e.g. raw OpenAI API keys) and
+        only a safe display name for others (e.g. Codex OAuth account
+        slugs), so this module can't decide which is safe to expose.
+        Callers (each provider's own ``list_accounts()``) zip this
+        credential-free capacity/health data with whatever name they know
+        is safe to show for *their* account type, by matching on ``index``.
+        """
+        with self._lock:
+            accounts = list(self._accounts)
+        now = time.monotonic()
+        return [
+            {
+                "index": account.index,
+                "healthy": account.unhealthy_until <= now,
+                "consecutive_failures": account.consecutive_failures,
+                "weight": account.weight,
+                "client_ready": account.client is not None,
+                "rate_limit": account.rate_limiter.capacity_dict(),
+            }
+            for account in accounts
+        ]
 
     def select(self) -> AccountView | None:
         """Return a credential-free view of the next account in rotation.

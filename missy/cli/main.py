@@ -3443,9 +3443,18 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             from missy.api.server import ApiConfig, ApiServer
 
             try:
+                from missy.providers.registry import LiveProviderRegistry
                 from missy.providers.registry import get_registry as _get_provider_registry
 
-                _api_provider_registry = _get_provider_registry()
+                # A live-forwarding proxy, not a one-time snapshot: every
+                # config hot-reload installs a brand-new ProviderRegistry
+                # (see LiveProviderRegistry's docstring), so a plain
+                # `_get_provider_registry()` snapshot here would leave the
+                # Web TUI's provider list/controls permanently stale after
+                # the first reload even though config.yaml and the real
+                # dispatch path both picked up the change correctly.
+                _get_provider_registry()  # raises if never initialised
+                _api_provider_registry = LiveProviderRegistry()
             except Exception:
                 _api_provider_registry = None
 
@@ -3472,7 +3481,18 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
             _api_host = _api_cfg.get("host", "127.0.0.1")
             _api_port = int(_api_cfg.get("port", 8080))
-            _api_server_config = ApiConfig(host=_api_host, port=_api_port, api_key=_api_key)
+            _api_server_config = ApiConfig(
+                host=_api_host,
+                port=_api_port,
+                api_key=_api_key,
+                web_session_ttl_seconds=int(
+                    _api_cfg.get("session_ttl_seconds", 30 * 24 * 60 * 60)
+                ),
+                # Persisted so a `missy gateway start` restart -- routine
+                # during config changes -- doesn't silently log the
+                # operator out of every open Web TUI tab.
+                web_session_store_path="~/.missy/secrets/web_sessions.json",
+            )
             api_server = ApiServer(
                 config=_api_server_config,
                 runtime=_agent,
@@ -7130,7 +7150,12 @@ def api_start(
     )
     runtime = AgentRuntime(agent_config)
 
-    api_config = ApiConfig(host=host, port=port, api_key=api_key)
+    api_config = ApiConfig(
+        host=host,
+        port=port,
+        api_key=api_key,
+        web_session_store_path="~/.missy/secrets/web_sessions.json",
+    )
     server = ApiServer(
         config=api_config,
         runtime=runtime,

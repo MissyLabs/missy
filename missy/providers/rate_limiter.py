@@ -371,3 +371,36 @@ class RateLimiter:
         with self._lock:
             self._refill()
             return self._tok_tokens if self._tpm > 0 else float("inf")
+
+    @property
+    def requests_per_minute(self) -> int:
+        """Configured request budget (0 = unlimited). Read-only; for display."""
+        return self._rpm
+
+    def capacity_dict(self) -> dict[str, float | int | bool | None]:
+        """Return this limiter's budget as JSON-safe data (no raw ``inf``).
+
+        ``request_capacity``/``token_capacity`` report ``float("inf")`` for
+        an unlimited bucket -- valid Python, not valid JSON (``json.dumps``
+        would emit the non-standard ``Infinity`` token, which a browser's
+        ``JSON.parse`` rejects). This swaps that for ``None`` plus an
+        explicit ``*_unlimited`` flag, the shared shape every rate-limit
+        display in the Web TUI (provider-level and per-account) expects.
+        """
+        request_capacity = self.request_capacity
+        token_capacity = self.token_capacity
+        request_unlimited = math.isinf(request_capacity)
+        token_unlimited = math.isinf(token_capacity)
+        return {
+            "requests_per_minute": self._rpm,
+            "request_capacity": None if request_unlimited else request_capacity,
+            "request_unlimited": request_unlimited,
+            "tokens_per_minute": self._tpm,
+            "token_capacity": None if token_unlimited else token_capacity,
+            "token_unlimited": token_unlimited,
+        }
+
+    @property
+    def tokens_per_minute(self) -> int:
+        """Configured token budget (0 = unlimited). Read-only; for display."""
+        return self._tpm
