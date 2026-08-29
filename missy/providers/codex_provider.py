@@ -45,7 +45,7 @@ from missy.core.exceptions import ProviderError
 from missy.gateway.client import PolicyHTTPClient
 
 from .base import BaseProvider, CompletionResponse, Message, ToolCall
-from .rate_limiter import RateLimiter
+from .rate_limiter import RateLimiter, parse_retry_after
 from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
@@ -412,6 +412,33 @@ class CodexProvider(BaseProvider):
             return
         super()._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
+    def _current_rate_limiter(self) -> RateLimiter | None:
+        """Return the rate limiter for the account active on this thread, if any."""
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        if account is not None:
+            return account.rate_limiter
+        return self.rate_limiter
+
+    def _note_rate_limit_response(self, exc: Exception) -> None:
+        """Feed a 429 response's Retry-After back into the active rate limiter.
+
+        Sibling providers (Anthropic, OpenAI) already do this; this
+        provider never did, so an upstream 429 depleted no budget and
+        triggered no pause -- every subsequent call kept firing at full
+        rate straight into the same still-throttled window instead of
+        backing off, turning a normally-transient rate limit into a hard,
+        immediate task failure. No-op for any other status code.
+        """
+        if _http_status(exc) != 429:
+            return
+        limiter = self._current_rate_limiter()
+        if limiter is None:
+            return
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", {}) or {}
+        retry_after = parse_retry_after(headers.get("retry-after"))
+        limiter.on_rate_limit_response(retry_after)
+
     def _get_token(self, *, force_refresh: bool = False) -> str:
         account_name = self._current_account_name()
         if account_name is not None:
@@ -519,12 +546,15 @@ class CodexProvider(BaseProvider):
                         self._record_account_outcome(True)
                     except Exception as retry_exc:
                         self._record_account_outcome(False)
+                        self._note_rate_limit_response(retry_exc)
                         raise _codex_request_error(retry_exc) from retry_exc
                 else:
                     self._record_account_outcome(False)
+                    self._note_rate_limit_response(exc)
                     raise _codex_request_error(exc) from exc
             else:
                 self._record_account_outcome(False)
+                self._note_rate_limit_response(exc)
                 raise _codex_request_error(exc) from exc
 
         try:
