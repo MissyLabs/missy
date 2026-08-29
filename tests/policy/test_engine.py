@@ -272,6 +272,30 @@ class TestCheckShellRedirectionTargets:
         with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
             pe.check_shell("cmd < /tmp/in/data.txt > /tmp/out/data.txt")
 
+    def test_write_redirect_to_dev_null_permitted_with_no_allowlist(self):
+        """/dev/null discards every byte written to it -- there is no file
+        content to leak or tamper with, so it must never require an
+        explicit allowed_write_paths entry the way a real path would.
+        Found live during validation run 25: a routine `... 2>/dev/null`
+        diagnostic command was denied mid-task with no /dev/null in the
+        config's allowlist."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["find"]))
+        assert pe.check_shell("find . -maxdepth 1 2>/dev/null") is True
+
+    def test_read_redirect_from_dev_null_permitted_with_no_allowlist(self):
+        """Reading /dev/null yields immediate EOF -- no data exposure."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["cat"]))
+        assert pe.check_shell("cat < /dev/null") is True
+
+    def test_dev_null_exception_does_not_widen_other_redirect_targets(self):
+        """Orthogonality check: the /dev/null carve-out must not accidentally
+        widen to sibling /dev paths or a same-named file elsewhere."""
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["cmd"]))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("cmd > /dev/shm/pwn")
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("cmd > /tmp/null")
+
 
 # ---------------------------------------------------------------------------
 # Singleton helpers

@@ -149,6 +149,18 @@ class CircuitBreaker:
             self._on_failure()
             raise
 
+    def record_outcome(self, *, success: bool) -> None:
+        """Record a call's outcome without gating it through :meth:`call`.
+
+        For a caller that deliberately bypassed :meth:`call` for one
+        specific attempt (e.g. retrying a multi-account provider on a
+        *different* underlying credential than the one whose failure just
+        tripped this breaker, rather than blindly repeating the same
+        failed path) but still wants that attempt's real result reflected
+        in this breaker's state for every other caller.
+        """
+        self._on_success() if success else self._on_failure()
+
     def _on_success(self) -> None:
         """Reset failure tracking and close the circuit."""
         with self._lock:

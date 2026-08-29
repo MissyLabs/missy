@@ -53,6 +53,7 @@ def _make_account(
     dm_allowlist: list[str] | None = None,
     ignore_bots: bool = True,
     allow_bots_if_mention_only: bool = False,
+    allowed_bot_author_ids: list[str] | None = None,
     auto_thread_threshold: int = 0,
 ) -> DiscordAccountConfig:
     return DiscordAccountConfig(
@@ -64,6 +65,7 @@ def _make_account(
         dm_allowlist=dm_allowlist or [],
         ignore_bots=ignore_bots,
         allow_bots_if_mention_only=allow_bots_if_mention_only,
+        allowed_bot_author_ids=allowed_bot_author_ids or [],
         auto_thread_threshold=auto_thread_threshold,
     )
 
@@ -372,6 +374,40 @@ class TestHandleMessageBotFilter:
     async def test_bot_author_filtered_when_ignore_bots(self):
         ch = _make_channel(_make_account(ignore_bots=True))
         data = _make_message(author_id="other-bot", is_bot=True)
+        await ch._handle_message(data)
+        assert ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_bot_author_bypasses_ignore_bots(self):
+        """A specifically allowlisted bot (e.g. a trusted supervisor/test
+        harness account) is accepted even though ignore_bots=True and
+        allow_bots_if_mention_only=False would otherwise reject every bot
+        message, including this one -- there was previously no way to
+        trust exactly one named bot without also accepting every
+        mentioning bot."""
+        ch = _make_channel(
+            _make_account(
+                ignore_bots=True,
+                allow_bots_if_mention_only=False,
+                allowed_bot_author_ids=["supervisor-bot"],
+            )
+        )
+        data = _make_message(author_id="supervisor-bot", is_bot=True)
+        await ch._handle_message(data)
+        assert not ch._queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_non_allowlisted_bot_author_still_filtered(self):
+        """The allowlist is specific -- an unlisted bot (including this
+        bot's own future/other traffic) is still ignored."""
+        ch = _make_channel(
+            _make_account(
+                ignore_bots=True,
+                allow_bots_if_mention_only=False,
+                allowed_bot_author_ids=["supervisor-bot"],
+            )
+        )
+        data = _make_message(author_id="some-other-bot", is_bot=True)
         await ch._handle_message(data)
         assert ch._queue.empty()
 

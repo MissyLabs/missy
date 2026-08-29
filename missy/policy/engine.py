@@ -30,6 +30,26 @@ from .rest_policy import RestPolicy
 from .shell import ShellPolicyEngine
 
 
+def _is_dev_null(target: str) -> bool:
+    """Return ``True`` when *target* is the POSIX null device.
+
+    ``/dev/null`` discards every byte written to it and yields immediate
+    EOF when read — there is no file content to leak, tamper with, or
+    exfiltrate, so routing it through :meth:`FilesystemPolicyEngine.check_write`/
+    ``check_read`` like a real path is pure friction: an extremely common
+    shell idiom (``... 2>/dev/null``, ``command < /dev/null``) fails with a
+    filesystem-policy denial on any config that doesn't happen to list
+    ``/dev/null`` in its allowed paths, even under ``shell.unrestricted``.
+    Resolves symlinks/relative forms (e.g. a container's ``/dev/null`` bind
+    mount reached via a different apparent path) rather than a bare string
+    compare, since a redirect target isn't necessarily already canonical.
+    """
+    try:
+        return Path(target).resolve() == Path("/dev/null")
+    except OSError:
+        return False
+
+
 class PolicyEngine:
     """Facade that composes network, filesystem, shell, and REST policy engines.
 
@@ -185,8 +205,12 @@ class PolicyEngine:
 
         write_targets, read_targets = self.shell.extract_redirect_targets(command)
         for target in write_targets:
+            if _is_dev_null(target):
+                continue
             self.filesystem.check_write(target, session_id=session_id, task_id=task_id)
         for target in read_targets:
+            if _is_dev_null(target):
+                continue
             self.filesystem.check_read(target, session_id=session_id, task_id=task_id)
 
         return True

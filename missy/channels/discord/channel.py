@@ -1369,7 +1369,17 @@ class DiscordChannel(BaseChannel):
         if not self.account_config.ignore_bots:
             return True  # Configured to accept bot messages.
 
-        # ignore_bots is True: check the exemption flag.
+        # ignore_bots is True: a specifically allowlisted bot (e.g. a
+        # trusted supervisor/orchestrator account) bypasses ignore_bots
+        # regardless of allow_bots_if_mention_only -- that flag exempts
+        # *every* mentioning bot, which is too broad when only one named
+        # bot should be trusted while every other bot (including this
+        # bot's own messages) stays ignored.
+        author_id = str(author.get("id") or "")
+        if author_id and author_id in self.account_config.allowed_bot_author_ids:
+            return True
+
+        # Otherwise check the mention-based exemption flag.
         if self.account_config.allow_bots_if_mention_only:
             own_id = self.bot_user_id or self.account_config.account_id
             if own_id and f"<@{own_id}>" in content:

@@ -111,7 +111,20 @@ class DiscordAccountConfig:
         ignore_bots: When ``True`` the bot ignores messages from other bots.
         allow_bots_if_mention_only: When ``True`` and ``ignore_bots`` is
             ``True``, bot messages that explicitly @-mention this bot are
-            not ignored.
+            not ignored. Note this exempts *every* mentioning bot, not a
+            specific one -- use ``allowed_bot_author_ids`` when only one
+            named bot (e.g. a trusted supervisor/orchestrator account)
+            should bypass ``ignore_bots``, while still blocking the bot's
+            own messages and every other bot.
+        allowed_bot_author_ids: Discord user IDs of specific bot accounts
+            exempted from ``ignore_bots``, independent of
+            ``allow_bots_if_mention_only``. Before this field existed,
+            ``ignore_bots=True`` had no way to trust *one* specific bot
+            (e.g. a test-harness supervisor bot driving this account in an
+            embedded/automated deployment) without also accepting mentions
+            from every other bot in the server -- there was no
+            "ignore all bots except this allowlisted one" mode. Empty by
+            default: no behavior change unless explicitly configured.
         rate_limit_per_minute: Maximum commands (slash or
             natural-language) a single Discord user may trigger per
             minute. ``0`` disables per-user rate limiting entirely.
@@ -128,6 +141,7 @@ class DiscordAccountConfig:
     ack_reaction: str = ""
     ignore_bots: bool = True
     allow_bots_if_mention_only: bool = False
+    allowed_bot_author_ids: list[str] = field(default_factory=list)
     auto_thread_threshold: int = 0  # 0 = disabled; N = create thread after N messages
     rate_limit_per_minute: int = 10  # 0 = disabled
     vault_dir: str = "~/.missy/secrets"  # must match the config's vault.vault_dir
@@ -229,6 +243,7 @@ def _parse_account(
         ack_reaction=str(data.get("ack_reaction", "")),
         ignore_bots=_coerce_bool(data.get("ignore_bots"), True),
         allow_bots_if_mention_only=_coerce_bool(data.get("allow_bots_if_mention_only"), False),
+        allowed_bot_author_ids=[str(uid) for uid in data.get("allowed_bot_author_ids", [])],
         auto_thread_threshold=int(data.get("auto_thread_threshold", 0)),
         rate_limit_per_minute=int(data.get("rate_limit_per_minute", 10)),
         vault_dir=vault_dir,

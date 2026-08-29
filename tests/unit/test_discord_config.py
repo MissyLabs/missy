@@ -107,6 +107,7 @@ class TestDiscordAccountConfig:
         assert ac.ack_reaction == ""
         assert ac.ignore_bots is True
         assert ac.allow_bots_if_mention_only is False
+        assert ac.allowed_bot_author_ids == []
 
     def test_resolve_token_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_DISCORD_TOKEN", "my-secret-token")
@@ -129,6 +130,7 @@ class TestDiscordAccountConfig:
             "ack_reaction": "eyes",
             "ignore_bots": False,
             "allow_bots_if_mention_only": True,
+            "allowed_bot_author_ids": ["999888777"],
             "guild_policies": {
                 "555": {
                     "enabled": True,
@@ -148,6 +150,7 @@ class TestDiscordAccountConfig:
         assert ac.ack_reaction == "eyes"
         assert ac.ignore_bots is False
         assert ac.allow_bots_if_mention_only is True
+        assert ac.allowed_bot_author_ids == ["999888777"]
         assert "555" in ac.guild_policies
         assert ac.guild_policies["555"].require_mention is True
 

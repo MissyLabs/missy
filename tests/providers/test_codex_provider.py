@@ -820,6 +820,50 @@ class TestCodexProviderStream:
             mock_cls.return_value.post.side_effect = http_error
             list(self.provider.stream(self._messages()))
 
+    def test_429_response_feeds_active_accounts_rate_limiter(self):
+        """Sibling providers (Anthropic, OpenAI) already call
+        RateLimiter.on_rate_limit_response() on a 429 so future calls back
+        off; this provider never did, so an upstream rate limit depleted
+        no budget and paused nothing -- every retry kept firing at full
+        rate straight into the same still-throttled window. Found live
+        during validation run 25 (Bot Buddy campaign): a heavy nested
+        sub-agent build hit 429 on both round-robin accounts back to back
+        with no backoff in between, turning a transient rate limit into an
+        immediate hard task failure.
+        """
+        import httpx
+
+        from missy.providers.codex_provider import CodexProvider
+        from missy.providers.rate_limiter import RateLimiter
+
+        provider = CodexProvider(_make_multi_config(["work", "personal"]))
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 429
+        mock_resp.text = "Too Many Requests"
+        mock_resp.headers = {"retry-after": "12"}
+        http_error = httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
+
+        with (
+            patch("missy.providers.codex_provider.PolicyHTTPClient") as mock_cls,
+            patch(
+                "missy.providers.codex_provider._load_oauth_token",
+                side_effect=lambda force_refresh=False, account=None: f"{account}-token",
+            ),
+            patch.object(provider, "_acquire_rate_limit"),
+            # Patched on the class (not a specific account instance) since
+            # stream() selects the round-robin account itself internally --
+            # this test only needs to prove the callback fires with the
+            # right delay, not chase which of the two account instances it
+            # lands on. Also avoids a real time.sleep(12) in the test run.
+            patch.object(RateLimiter, "on_rate_limit_response") as mock_note,
+            pytest.raises(ProviderError, match="429"),
+        ):
+            mock_cls.return_value.post.side_effect = http_error
+            list(provider.stream(self._messages()))
+
+        mock_note.assert_called_once_with(12.0)
+
     def test_retries_once_with_forced_oauth_refresh_on_401(self):
         import httpx
 

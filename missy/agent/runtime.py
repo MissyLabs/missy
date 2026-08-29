@@ -5655,6 +5655,71 @@ class AgentRuntime:
                         },
                     )
 
+            # A rate-limit failure on one round-robin OAuth account of a
+            # multi-account provider (e.g. CodexProvider with 2+
+            # oauth_accounts) is exactly what balancing across accounts
+            # exists to absorb -- yet ProviderRegistry.rotate_key() is a
+            # deliberate no-op for such providers (they already balance
+            # every call internally), so without this the whole turn was
+            # failing outright on a single unlucky account pick even when
+            # a sibling account had *just* served this same turn's
+            # previous provider call successfully. The failed account's
+            # health was already recorded (_record_account_outcome(False)
+            # inside the provider) before this exception reached here, so
+            # a fresh call's account selection is biased away from it.
+            if (
+                failure_class == ProviderFailureClass.RATE_LIMIT
+                and getattr(provider, "is_multi_account", False)
+                and getattr(provider, "account_count", 0) > 1
+            ):
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.account_retry",
+                    result="allow",
+                    detail={"provider": provider.name, "reason": str(failure_class)},
+                )
+                # Deliberately bypass breaker.call() here rather than
+                # reusing _attempt(): the FIRST attempt's own failure may
+                # have just tripped (or re-tripped, extending a HALF_OPEN
+                # probe's backoff) this provider-level breaker, which is
+                # shared across every account of a multi-account provider.
+                # Routing this retry through that same gate meant it was
+                # rejected outright with "breaker OPEN" before ever
+                # reaching the provider -- so a healthy sibling account
+                # was never actually tried, no matter how many times a
+                # caller retried, since each attempt re-tripped the same
+                # breaker for the next one (confirmed live: a direct,
+                # breaker-bypassing request to the sibling account
+                # succeeded immediately while the real gated codepath kept
+                # reporting "breaker OPEN"). This retry is deliberately
+                # targeting a *different* underlying credential, not
+                # blindly repeating the failed path, so it's exempt from
+                # the "stop hammering it" gate -- but its outcome is still
+                # recorded into the breaker's own bookkeeping (success
+                # closes it, failure counts toward it) so the breaker
+                # keeps reflecting real provider availability for every
+                # other caller.
+                breaker = self._get_breaker_for(provider.name)
+                try:
+                    result = call_factory(provider)()
+                    breaker.record_outcome(success=True)
+                    return result, provider
+                except (ProviderError, MissyError) as exc2:
+                    breaker.record_outcome(success=False)
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": provider.name,
+                            "failure_class": str(classify_provider_error(exc2)),
+                            "error": str(exc2),
+                            "after_account_retry": True,
+                        },
+                    )
+
             # Budget must still allow another (potentially billed) call
             # before spending it on a fallback provider.
             self._check_budget(session_id=session_id, task_id=task_id)
