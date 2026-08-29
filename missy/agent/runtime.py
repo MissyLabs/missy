@@ -5679,9 +5679,34 @@ class AgentRuntime:
                     result="allow",
                     detail={"provider": provider.name, "reason": str(failure_class)},
                 )
+                # Deliberately bypass breaker.call() here rather than
+                # reusing _attempt(): the FIRST attempt's own failure may
+                # have just tripped (or re-tripped, extending a HALF_OPEN
+                # probe's backoff) this provider-level breaker, which is
+                # shared across every account of a multi-account provider.
+                # Routing this retry through that same gate meant it was
+                # rejected outright with "breaker OPEN" before ever
+                # reaching the provider -- so a healthy sibling account
+                # was never actually tried, no matter how many times a
+                # caller retried, since each attempt re-tripped the same
+                # breaker for the next one (confirmed live: a direct,
+                # breaker-bypassing request to the sibling account
+                # succeeded immediately while the real gated codepath kept
+                # reporting "breaker OPEN"). This retry is deliberately
+                # targeting a *different* underlying credential, not
+                # blindly repeating the failed path, so it's exempt from
+                # the "stop hammering it" gate -- but its outcome is still
+                # recorded into the breaker's own bookkeeping (success
+                # closes it, failure counts toward it) so the breaker
+                # keeps reflecting real provider availability for every
+                # other caller.
+                breaker = self._get_breaker_for(provider.name)
                 try:
-                    return _attempt(provider), provider
+                    result = call_factory(provider)()
+                    breaker.record_outcome(success=True)
+                    return result, provider
                 except (ProviderError, MissyError) as exc2:
+                    breaker.record_outcome(success=False)
                     self._emit_event(
                         session_id=session_id,
                         task_id=task_id,

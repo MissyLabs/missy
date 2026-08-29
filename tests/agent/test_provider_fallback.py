@@ -380,6 +380,48 @@ class TestKeyRotationOnAuthFailure:
         # call through the provider's own account selection, not a no-op.
         assert provider.accounts_seen == [0, 1]
 
+    def test_account_retry_bypasses_a_breaker_the_first_attempt_just_tripped(self):
+        """Regression: the first attempt's own failure can trip (or
+        re-trip, extending a HALF_OPEN probe's backoff) this provider's
+        breaker -- shared across every account of a multi-account
+        provider. If the retry were routed through that same gate
+        (breaker.call()), it would be rejected outright with "breaker
+        OPEN" before ever reaching a sibling account, no matter how
+        healthy that sibling actually is. Reproduced live: a direct,
+        breaker-bypassing request to the sibling account succeeded
+        immediately while the real gated codepath kept reporting "breaker
+        OPEN" call after call."""
+        cfg = ProviderConfig(name="codex", model="m", api_key="unused")
+        provider = _MultiAccountFailNTimesProvider("codex", cfg, fail_times=1)
+        registry = _install_registry(("codex", provider, cfg))
+
+        rt = _bare_runtime("codex")
+        breaker = rt._get_breaker_for("codex")
+        # Prime the breaker one failure short of its default threshold (5)
+        # so the first real attempt's failure below is the one that trips
+        # it OPEN, exactly as happened live.
+        for _ in range(4):
+            breaker._on_failure()
+        assert breaker.state.value == "closed"
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            result = rt._single_turn(
+                provider=provider,
+                system_prompt="sys",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s1",
+                task_id="t1",
+            )
+
+        assert result.content == "codex reply"
+        assert provider.calls == 2
+        assert provider.accounts_seen == [0, 1]
+        # The bypass path recorded the retry's own success into the
+        # breaker's bookkeeping, so it reflects real current availability
+        # (closed) rather than staying OPEN from the first attempt's
+        # failure that triggered this whole retry.
+        assert breaker.state.value == "closed"
+
     def test_does_not_retry_single_account_provider_on_rate_limit_failure(self):
         """A single-account provider gets no such retry -- there is no
         sibling account for a second attempt to land on."""

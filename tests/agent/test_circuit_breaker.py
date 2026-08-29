@@ -766,3 +766,33 @@ class TestEdgeCases:
         with pytest.raises(CustomError):
             breaker.call(raise_custom)
         assert breaker._failure_count == 1
+
+
+class TestRecordOutcome:
+    """record_outcome() lets a caller who deliberately bypassed call() (e.g.
+    retrying on a different underlying credential than the one whose failure
+    just tripped this breaker) still report that attempt's real result."""
+
+    def test_record_outcome_success_closes_an_open_breaker(self):
+        breaker = _make_breaker(threshold=2)
+        _trip(breaker)
+        assert breaker.state == CircuitState.OPEN
+        breaker.record_outcome(success=True)
+        assert breaker.state == CircuitState.CLOSED
+        assert breaker._failure_count == 0
+
+    def test_record_outcome_failure_increments_and_can_open(self):
+        breaker = _make_breaker(threshold=2)
+        breaker.record_outcome(success=False)
+        assert breaker.state == CircuitState.CLOSED
+        breaker.record_outcome(success=False)
+        assert breaker.state == CircuitState.OPEN
+
+    def test_record_outcome_never_gates_the_call_itself(self):
+        """Unlike call(), record_outcome() has no bypassed-call to reject --
+        it only ever records bookkeeping, regardless of current state."""
+        breaker = _make_breaker(threshold=1)
+        _trip(breaker)
+        assert breaker.state == CircuitState.OPEN
+        breaker.record_outcome(success=False)  # does not raise
+        assert breaker.state == CircuitState.OPEN
