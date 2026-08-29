@@ -5655,6 +5655,46 @@ class AgentRuntime:
                         },
                     )
 
+            # A rate-limit failure on one round-robin OAuth account of a
+            # multi-account provider (e.g. CodexProvider with 2+
+            # oauth_accounts) is exactly what balancing across accounts
+            # exists to absorb -- yet ProviderRegistry.rotate_key() is a
+            # deliberate no-op for such providers (they already balance
+            # every call internally), so without this the whole turn was
+            # failing outright on a single unlucky account pick even when
+            # a sibling account had *just* served this same turn's
+            # previous provider call successfully. The failed account's
+            # health was already recorded (_record_account_outcome(False)
+            # inside the provider) before this exception reached here, so
+            # a fresh call's account selection is biased away from it.
+            if (
+                failure_class == ProviderFailureClass.RATE_LIMIT
+                and getattr(provider, "is_multi_account", False)
+                and getattr(provider, "account_count", 0) > 1
+            ):
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.provider.account_retry",
+                    result="allow",
+                    detail={"provider": provider.name, "reason": str(failure_class)},
+                )
+                try:
+                    return _attempt(provider), provider
+                except (ProviderError, MissyError) as exc2:
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.provider.call_failed",
+                        result="error",
+                        detail={
+                            "provider": provider.name,
+                            "failure_class": str(classify_provider_error(exc2)),
+                            "error": str(exc2),
+                            "after_account_retry": True,
+                        },
+                    )
+
             # Budget must still allow another (potentially billed) call
             # before spending it on a fallback provider.
             self._check_budget(session_id=session_id, task_id=task_id)

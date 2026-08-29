@@ -89,6 +89,47 @@ class _AlwaysFailProvider(BaseProvider):
         raise ProviderError(self._error_message)
 
 
+class _MultiAccountFailNTimesProvider(BaseProvider):
+    """Simulates a round-robin multi-account provider (like CodexProvider)
+    whose *account selection* -- not its API key -- changes between calls.
+
+    Fails with a rate-limit error for the first ``fail_times`` calls, then
+    succeeds, tracking which "account" (an opaque index the fake advances
+    each call, standing in for real round-robin selection) served each
+    attempt.
+    """
+
+    def __init__(self, name: str, config: ProviderConfig, fail_times: int, account_count: int = 2):
+        self.name = name
+        self._config = config
+        self._api_key = config.api_key
+        self._fail_times = fail_times
+        self.account_count = account_count
+        self.calls = 0
+        self.accounts_seen: list[int] = []
+
+    @property
+    def is_multi_account(self) -> bool:
+        return True
+
+    def is_available(self) -> bool:
+        return True
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        account = (self.calls - 1) % self.account_count
+        self.accounts_seen.append(account)
+        if self.calls <= self._fail_times:
+            raise ProviderError("limited rate limited: 429")
+        return CompletionResponse(
+            content=f"{self.name} reply",
+            model=kwargs.get("model") or "default-model",
+            provider=self.name,
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            raw={},
+        )
+
+
 class _HealthyProvider(BaseProvider):
     """A plain healthy provider that does NOT override complete_with_tools
     (inherits BaseProvider's default degrade-to-complete() -- i.e. not
@@ -308,6 +349,57 @@ class TestKeyRotationOnAuthFailure:
 
         assert provider.calls == 1  # never retried on a rotated key
         assert provider._api_key == "key-0"  # unchanged
+        assert result.content == "healthy reply"
+
+    def test_retries_same_multi_account_provider_on_rate_limit_failure(self):
+        """A rate-limit failure on one round-robin OAuth account (e.g.
+        CodexProvider with 2+ oauth_accounts) must retry the SAME provider
+        once -- letting its own account selection move to a sibling
+        account -- rather than treating the whole provider as down and
+        immediately jumping to cross-provider fallback (or failing
+        outright when no fallback provider is configured, as previously
+        happened even though a healthy sibling account existed)."""
+        cfg = ProviderConfig(name="codex", model="m", api_key="unused")
+        provider = _MultiAccountFailNTimesProvider("codex", cfg, fail_times=1)
+        registry = _install_registry(("codex", provider, cfg))
+
+        rt = _bare_runtime("codex")
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            result = rt._single_turn(
+                provider=provider,
+                system_prompt="sys",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s1",
+                task_id="t1",
+            )
+
+        assert result.content == "codex reply"
+        assert provider.calls == 2
+        # First attempt used account 0 (the one that hit the 429); the
+        # retry landed on account 1, proving the retry is a real second
+        # call through the provider's own account selection, not a no-op.
+        assert provider.accounts_seen == [0, 1]
+
+    def test_does_not_retry_single_account_provider_on_rate_limit_failure(self):
+        """A single-account provider gets no such retry -- there is no
+        sibling account for a second attempt to land on."""
+        cfg = ProviderConfig(name="limited", model="m", api_key="key-0")
+        provider = _AlwaysFailProvider("limited", cfg, "limited rate limited: 429")
+        healthy_cfg = ProviderConfig(name="healthy", model="m", api_key="hk")
+        healthy = _HealthyProvider("healthy", healthy_cfg)
+        registry = _install_registry(("limited", provider, cfg), ("healthy", healthy, healthy_cfg))
+
+        rt = _bare_runtime("limited")
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            result = rt._single_turn(
+                provider=provider,
+                system_prompt="sys",
+                messages=[{"role": "user", "content": "hi"}],
+                session_id="s1",
+                task_id="t1",
+            )
+
+        assert provider.calls == 1  # no account-retry; not multi-account
         assert result.content == "healthy reply"
 
 
