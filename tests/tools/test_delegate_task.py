@@ -190,6 +190,41 @@ class TestAdvancedOrchestration:
         assert "Success criteria: list exploitable gaps" in prompt
         assert "Suggested tools: file_read" in prompt
 
+    def test_explicit_agents_forward_independent_providers(self, tool):
+        runtime = MagicMock()
+        runtime.run.return_value = "ok"
+
+        result = tool.execute(
+            agents=[
+                {"name": "Delegate", "task": "implement", "provider": "acpx"},
+                {"name": "Reviewer", "task": "review", "provider": "openai"},
+            ],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert result.success
+        assert "[provider=acpx]" in result.output
+        assert "[provider=openai]" in result.output
+        providers = {call.kwargs["_provider"] for call in runtime.run.call_args_list}
+        assert providers == {"acpx", "openai"}
+
+    @pytest.mark.parametrize("provider", ["", "   ", 7, ["openai"]])
+    def test_invalid_explicit_provider_is_rejected(self, tool, provider):
+        runtime = MagicMock()
+
+        result = tool.execute(
+            agents=[{"task": "work", "provider": provider}],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+        )
+
+        assert not result.success
+        assert "provider must be a non-empty string" in result.error
+        runtime.run.assert_not_called()
+
     @pytest.mark.parametrize(
         "dependencies, expected",
         [([3], "missing dependencies"), ([0], "depend on itself")],
@@ -266,6 +301,7 @@ class TestSchema:
         agents = tool.get_schema()["parameters"]["properties"]["agents"]
         assert agents["type"] == "array"
         assert agents["items"]["properties"]["depends_on"]["items"]["type"] == "integer"
+        assert agents["items"]["properties"]["provider"]["type"] == "string"
 
     def test_schema_exposes_advanced_strategy_and_failure_control(self, tool):
         properties = tool.get_schema()["parameters"]["properties"]

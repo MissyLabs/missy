@@ -6,7 +6,7 @@ _get_tools().
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from missy.agent.runtime import AgentConfig, AgentRuntime
 
@@ -185,6 +185,22 @@ class TestApplyProviderGate:
         assert result == ["calculator"]
         mock_gate.filter_tools.assert_called_once_with(["calculator", "shell_exec"], "ollama")
 
+    def test_explicit_provider_override_is_used_for_gating(self) -> None:
+        intel = SimpleNamespace(
+            provider_gating_enabled=True,
+            provider_gating_min_samples=3,
+            provider_gating_min_composite=0.4,
+        )
+        runtime = _make_runtime(provider="parent", tool_intelligence=intel)
+        mock_gate = MagicMock()
+        mock_gate.filter_tools.return_value = (["calculator"], {})
+
+        with patch("missy.tools.intelligence.ToolProviderGate", return_value=mock_gate):
+            result = runtime._apply_provider_gate(["calculator"], provider_name="acpx")
+
+        assert result == ["calculator"]
+        mock_gate.filter_tools.assert_called_once_with(["calculator"], "acpx")
+
     def test_gate_construction_failure_falls_back_ungated(self) -> None:
         intel = SimpleNamespace(
             provider_gating_enabled=True,
@@ -291,3 +307,28 @@ class TestCandidateRuntimeLoading:
             runtime._get_tools()
 
         mock_loader.load_enabled.assert_called_once_with("mock")
+
+    def test_runtime_loader_runs_once_for_each_subagent_provider(self) -> None:
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = []
+        tool_reg.is_enabled.return_value = True
+
+        intel = SimpleNamespace(
+            candidate_runtime_loading_enabled=True,
+            provider_gating_enabled=False,
+            candidate_generation_enabled=False,
+        )
+        runtime = _make_runtime(provider="parent", tool_intelligence=intel)
+
+        mock_loader = MagicMock()
+        mock_loader.load_enabled.return_value = SimpleNamespace(loaded=[], skipped=[])
+        with (
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.tools.intelligence.get_candidate_store", return_value=MagicMock()),
+            patch("missy.tools.intelligence.CandidateRuntimeLoader", return_value=mock_loader),
+        ):
+            runtime._get_tools(provider_name="acpx")
+            runtime._get_tools(provider_name="openai")
+            runtime._get_tools(provider_name="acpx")
+
+        assert mock_loader.load_enabled.call_args_list == [call("acpx"), call("openai")]

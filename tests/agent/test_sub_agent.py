@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.agent.runtime import AgentConfig, AgentRuntime
 from missy.agent.sub_agent import (
     MAX_CONCURRENT,
     MAX_SUB_AGENT_DEPTH,
@@ -19,6 +20,7 @@ from missy.agent.sub_agent import (
     parse_subtasks,
     validate_subtasks,
 )
+from missy.providers.base import CompletionResponse
 
 
 class TestParseSubtasks:
@@ -364,6 +366,32 @@ class TestSubAgentRunner:
         runner.run_all(tasks)
         assert runtime.run.call_args.kwargs["_delegation_depth"] == 1
 
+    def test_each_subtask_can_select_a_different_provider(self):
+        runtime = self._mock_runtime("ok")
+        runner = SubAgentRunner(runtime=runtime, session_id="sess-1", depth=0)
+        tasks = [
+            SubTask(id=0, description="delegate", provider="acpx"),
+            SubTask(id=1, description="analyze", provider="openai"),
+        ]
+
+        runner.run_all(tasks)
+
+        providers = {call.kwargs["_provider"] for call in runtime.run.call_args_list}
+        assert providers == {"acpx", "openai"}
+
+    def test_unassigned_subtask_inherits_parent_provider(self):
+        runtime = self._mock_runtime("ok")
+        runner = SubAgentRunner(
+            runtime=runtime,
+            session_id="sess-1",
+            depth=1,
+            default_provider="acpx",
+        )
+
+        runner.run_all([SubTask(id=0, description="nested")])
+
+        assert runtime.run.call_args.kwargs["_provider"] == "acpx"
+
 
 class TestRealConcurrency:
     """SR-4.2: independent subtasks must genuinely overlap in wall-clock
@@ -395,6 +423,51 @@ class TestRealConcurrency:
         # All three calls should have started within a tight window of
         # each other, not staggered ~0.2s apart.
         assert max(start_times) - min(start_times) < 0.15
+
+    def test_shared_runtime_dispatches_concurrent_agents_to_distinct_providers(self):
+        providers = {}
+        for name in ("parent", "acpx", "openai"):
+            provider = MagicMock()
+            provider.name = name
+            provider.is_available.return_value = True
+            provider.complete.return_value = CompletionResponse(
+                content=f"{name} reply",
+                model=f"{name}-model",
+                provider=name,
+                usage={},
+                raw={},
+            )
+            providers[name] = provider
+
+        registry = MagicMock()
+        registry.get.side_effect = providers.get
+        registry.get_config.return_value = None
+        registry.key_for.side_effect = lambda candidate: next(
+            (name for name, provider in providers.items() if provider is candidate), None
+        )
+        registry.list_providers.return_value = sorted(providers)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("no tools")),
+            patch("missy.agent.runtime.get_message_bus", side_effect=RuntimeError("no bus")),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="parent"))
+            runtime._memory_store = None
+            runtime._request_tracker = None
+            runner = SubAgentRunner(runtime=runtime, session_id="sess-1", depth=1)
+            results = runner.run_all(
+                [
+                    SubTask(id=0, description="delegate", provider="acpx"),
+                    SubTask(id=1, description="review", provider="openai"),
+                ]
+            )
+
+        assert results == ["acpx reply", "openai reply"]
+        providers["acpx"].complete.assert_called_once()
+        providers["openai"].complete.assert_called_once()
+        providers["parent"].complete.assert_not_called()
+        assert runtime.config.provider == "parent"
 
     def test_concurrency_capped_at_max_concurrent(self):
         """No more than MAX_CONCURRENT subtasks should be in flight at once,

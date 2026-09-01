@@ -67,6 +67,7 @@ class CandidateDelegatedTool(BaseTool):
         self._candidate_id = candidate.id
         self._target_tool = target_tool
         self._registry = registry
+        self._provider_enabled = dict(candidate.provider_enabled)
 
     @property
     def candidate_id(self) -> str:
@@ -75,6 +76,10 @@ class CandidateDelegatedTool(BaseTool):
     @property
     def target_tool(self) -> str:
         return self._target_tool
+
+    def is_enabled_for_provider(self, provider_name: str) -> bool:
+        """Return whether this candidate may be exposed to *provider_name*."""
+        return self._provider_enabled.get(provider_name) is True
 
     def get_schema(self) -> dict[str, Any]:
         return dict(self._schema)

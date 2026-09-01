@@ -475,7 +475,9 @@ class AgentConfig:
         "high-impact requests with separable analysis, use one delegate_task "
         "call with strategy='diverse' so complementary specialists work in "
         "parallel and a lead agent synthesizes their findings. Use explicit "
-        "agents with dependencies for concrete multi-step workflows. "
+        "agents with dependencies for concrete multi-step workflows; an explicit "
+        "agent may set its provider registry key when specialists should use "
+        "different configured providers. "
         "PROVIDER BENCHMARKING: When asked to benchmark, compare, or race AI "
         "providers (e.g. 'benchmark this on openai vs ollama'), ALWAYS call "
         "provider_benchmark(prompt=..., providers=[...]) — it uses Missy's "
@@ -593,7 +595,8 @@ DISCORD_SYSTEM_PROMPT = (
     "requests with separable analysis, use one delegate_task call with "
     "strategy='diverse' so complementary specialists run in parallel and a "
     "lead agent synthesizes the result. Use explicit agents with dependencies "
-    "for concrete workflows. "
+    "for concrete workflows; an explicit agent may set its provider registry "
+    "key when specialists should use different configured providers. "
     "PROVIDER BENCHMARKING: When asked to benchmark, compare, or race AI "
     "providers against each other (e.g. 'benchmark this on openai vs "
     "ollama'), ALWAYS call provider_benchmark(prompt=..., providers=[...]) "
@@ -756,6 +759,12 @@ class AgentRuntime:
         # inherit its policy and budget, but each concurrent worker still needs
         # a distinct identity for audit logs and operator visibility.
         self._agent_execution_local = threading.local()
+        # Candidate tools can be enabled for one provider and denied for
+        # another. Track loading per provider (under a lock because delegated
+        # agents call _get_tools concurrently) instead of letting whichever
+        # provider runs first permanently decide the shared runtime's set.
+        self._candidate_runtime_loaded_providers: set[str] = set()
+        self._candidate_runtime_load_lock = threading.Lock()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
         # Scan for incomplete checkpoints from previous runs
@@ -1010,6 +1019,7 @@ class AgentRuntime:
         _delegation_depth: int = 0,
         *,
         _explicit_tool_request_input: str | None = None,
+        _provider: str | None = None,
     ) -> str:
         """Run the agent with *user_input* and return the response string.
 
@@ -1048,6 +1058,10 @@ class AgentRuntime:
                 Defaults to *user_input*. This text is used only by the
                 explicit-tool-request completion guard; provider context and
                 persisted history continue to use *user_input*.
+            _provider: Internal per-call provider registry key. Used by
+                sub-agent delegation so concurrent children can select
+                different providers without mutating ``self.config.provider``.
+                ``None`` inherits the runtime's configured provider.
 
         Returns:
             The model's reply as a plain string.
@@ -1058,6 +1072,9 @@ class AgentRuntime:
         """
         if not user_input or not user_input.strip():
             raise ValueError("user_input must be a non-empty string")
+        if _provider is not None and (not isinstance(_provider, str) or not _provider.strip()):
+            raise ValueError("_provider must be a non-empty provider name when set")
+        requested_provider = _provider.strip() if _provider is not None else self.config.provider
 
         # SR-4.1: reset the sleeptime worker's idle timer on every real
         # user interaction so it never processes memory concurrently with
@@ -1085,6 +1102,7 @@ class AgentRuntime:
             }
             self._agent_execution_local.value = agent_execution
         agent_execution["task_id"] = task_id
+        agent_execution["requested_provider"] = requested_provider
         self._agent_execution_local.value = agent_execution
 
         logger.info(
@@ -1101,7 +1119,11 @@ class AgentRuntime:
             task_id=task_id,
             event_type="agent.run.start",
             result="allow",
-            detail={"user_input_length": len(user_input), "goal": user_input[:500]},
+            detail={
+                "user_input_length": len(user_input),
+                "goal": user_input[:500],
+                "requested_provider": requested_provider,
+            },
         )
         if _HAS_MESSAGE_BUS:
             self._bus_publish(
@@ -1116,7 +1138,9 @@ class AgentRuntime:
             )
 
         try:
-            provider = self._get_provider()
+            provider = self._get_provider(_provider)
+            agent_execution["provider"] = provider.name
+            self._agent_execution_local.value = agent_execution
         except ProviderError as exc:
             logger.warning(
                 "Agent %s task %s failed during provider resolution: %s",
@@ -1129,7 +1153,11 @@ class AgentRuntime:
                 task_id=task_id,
                 event_type="agent.run.error",
                 result="error",
-                detail={"error": str(exc), "stage": "provider_resolution"},
+                detail={
+                    "error": str(exc),
+                    "stage": "provider_resolution",
+                    "requested_provider": requested_provider,
+                },
             )
             if _HAS_MESSAGE_BUS:
                 self._bus_publish(
@@ -1208,6 +1236,7 @@ class AgentRuntime:
                 explicit_tool_request_input=_explicit_tool_request_input,
                 _delegation_depth=_delegation_depth,
                 priority_tools=priority_tools,
+                provider_name=requested_provider,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -1516,6 +1545,7 @@ class AgentRuntime:
         explicit_tool_request_input: str | None = None,
         _delegation_depth: int = 0,
         priority_tools: list[str] | None = None,
+        provider_name: str | None = None,
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -1544,11 +1574,13 @@ class AgentRuntime:
                 to the front of the definitions sent to the provider
                 (order can influence which tool an LLM reaches for first),
                 without changing which tools are allowed/available.
+            provider_name: Preferred provider registry key for provider-specific
+                tool policy and model routing. Defaults to the runtime provider.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
-        tools = self._get_tools()
+        tools = self._get_tools(provider_name=provider_name)
         if priority_tools:
             priority_set = set(priority_tools)
             prioritised = [t for t in tools if getattr(t, "name", None) in priority_set]
@@ -1575,6 +1607,7 @@ class AgentRuntime:
                 messages=messages,
                 session_id=session_id,
                 task_id=task_id,
+                provider_name=provider_name,
             )
             return response.content, []
 
@@ -3250,6 +3283,7 @@ class AgentRuntime:
         messages: list[dict],
         session_id: str,
         task_id: str,
+        provider_name: str | None = None,
     ) -> CompletionResponse:
         """Execute a single provider.complete() call via the circuit breaker.
 
@@ -3259,6 +3293,7 @@ class AgentRuntime:
             messages: Message list (user turn last).
             session_id: For provider kwargs.
             task_id: For provider kwargs.
+            provider_name: Preferred provider registry key for model routing.
 
         Returns:
             A :class:`~missy.providers.base.CompletionResponse`.
@@ -3305,7 +3340,10 @@ class AgentRuntime:
                 _last_user_text = str(_m.get("content") or "")
                 break
         _effective_model = self._route_model(
-            _last_user_text, history_length=len(messages), tool_count=0
+            _last_user_text,
+            history_length=len(messages),
+            tool_count=0,
+            provider_name=provider_name,
         )
 
         # SR-4.8: model/tool compatibility across a fallback transition --
@@ -3355,7 +3393,7 @@ class AgentRuntime:
     # Tools available in Discord mode — no desktop/X11/browser/atspi tools.
     _DISCORD_TOOLS = frozenset(MISSY_DISCORD_TOOLS)
 
-    def _get_tools(self) -> list:
+    def _get_tools(self, provider_name: str | None = None) -> list:
         """Return registered tools, or an empty list when unavailable.
 
         Respects :attr:`AgentConfig.capability_mode`:
@@ -3369,18 +3407,25 @@ class AgentRuntime:
             A list of :class:`~missy.tools.base.BaseTool` instances, or
             ``[]`` when the registry is not initialised.
         """
+        effective_provider = provider_name or self.config.provider
         try:
             registry = get_tool_registry()
-            self._load_enabled_candidate_tools(registry)
+            self._load_enabled_candidate_tools(registry, provider_name=effective_provider)
             self._sync_mcp_tools(registry)
             tool_names = [name for name in registry.list_tools() if registry.is_enabled(name)]
         except RuntimeError:
             return []
 
+        model_id = self.config.model or ""
+        if effective_provider != self.config.provider:
+            with contextlib.suppress(Exception):
+                provider_config = get_registry().get_config(effective_provider)
+                if provider_config is not None:
+                    model_id = provider_config.model or ""
         layers = build_configured_tool_policy_layers(
             capability_mode=self.config.capability_mode,
-            provider_name=self.config.provider,
-            model_id=self.config.model or "",
+            provider_name=effective_provider,
+            model_id=model_id,
             global_policy=self.config.tool_policy,
             agent_policy=self.config.agent_tool_policy,
             group_policy=self.config.group_tool_policy,
@@ -3395,32 +3440,60 @@ class AgentRuntime:
         decision = resolve_tool_policy(tool_names, layers, groups=groups)
         self._last_tool_policy_decision = decision
 
-        allowed_names = self._apply_provider_gate(list(decision.tools))
+        allowed_names = self._apply_provider_gate(
+            list(decision.tools), provider_name=effective_provider
+        )
 
         tools_by_name = {name: registry.get(name) for name in tool_names}
-        return [tool for name in allowed_names if (tool := tools_by_name.get(name)) is not None]
+        selected_tools = []
+        for name in allowed_names:
+            tool = tools_by_name.get(name)
+            if tool is None:
+                continue
+            provider_check = getattr(type(tool), "is_enabled_for_provider", None)
+            if callable(provider_check) and not tool.is_enabled_for_provider(effective_provider):
+                continue
+            selected_tools.append(tool)
+        return selected_tools
 
-    def _load_enabled_candidate_tools(self, registry: Any) -> None:
+    def _load_enabled_candidate_tools(
+        self, registry: Any, provider_name: str | None = None
+    ) -> None:
         """Register enabled candidate tools when runtime loading is explicitly enabled."""
         intel = getattr(self.config, "tool_intelligence", None)
         if not bool(getattr(intel, "candidate_runtime_loading_enabled", False)):
             return
-        if getattr(self, "_candidate_runtime_loaded", False):
-            return
-        try:
-            from missy.tools.intelligence import CandidateRuntimeLoader, get_candidate_store
+        effective_provider = provider_name or self.config.provider
+        lock = getattr(self, "_candidate_runtime_load_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._candidate_runtime_load_lock = lock
+        with lock:
+            loaded = getattr(self, "_candidate_runtime_loaded_providers", None)
+            if loaded is None:
+                loaded = set()
+                self._candidate_runtime_loaded_providers = loaded
+            if effective_provider in loaded:
+                return
+            try:
+                from missy.tools.intelligence import CandidateRuntimeLoader, get_candidate_store
 
-            report = CandidateRuntimeLoader(get_candidate_store(), registry).load_enabled(
-                self.config.provider
-            )
-            self._candidate_runtime_loaded = True
-            if report.skipped:
-                logger.info(
-                    "Candidate runtime loader skipped %d candidate(s).",
-                    len(report.skipped),
+                report = CandidateRuntimeLoader(get_candidate_store(), registry).load_enabled(
+                    effective_provider
                 )
-        except Exception:
-            logger.debug("Candidate runtime loader failed; continuing with registered tools only.")
+                loaded.add(effective_provider)
+                if report.skipped:
+                    logger.info(
+                        "Candidate runtime loader skipped %d candidate(s) for provider %r.",
+                        len(report.skipped),
+                        effective_provider,
+                    )
+            except Exception:
+                logger.debug(
+                    "Candidate runtime loader failed for provider %r; "
+                    "continuing with registered tools only.",
+                    effective_provider,
+                )
 
     def _sync_mcp_tools(self, registry: Any) -> None:
         """Register every currently-connected MCP tool into *registry*.
@@ -3459,7 +3532,9 @@ class AgentRuntime:
         except Exception:
             logger.debug("MCP tool sync failed; continuing without MCP tools", exc_info=True)
 
-    def _apply_provider_gate(self, tool_names: list[str]) -> list[str]:
+    def _apply_provider_gate(
+        self, tool_names: list[str], provider_name: str | None = None
+    ) -> list[str]:
         """Filter *tool_names* through :class:`~missy.tools.intelligence.provider_gate.ToolProviderGate`.
 
         No-ops (returns *tool_names* unchanged) unless
@@ -3470,14 +3545,15 @@ class AgentRuntime:
         intel = getattr(self.config, "tool_intelligence", None)
         if not bool(getattr(intel, "provider_gating_enabled", False)):
             return tool_names
+        effective_provider = provider_name or self.config.provider
         try:
             gate = self._get_provider_gate()
-            allowed, denied = gate.filter_tools(tool_names, self.config.provider)
+            allowed, denied = gate.filter_tools(tool_names, effective_provider)
             if denied:
                 logger.info(
                     "Provider gate denied %d tool(s) for provider %r: %s",
                     len(denied),
-                    self.config.provider,
+                    effective_provider,
                     denied,
                 )
             return allowed
@@ -3549,7 +3625,11 @@ class AgentRuntime:
             )
 
     def _route_model(
-        self, user_input: str, history_length: int = 0, tool_count: int = 0
+        self,
+        user_input: str,
+        history_length: int = 0,
+        tool_count: int = 0,
+        provider_name: str | None = None,
     ) -> str | None:
         """F05: pick the model tier for a call via ModelRouter, or the default.
 
@@ -3569,14 +3649,22 @@ class AgentRuntime:
             The model id to use, or ``None`` to let the provider use its own
             default (mirroring ``self.config.model`` being unset).
         """
+        from missy.providers.registry import get_registry as get_provider_registry
+
+        effective_provider = provider_name or self.config.provider
         default = self.config.model
+        if effective_provider != self.config.provider:
+            with contextlib.suppress(Exception):
+                provider_config = get_provider_registry().get_config(effective_provider)
+                if provider_config is not None:
+                    default = provider_config.model or None
         if not bool(getattr(self.config, "model_routing_enabled", False)):
             return default
         try:
-            from missy.providers.registry import ModelRouter, get_registry
+            from missy.providers.registry import ModelRouter
 
-            registry = get_registry()
-            pconfig = registry.get_config(self.config.provider)
+            registry = get_provider_registry()
+            pconfig = registry.get_config(effective_provider)
             if pconfig is None:
                 return default
             router = ModelRouter()
@@ -3589,7 +3677,7 @@ class AgentRuntime:
                     "F05: routed to %r tier -> model %r for provider %r.",
                     tier,
                     routed,
-                    self.config.provider,
+                    effective_provider,
                 )
             return routed or default
         except Exception:
@@ -3795,6 +3883,10 @@ class AgentRuntime:
             tool_args.setdefault("_depth", _delegation_depth)
             tool_args.setdefault("_parent_agent_id", agent_execution.get("agent_id", ""))
             tool_args.setdefault("_parent_task_id", task_id)
+            tool_args.setdefault(
+                "_parent_provider",
+                str(agent_execution.get("requested_provider") or self.config.provider),
+            )
 
         # Rewrite heredoc-style shell commands to temp files so they pass
         # the shell policy (which blocks << as a subshell marker).
@@ -5454,11 +5546,11 @@ class AgentRuntime:
 
         return self._session_mgr.create_session()
 
-    def _get_provider(self) -> Any:
-        """Resolve the configured provider with automatic fallback.
+    def _get_provider(self, preferred_name: str | None = None) -> Any:
+        """Resolve a preferred provider with automatic fallback.
 
-        The sticky, configured default (``self.config.provider``, the
-        provider-preference hierarchy's "default") is always tried first.
+        The per-call *preferred_name*, when provided, is tried first; otherwise
+        the sticky configured default (``self.config.provider``) is used.
         When it's unavailable, the next pick is drawn from the weighted
         balancing pool (:meth:`~missy.providers.registry.ProviderRegistry.select_weighted`,
         proportional to each candidate's configured ``weight``) rather
@@ -5473,7 +5565,17 @@ class AgentRuntime:
             ProviderError: When no provider is available.
         """
         registry = get_registry()
-        provider = registry.get(self.config.provider)
+        provider_name = (
+            preferred_name.strip() if preferred_name is not None else self.config.provider
+        )
+        provider = registry.get(provider_name)
+
+        if preferred_name is not None and provider is None:
+            available_names = ", ".join(registry.list_providers()) or "none"
+            raise ProviderError(
+                f"Requested provider {provider_name!r} is not registered. "
+                f"Configured provider keys: {available_names}."
+            )
 
         if provider is not None and provider.is_available():
             return provider
@@ -5481,16 +5583,16 @@ class AgentRuntime:
         if provider is not None:
             logger.warning(
                 "Configured provider %r is not available; falling back.",
-                self.config.provider,
+                provider_name,
             )
 
-        fallback = registry.select_weighted(exclude={self.config.provider})
+        fallback = registry.select_weighted(exclude={provider_name})
         if fallback is not None:
             logger.info("Using weighted fallback provider %r.", fallback.name)
             return fallback
 
         raise ProviderError(
-            f"No providers available. Configured provider was {self.config.provider!r}. "
+            f"No providers available. Preferred provider was {provider_name!r}. "
             "Ensure at least one provider is initialised and its API key is set."
         )
 

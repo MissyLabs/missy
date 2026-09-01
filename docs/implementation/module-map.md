@@ -304,7 +304,7 @@ dependencies on other `missy` modules.
 
 | Field | Value |
 |-------|-------|
-| **Purpose** | Decomposes concrete workflows or builds a diversified specialist plan for advanced requests, validates the dependency DAG, executes independent work in parallel, applies configurable failure propagation, and optionally runs a synthesis agent. Every child uses the *same* AgentRuntime/session as the caller so budget and policy remain aggregated; nesting is bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
+| **Purpose** | Decomposes concrete workflows or builds a diversified specialist plan for advanced requests, validates the dependency DAG, executes independent work in parallel, applies configurable failure propagation, and optionally runs a synthesis agent. Every child uses the *same* AgentRuntime/session as the caller so budget and policy remain aggregated, while an explicit child may select a different configured provider through a concurrency-safe per-call override; nesting is bounded by `MAX_SUB_AGENT_DEPTH`. Wired into production via the `delegate_task` tool. |
 | **Key exports** | `SubAgentRunner`, `SubTask`, `parse_subtasks`, `build_diverse_subtasks`, `validate_subtasks`, `DelegationPlanError`, `MAX_SUB_AGENT_DEPTH` |
 | **Internal deps** | `missy.agent.runtime` (via the runtime instance passed in, not an import) |
 
