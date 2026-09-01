@@ -71,6 +71,8 @@ def test_loads_enabled_delegated_candidate(tmp_path: Path) -> None:
     assert report.loaded == ["echo_alias"]
     loaded = registry.get("echo_alias")
     assert isinstance(loaded, CandidateDelegatedTool)
+    assert loaded.is_enabled_for_provider("mock")
+    assert not loaded.is_enabled_for_provider("openai")
     assert loaded.get_schema()["parameters"]["required"] == ["text"]
     assert registry.execute("echo_alias", text="hello").output == "hello"
 

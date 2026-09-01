@@ -280,6 +280,35 @@ class TestAgentRuntimeRun:
 
 
 class TestProviderResolution:
+    def test_per_call_provider_override_selects_requested_provider(self):
+        parent = _make_provider("parent", reply="parent reply")
+        acpx = _make_provider("acpx", reply="acpx reply")
+        mock_registry = _make_registry({"parent": parent, "acpx": acpx})
+
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
+            runtime = AgentRuntime(AgentConfig(provider="parent"))
+            result = runtime.run("hi", _provider="acpx")
+
+        assert result == "acpx reply"
+        acpx.complete.assert_called_once()
+        parent.complete.assert_not_called()
+        assert runtime.config.provider == "parent"
+        start_event = event_bus.get_events(event_type="agent.run.start")[-1]
+        complete_event = event_bus.get_events(event_type="agent.run.complete")[-1]
+        assert start_event.detail["requested_provider"] == "acpx"
+        assert complete_event.detail["provider"] == "acpx"
+
+    def test_unknown_per_call_provider_is_rejected_instead_of_silent_fallback(self):
+        parent = _make_provider("parent")
+        mock_registry = _make_registry({"parent": parent})
+
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
+            runtime = AgentRuntime(AgentConfig(provider="parent"))
+            with pytest.raises(ProviderError, match="not registered"):
+                runtime.run("hi", _provider="typo")
+
+        parent.complete.assert_not_called()
+
     def test_fallback_to_available_provider(self):
         """If configured provider unavailable, fallback to any available one."""
         primary = _make_provider("primary", available=False)

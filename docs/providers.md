@@ -322,6 +322,30 @@ only that provider in your YAML file.
 
 ---
 
+## Per-sub-agent Provider Selection
+
+Explicit `delegate_task` agents may each select a configured provider by its
+registry key. Agents without a `provider` field inherit the provider of the
+agent that delegated to them:
+
+```json
+{
+  "agents": [
+    {"name": "Implementer", "task": "Implement the change", "provider": "acpx"},
+    {"name": "Reviewer", "task": "Review the design", "provider": "openai"}
+  ]
+}
+```
+
+The children still share their parent's runtime, session budget, capability
+mode, tool policy, audit lineage, and delegation-depth limit. Provider choice
+is a per-call override and never changes the runtime's configured default, so
+independent children can run concurrently on different providers. Unknown
+provider keys fail that child explicitly; an unavailable registered provider
+uses the normal provider fallback behavior described above.
+
+---
+
 ## API Key Resolution
 
 For each provider, the API key is resolved at configuration parse time in

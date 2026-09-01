@@ -57,7 +57,7 @@ class DelegateTaskTool(BaseTool):
             "type": "array",
             "description": (
                 "Optional explicit agent definitions. Each item has a task and may "
-                "define a name, role, focus, success criteria, tool hints, and "
+                "define a name, role, focus, success criteria, provider registry key, tool hints, and "
                 "depends_on list of zero-based agent indexes. Use complementary "
                 "roles instead of giving every agent the same generic assignment. "
                 "At most 10 agents are allowed."
@@ -70,6 +70,14 @@ class DelegateTaskTool(BaseTool):
                     "role": {"type": "string"},
                     "focus": {"type": "string"},
                     "success_criteria": {"type": "string"},
+                    "provider": {
+                        "type": "string",
+                        "description": (
+                            "Optional configured provider registry key for this agent "
+                            "(for example 'acpx' or 'openai'). Omit to inherit the "
+                            "parent runtime's provider."
+                        ),
+                    },
                     "tool_hints": {"type": "array", "items": {"type": "string"}},
                     "depends_on": {"type": "array", "items": {"type": "integer"}},
                 },
@@ -116,6 +124,7 @@ class DelegateTaskTool(BaseTool):
         _depth: int = 0,
         _parent_agent_id: str = "",
         _parent_task_id: str = "",
+        _parent_provider: str = "",
         agents: list[dict] | None = None,
         strategy: str = "decompose",
         include_synthesis: bool = True,
@@ -207,6 +216,15 @@ class DelegateTaskTool(BaseTool):
                         output="",
                         error=f"agents[{index}].tool_hints must be a list of strings.",
                     )
+                raw_provider = spec.get("provider")
+                if raw_provider is not None and (
+                    not isinstance(raw_provider, str) or not raw_provider.strip()
+                ):
+                    return ToolResult(
+                        success=False,
+                        output="",
+                        error=f"agents[{index}].provider must be a non-empty string when set.",
+                    )
 
                 subtasks.append(
                     SubTask(
@@ -216,6 +234,7 @@ class DelegateTaskTool(BaseTool):
                         role=str(spec.get("role") or "").strip()[:240],
                         focus=str(spec.get("focus") or "").strip()[:1_000],
                         success_criteria=str(spec.get("success_criteria") or "").strip()[:1_000],
+                        provider=str(raw_provider or "").strip()[:128],
                         tool_hints=[hint.strip()[:80] for hint in raw_tool_hints if hint.strip()],
                         depends_on=sorted(set(raw_dependencies)),
                     )
@@ -260,6 +279,7 @@ class DelegateTaskTool(BaseTool):
             parent_agent_id=_parent_agent_id,
             parent_task_id=_parent_task_id,
             failure_policy=failure_policy,
+            default_provider=_parent_provider,
         )
         results = runner.run_all(subtasks)
 
@@ -284,6 +304,7 @@ class DelegateTaskTool(BaseTool):
             )
             lines.append(
                 f"Step {task.id} — Agent {task.name} ({task.agent_id})"
+                f"{' [provider=' + task.provider + ']' if task.provider else ''}"
                 f"{' [FAILED]' if task.status == 'error' else ''}"
                 f"{' [SKIPPED]' if task.status == 'skipped' else ''}"
                 f"{' — ' + task.role if task.role else ''}: {task.description}\n"

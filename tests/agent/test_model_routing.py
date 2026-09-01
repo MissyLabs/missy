@@ -52,6 +52,17 @@ class TestDisabled:
         runtime = _make_runtime()  # model=None, routing off
         assert runtime._route_model("x") is None
 
+    def test_provider_override_uses_that_providers_default_model(self) -> None:
+        runtime = _make_runtime(model="parent-model")
+        override_config = ProviderConfig(name="openai", model="openai-model")
+        with patch(
+            "missy.providers.registry.get_registry",
+            return_value=_registry_with_config(override_config),
+        ):
+            routed = runtime._route_model("x", provider_name="openai")
+
+        assert routed == "openai-model"
+
 
 class TestEnabledRouting:
     def _run_route(self, runtime, prompt, **kw):

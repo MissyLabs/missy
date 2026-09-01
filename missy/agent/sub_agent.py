@@ -14,7 +14,10 @@ runtime -- so it goes through identical policy/capability_mode
 enforcement and its spend is tracked by the exact same per-session
 ``CostTracker`` the parent's budget cap already checks (no separate
 cross-child budget-aggregation logic is needed; it falls out of reusing
-the parent's own session-scoped accounting). Recursion is bounded by
+the parent's own session-scoped accounting). An explicit subtask may still
+select its own provider through the runtime's per-call provider override;
+this never mutates the shared runtime configuration, so concurrent agents
+can safely use different providers. Recursion is bounded by
 :data:`MAX_SUB_AGENT_DEPTH`, threaded down from
 ``AgentRuntime.run(_delegation_depth=...)``. Independent tasks (no
 shared dependency) genuinely execute concurrently via
@@ -75,6 +78,8 @@ class SubTask:
         role: Specialist mandate injected into the agent prompt.
         focus: Perspective or problem dimension owned by this agent.
         success_criteria: Concrete standard the agent output should meet.
+        provider: Optional provider registry key for this agent. Empty means
+            inherit the parent runtime's configured provider.
         context_chars_per_dependency: Per-parent context limit for this step.
         is_synthesis: Whether this step integrates other agents' findings.
         result: Output string set after the step completes successfully.
@@ -89,6 +94,7 @@ class SubTask:
     role: str = ""
     focus: str = ""
     success_criteria: str = ""
+    provider: str = ""
     context_chars_per_dependency: int = DEFAULT_DEPENDENCY_CONTEXT_CHARS
     is_synthesis: bool = False
     agent_id: str = field(default_factory=lambda: f"subagent-{uuid.uuid4().hex[:12]}")
@@ -293,6 +299,7 @@ class SubAgentRunner:
         parent_agent_id: str = "",
         parent_task_id: str = "",
         failure_policy: str = "continue",
+        default_provider: str = "",
     ) -> None:
         if failure_policy not in FAILURE_POLICIES:
             allowed = ", ".join(sorted(FAILURE_POLICIES))
@@ -303,6 +310,7 @@ class SubAgentRunner:
         self._parent_agent_id = parent_agent_id
         self._parent_task_id = parent_task_id
         self._failure_policy = failure_policy
+        self._default_provider = default_provider
         self._semaphore = threading.Semaphore(MAX_CONCURRENT)
 
     def run_subtask(self, subtask: SubTask, context: str = "") -> str:
@@ -351,6 +359,13 @@ class SubAgentRunner:
             )
             try:
                 execution_scope = getattr(type(self._runtime), "agent_execution", None)
+                run_kwargs = {
+                    "session_id": self._session_id,
+                    "_delegation_depth": self._depth,
+                }
+                selected_provider = subtask.provider or self._default_provider
+                if selected_provider:
+                    run_kwargs["_provider"] = selected_provider
                 if callable(execution_scope):
                     with self._runtime.agent_execution(
                         agent_id=subtask.agent_id,
@@ -359,13 +374,9 @@ class SubAgentRunner:
                         parent_task_id=self._parent_task_id,
                         depth=self._depth,
                     ):
-                        result = self._runtime.run(
-                            prompt, session_id=self._session_id, _delegation_depth=self._depth
-                        )
+                        result = self._runtime.run(prompt, **run_kwargs)
                 else:
-                    result = self._runtime.run(
-                        prompt, session_id=self._session_id, _delegation_depth=self._depth
-                    )
+                    result = self._runtime.run(prompt, **run_kwargs)
                 subtask.result = result
                 subtask.status = "complete"
                 logger.info("Sub-agent %s completed step %d", subtask.agent_id, subtask.id)
