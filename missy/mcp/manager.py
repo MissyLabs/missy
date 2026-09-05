@@ -539,8 +539,17 @@ class McpManager:
                         f"injection patterns and was blocked: {warnings}"
                     )
                 result = f"[SECURITY WARNING: MCP tool output may contain injection] {result_text}"
-        except Exception:
-            logger.exception("MCP injection scan failed; blocking tool output")
+        except Exception as exc:
+            # Do not ask logging to format the traceback here.  Traceback
+            # formatting can itself import modules (for example via
+            # ``linecache``), so an unavailable or compromised import path
+            # could otherwise raise again before the fail-closed result is
+            # returned.  The exception type is enough diagnostic context and
+            # keeps this security boundary independent of traceback machinery.
+            logger.error(
+                "MCP injection scan failed; blocking tool output (%s)",
+                type(exc).__name__,
+            )
             self._emit_call_audit(
                 namespaced_name, session_id, task_id, "deny", "injection_scan_failed"
             )
