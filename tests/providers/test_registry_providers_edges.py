@@ -524,7 +524,13 @@ class TestToolCallDataclassContract:
 class TestToolResultDataclassContract:
     def test_fields_present(self):
         field_names = {f.name for f in fields(ToolResult)}
-        assert field_names == {"tool_call_id", "name", "content", "is_error"}
+        assert field_names == {
+            "tool_call_id",
+            "name",
+            "content",
+            "is_error",
+            "security_flags",
+        }
 
     def test_is_error_defaults_to_false(self):
         tr = ToolResult(tool_call_id="tc-1", name="mytool", content="output")
@@ -551,7 +557,13 @@ class TestToolResultDataclassContract:
     def test_asdict_round_trip(self):
         tr = ToolResult(tool_call_id="tc-5", name="scan", content="ok", is_error=False)
         d = asdict(tr)
-        assert d == {"tool_call_id": "tc-5", "name": "scan", "content": "ok", "is_error": False}
+        assert d == {
+            "tool_call_id": "tc-5",
+            "name": "scan",
+            "content": "ok",
+            "is_error": False,
+            "security_flags": [],
+        }
 
 
 # ===========================================================================

@@ -954,8 +954,8 @@ class TestSchedulerTaskSanitization:
         warning_calls = str(mock_logger.warning.call_args_list)
         assert "injection" not in warning_calls.lower()
 
-    def test_sanitizer_import_failure_does_not_prevent_job_execution(self):
-        """If InputSanitizer cannot be imported, _run_job still runs the job."""
+    def test_sanitizer_import_failure_prevents_unscanned_job_execution(self):
+        """If InputSanitizer is unavailable, the stored job fails closed."""
         task = "Print hello world"
         mgr, job_id = self._make_manager_with_job(task)
 
@@ -972,11 +972,10 @@ class TestSchedulerTaskSanitization:
                 side_effect=ImportError("sanitizer unavailable"),
             ),
         ):
-            # Should not raise even though the sanitizer path fails.
             mgr._run_job(job_id)
 
-        # The AgentRuntime was constructed and run was invoked — job executed.
-        assert mock_agent.run.called
+        assert not mock_agent.run.called
+        assert "could not be security-scanned" in mgr._jobs[job_id].last_error
 
     def test_injection_warning_includes_job_name(self):
         """The injection warning log message must include the job name."""
@@ -1228,8 +1227,8 @@ class TestMcpManagerCallToolInjectionScan:
 
         assert result.startswith("[MCP BLOCKED]")
 
-    def test_sanitizer_unavailable_result_passes_through(self):
-        """When InputSanitizer cannot be imported, the raw result must be returned."""
+    def test_sanitizer_unavailable_result_is_blocked(self):
+        """When InputSanitizer cannot be imported, MCP output fails closed."""
         raw = "Normal looking result with no suspicious patterns."
         mgr = self._make_manager_with_mock_client(raw)
 
@@ -1243,9 +1242,8 @@ class TestMcpManagerCallToolInjectionScan:
         with patch("builtins.__import__", side_effect=fake_import):
             result = mgr.call_tool("srv__some_tool", {})
 
-        # Whether the mock patches takes effect or not, the result must not raise
-        # and the raw content should be present.
-        assert raw in result or result == raw
+        assert result.startswith("[MCP BLOCKED]")
+        assert raw not in result
 
     def test_injection_warning_logged_for_dangerous_result(self):
         """A warning must be logged to the module logger when injection is found."""

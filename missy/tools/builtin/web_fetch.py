@@ -17,10 +17,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from missy.security.sanitizer import sanitizer as input_sanitizer
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 _MAX_RESPONSE_BYTES = 65_536  # 64 KB
 _DEFAULT_TIMEOUT = 30
+_LOW_CONFIDENCE_HTML_COMMENT_PATTERN = r"<!--(?:(?!-->)[\s\S])*-->"
+_SECURITY_BLOCK = (
+    "[SECURITY BLOCK: The fetched response body was omitted because it "
+    "contained prompt-injection-like instructions.]"
+)
+_SCAN_FAILURE_BLOCK = (
+    "[SECURITY BLOCK: The fetched response body was omitted because its "
+    "prompt-injection security scan failed.]"
+)
 
 
 class WebFetchTool(BaseTool):
@@ -98,10 +108,28 @@ class WebFetchTool(BaseTool):
                 # Truncate by character count as a close approximation.
                 content = content[:_MAX_RESPONSE_BYTES] + "\n[Response truncated]"
 
+            security_flags: list[str] = []
+            try:
+                matches = input_sanitizer.check_for_injection(content)
+                high_confidence_matches = [
+                    match for match in matches if match != _LOW_CONFIDENCE_HTML_COMMENT_PATTERN
+                ]
+                if high_confidence_matches:
+                    security_flags.append("prompt_injection")
+                    content = _SECURITY_BLOCK
+            except Exception:
+                security_flags.append("prompt_injection_scan_failed")
+                content = _SCAN_FAILURE_BLOCK
+
             status = response.status_code
             success = 200 <= status < 300
             error = f"HTTP {status}" if not success else None
-            return ToolResult(success=success, output=content, error=error)
+            return ToolResult(
+                success=success,
+                output=content,
+                error=error,
+                security_flags=security_flags,
+            )
         except Exception as exc:
             return ToolResult(success=False, output=None, error=str(exc))
 

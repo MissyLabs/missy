@@ -522,7 +522,8 @@ class McpManager:
         try:
             from missy.security.sanitizer import InputSanitizer
 
-            warnings = InputSanitizer().check_for_injection(result)
+            result_text = result if isinstance(result, str) else json.dumps(result, default=str)
+            warnings = InputSanitizer().check_for_injection(result_text)
             if warnings:
                 logger.warning(
                     "MCP tool %r returned content with injection patterns: %s",
@@ -537,9 +538,25 @@ class McpManager:
                         f"[MCP BLOCKED] Tool {namespaced_name!r} output contained "
                         f"injection patterns and was blocked: {warnings}"
                     )
-                result = f"[SECURITY WARNING: MCP tool output may contain injection] {result}"
-        except Exception:
-            logger.debug("MCP injection scan failed; tool output passed through", exc_info=True)
+                result = f"[SECURITY WARNING: MCP tool output may contain injection] {result_text}"
+        except Exception as exc:
+            # Do not ask logging to format the traceback here.  Traceback
+            # formatting can itself import modules (for example via
+            # ``linecache``), so an unavailable or compromised import path
+            # could otherwise raise again before the fail-closed result is
+            # returned.  The exception type is enough diagnostic context and
+            # keeps this security boundary independent of traceback machinery.
+            logger.error(
+                "MCP injection scan failed; blocking tool output (%s)",
+                type(exc).__name__,
+            )
+            self._emit_call_audit(
+                namespaced_name, session_id, task_id, "deny", "injection_scan_failed"
+            )
+            return (
+                f"[MCP BLOCKED] Tool {namespaced_name!r} output could not be "
+                "security-scanned for prompt injection."
+            )
 
         self._emit_call_audit(namespaced_name, session_id, task_id, "allow", "")
         return result
