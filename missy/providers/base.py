@@ -71,12 +71,15 @@ class ToolResult:
         name: The name of the tool that was executed.
         content: The result content as a string.
         is_error: ``True`` when the tool execution failed.
+        security_flags: Machine-readable security findings propagated from
+            the tool implementation to the agent runtime.
     """
 
     tool_call_id: str
     name: str
     content: str
     is_error: bool = False
+    security_flags: list[str] = field(default_factory=list)
 
 
 @dataclass

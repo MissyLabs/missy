@@ -120,7 +120,8 @@ class TestToolOutputInjectionScanning:
         ):
             result = runtime.run("calculate something")
 
-        assert result == "final answer"
+        assert result.endswith("final answer")
+        assert result.startswith("Security warning: I detected prompt-injection-like")
         # Verify the sanitizer was called with tool output
         sanitizer.check_for_injection.assert_called()
 
@@ -156,8 +157,8 @@ class TestToolOutputInjectionScanning:
         assert result == "final answer"
         sanitizer.check_for_injection.assert_called()
 
-    def test_sanitizer_none_skips_injection_check(self):
-        """When _sanitizer is None, no injection scanning occurs."""
+    def test_sanitizer_none_fails_closed(self):
+        """A missing scanner must omit tool output instead of silently passing it."""
         provider = MagicMock()
         provider.name = "fake"
         provider.is_available.return_value = True
@@ -176,7 +177,8 @@ class TestToolOutputInjectionScanning:
         ):
             result = runtime.run("calculate something")
 
-        assert result == "final answer"
+        assert result.endswith("final answer")
+        assert "could not completely security-scan" in result
 
     def test_injection_embedded_in_image_still_caught_via_vision_analyze(self):
         """FX-real-vision: the second line of defense for image-embedded
@@ -256,13 +258,68 @@ class TestToolOutputInjectionScanning:
         ):
             result = runtime.run("what does this image say")
 
-        assert result == "final answer"
+        assert result.endswith("final answer")
+        assert result.startswith("Security warning: I detected prompt-injection-like")
         assert len(captured_tool_messages) == 1
         # The real InputSanitizer (not mocked here) must have flagged the
-        # embedded instruction and prepended its warning before this tool
-        # result ever became part of the conversation the model sees.
-        assert "SECURITY WARNING" in captured_tool_messages[0]["content"]
-        assert "prompt injection" in captured_tool_messages[0]["content"]
+        # embedded instruction and quarantined the complete result before it
+        # ever became part of the conversation the model sees.
+        assert "SECURITY BLOCK" in captured_tool_messages[0]["content"]
+        assert "prompt-injection-like" in captured_tool_messages[0]["content"]
+        assert "Ignore previous instructions" not in captured_tool_messages[0]["content"]
+
+    def test_tool_security_flag_is_audited_and_forces_user_warning(self):
+        provider = MagicMock()
+        provider.name = "fake"
+        provider.is_available.return_value = True
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("browser_get_content"),
+            _make_stop_response("The visible page is ASCII art."),
+        ]
+        provider.complete.return_value = _make_stop_response()
+
+        tool = MagicMock()
+        tool.name = "browser_get_content"
+        tool_reg = MagicMock()
+        tool_reg.list_tools.return_value = ["browser_get_content"]
+        tool_reg.get.return_value = tool
+        tool_reg.execute.return_value = MagicMock(
+            success=True,
+            output="",
+            error=None,
+            security_flags=["prompt_injection"],
+        )
+
+        reg = _make_registry(provider)
+        cfg = AgentConfig(provider="fake", max_iterations=5, capability_mode="full")
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(cfg)
+        runtime._rate_limiter = None
+        runtime._memory_store = None
+        runtime._cost_tracking_enabled = False
+        runtime._context_manager = None
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch.object(runtime, "_emit_event") as emit_event,
+        ):
+            result = runtime.run("inspect the page")
+
+        assert result.startswith("Security warning: I detected prompt-injection-like")
+        assert "browser_get_content" in result
+        assert "The visible page is ASCII art." in result
+        injection_events = [
+            call
+            for call in emit_event.call_args_list
+            if call.kwargs.get("event_type") == "agent.tool.prompt_injection_detected"
+        ]
+        assert len(injection_events) == 1
+        assert injection_events[0].kwargs["result"] == "deny"
+        assert injection_events[0].kwargs["detail"]["user_warning_required"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -585,14 +585,21 @@ class SchedulerManager:
 
                 sanitizer = InputSanitizer()
                 warnings = sanitizer.check_for_injection(job.task)
-                if warnings:
-                    logger.warning(
-                        "Injection patterns detected in scheduled job %r task: %s",
-                        job.name,
-                        warnings,
-                    )
-            except Exception:
-                logger.debug("Could not run InputSanitizer on job task", exc_info=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Scheduled job {job.name!r} was not run because its prompt "
+                    "could not be security-scanned."
+                ) from exc
+            if warnings:
+                logger.warning(
+                    "Blocking scheduled job %r with injection patterns: %s",
+                    job.name,
+                    warnings,
+                )
+                raise ValueError(
+                    f"Scheduled job {job.name!r} was not run because its stored "
+                    "prompt contains prompt-injection-like instructions."
+                )
 
             agent = AgentRuntime(
                 AgentConfig(

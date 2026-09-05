@@ -68,12 +68,17 @@ class ToolResult:
             to the tool itself failing internally. Lets callers apply a
             harsher trust-score penalty for policy violations than for
             ordinary tool failures without re-parsing ``error`` text.
+        security_flags: Machine-readable security findings produced while
+            obtaining the result.  These are kept separate from ``output``
+            so the runtime can enforce and audit them even when suspicious
+            source content is hidden from the model-facing result.
     """
 
     success: bool
     output: Any
     error: str | None = None
     policy_denied: bool = False
+    security_flags: list[str] = field(default_factory=list)
 
 
 class BaseTool(ABC):

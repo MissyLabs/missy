@@ -1162,6 +1162,7 @@ class TestBrowserGetContentTool:
         mock_page = _make_mock_page()
         mock_loc = MagicMock()
         mock_loc.inner_text.return_value = "Page body text"
+        mock_loc.evaluate.return_value = "Page body text"
         mock_page.locator.return_value.first = mock_loc
 
         with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):
@@ -1174,6 +1175,7 @@ class TestBrowserGetContentTool:
         mock_page = _make_mock_page()
         mock_loc = MagicMock()
         mock_loc.inner_html.return_value = "<p>HTML content</p>"
+        mock_loc.evaluate.return_value = "HTML content"
         mock_page.locator.return_value.first = mock_loc
 
         with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):
@@ -1187,6 +1189,7 @@ class TestBrowserGetContentTool:
         long_text = "x" * 10_000
         mock_loc = MagicMock()
         mock_loc.inner_text.return_value = long_text
+        mock_loc.evaluate.return_value = long_text
         mock_page.locator.return_value.first = mock_loc
 
         with patch("missy.tools.builtin.browser_tools._page", return_value=mock_page):

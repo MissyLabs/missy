@@ -543,7 +543,8 @@ class TestMemoryInjectionStructure:
         )
         base_end = system.index("## Relevant Memory")
         assert base_end > 0  # base system comes first
-        assert system[:base_end].strip() == "Base"
+        assert system.startswith("Base")
+        assert "Untrusted Historical Context Policy" in system[:base_end]
 
     def test_multiple_memory_results_joined_with_newlines(self):
         cm = ContextManager()

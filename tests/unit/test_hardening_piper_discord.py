@@ -189,7 +189,8 @@ class TestAgentToolLoopEdgeCases:
             task_id="t1",
             user_input="what is 1+1",
         )
-        assert result == "The answer is 2."
+        assert result.endswith("The answer is 2.")
+        assert "could not completely security-scan" in result
         rt._single_turn.assert_called_once()
 
     def test_iteration_limit_fallback_failure(self) -> None:

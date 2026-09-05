@@ -19,6 +19,7 @@ Example::
 from __future__ import annotations
 
 import base64
+import codecs
 import html
 import logging
 import re
@@ -44,6 +45,15 @@ _ZERO_WIDTH_RE: re.Pattern[str] = re.compile(
     "\u2062"  # invisible times
     "\u2063"  # invisible separator
     "\u2064"  # invisible plus
+    "\u202a"  # left-to-right embedding
+    "\u202b"  # right-to-left embedding
+    "\u202c"  # pop directional formatting
+    "\u202d"  # left-to-right override
+    "\u202e"  # right-to-left override
+    "\u2066"  # left-to-right isolate
+    "\u2067"  # right-to-left isolate
+    "\u2068"  # first-strong isolate
+    "\u2069"  # pop directional isolate
     "\ufeff"  # byte-order mark / zero-width no-break space
     "\ufe0f"  # variation selector-16
     "\ufe0e"  # variation selector-15
@@ -53,6 +63,52 @@ _ZERO_WIDTH_RE: re.Pattern[str] = re.compile(
 #: Regex to find plausible base64 segments (at least 20 chars, valid charset,
 #: optional padding).  Kept short to avoid pathological backtracking.
 _BASE64_SEGMENT_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
+_HEX_SEGMENT_RE: re.Pattern[str] = re.compile(
+    r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}(?:[\s:_-]?)){10,}(?![0-9A-Fa-f])"
+)
+_ROT13_SEGMENT_RE: re.Pattern[str] = re.compile(
+    r"\brot13\s*[:=]\s*([A-Za-z][A-Za-z\s,.'\-]{19,})", re.IGNORECASE
+)
+_OBFUSCATED_KEYWORD_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(r"\b" + r"[\s._-]+".join(word) + r"\b", re.IGNORECASE), word)
+    for word in ("ignore", "disregard", "previous", "instructions", "system", "override")
+)
+_COMMON_CONFUSABLES = str.maketrans(
+    {
+        "а": "a",
+        "е": "e",
+        "і": "i",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "х": "x",
+        "у": "y",
+        "Α": "A",
+        "Β": "B",
+        "Ε": "E",
+        "Ι": "I",
+        "Κ": "K",
+        "Μ": "M",
+        "Ν": "N",
+        "Ο": "O",
+        "Ρ": "P",
+        "Τ": "T",
+        "Χ": "X",
+        "Υ": "Y",
+        "Ζ": "Z",
+        "α": "a",
+        "β": "b",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ο": "o",
+        "ρ": "p",
+        "τ": "t",
+        "χ": "x",
+        "υ": "y",
+    }
+)
+_LEET_TRANSLATION = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t"})
 
 
 def _strip_zero_width(text: str) -> str:
@@ -90,6 +146,75 @@ def _decode_base64_segments(text: str) -> str | None:
         except Exception:
             continue
     return " ".join(decoded_parts) if decoded_parts else None
+
+
+def _decode_hex_segments(text: str) -> str | None:
+    decoded_parts: list[str] = []
+    for match in _HEX_SEGMENT_RE.finditer(text):
+        compact = re.sub(r"[\s:_-]", "", match.group(0))
+        try:
+            decoded = bytes.fromhex(compact).decode("utf-8", errors="strict")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if decoded.isprintable() or any(char in decoded for char in " \n\t"):
+            decoded_parts.append(decoded)
+    return " ".join(decoded_parts) if decoded_parts else None
+
+
+def _decode_rot13_segments(text: str) -> str | None:
+    parts = [codecs.decode(match.group(1), "rot_13") for match in _ROT13_SEGMENT_RE.finditer(text)]
+    return " ".join(parts) if parts else None
+
+
+def _deobfuscation_variants(text: str) -> list[str]:
+    """Build bounded alternative representations used only for detection."""
+    variants: list[str] = []
+
+    def add(candidate: str | None) -> None:
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    add(text)
+    decoded = text
+    for _ in range(2):
+        try:
+            url_decoded = unquote(decoded)
+        except Exception:
+            logger.debug("URL-decode failed during injection check", exc_info=True)
+            url_decoded = decoded
+        try:
+            next_decoded = html.unescape(url_decoded)
+        except Exception:
+            logger.debug("HTML-unescape failed during injection check", exc_info=True)
+            next_decoded = url_decoded
+        if next_decoded == decoded:
+            break
+        add(next_decoded)
+        decoded = next_decoded
+
+    # Decode at most two nested layers. This catches ordinary nested wrappers
+    # without allowing adversarial content to cause unbounded expansion.
+    frontier = list(variants)
+    for _ in range(2):
+        next_frontier: list[str] = []
+        for candidate in frontier:
+            for decoder in (_decode_base64_segments, _decode_hex_segments, _decode_rot13_segments):
+                decoded_candidate = decoder(candidate)
+                if decoded_candidate and decoded_candidate not in variants:
+                    add(decoded_candidate)
+                    next_frontier.append(decoded_candidate)
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    for candidate in list(variants):
+        add(candidate.translate(_COMMON_CONFUSABLES))
+        add(candidate.translate(_LEET_TRANSLATION))
+        collapsed = candidate
+        for pattern, replacement in _OBFUSCATED_KEYWORD_REPLACEMENTS:
+            collapsed = pattern.sub(replacement, collapsed)
+        add(collapsed)
+    return variants
 
 
 class InputSanitizer:
@@ -199,6 +324,26 @@ class InputSanitizer:
         # --- Indirect prompt injection vectors ---
         r"when\s+you\s+(see|read|encounter)\s+this",  # Trigger-based injection
         r"(if|when)\s+the\s+user\s+asks?\s+about",  # Conditional instruction override
+        # Instruction-shaped content can avoid the familiar "ignore previous
+        # instructions" wording entirely.  Require multiple independent
+        # signals in each expression so ordinary help pages containing one
+        # imperative sentence do not trigger on their own.  These patterns
+        # cover indirect attacks that address an AI/LLM and tell it to
+        # execute a response/game, or that combine conversation look-back,
+        # exact-output control, and concealment.
+        (
+            r"\A(?=[\s\S]*\b(?:LLM|language\s+model|AI\s+assistant)\b)"
+            r"(?=[\s\S]*\b(?:follow|perform|execute|obey)\b[\s\S]{0,160}"
+            r"\b(?:instructions?|game|response)\b)"
+            r"(?=[\s\S]*\b(?:user(?:'s|’s)?|conversation|exact(?:ly)?)\b)"
+        ),
+        (
+            r"\A(?=[\s\S]*\b(?:previous|prior|recent|most\s+recent)\s+"
+            r"(?:conversation|question|response|message)\b)"
+            r"(?=[\s\S]*\b(?:say\s+only|output\s+exactly|exact\s+text)\b)"
+            r"(?=[\s\S]*\b(?:do\s+not|don't)\s+"
+            r"(?:mention|discuss|reveal|describe)\b)"
+        ),
         # --- Payload splitting / multi-turn injection ---
         r"remember\s+this\s+for\s+(later|next|future)\s+",  # Memory poisoning
         r"in\s+your\s+next\s+response\s*,?\s*(you\s+)?(must|should|will)",  # Future response control
@@ -297,39 +442,11 @@ class InputSanitizer:
             A list of pattern strings (from :attr:`INJECTION_PATTERNS`) that
             matched.  An empty list means the input appears clean.
         """
-        # Pre-process: strip zero-width chars and normalize Unicode
-        normalized = _normalize_unicode(_strip_zero_width(text))
-
         matched: list[str] = []
-        for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
-            if pattern.search(normalized):
-                matched.append(original)
-
-        # Also scan URL-decoded and HTML-entity-decoded variants to catch
-        # encoded evasion attempts (e.g. %69gnore → ignore).
-        try:
-            url_decoded = unquote(text)
-        except Exception:
-            logger.debug("URL-decode failed during injection check", exc_info=True)
-            url_decoded = text
-        try:
-            html_decoded = html.unescape(text)
-        except Exception:
-            logger.debug("HTML-unescape failed during injection check", exc_info=True)
-            html_decoded = text
-        for decoded_variant in (url_decoded, html_decoded):
-            if decoded_variant != text:
-                decoded_norm = _normalize_unicode(_strip_zero_width(decoded_variant))
-                for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
-                    if original not in matched and pattern.search(decoded_norm):
-                        matched.append(original)
-
-        # Scan decoded base64 segments for injection payloads
-        decoded_b64 = _decode_base64_segments(text)
-        if decoded_b64:
-            b64_normalized = _normalize_unicode(_strip_zero_width(decoded_b64))
+        for variant in _deobfuscation_variants(text):
+            normalized = _normalize_unicode(_strip_zero_width(variant))
             for pattern, original in zip(self._patterns, self.INJECTION_PATTERNS, strict=False):
-                if original not in matched and pattern.search(b64_normalized):
+                if original not in matched and pattern.search(normalized):
                     matched.append(original)
 
         return matched

@@ -93,8 +93,8 @@ class TestSession26InjectionPatterns:
     # --- Pattern count ---
 
     def test_total_injection_pattern_count(self) -> None:
-        """Should have 98 injection patterns after session 26 additions."""
-        assert len(InputSanitizer.INJECTION_PATTERNS) == 98
+        """Should include the 100 patterns after indirect-injection additions."""
+        assert len(InputSanitizer.INJECTION_PATTERNS) == 100
 
     def test_total_secret_pattern_count(self) -> None:
         """Should have 54 secret patterns after SR-1.10 additions

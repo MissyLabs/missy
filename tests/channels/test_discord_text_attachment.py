@@ -163,8 +163,9 @@ class TestBuildInboundAttachmentContext:
             [],
             [{"url": "https://cdn.discordapp.com/x/y/note.txt", "filename": "note.txt"}],
         )
-        assert "SECURITY WARNING" in result
-        assert "untrusted data" in result
+        assert "SECURITY BLOCK" in result
+        assert "omitted" in result
+        assert "Ignore all previous instructions" not in result
 
     @pytest.mark.asyncio
     async def test_text_download_failure_reported_inline_not_raised(self):
