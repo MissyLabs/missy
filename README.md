@@ -242,6 +242,8 @@ providers:
     model: "claude-sonnet-4-6"
     fast_model: "claude-haiku-4-5"
     premium_model: "claude-opus-4-6"
+    context_worker_provider: ""       # empty = no new provider-egress boundary
+    context_worker_model: "claude-haiku-4-5"
     timeout: 30
 
 container:                       # optional Docker sandbox

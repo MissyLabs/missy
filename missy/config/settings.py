@@ -290,6 +290,13 @@ class ProviderConfig:
             OpenAI accounts. Must be empty (equal weight 1.0 for every
             account, the original behavior) or exactly as long as
             whichever of ``api_keys``/``oauth_accounts`` is in use.
+        context_worker_provider: Registry key of the provider that should
+            analyze stored large tool output for this parent provider. Empty
+            keeps the call on the parent provider. Setting a different key is
+            an explicit operator authorization for cross-provider data egress.
+        context_worker_model: Optional model override for context-worker
+            calls. Empty uses the worker provider's ``fast_model`` when set,
+            then its primary ``model``.
     """
 
     name: str
@@ -303,6 +310,8 @@ class ProviderConfig:
     oauth_accounts: list = field(default_factory=list)  # OpenAI OAuth account names
     fast_model: str = ""  # Model for fast/simple tier (e.g. claude-haiku-4-5)
     premium_model: str = ""  # Model for premium/complex tier (e.g. claude-opus-4-6)
+    context_worker_provider: str = ""  # Empty = same provider (no new egress boundary)
+    context_worker_model: str = ""  # Empty = worker fast_model, then primary model
     requests_per_minute: int = 60  # RateLimiter RPM budget (0 = unlimited)
     tokens_per_minute: int = 100_000  # RateLimiter TPM budget (0 = unlimited)
     max_wait_seconds: float = 30.0  # Max blocking wait in RateLimiter.acquire
@@ -1042,6 +1051,8 @@ def _parse_providers(
             oauth_accounts=oauth_accounts,
             fast_model=str(raw.get("fast_model", "")),
             premium_model=str(raw.get("premium_model", "")),
+            context_worker_provider=str(raw.get("context_worker_provider", "")),
+            context_worker_model=str(raw.get("context_worker_model", "")),
             requests_per_minute=int(raw.get("requests_per_minute", 60)),
             tokens_per_minute=int(raw.get("tokens_per_minute", 100_000)),
             max_wait_seconds=float(raw.get("max_wait_seconds", 30.0)),

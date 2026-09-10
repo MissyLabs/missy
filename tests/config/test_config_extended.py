@@ -637,6 +637,23 @@ class TestSettingsEnvVarSubstitution:
         assert c.providers["anthropic"].fast_model == "claude-haiku-4-5"
         assert c.providers["anthropic"].premium_model == "claude-opus-4-6"
 
+    def test_context_worker_routing_parsed(self, tmp_path):
+        """Context-worker egress and model choices survive YAML parsing."""
+        cfg = _write_cfg(
+            tmp_path,
+            textwrap.dedent("""\
+            providers:
+              anthropic:
+                name: anthropic
+                model: claude-sonnet-4-6
+                context_worker_provider: ollama
+                context_worker_model: qwen3:8b
+            """),
+        )
+        c = load_config(str(cfg))
+        assert c.providers["anthropic"].context_worker_provider == "ollama"
+        assert c.providers["anthropic"].context_worker_model == "qwen3:8b"
+
     def test_provider_enabled_false(self, tmp_path):
         """A provider with enabled: false is loaded with enabled=False."""
         cfg = _write_cfg(

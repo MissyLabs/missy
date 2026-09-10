@@ -33,6 +33,7 @@ from missy.tools.builtin.browser_tools import (
 )
 from missy.tools.builtin.calculator import CalculatorTool
 from missy.tools.builtin.code_evolve import CodeEvolveTool
+from missy.tools.builtin.context_shunt import ContextShuntTool
 from missy.tools.builtin.delegate_task import DelegateTaskTool
 from missy.tools.builtin.desktop_tools import (
     DesktopFocusWindowTool,
@@ -139,6 +140,7 @@ __all__ = [
     "BrowserWaitTool",
     "CalculatorTool",
     "CodeEvolveTool",
+    "ContextShuntTool",
     "DelegateTaskTool",
     "DiscordLookupUserTool",
     "DiscordUploadTool",
@@ -235,6 +237,7 @@ _ALL_TOOL_CLASSES = [
     BrowserWaitTool,
     CalculatorTool,
     CodeEvolveTool,
+    ContextShuntTool,
     DelegateTaskTool,
     DiscordLookupUserTool,
     DiscordUploadTool,

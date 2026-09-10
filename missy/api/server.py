@@ -1062,6 +1062,10 @@ def _make_handler(
                     "model": str(getattr(config, "model", "") or ""),
                     "fast_model": str(getattr(config, "fast_model", "") or ""),
                     "premium_model": str(getattr(config, "premium_model", "") or ""),
+                    "context_worker_provider": str(
+                        getattr(config, "context_worker_provider", "") or ""
+                    ),
+                    "context_worker_model": str(getattr(config, "context_worker_model", "") or ""),
                     "base_url": str(getattr(config, "base_url", "") or ""),
                     "timeout": getattr(config, "timeout", None),
                     "key_rotation_strategy": str(

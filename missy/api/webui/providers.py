@@ -224,6 +224,8 @@ const EDITABLE_FIELDS = [
   {key: 'model', label: 'Model', type: 'text'},
   {key: 'fast_model', label: 'Fast model', type: 'text'},
   {key: 'premium_model', label: 'Premium model', type: 'text'},
+  {key: 'context_worker_provider', label: 'Context worker provider', type: 'text'},
+  {key: 'context_worker_model', label: 'Context worker model', type: 'text'},
   {key: 'base_url', label: 'Base URL', type: 'text'},
   {key: 'timeout', label: 'Timeout (s, 0=default)', type: 'number'},
   {key: 'requests_per_minute', label: 'Requests/min (0=unlimited)', type: 'number'},

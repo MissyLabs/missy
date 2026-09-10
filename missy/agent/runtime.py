@@ -430,7 +430,7 @@ def _rewrite_heredoc_command(
 
 # Threshold (chars) above which tool results are stored separately and replaced
 # with a compact reference.  Must be <= _MAX_TOOL_RESULT_CHARS.
-_LARGE_CONTENT_THRESHOLD = 50_000
+_LARGE_CONTENT_THRESHOLD = 16_000
 
 # SR-3.3: tools that retrieve from the memory store need a live store
 # reference and the calling session's ID, but neither is part of the
@@ -439,7 +439,9 @@ _LARGE_CONTENT_THRESHOLD = 50_000
 # would defeat per-session isolation). These are injected as private
 # (``_``-prefixed) kwargs at dispatch time, the same way SR-2.4's heredoc
 # rewrite special-cases shell_exec.
-_MEMORY_RETRIEVAL_TOOL_NAMES = frozenset({"memory_search", "memory_describe", "memory_expand"})
+_MEMORY_RETRIEVAL_TOOL_NAMES = frozenset(
+    {"memory_search", "memory_describe", "memory_expand", "context_shunt"}
+)
 
 
 @dataclass
@@ -473,7 +475,10 @@ class AgentConfig:
         "If it requires running a command, call shell_exec now. "
         "Available tools: file_read, file_write, file_delete, list_files, "
         "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
-        "provider_benchmark, delegate_task, image_generate. For still-image "
+        "provider_benchmark, context_shunt, delegate_task, image_generate. "
+        "When a tool returns a ref_* for large output, use context_shunt with "
+        "one focused question so the full corpus stays out of your context; "
+        "use memory_expand only for a small exact excerpt. For still-image "
         "creation, call image_generate; never substitute video_generate or "
         "claim that no image tool is available. Use its returned path directly; "
         "do not call file_read on a generated binary PNG. For advanced, ambiguous, or "
@@ -593,7 +598,8 @@ DISCORD_SYSTEM_PROMPT = (
     "Available tools: file_read, file_write, file_delete, list_files, "
     "shell_exec, web_fetch, calculator, self_create_tool, code_evolve, "
     "discord_upload_file, discord_lookup_user, Incus container management tools, vision tools, "
-    "memory tools (memory_search, memory_describe, memory_expand), "
+    "memory tools (memory_search, memory_describe, memory_expand), context_shunt "
+    "for compact analysis of stored ref_* output, "
     "delegate_task for multi-step sub-agent work, image_generate for still "
     "images, and the video tools video_generate and video_edit. For advanced, "
     "ambiguous, or high-impact "
@@ -3990,6 +3996,21 @@ class AgentRuntime:
             requested_session_id = tool_call.arguments.get("session_id")
             tool_args.setdefault("_session_id", requested_session_id or session_id)
 
+        if tool_call.name == "context_shunt":
+            tool_args = dict(tool_args)
+            agent_execution = self._current_agent_execution()
+            # These values form the security boundary. Assign rather than
+            # setdefault so a provider cannot smuggle model-invented private
+            # kwargs outside the advertised schema to forge session scope or
+            # select a different provider configuration/egress route.
+            tool_args["_memory_store"] = self._memory_store
+            tool_args["_session_id"] = session_id
+            tool_args["_runtime"] = self
+            tool_args["_task_id"] = task_id
+            tool_args["_parent_provider"] = str(
+                agent_execution.get("requested_provider") or self.config.provider
+            )
+
         # SR-4.2: delegate_task needs a live AgentRuntime reference (to run
         # sub-agents through the same policy/budget/audit machinery as this
         # call) plus the current session_id (so child spend aggregates
@@ -4580,7 +4601,11 @@ class AgentRuntime:
             )
             if preview_tail:
                 replacement += f"\n...{preview_tail}"
-            replacement += "\nUse memory_search or memory_expand to retrieve full content."
+            replacement += (
+                "\nUse context_shunt(item_ids=[this ref], question=...) for compact "
+                "analysis without loading the corpus into the parent context. Use "
+                "memory_expand only for a small exact excerpt."
+            )
             return replacement
         except Exception:
             logger.debug("Failed to store large content", exc_info=True)

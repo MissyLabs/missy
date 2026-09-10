@@ -20,6 +20,7 @@ ToolPolicyProfile = Literal["minimal", "coding", "messaging", "full"]
 
 MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
     "calculator",
+    "context_shunt",
     "file_read",
     "list_files",
     "web_fetch",
@@ -60,6 +61,7 @@ MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
 # DISCORD_SYSTEM_PROMPT (missy/agent/runtime.py) is updated to match.
 MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "calculator",
+    "context_shunt",
     "file_read",
     "file_write",
     "file_delete",

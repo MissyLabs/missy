@@ -228,6 +228,8 @@ block.
 | `api_keys` | list of strings | `[]` | Multiple API keys for round-robin rotation.  Takes precedence over single `api_key` when non-empty. |
 | `fast_model` | string | `""` | Model to use for quick/simple tasks (e.g. `"claude-haiku-4-5"`).  Empty string disables tier routing for fast tasks. |
 | `premium_model` | string | `""` | Model to use for complex reasoning tasks (e.g. `"claude-opus-4-6"`).  Empty string disables tier routing for premium tasks. |
+| `context_worker_provider` | string | `""` | Provider registry key used by `context_shunt` to analyze stored large outputs. Empty keeps data on the parent provider. A different value explicitly authorizes cross-provider egress. |
+| `context_worker_model` | string | `""` | Optional model override for `context_shunt`. Empty uses the worker provider's `fast_model`, then its primary `model`. |
 
 ### API Key Resolution Order
 
@@ -507,6 +509,10 @@ providers:
     # base_url: null                      # Uses SDK default
     timeout: 30
     enabled: true
+    # Analyze large outputs with a cheaper model while keeping the parent
+    # context compact. Empty provider means the same Anthropic endpoint.
+    context_worker_provider: ""
+    context_worker_model: "claude-haiku-4-5"
 
   openai:
     name: openai

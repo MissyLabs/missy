@@ -11,6 +11,7 @@ from missy.config.writer import (
     ConfigWriteError,
     set_account_weights,
     set_default_provider,
+    set_provider_field,
     set_provider_weight,
 )
 
@@ -100,6 +101,24 @@ class TestSetProviderWeight:
         set_provider_weight(str(path), "openai", 3.0)
         backup_dir = tmp_path / "config.d"
         assert not backup_dir.exists()
+
+
+class TestSetContextWorkerFields:
+    def test_persists_context_worker_provider_and_model(self, tmp_path: Path):
+        path = _write_config(tmp_path)
+
+        assert (
+            set_provider_field(str(path), "anthropic", "context_worker_provider", "ollama")
+            == "ollama"
+        )
+        assert (
+            set_provider_field(str(path), "anthropic", "context_worker_model", "qwen3:8b")
+            == "qwen3:8b"
+        )
+
+        data = yaml.safe_load(path.read_text())
+        assert data["providers"]["anthropic"]["context_worker_provider"] == "ollama"
+        assert data["providers"]["anthropic"]["context_worker_model"] == "qwen3:8b"
 
 
 class TestSetAccountWeights:

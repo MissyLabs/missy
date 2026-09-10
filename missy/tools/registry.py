@@ -347,6 +347,7 @@ class ToolRegistry:
                 output=None,
                 error=_safe_text(result.error),
                 policy_denied=result.policy_denied,
+                security_flags=list(result.security_flags),
             )
         self._emit_event(tool_name, session_id, task_id, event_result, result.error or "")
         return result
