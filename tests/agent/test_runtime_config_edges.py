@@ -465,7 +465,7 @@ class TestModuleConstants:
         assert _MAX_TOOL_RESULT_CHARS == 200_000
 
     def test_large_content_threshold_value(self):
-        assert _LARGE_CONTENT_THRESHOLD == 50_000
+        assert _LARGE_CONTENT_THRESHOLD == 16_000
 
     def test_large_content_threshold_less_than_max(self):
         assert _LARGE_CONTENT_THRESHOLD <= _MAX_TOOL_RESULT_CHARS

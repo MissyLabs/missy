@@ -95,7 +95,7 @@ def list_operator_controls(
                 "id": _CONTROL_PROVIDER_SET_FIELD,
                 "label": "Edit provider configuration",
                 "description": (
-                    "Set model, fast_model, premium_model, base_url, timeout, "
+                    "Set model tiers, context-worker routing, base_url, timeout, "
                     "requests_per_minute, or tokens_per_minute for a provider. "
                     "Never used for credentials -- use `missy providers auth` for those."
                 ),
@@ -1052,6 +1052,10 @@ def _provider_field_targets(provider_registry: ProviderRegistry | None) -> list[
                     "model": str(getattr(config, "model", "") or ""),
                     "fast_model": str(getattr(config, "fast_model", "") or ""),
                     "premium_model": str(getattr(config, "premium_model", "") or ""),
+                    "context_worker_provider": str(
+                        getattr(config, "context_worker_provider", "") or ""
+                    ),
+                    "context_worker_model": str(getattr(config, "context_worker_model", "") or ""),
                     "base_url": str(getattr(config, "base_url", "") or ""),
                     "timeout": _int_field(config, "timeout"),
                     "requests_per_minute": _int_field(config, "requests_per_minute"),

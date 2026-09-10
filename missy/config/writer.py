@@ -143,6 +143,8 @@ EDITABLE_PROVIDER_FIELDS: dict[str, str] = {
     "model": "str",
     "fast_model": "str",
     "premium_model": "str",
+    "context_worker_provider": "str",
+    "context_worker_model": "str",
     "base_url": "str",
     "timeout": "int",
     "requests_per_minute": "int",
