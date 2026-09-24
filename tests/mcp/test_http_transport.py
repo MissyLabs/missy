@@ -59,21 +59,25 @@ def _standard_handler(*, session=None):
 
 class TestHttpTransport:
     def test_connect_and_list_tools(self) -> None:
-        with patch("httpx.Client", return_value=_fake_http(_standard_handler())):
+        with patch.object(
+            McpClient, "_build_http_client", return_value=_fake_http(_standard_handler())
+        ):
             c = McpClient("remote", url="https://mcp.example.com/rpc")
             c.connect()
         assert [t["name"] for t in c._tools] == ["echo"]
         assert c.is_alive() is True
 
     def test_call_tool(self) -> None:
-        with patch("httpx.Client", return_value=_fake_http(_standard_handler())):
+        with patch.object(
+            McpClient, "_build_http_client", return_value=_fake_http(_standard_handler())
+        ):
             c = McpClient("remote", url="https://mcp.example.com/rpc")
             c.connect()
             assert c.call_tool("echo", {"msg": "x"}) == "hi"
 
     def test_session_id_captured_and_echoed(self) -> None:
         fake = _fake_http(_standard_handler(session="sess-42"))
-        with patch("httpx.Client", return_value=fake):
+        with patch.object(McpClient, "_build_http_client", return_value=fake):
             c = McpClient("remote", url="https://mcp.example.com/rpc")
             c.connect()
             c.call_tool("echo", {})
@@ -89,11 +93,11 @@ class TestHttpTransport:
     def test_auth_headers_installed_on_client(self) -> None:
         captured = {}
 
-        def fake_client_ctor(**kwargs):
-            captured.update(kwargs)
+        def fake_builder(base_headers):
+            captured["headers"] = base_headers
             return _fake_http(_standard_handler())
 
-        with patch("httpx.Client", side_effect=fake_client_ctor):
+        with patch.object(McpClient, "_build_http_client", side_effect=fake_builder):
             McpClient(
                 "remote", url="https://x/rpc", headers={"Authorization": "Bearer tok"}
             ).connect()
@@ -103,7 +107,7 @@ class TestHttpTransport:
         def handler(url, json=None, headers=None, timeout=None):
             return _resp(status=401)
 
-        with patch("httpx.Client", return_value=_fake_http(handler)):
+        with patch.object(McpClient, "_build_http_client", return_value=_fake_http(handler)):
             c = McpClient("remote", url="https://x/rpc")
             with pytest.raises(RuntimeError, match="auth failed"):
                 c.connect()
@@ -123,14 +127,14 @@ class TestHttpTransport:
                 return _resp(ct="text/event-stream", text=body)
             return _resp({"jsonrpc": "2.0", "id": rid, "result": {}})
 
-        with patch("httpx.Client", return_value=_fake_http(handler)):
+        with patch.object(McpClient, "_build_http_client", return_value=_fake_http(handler)):
             c = McpClient("remote", url="https://x/rpc")
             c.connect()  # must parse SSE bodies without error
         assert c._tools == []
 
     def test_disconnect_closes_http(self) -> None:
         fake = _fake_http(_standard_handler())
-        with patch("httpx.Client", return_value=fake):
+        with patch.object(McpClient, "_build_http_client", return_value=fake):
             c = McpClient("remote", url="https://x/rpc")
             c.connect()
             c.disconnect()
@@ -194,3 +198,98 @@ class TestManagerWiring:
                 mgr.add_server("remote", url="http://x", headers={"Authorization": "Bearer t"})
         _, kwargs = MC.call_args
         assert kwargs["headers"] == {"Authorization": "Bearer t"}
+
+
+class TestHttpTransportPolicy:
+    """SEC-01 / SEC-05: MCP HTTP goes through PolicyHTTPClient; no cleartext creds."""
+
+    def test_denied_host_raises_policy_violation(self) -> None:
+        from missy.config.settings import get_default_config
+        from missy.core.exceptions import PolicyViolationError
+        from missy.policy.engine import init_policy_engine
+
+        init_policy_engine(get_default_config())  # default_deny, nothing allowed
+        c = McpClient("remote", url="https://evil.example.net/rpc")
+        with pytest.raises(PolicyViolationError):
+            c.connect()
+
+    def test_builder_returns_policy_adapter(self) -> None:
+        from missy.mcp.client import _PolicyMcpHttp
+
+        http = McpClient("remote", url="https://x/rpc")._build_http_client({"A": "1"})
+        try:
+            assert isinstance(http, _PolicyMcpHttp)
+            assert http._client.category == "tool"
+        finally:
+            http.close()
+
+    def test_adapter_merges_base_headers(self) -> None:
+        from missy.mcp.client import _PolicyMcpHttp
+
+        adapter = _PolicyMcpHttp({"Authorization": "Bearer t"}, session_id="mcp:x")
+        adapter._client = MagicMock()
+        adapter.post("https://x/rpc", json={"a": 1}, headers={"MCP-Session-Id": "s"}, timeout=5)
+        kwargs = adapter._client.post.call_args.kwargs
+        assert kwargs["headers"] == {"Authorization": "Bearer t", "MCP-Session-Id": "s"}
+        assert kwargs["timeout"] == 5
+
+    def test_bearer_over_plain_http_refused(self) -> None:
+        c = McpClient("remote", url="http://10.0.0.5/rpc", headers={"Authorization": "Bearer t"})
+        with pytest.raises(RuntimeError, match="plain"):
+            c.connect()
+
+    def test_bearer_over_plain_http_allowed_with_opt_in(self) -> None:
+        with patch.object(
+            McpClient, "_build_http_client", return_value=_fake_http(_standard_handler())
+        ):
+            c = McpClient(
+                "remote",
+                url="http://10.0.0.5/rpc",
+                headers={"Authorization": "Bearer t"},
+                allow_insecure_auth=True,
+            )
+            c.connect()
+        assert c.is_alive()
+
+    def test_bearer_over_loopback_http_allowed(self) -> None:
+        with patch.object(
+            McpClient, "_build_http_client", return_value=_fake_http(_standard_handler())
+        ):
+            c = McpClient(
+                "remote", url="http://127.0.0.1:9000/rpc", headers={"Authorization": "Bearer t"}
+            )
+            c.connect()
+        assert c.is_alive()
+
+    def test_save_config_preserves_auth_keys(self, tmp_path) -> None:
+        import json as _json
+        import threading
+
+        from missy.mcp.manager import McpManager
+
+        cfg = tmp_path / "mcp.json"
+        cfg.write_text(
+            _json.dumps(
+                [
+                    {
+                        "name": "remote",
+                        "url": "https://x/rpc",
+                        "bearer_token": "vault://MCP_TOKEN",
+                        "allow_insecure_auth": False,
+                        "digest": "sha256:abc",
+                    }
+                ]
+            )
+        )
+        mgr = McpManager.__new__(McpManager)
+        mgr._config_path = cfg
+        mgr._lock = threading.Lock()
+        client = MagicMock()
+        client._command = None
+        client._url = "https://x/rpc"
+        mgr._clients = {"remote": client}
+        mgr._save_config()
+        saved = _json.loads(cfg.read_text())[0]
+        assert saved["bearer_token"] == "vault://MCP_TOKEN"
+        assert saved["digest"] == "sha256:abc"
+        assert saved["allow_insecure_auth"] is False

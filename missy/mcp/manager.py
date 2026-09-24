@@ -66,6 +66,13 @@ def _resolve_mcp_auth_headers(entry: dict) -> dict[str, str] | None:
     return headers or None
 
 
+def _insecure_auth_kwargs(entry: dict) -> dict[str, bool]:
+    """Return ``{"allow_insecure_auth": True}`` only when the entry opts in (SEC-05)."""
+    if isinstance(entry, dict) and entry.get("allow_insecure_auth") is True:
+        return {"allow_insecure_auth": True}
+    return {}
+
+
 class McpManager:
     """Manages MCP server connections and exposes their tools to the agent.
 
@@ -154,6 +161,7 @@ class McpManager:
                     command=entry.get("command"),
                     url=entry.get("url"),
                     headers=_resolve_mcp_auth_headers(entry),
+                    **_insecure_auth_kwargs(entry),
                 )
             except Exception as exc:
                 logger.warning("MCP: failed to connect %r: %s", name, exc)
@@ -193,6 +201,7 @@ class McpManager:
                     command=entry.get("command"),
                     url=entry.get("url"),
                     headers=_resolve_mcp_auth_headers(entry),
+                    **_insecure_auth_kwargs(entry),
                 )
                 logger.info("MCP: connected newly-configured server %r via health_check", name)
             except Exception as exc:
@@ -204,6 +213,7 @@ class McpManager:
         command: str | None = None,
         url: str | None = None,
         headers: dict[str, str] | None = None,
+        allow_insecure_auth: bool = False,
     ) -> McpClient:
         """Connect to a new MCP server and persist the config.
 
@@ -223,7 +233,13 @@ class McpManager:
             )
         if "__" in name:
             raise ValueError(f"Invalid MCP server name: {name!r} (must not contain '__')")
-        client = McpClient(name=name, command=command, url=url, headers=headers)
+        client = McpClient(
+            name=name,
+            command=command,
+            url=url,
+            headers=headers,
+            **({"allow_insecure_auth": True} if allow_insecure_auth else {}),
+        )
         client.connect()
 
         # Digest verification (Feature 3)
@@ -360,10 +376,17 @@ class McpManager:
             cmd = client._command
             url = client._url
             headers = getattr(client, "_headers", None)
+            insecure = bool(getattr(client, "_allow_insecure_auth", False))
             client.disconnect()
             with self._lock:
                 self._clients.pop(name, None)
-            self.add_server(name, command=cmd, url=url, headers=headers)
+            self.add_server(
+                name,
+                command=cmd,
+                url=url,
+                headers=headers,
+                **({"allow_insecure_auth": True} if insecure else {}),
+            )
 
     def health_check(self) -> None:
         """Restart any dead MCP servers, and connect any newly-configured ones.
@@ -646,7 +669,12 @@ class McpManager:
         # subsequent connection skips digest verification with no operator
         # signal that protection was lost. Read whatever digest currently
         # exists on disk for each server name and carry it forward.
+        # The same applies to operator-authored per-server keys
+        # (``bearer_token``/``headers``/``allow_insecure_auth``): they only
+        # ever live on disk (secrets stay as vault:// references), so every
+        # non-connection key of an existing entry is carried forward too.
         existing_digests: dict[str, str] = {}
+        existing_extra: dict[str, dict] = {}
         if self._config_path.exists():
             try:
                 existing = json.loads(self._config_path.read_text())
@@ -655,6 +683,12 @@ class McpManager:
                     entry_name = entry.get("name")
                     if digest and entry_name:
                         existing_digests[entry_name] = digest
+                    if entry_name and isinstance(entry, dict):
+                        existing_extra[entry_name] = {
+                            k: v
+                            for k, v in entry.items()
+                            if k not in {"name", "command", "url", "digest"}
+                        }
             except Exception:
                 logger.warning(
                     "MCP: could not read existing config at %s to preserve pinned "
@@ -668,6 +702,8 @@ class McpManager:
                 for name, c in self._clients.items()
             ]
         for entry in entries:
+            for key, value in existing_extra.get(entry["name"], {}).items():
+                entry.setdefault(key, value)
             digest = existing_digests.get(entry["name"])
             if digest:
                 entry["digest"] = digest

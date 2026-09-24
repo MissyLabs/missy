@@ -103,7 +103,7 @@ class TestMcpClientConnect:
             return resp
 
         fake_http.post.side_effect = _post
-        with patch("httpx.Client", return_value=fake_http):
+        with patch.object(McpClient, "_build_http_client", return_value=fake_http):
             c = McpClient(name="test", url="http://localhost:3000")
             c.connect()
         assert c.is_alive() is True
