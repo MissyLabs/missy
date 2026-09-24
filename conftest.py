@@ -60,3 +60,15 @@ def deterministic_public_dns(request):
     public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
     with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_discord_rate_governor():
+    """The Discord REST rate governor is process-wide by design (RATE-01/03);
+    reset it around each test so one test's 401/429 responses can't open the
+    circuit for unrelated tests."""
+    from missy.channels.discord.rest import rate_governor
+
+    rate_governor.reset()
+    yield
+    rate_governor.reset()

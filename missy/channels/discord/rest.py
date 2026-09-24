@@ -20,7 +20,9 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import threading
 import time
+from collections import OrderedDict, deque
 from typing import Any
 
 from missy.gateway.client import PolicyHTTPClient, create_client
@@ -53,6 +55,180 @@ def _validate_snowflake(value: str, name: str = "id") -> str:
 def _mask_mentions(s: str) -> str:
     """Redact snowflake IDs inside common mention tokens for safer logging."""
     return _MENTION_ID_RE.sub(lambda m: re.sub(r"\d+", "redacted", m.group(0)), s or "")
+
+
+#: Longest ``Retry-After`` (seconds) a single call will sleep for (RATE-01).
+#: Discord can answer a 429 with a very long Retry-After; sleeping through it
+#: pins a worker thread (and previously the whole gateway event loop) for
+#: minutes. Longer waits fail fast so the caller can surface "rate limited".
+MAX_RETRY_AFTER_SECONDS = 30.0
+
+#: Discord bans an IP (Cloudflare, ~1h) after 10,000 invalid (401/403/429)
+#: requests in 10 minutes. Stop well before that (RATE-03).
+INVALID_REQUEST_WINDOW_SECONDS = 600.0
+INVALID_REQUEST_THRESHOLD = 1000
+
+#: How long all REST calls are refused after an HTTP 401 (bad/revoked token):
+#: retrying can never succeed and only burns the invalid-request budget.
+UNAUTHORIZED_COOLDOWN_SECONDS = 600.0
+
+_MAX_TRACKED_ROUTES = 1000
+
+
+class DiscordRateLimitedError(RuntimeError):
+    """Raised instead of sleeping when Discord asks for a wait above the cap,
+    or while the invalid-request circuit is open."""
+
+
+def _header(response: Any, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except Exception:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _header_float(response: Any, name: str) -> float | None:
+    value = _header(response, name)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+class _DiscordRateGovernor:
+    """Process-wide Discord REST rate-limit state (RATE-01 / RATE-03).
+
+    Shared by every :class:`DiscordRestClient` so all accounts/threads in the
+    process see the same global pause, per-bucket exhaustion, and
+    invalid-request budget. Thread-safe.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._global_until = 0.0
+        self._circuit_until = 0.0
+        self._circuit_reason = ""
+        self._route_bucket: OrderedDict[str, str] = OrderedDict()
+        self._bucket_reset: dict[str, tuple[int, float]] = {}
+        self._invalid: deque[float] = deque()
+
+    def reset(self) -> None:
+        with self._lock:
+            self.__init__()
+
+    def wait_time(self, route: str) -> float:
+        """Seconds to wait before *route* may be called (raises if circuit open)."""
+        now = time.monotonic()
+        with self._lock:
+            if now < self._circuit_until:
+                raise DiscordRateLimitedError(
+                    f"Discord REST circuit open ({self._circuit_reason}); "
+                    f"retry in {self._circuit_until - now:.0f}s"
+                )
+            wait = max(0.0, self._global_until - now)
+            bucket = self._route_bucket.get(route)
+            if bucket is not None:
+                remaining, reset_at = self._bucket_reset.get(bucket, (1, 0.0))
+                if remaining <= 0 and reset_at > now:
+                    wait = max(wait, reset_at - now)
+        return wait
+
+    def before_request(self, route: str) -> None:
+        wait = self.wait_time(route)
+        if wait <= 0:
+            return
+        if wait > MAX_RETRY_AFTER_SECONDS:
+            raise DiscordRateLimitedError(
+                f"Discord rate limit for {route} resets in {wait:.0f}s (over the "
+                f"{MAX_RETRY_AFTER_SECONDS:.0f}s cap); not waiting"
+            )
+        time.sleep(wait)
+
+    def after_response(self, route: str, response: Any) -> None:
+        status = getattr(response, "status_code", None)
+        if not isinstance(status, int):
+            return
+        now = time.monotonic()
+        opened: str | None = None
+        with self._lock:
+            bucket = _header(response, "X-RateLimit-Bucket")
+            remaining = _header_float(response, "X-RateLimit-Remaining")
+            reset_after = _header_float(response, "X-RateLimit-Reset-After")
+            if bucket:
+                self._route_bucket[route] = bucket
+                self._route_bucket.move_to_end(route)
+                while len(self._route_bucket) > _MAX_TRACKED_ROUTES:
+                    old_route, old_bucket = self._route_bucket.popitem(last=False)
+                    if old_bucket not in self._route_bucket.values():
+                        self._bucket_reset.pop(old_bucket, None)
+                if remaining is not None and reset_after is not None:
+                    self._bucket_reset[bucket] = (int(remaining), now + reset_after)
+            if status == 429:
+                is_global = (_header(response, "X-RateLimit-Global") or "").lower() == "true" or (
+                    _header(response, "X-RateLimit-Scope") == "global"
+                )
+                retry_after = _header_float(response, "Retry-After") or 1.0
+                if is_global:
+                    self._global_until = max(self._global_until, now + retry_after)
+            if status in (401, 403, 429) and _header(response, "X-RateLimit-Scope") != "shared":
+                self._invalid.append(now)
+            while self._invalid and now - self._invalid[0] > INVALID_REQUEST_WINDOW_SECONDS:
+                self._invalid.popleft()
+            if status == 401 and now >= self._circuit_until:
+                self._circuit_until = now + UNAUTHORIZED_COOLDOWN_SECONDS
+                self._circuit_reason = "HTTP 401: bot token rejected"
+                opened = self._circuit_reason
+            elif len(self._invalid) >= INVALID_REQUEST_THRESHOLD and now >= self._circuit_until:
+                self._circuit_until = self._invalid[0] + INVALID_REQUEST_WINDOW_SECONDS
+                self._circuit_reason = (
+                    f"{len(self._invalid)} invalid requests in "
+                    f"{INVALID_REQUEST_WINDOW_SECONDS:.0f}s"
+                )
+                opened = self._circuit_reason
+        if opened:
+            logger.error("Discord REST circuit opened: %s", opened)
+            try:
+                from missy.core.events import AuditEvent, event_bus
+
+                event_bus.publish(
+                    AuditEvent.now(
+                        session_id="discord",
+                        task_id="rest",
+                        event_type="discord.rest.circuit_open",
+                        category="network",
+                        result="deny",
+                        detail={"reason": opened},
+                    )
+                )
+            except Exception:
+                logger.debug("Could not publish circuit_open audit event", exc_info=True)
+
+
+#: The process-wide governor instance.
+rate_governor = _DiscordRateGovernor()
+
+
+def _route_key(method: str, url: str) -> str:
+    return f"{method.upper()} {url.split('?', 1)[0]}"
+
+
+def _retry_after_delay(response: Any) -> float | None:
+    """Parse Retry-After; raise if it exceeds :data:`MAX_RETRY_AFTER_SECONDS`."""
+    delay = _header_float(response, "Retry-After")
+    if delay is None:
+        return None
+    if delay > MAX_RETRY_AFTER_SECONDS:
+        raise DiscordRateLimitedError(
+            f"Discord asked to retry after {delay:.0f}s (over the "
+            f"{MAX_RETRY_AFTER_SECONDS:.0f}s cap); giving up on this request"
+        )
+    return delay
 
 
 class DiscordRestClient:
@@ -124,8 +300,11 @@ class DiscordRestClient:
         """
         attempt_count = len(self._RETRY_BACKOFFS) + 1
         response = None
+        route = _route_key(method, url)
         for attempt in range(attempt_count):
+            rate_governor.before_request(route)
             response = getattr(self._http, method)(url, **kwargs)
+            rate_governor.after_response(route, response)
             if response.status_code not in self._RETRY_STATUSES:
                 return response
             if attempt >= len(self._RETRY_BACKOFFS):
@@ -133,12 +312,7 @@ class DiscordRestClient:
 
             delay: float | None = None
             if response.status_code == 429:
-                ra = response.headers.get("Retry-After") if hasattr(response, "headers") else None
-                if ra:
-                    try:
-                        delay = float(ra)
-                    except Exception:
-                        delay = None
+                delay = _retry_after_delay(response)
             if delay is None:
                 delay = self._RETRY_BACKOFFS[attempt]
 
@@ -265,24 +439,18 @@ class DiscordRestClient:
             except Exception:
                 logger.exception("Discord send_message final failure logging failed")
 
+        route = _route_key("post", url)
         for attempt in range(attempt_count):
             response = None
             try:
+                rate_governor.before_request(route)
                 response = self._http.post(url, headers=self._headers(), json=body)
+                rate_governor.after_response(route, response)
 
                 if response.status_code in retry_statuses:
                     delay: float | None = None
                     if response.status_code == 429:
-                        ra = (
-                            response.headers.get("Retry-After")
-                            if hasattr(response, "headers")
-                            else None
-                        )
-                        if ra:
-                            try:
-                                delay = float(ra)
-                            except Exception:
-                                delay = None
+                        delay = _retry_after_delay(response)
 
                     # Exhaustion check must happen regardless of where
                     # *delay* came from. Previously this was nested inside
@@ -321,6 +489,10 @@ class DiscordRestClient:
                     raise RuntimeError(f"Discord send_message missing id in response: {payload!r}")
                 return payload
 
+            except DiscordRateLimitedError as exc:
+                # Retrying can't help within the cap -- fail fast (RATE-01).
+                _log_final_failure(response=response, exc=exc, attempt_index=attempt + 1)
+                raise
             except Exception as exc:
                 if attempt >= len(backoffs):
                     _log_final_failure(response=response, exc=exc, attempt_index=attempt_count)
@@ -368,7 +540,10 @@ class DiscordRestClient:
         with path.open("rb") as fh:
             files = {"file": (path.name, fh, mime)}
             data = {"content": caption} if caption else {}
+            route = _route_key("post", url)
+            rate_governor.before_request(route)
             response = self._http.post(url, headers=headers, files=files, data=data, timeout=60)
+            rate_governor.after_response(route, response)
         response.raise_for_status()
         return response.json()
 
@@ -415,11 +590,12 @@ class DiscordRestClient:
             channel_id: The channel snowflake ID.
         """
         _validate_snowflake(channel_id, "channel_id")
+        url = f"{BASE}/channels/{channel_id}/typing"
+        route = _route_key("post", url)
         try:
-            self._http.post(
-                f"{BASE}/channels/{channel_id}/typing",
-                headers=self._headers(),
-            )
+            rate_governor.before_request(route)
+            response = self._http.post(url, headers=self._headers())
+            rate_governor.after_response(route, response)
         except Exception as exc:
             logger.debug("typing indicator failed for %s: %s", channel_id, exc)
 
