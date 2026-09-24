@@ -3289,6 +3289,15 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
+            # SCHED-04: daily retention pass (internal job, not in jobs.json).
+            from missy.config.settings import load_config as _load_config_only
+            from missy.scheduler.maintenance import register_maintenance_job
+
+            _cfg_path = str(Path(ctx.obj["config_path"]).expanduser())
+            register_maintenance_job(
+                scheduler_manager._scheduler,  # noqa: SLF001
+                lambda: _load_config_only(_cfg_path),
+            )
             console.print(
                 f"[green]Scheduler started[/] ({len(scheduler_manager.list_jobs())} job(s) loaded)"
             )
