@@ -376,7 +376,7 @@ class McpManager:
             cmd = client._command
             url = client._url
             headers = getattr(client, "_headers", None)
-            insecure = bool(getattr(client, "_allow_insecure_auth", False))
+            insecure = getattr(client, "_allow_insecure_auth", False) is True
             client.disconnect()
             with self._lock:
                 self._clients.pop(name, None)
