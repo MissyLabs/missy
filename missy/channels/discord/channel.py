@@ -1592,14 +1592,22 @@ class DiscordChannel(BaseChannel):
             return False
 
         # Role allowlist check. The Gateway's message `member` object
-        # carries the author's role IDs (snowflakes); allowed_roles is
-        # documented and configured as role *names*, so the IDs are
-        # resolved via a cached guild role lookup before comparing.
-        if guild_policy.allowed_roles:
+        # carries the author's role IDs (snowflakes). SEC-02: role IDs are
+        # the only unforgeable identity -- role *names* aren't unique, so
+        # anyone able to create a role could copy an allowlisted name. When
+        # allowed_role_ids is configured it's authoritative and names are
+        # ignored; legacy name-only configs still work (resolved via a
+        # cached guild role lookup) but are flagged by `missy security scan`.
+        role_ids_allow = list(getattr(guild_policy, "allowed_role_ids", None) or [])
+        if role_ids_allow or guild_policy.allowed_roles:
             member = data.get("member") or {}
-            member_role_ids = member.get("roles") or []
-            member_role_names = self._resolve_role_names(guild_id, member_role_ids)
-            if not member_role_names & set(guild_policy.allowed_roles):
+            member_role_ids = [str(r) for r in (member.get("roles") or [])]
+            if role_ids_allow:
+                role_ok = bool(set(member_role_ids) & set(role_ids_allow))
+            else:
+                member_role_names = self._resolve_role_names(guild_id, member_role_ids)
+                role_ok = bool(member_role_names & set(guild_policy.allowed_roles))
+            if not role_ok:
                 self._emit_audit(
                     "discord.channel.allowlist_denied",
                     "deny",

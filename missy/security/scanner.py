@@ -1016,6 +1016,36 @@ class SecurityScanner:
                     )
                 )
 
+            # SEC-043: credentials over cleartext HTTP (SEC-05)
+            url = str(server.get("url") or "")
+            has_creds = bool(server.get("bearer_token") or server.get("headers"))
+            if has_creds and url.lower().startswith("http://"):
+                from urllib.parse import urlparse
+
+                host = (urlparse(url).hostname or "").lower()
+                loopback = host in {"localhost", "::1"} or host.startswith("127.")
+                if not loopback:
+                    allowed = server.get("allow_insecure_auth") is True
+                    self._add(
+                        Finding(
+                            id="SEC-043",
+                            title=f"MCP server '{name}' sends credentials over plain HTTP",
+                            description=(
+                                f"MCP server '{name}' ({url}) is configured with a bearer "
+                                "token/credential headers on a non-loopback http:// URL. "
+                                + (
+                                    "allow_insecure_auth is set, so they are sent in cleartext."
+                                    if allowed
+                                    else "Missy refuses to connect until this is fixed."
+                                )
+                            ),
+                            severity=Severity.HIGH if allowed else Severity.MEDIUM,
+                            category="mcp",
+                            recommendation="Serve the MCP endpoint over https://.",
+                            details={"server": name, "url": url},
+                        )
+                    )
+
     # ------------------------------------------------------------------
     # Check: tool permissions (SEC-050 .. SEC-051)
     # ------------------------------------------------------------------
@@ -1474,6 +1504,32 @@ class SecurityScanner:
                     ),
                 )
             )
+
+        # SEC-095: Discord role allowlists by name (SEC-02)
+        discord_cfg = getattr(self.config, "discord", None) if self.config else None
+        for account in getattr(discord_cfg, "accounts", None) or []:
+            for guild_id, policy in (getattr(account, "guild_policies", None) or {}).items():
+                names = list(getattr(policy, "allowed_roles", None) or [])
+                ids = list(getattr(policy, "allowed_role_ids", None) or [])
+                if names and not ids:
+                    self._add(
+                        Finding(
+                            id="SEC-095",
+                            title=f"Discord guild {guild_id} allowlists roles by name",
+                            description=(
+                                "allowed_roles matches role names, which are not "
+                                "unique: anyone able to create a role in that guild "
+                                f"can create one named {names[0]!r} and pass the check."
+                            ),
+                            severity=Severity.MEDIUM,
+                            category="config",
+                            recommendation=(
+                                "Replace allowed_roles with allowed_role_ids (role "
+                                "snowflakes: Server Settings -> Roles -> Copy Role ID)."
+                            ),
+                            details={"guild_id": str(guild_id), "role_names": names},
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Utility
