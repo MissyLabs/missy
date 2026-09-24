@@ -14,6 +14,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+#: Default database location (read at construction time so tests can
+#: redirect it away from the operator's real memory).
+DEFAULT_DB_PATH = "~/.missy/memory.db"
+
 
 @dataclass
 class ConversationTurn:
@@ -263,8 +267,8 @@ class SQLiteMemoryStore:
         results = store.search("Hello")
     """
 
-    def __init__(self, db_path: str = "~/.missy/memory.db") -> None:
-        self._path = Path(db_path).expanduser()
+    def __init__(self, db_path: str | None = None) -> None:
+        self._path = Path(db_path or DEFAULT_DB_PATH).expanduser()
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._local = threading.local()
         self._init_db()

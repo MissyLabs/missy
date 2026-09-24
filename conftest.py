@@ -104,3 +104,17 @@ def _isolate_trust_store(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(trust_mod, "DEFAULT_TRUST_PATH", str(store))
     monkeypatch.setattr(trust_mod, "_SHARED", {})
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory_db(tmp_path_factory, monkeypatch):
+    """Never let tests read/write the operator's real ~/.missy/memory.db.
+
+    Every AgentRuntime builds a default SQLiteMemoryStore; before this the
+    suite wrote turns into the real database, and with RATE-04's
+    cross-process SleeptimeWorker lock parallel workers also contended for
+    one real lock file.
+    """
+    db = tmp_path_factory.mktemp("memory") / "memory.db"
+    monkeypatch.setattr("missy.memory.sqlite_store.DEFAULT_DB_PATH", str(db))
+    yield

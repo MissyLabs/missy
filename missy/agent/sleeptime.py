@@ -44,6 +44,7 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -210,7 +211,52 @@ class SleeptimeWorker:
         self._processing = False
         self._stats = SleeptimeStats()
         self._owner_key: str | None = None
+        self._owner_lock_fd: int | None = None
         self._abort_cycle = False
+
+    def _acquire_process_lock(self, key: str) -> bool:
+        """Claim the cross-process owner lock for a file-backed store (RATE-04).
+
+        The in-process owner registry can't see a second process (e.g. an
+        interactive ``missy run`` alongside the gateway) processing the same
+        memory.db -- the multi-worker condition behind the issue.md quota
+        incident. A non-blocking ``flock`` on ``<db>.sleeptime.lock`` makes
+        ownership exclusive across processes; it's released on :meth:`stop`
+        or process exit.
+        """
+        if not key.startswith("sqlite:"):
+            return True
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - non-POSIX
+            return True
+        lock_path = key[len("sqlite:") :] + ".sleeptime.lock"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            logger.debug("SleeptimeWorker: cannot open %s; skipping lock", lock_path)
+            return True
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self._owner_lock_fd = fd
+        return True
+
+    def _release_process_lock(self) -> None:
+        fd = self._owner_lock_fd
+        self._owner_lock_fd = None
+        if fd is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
     def _memory_store_key(self) -> str:
         store = self._memory_store
@@ -250,6 +296,12 @@ class SleeptimeWorker:
                 logger.warning(
                     "SleeptimeWorker owner already exists for %s; refusing duplicate.", key
                 )
+                return False
+            if owner is None and not self._acquire_process_lock(key):
+                logger.warning(
+                    "SleeptimeWorker: another process already owns %s; not starting.", key
+                )
+                self._publish_start_refused(key)
                 return False
             self._owners[key] = self
             self._owner_key = key
@@ -295,7 +347,23 @@ class SleeptimeWorker:
                 if self._owners.get(self._owner_key) is self:
                     del self._owners[self._owner_key]
             self._owner_key = None
+        self._release_process_lock()
         logger.debug("SleeptimeWorker stopped.")
+
+    def _publish_start_refused(self, key: str) -> None:
+        with contextlib.suppress(Exception):
+            from missy.core.events import AuditEvent, event_bus
+
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="",
+                    task_id="",
+                    event_type="sleeptime.start_refused",
+                    category="provider",
+                    result="deny",
+                    detail={"store": key, "reason": "owned by another process"},
+                )
+            )
 
     def record_activity(self) -> None:
         """Reset the idle timer.

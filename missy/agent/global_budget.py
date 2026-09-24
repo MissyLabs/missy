@@ -142,7 +142,7 @@ class GlobalBudget:
                     session_id="",
                     task_id="",
                     event_type="budget.global.corrupt",
-                    category="budget",
+                    category="provider",
                     result="deny",
                     detail={"path": str(self._path), "reason": reason},
                 )
