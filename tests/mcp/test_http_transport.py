@@ -203,12 +203,14 @@ class TestManagerWiring:
 class TestHttpTransportPolicy:
     """SEC-01 / SEC-05: MCP HTTP goes through PolicyHTTPClient; no cleartext creds."""
 
-    def test_denied_host_raises_policy_violation(self) -> None:
+    def test_denied_host_raises_policy_violation(self, monkeypatch) -> None:
         from missy.config.settings import get_default_config
         from missy.core.exceptions import PolicyViolationError
-        from missy.policy.engine import init_policy_engine
+        from missy.policy import engine as engine_mod
 
-        init_policy_engine(get_default_config())  # default_deny, nothing allowed
+        # Restore the process-global engine afterwards (monkeypatch undo).
+        monkeypatch.setattr(engine_mod, "_engine", engine_mod._engine)
+        engine_mod.init_policy_engine(get_default_config())  # default_deny
         c = McpClient("remote", url="https://evil.example.net/rpc")
         with pytest.raises(PolicyViolationError):
             c.connect()

@@ -177,7 +177,7 @@ class TestWebFetchHeaderSanitization:
         mock_resp.status_code = 200
 
         mock_client = MagicMock()
-        mock_client.get.return_value = mock_resp
+        mock_client.get_capped.return_value = mock_resp
 
         blocked_headers = {
             "Host": "evil.com",
@@ -194,7 +194,7 @@ class TestWebFetchHeaderSanitization:
             tool.execute(url="https://example.com", headers=blocked_headers)
 
         # Get should be called without any headers (all blocked)
-        call_args = mock_client.get.call_args
+        call_args = mock_client.get_capped.call_args
         assert "headers" not in (call_args.kwargs or {})
 
     def test_mixed_blocked_and_safe_headers(self):
@@ -207,7 +207,7 @@ class TestWebFetchHeaderSanitization:
         mock_resp.status_code = 200
 
         mock_client = MagicMock()
-        mock_client.get.return_value = mock_resp
+        mock_client.get_capped.return_value = mock_resp
 
         headers = {
             "Accept": "application/json",
@@ -218,7 +218,7 @@ class TestWebFetchHeaderSanitization:
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             tool.execute(url="https://example.com", headers=headers)
 
-        call_args = mock_client.get.call_args
+        call_args = mock_client.get_capped.call_args
         passed_headers = call_args.kwargs.get("headers", {})
         assert "Accept" in passed_headers
         assert "X-Custom" in passed_headers
@@ -234,7 +234,7 @@ class TestWebFetchHeaderSanitization:
         mock_resp.status_code = 200
 
         mock_client = MagicMock()
-        mock_client.get.return_value = mock_resp
+        mock_client.get_capped.return_value = mock_resp
 
         headers = {
             "AUTHORIZATION": "Bearer secret",
@@ -245,7 +245,7 @@ class TestWebFetchHeaderSanitization:
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             tool.execute(url="https://example.com", headers=headers)
 
-        call_args = mock_client.get.call_args
+        call_args = mock_client.get_capped.call_args
         assert "headers" not in (call_args.kwargs or {})
 
 

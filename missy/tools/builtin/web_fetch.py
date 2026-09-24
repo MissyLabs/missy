@@ -92,8 +92,11 @@ class WebFetchTool(BaseTool):
         """
         try:
             from missy.gateway.client import create_client
+            from missy.tools.base import current_tool_context
 
-            http = create_client(session_id="web_fetch_tool", task_id="fetch", timeout=timeout)
+            # DGAP-02: attribute the request audit event to the calling
+            # session (was a fixed "web_fetch_tool" id for every fetch).
+            session_id, task_id = current_tool_context()
             request_kwargs: dict[str, Any] = {}
             if headers:
                 safe_headers = {
@@ -102,11 +105,21 @@ class WebFetchTool(BaseTool):
                 if safe_headers:
                     request_kwargs["headers"] = safe_headers
 
-            response = http.get(url, **request_kwargs)
+            # PERF-02: stream at most the kept prefix and always close the
+            # client (it previously leaked its connection pool and buffered
+            # up to 50 MB only to keep 64 KB).
+            http = create_client(
+                session_id=session_id or "web_fetch_tool",
+                task_id=task_id or "fetch",
+                timeout=timeout,
+            )
+            try:
+                response = http.get_capped(url, _MAX_RESPONSE_BYTES, **request_kwargs)
+            finally:
+                http.close()
             content = response.text
-            if len(content.encode("utf-8", errors="replace")) > _MAX_RESPONSE_BYTES:
-                # Truncate by character count as a close approximation.
-                content = content[:_MAX_RESPONSE_BYTES] + "\n[Response truncated]"
+            if getattr(response, "truncated", False) is True:
+                content += "\n[Response truncated]"
 
             security_flags: list[str] = []
             try:

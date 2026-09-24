@@ -48,7 +48,7 @@ def _mock_http_client(*, text: str = "ok", status_code: int = 200) -> MagicMock:
     resp.text = text
     resp.status_code = status_code
     client = MagicMock()
-    client.get.return_value = resp
+    client.get_capped.return_value = resp
     return client
 
 
@@ -538,7 +538,7 @@ class TestWebFetchSSRF:
     def _scheme_blocked_client(self, scheme: str) -> MagicMock:
         """Return a mock client whose .get() raises ValueError for disallowed schemes."""
         client = MagicMock()
-        client.get.side_effect = ValueError(
+        client.get_capped.side_effect = ValueError(
             f"Scheme '{scheme}' is not permitted by the network policy"
         )
         return client
@@ -582,7 +582,7 @@ class TestWebFetchSSRF:
     def test_ssrf_to_169_254_link_local_blocked(self):
         """169.254.x.x is the AWS IMDS range; requests there should be blocked."""
         client = MagicMock()
-        client.get.side_effect = PermissionError(
+        client.get_capped.side_effect = PermissionError(
             "Host 169.254.169.254 is blocked by network policy"
         )
         with patch("missy.gateway.client.create_client", return_value=client):
@@ -592,7 +592,7 @@ class TestWebFetchSSRF:
 
     def test_ssrf_to_localhost_blocked(self):
         client = MagicMock()
-        client.get.side_effect = PermissionError("Host localhost is not in allow-list")
+        client.get_capped.side_effect = PermissionError("Host localhost is not in allow-list")
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="http://localhost:8080/admin")
         assert result.success is False
@@ -600,7 +600,7 @@ class TestWebFetchSSRF:
 
     def test_ssrf_to_ipv6_loopback_blocked(self):
         client = MagicMock()
-        client.get.side_effect = PermissionError("Host ::1 is not in allow-list")
+        client.get_capped.side_effect = PermissionError("Host ::1 is not in allow-list")
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="http://[::1]/admin")
         assert result.success is False
@@ -616,13 +616,13 @@ class TestWebFetchSSRF:
         resp.text = "auth ok"
         resp.status_code = 200
         client = MagicMock()
-        client.get.return_value = resp
+        client.get_capped.return_value = resp
 
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="http://admin:secret@internal.example.com/")
 
         # Tool should have passed the URL directly to the HTTP client.
-        call_url = client.get.call_args[0][0]
+        call_url = client.get_capped.call_args[0][0]
         assert call_url == "http://admin:secret@internal.example.com/"
         assert result.success is True
 
@@ -631,7 +631,7 @@ class TestWebFetchSSRF:
         resp.text = "page"
         resp.status_code = 200
         client = MagicMock()
-        client.get.return_value = resp
+        client.get_capped.return_value = resp
 
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="https://example.com/page#section")
@@ -644,7 +644,7 @@ class TestWebFetchSSRF:
         resp.text = "resolved"
         resp.status_code = 200
         client = MagicMock()
-        client.get.return_value = resp
+        client.get_capped.return_value = resp
 
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="https://example.com/safe/../../../etc/passwd")
@@ -703,7 +703,7 @@ class TestEmptyRequiredParameters:
     def test_web_fetch_empty_url_raises_or_errors(self):
         """An empty URL string must produce a clean failure."""
         client = MagicMock()
-        client.get.side_effect = ValueError("Invalid URL ''")
+        client.get_capped.side_effect = ValueError("Invalid URL ''")
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="")
         assert result.success is False
@@ -711,7 +711,7 @@ class TestEmptyRequiredParameters:
 
     def test_web_fetch_whitespace_only_url_errors(self):
         client = MagicMock()
-        client.get.side_effect = ValueError("Invalid URL '   '")
+        client.get_capped.side_effect = ValueError("Invalid URL '   '")
         with patch("missy.gateway.client.create_client", return_value=client):
             result = WebFetchTool().execute(url="   ")
         assert result.success is False
@@ -812,7 +812,7 @@ class TestTypeConfusion:
         """timeout must be an int; a string value must not crash the tool."""
         client = MagicMock()
         # create_client will receive the raw value; it may raise TypeError.
-        client.get.side_effect = TypeError("timeout must be an integer")
+        client.get_capped.side_effect = TypeError("timeout must be an integer")
         with patch("missy.gateway.client.create_client", return_value=client) as mock_cc:
             mock_cc.side_effect = TypeError("timeout must be an integer")
             result = WebFetchTool().execute(url="https://example.com", timeout="thirty")  # type: ignore[arg-type]
