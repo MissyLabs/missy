@@ -118,3 +118,14 @@ def _isolate_memory_db(tmp_path_factory, monkeypatch):
     db = tmp_path_factory.mktemp("memory") / "memory.db"
     monkeypatch.setattr("missy.memory.sqlite_store.DEFAULT_DB_PATH", str(db))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_desktop_config_cache():
+    """PERF-01's config cache is keyed by file mtime; tests that patch
+    load_config must not see a previous test's cached object."""
+    from missy.tools.builtin import _desktop_shared
+
+    _desktop_shared.clear_config_cache()
+    yield
+    _desktop_shared.clear_config_cache()

@@ -19,8 +19,13 @@ import threading
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+_config_cache_lock = threading.Lock()
+_config_cache: tuple[tuple[str, int, int], Any] | None = None
 
 
 def load_missy_config():
@@ -30,15 +35,37 @@ def load_missy_config():
     default precedence as the CLI (see ``missy/cli/main.py``'s
     ``DEFAULT_CONFIG``). Returns ``None`` on any failure (missing file,
     invalid YAML) so callers can fail closed rather than raise.
+
+    PERF-01: the parsed config (a full YAML parse plus ``vault://``
+    decryption of every provider key) is cached by the file's
+    ``(path, mtime_ns, size)``; any edit invalidates it, so hot-reload
+    semantics are unchanged while repeated desktop/OBS/VTube calls no longer
+    re-parse and re-decrypt on every call.
     """
+    global _config_cache
     try:
         from missy.config.settings import load_config
 
-        path = os.environ.get("MISSY_CONFIG", "~/.missy/config.yaml")
-        return load_config(str(Path(path).expanduser()))
+        path = str(Path(os.environ.get("MISSY_CONFIG", "~/.missy/config.yaml")).expanduser())
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size)
+        with _config_cache_lock:
+            if _config_cache is not None and _config_cache[0] == key:
+                return _config_cache[1]
+        cfg = load_config(path)
+        with _config_cache_lock:
+            _config_cache = (key, cfg)
+        return cfg
     except Exception:
         logger.debug("desktop/obs/vtube tools: could not load Missy config", exc_info=True)
         return None
+
+
+def clear_config_cache() -> None:
+    """Drop the cached config (tests / explicit reload)."""
+    global _config_cache
+    with _config_cache_lock:
+        _config_cache = None
 
 
 def require_approval(action: str, reason: str, risk: str = "high") -> str | None:
