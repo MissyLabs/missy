@@ -38,57 +38,91 @@ AUDIT_FILTER_KEYS = (
 )
 
 
+#: Most audit lines one browser request will parse (PERF-03). Deep history
+#: beyond this is reported with ``total_is_estimate``.
+MAX_AUDIT_SCAN_LINES = 20_000
+
+
 def query_audit_events(
     params: dict[str, Any],
     *,
     bus: EventBus = event_bus,
 ) -> dict[str, Any]:
-    """Return redacted, filtered, paginated audit events for API responses."""
+    """Return redacted, filtered, paginated audit events for API responses.
+
+    Scans newest-first across the active *and rotated* audit logs (DGAP-03)
+    plus the in-process event bus, redacting each record before matching (so
+    a free-text ``q`` can't probe raw secret values) and stopping once
+    ``offset + limit`` matches are found or :data:`MAX_AUDIT_SCAN_LINES`
+    lines were read (PERF-03). ``total``/``facets`` then describe the scanned
+    window and ``total_is_estimate`` is ``True``.
+    """
     limit = _bounded_int(params.get("limit"), default=50, minimum=1, maximum=500)
     offset = _bounded_int(params.get("offset"), default=0, minimum=0, maximum=100_000)
-    scan_limit = max((limit + offset) * 10, 200)
+    wanted = offset + limit
 
-    memory_events = [event_to_record(event) for event in bus.get_events()]
+    memory_events = [redact_audit_value(event_to_record(event)) for event in bus.get_events()]
+    matched: list[dict[str, Any]] = []
+    seen: set[str] = set()
     source = "memory"
+    exhausted = True
+    scanned = 0
     try:
         from missy.observability.audit_logger import get_audit_logger
 
-        file_events = get_audit_logger().get_recent_events(limit=scan_limit)
-        # The process-wide logger may be reconfigured while more than one
-        # API/config lifecycle is winding down. Never let a successful file
-        # read hide current-process events that were synchronously published
-        # to the authoritative event bus but landed in a just-rotated path.
-        # Deduplicate on the common AuditEvent fields because persisted rows
-        # also carry chain/signature metadata absent from the in-memory form.
-        events = list(file_events)
-        seen = {_audit_identity(event) for event in file_events}
-        for event in memory_events:
-            identity = _audit_identity(event)
-            if identity not in seen:
-                events.append(event)
-                seen.add(identity)
-        events.sort(key=lambda event: str(event.get("timestamp") or ""))
-        events = events[-scan_limit:]
+        logger_obj = get_audit_logger()
         source = "file+memory"
+        exhausted = False
+        lines = logger_obj.iter_lines_newest_first(MAX_AUDIT_SCAN_LINES + 1)
+        for line in lines:
+            scanned += 1
+            if scanned > MAX_AUDIT_SCAN_LINES:
+                break
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            redacted = redact_audit_value(record)
+            identity = _audit_identity(redacted)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if audit_record_matches(redacted, params):
+                matched.append(redacted)
+                if len(matched) >= wanted and not params.get("full_count"):
+                    break
+        else:
+            exhausted = True
     except Exception:
-        events = memory_events[-scan_limit:]
+        source = "memory"
+        exhausted = True
 
-    redacted = [redact_audit_value(event) for event in events]
-    matched = [event for event in redacted if audit_record_matches(event, params)]
-    newest_first = list(reversed(matched))
+    # Events published in-process but not (yet) visible in the file -- e.g.
+    # landed in a just-rotated path -- still appear.
+    for event in memory_events:
+        identity = _audit_identity(event)
+        if identity not in seen and audit_record_matches(event, params):
+            seen.add(identity)
+            matched.append(event)
+
+    newest_first = sorted(matched, key=lambda e: str(e.get("timestamp") or ""), reverse=True)
     page = newest_first[offset : offset + limit]
     with_ids = [add_audit_event_id(event) for event in page]
 
     return {
         "events": with_ids,
         "count": len(with_ids),
-        "total": len(matched),
+        "total": len(newest_first),
+        "total_is_estimate": not exhausted,
+        "scanned_lines": min(scanned, MAX_AUDIT_SCAN_LINES),
         "limit": limit,
         "offset": offset,
-        "has_more": offset + limit < len(matched),
+        "has_more": (offset + limit < len(newest_first)) or not exhausted,
         "source": source,
         "filters": {key: params[key] for key in AUDIT_FILTER_KEYS if params.get(key)},
-        "facets": build_audit_facets(matched),
+        "facets": build_audit_facets(newest_first),
     }
 
 
