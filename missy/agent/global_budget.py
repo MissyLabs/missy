@@ -98,13 +98,65 @@ class GlobalBudget:
             os.close(fd)
 
     def _load(self) -> dict:
+        """Read the persisted record. Caller holds the cross-process lock.
+
+        A missing file is a fresh budget. A file that exists but can't be
+        read or parsed must NOT silently reset spend to zero (BUDGET-01:
+        that was fail-open -- any corruption re-granted the whole ceiling).
+        It is quarantined to ``<path>.corrupt`` and the current period is
+        treated as fully spent until an operator runs a reset.
+        """
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except (OSError, ValueError, TypeError):
-            pass
-        return {}
+            raw = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            return self._fail_closed(f"unreadable: {exc}")
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            return self._fail_closed(f"invalid JSON: {exc}")
+        if not isinstance(data, dict):
+            return self._fail_closed("not a JSON object")
+        spent = data.get("spent", 0.0)
+        if isinstance(spent, bool) or not isinstance(spent, (int, float)) or spent < 0:
+            return self._fail_closed(f"invalid spent value {spent!r}")
+        return data
+
+    def _fail_closed(self, reason: str) -> dict:
+        corrupt = self._path.with_name(self._path.name + ".corrupt")
+        with contextlib.suppress(OSError):
+            os.replace(self._path, corrupt)
+        logger.error(
+            "GlobalBudget: %s is %s; quarantined to %s and treating this period as "
+            "fully spent (fail closed). Run `missy budget reset` after checking it.",
+            self._path,
+            reason,
+            corrupt,
+        )
+        with contextlib.suppress(Exception):
+            from missy.core.events import AuditEvent, event_bus
+
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="",
+                    task_id="",
+                    event_type="budget.global.corrupt",
+                    category="budget",
+                    result="deny",
+                    detail={"path": str(self._path), "reason": reason},
+                )
+            )
+        record = {
+            "period": self.period,
+            "key": _period_key(self.period, datetime.now(UTC)),
+            "spent": float(self.max_spend_usd),
+            "alerted": True,
+        }
+        # Persist the at-cap state so the next read doesn't see "no file"
+        # and re-grant the ceiling.
+        self._save(record)
+        return record
 
     def _save(self, data: dict) -> None:
         dir_path = os.path.dirname(self._path)

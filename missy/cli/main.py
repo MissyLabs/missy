@@ -379,6 +379,57 @@ def _agent_tool_policy_kwargs(
     }
 
 
+def _install_global_budget(cfg: Any, *, announce: bool = False) -> None:
+    """Install (or re-install) the process-wide global spend ceiling (BUDGET-01).
+
+    Must run before anything in the process can spend: every entry point that
+    constructs an AgentRuntime calls this first, and ``gateway start`` calls it
+    before starting proactive triggers or the scheduler (and again on config
+    hot-reload). ``global_max_spend_usd <= 0`` installs a disabled budget, so
+    turning the cap off via hot reload actually takes effect.
+    """
+    try:
+        from missy.agent.global_budget import init_global_budget
+
+        raw_max = getattr(cfg, "global_max_spend_usd", 0.0)
+        gmax = float(raw_max) if isinstance(raw_max, (int, float)) else 0.0
+        raw_period = getattr(cfg, "global_budget_period", "total")
+        period = raw_period if isinstance(raw_period, str) and raw_period else "total"
+        init_global_budget(
+            max(0.0, gmax),
+            period=period,
+            alert_fn=lambda msg: console.print(f"[yellow]BUDGET ALERT:[/] {msg}"),
+        )
+        if announce and gmax > 0:
+            console.print(f"[green]Global budget[/] ${gmax:.2f} ({period})")
+    except Exception as exc:
+        logger.warning("Global budget init error: %s", exc, exc_info=True)
+
+
+def _agent_feature_kwargs(cfg: Any) -> dict[str, Any]:
+    """Return AgentConfig keyword args for the ``features:`` config section (GAP-02).
+
+    Only real bool/int values are honored, so a missing section (or a test
+    double) falls back to AgentConfig's own off-by-default values.
+    """
+    features = getattr(cfg, "features", None)
+    kwargs: dict[str, Any] = {}
+    for flag in (
+        "graph_memory_enabled",
+        "semantic_memory_enabled",
+        "prompt_patch_proposals_enabled",
+        "model_routing_enabled",
+        "condenser_pipeline_enabled",
+    ):
+        value = getattr(features, flag, None)
+        if isinstance(value, bool):
+            kwargs[flag] = value
+    min_messages = getattr(features, "condenser_min_messages", None)
+    if isinstance(min_messages, int) and not isinstance(min_messages, bool) and min_messages > 0:
+        kwargs["condenser_min_messages"] = min_messages
+    return kwargs
+
+
 def _resolve_provider_name(cfg: Any, explicit: str | None = None) -> str:
     """Resolve which provider registry key a new AgentConfig should use.
 
@@ -916,11 +967,13 @@ def ask(
     # Resolve provider.
     provider_name = _resolve_provider_name(cfg, provider)
 
+    _install_global_budget(cfg)
     agent_cfg = AgentConfig(
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
 
@@ -992,11 +1045,13 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
 
     provider_name = _resolve_provider_name(cfg, provider)
 
+    _install_global_budget(cfg)
     agent_cfg = AgentConfig(
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
@@ -3052,6 +3107,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # Populated below only when a proactive-trigger AgentRuntime is actually
     # constructed; used by the config hot-reload callback further down to
     # propagate a changed max_spend_usd to this runtime too.
+    # Global budget ceiling (F19 / BUDGET-01). Installed before proactive
+    # triggers and the scheduler start, so no background run can spend
+    # before the process-wide cap exists.
+    _install_global_budget(cfg, announce=True)
+
     _proactive_runtime = None
     try:
         if hasattr(cfg, "proactive") and cfg.proactive.enabled and cfg.proactive.triggers:
@@ -3085,6 +3145,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     provider=_provider_name,
                     max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                     **_agent_tool_policy_kwargs(cfg),
+                    **_agent_feature_kwargs(cfg),
                 )
                 _runtime = AgentRuntime(_agent_cfg)
                 _proactive_runtime = _runtime
@@ -3124,6 +3185,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         sleeptime_enabled=bool(getattr(getattr(cfg, "sleeptime", None), "enabled", False)),
         sleeptime_provider=(getattr(getattr(cfg, "sleeptime", None), "provider", "") or None),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     _agent = AgentRuntime(_agent_cfg)
 
@@ -3135,6 +3197,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         mcp_approval_gate=approval_gate,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
 
@@ -3219,6 +3282,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             scheduler_manager = SchedulerManager(
                 default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
+                default_feature_kwargs=_agent_feature_kwargs(cfg),
                 max_jobs=getattr(cfg.scheduling, "max_jobs", 0),
                 default_active_hours=getattr(cfg.scheduling, "active_hours", ""),
                 misfire_grace_seconds=getattr(cfg.scheduling, "misfire_grace_seconds", 300),
@@ -3233,26 +3297,6 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     except Exception as _sched_exc:
         console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
         logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
-
-    # Global budget ceiling (F19). Install the process-wide cross-session
-    # spend cap from config so every session/job/proactive run records into
-    # (and is bounded by) one shared total. No-op when global_max_spend_usd<=0.
-    try:
-        from missy.agent.global_budget import init_global_budget
-
-        _gmax = float(getattr(cfg, "global_max_spend_usd", 0.0) or 0.0)
-        if _gmax > 0:
-            init_global_budget(
-                _gmax,
-                period=str(getattr(cfg, "global_budget_period", "total") or "total"),
-                alert_fn=lambda msg: console.print(f"[yellow]BUDGET ALERT:[/] {msg}"),
-            )
-            console.print(
-                f"[green]Global budget[/] ${_gmax:.2f} "
-                f"({getattr(cfg, 'global_budget_period', 'total')})"
-            )
-    except Exception as _gb_exc:
-        logger.warning("Global budget init error: %s", _gb_exc, exc_info=True)
 
     # Heartbeat (F06). HeartbeatRunner (missy/agent/heartbeat.py) — periodic
     # HEARTBEAT.md-driven synthetic agent invocation with active-hours gating
@@ -3324,6 +3368,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
     def _apply_config_and_refresh_runtimes(new_cfg: Any) -> None:
         _apply_config(new_cfg)
+        # BUDGET-01: global_max_spend_usd / global_budget_period edits take
+        # effect on the running gateway, not only after a restart.
+        _install_global_budget(new_cfg)
         new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
         _agent.config.max_spend_usd = new_max_spend
         _discord_agent.config.max_spend_usd = new_max_spend
@@ -3406,6 +3453,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 capability_mode="safe-chat",
                 max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 **_agent_tool_policy_kwargs(cfg),
+                **_agent_feature_kwargs(cfg),
             )
             _voice_safe_chat_agent = AgentRuntime(_voice_safe_chat_agent_cfg)
             voice_channel.start(_agent, safe_chat_agent_runtime=_voice_safe_chat_agent)
@@ -4494,10 +4542,12 @@ def recover(
 
         cfg = _load_subsystems(ctx.obj["config_path"])
         provider_name = _resolve_provider_name(cfg, provider)
+        _install_global_budget(cfg)
         agent_cfg = AgentConfig(
             provider=provider_name,
             max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
             **_agent_tool_policy_kwargs(cfg),
+            **_agent_feature_kwargs(cfg),
         )
         agent = AgentRuntime(agent_cfg)
         with console.status(f"[bold cyan]Resuming {resume_id[:12]}...[/]", spinner="dots"):
@@ -7187,10 +7237,12 @@ def api_start(
         logger.debug("Memory store unavailable: %s", _mem_exc)
         memory_store = None
 
+    _install_global_budget(cfg)
     agent_config = AgentConfig(
         provider=_resolve_provider_name(cfg, provider),
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     runtime = AgentRuntime(agent_config)
 
