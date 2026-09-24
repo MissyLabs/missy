@@ -465,12 +465,22 @@ class TestCleanup:
         store.cleanup()
         assert store.is_healthy
 
-    def test_cleanup_does_not_alter_in_memory_cache(self):
+    def test_cleanup_prunes_only_expired_cached_turns(self):
+        """DATA-03: turns retention deleted must not resurface via fallback."""
         primary = _healthy()
         store = ResilientMemoryStore(primary)
+        recent = _turn(ts=datetime.now(UTC))
+        store._cache["s1"] = [_turn(), recent]  # _turn() default is old
+        store._cache["s2"] = [_turn()]
+        store.cleanup(older_than_days=30)
+        assert store._cache["s1"] == [recent]
+        assert "s2" not in store._cache
+
+    def test_cleanup_dry_run_leaves_cache(self):
+        store = ResilientMemoryStore(_healthy())
         store._cache["s1"] = [_turn()]
-        store.cleanup()
-        assert "s1" in store._cache  # cleanup must not touch cache
+        store.cleanup(dry_run=True)
+        assert "s1" in store._cache
 
     def test_cleanup_zero_age_threshold(self):
         primary = _healthy()
