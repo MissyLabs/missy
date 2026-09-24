@@ -5615,8 +5615,16 @@ def devices_list(ctx: click.Context) -> None:
 @click.option(
     "--node-id", default=None, help="Node ID to approve (omit to list pending and prompt)."
 )
+@click.option(
+    "--mode",
+    "policy_mode",
+    type=click.Choice(["full", "safe-chat", "muted"]),
+    default=None,
+    help="Capability mode to grant. Network pairing requests start as safe-chat; "
+    "pass --mode full to grant full access.",
+)
 @click.pass_context
-def devices_pair(ctx: click.Context, node_id: str | None) -> None:
+def devices_pair(ctx: click.Context, node_id: str | None, policy_mode: str | None) -> None:
     """Approve a pending edge node pairing request.
 
     If --node-id is omitted, lists pending nodes and prompts for selection.
@@ -5644,8 +5652,10 @@ def devices_pair(ctx: click.Context, node_id: str | None) -> None:
         node_id = pending[idx].node_id
 
     try:
-        token = mgr.approve_pairing(node_id)
-        _print_success(f"Node [bold]{node_id[:8]}[/] approved.")
+        token = mgr.approve_pairing(node_id, policy_mode=policy_mode)
+        approved = reg.get_node(node_id)
+        mode = getattr(approved, "policy_mode", policy_mode) or "full"
+        _print_success(f"Node [bold]{node_id[:8]}[/] approved (mode: {mode}).")
         console.print(f"[bold yellow]Auth token (shown once):[/] [green]{token}[/]")
     except Exception as exc:
         _print_error(f"Failed to approve node: {exc}")

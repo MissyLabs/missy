@@ -82,3 +82,13 @@ def _isolate_prompt_patch_store(tmp_path_factory, monkeypatch):
     store = tmp_path_factory.mktemp("patches") / "patches.json"
     monkeypatch.setattr("missy.agent.prompt_patches.DEFAULT_STORE_PATH", str(store))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_voice_pairing_rate_limits():
+    """SEC-03's per-IP pair-request budget is process-wide; isolate tests."""
+    from missy.channels.voice.pairing import PairingManager
+
+    PairingManager._requests_by_ip.clear()
+    yield
+    PairingManager._requests_by_ip.clear()
