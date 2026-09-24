@@ -71,6 +71,9 @@ class ProviderRegistry:
         # can be re-enabled without a restart) but is excluded from
         # get_available() and refused by set_default().
         self._runtime_disabled: set[str] = set()
+        # config.default_provider this registry was built from (DATA-05), so a
+        # reload only re-seeds the default when the config value changed.
+        self._config_default_provider: str = ""
         self._effective_provider_hosts: tuple[str, ...] = ()
         self._availability_cache: dict[str, tuple[bool, float]] = {}
         self._availability_inflight: dict[str, threading.Event] = {}
@@ -273,6 +276,39 @@ class ProviderRegistry:
                 raise ValueError(f"Provider {name!r} is not available or its probe timed out.")
             self._default_name = name
         logger.info("Default provider set to %r.", name)
+
+    def adopt_runtime_state(self, previous: ProviderRegistry) -> None:
+        """Carry live runtime state over from *previous* on a config reload (DATA-05).
+
+        Rebuilding every provider on each hot reload silently reset state
+        operators and the rate limiter rely on: token/request buckets refilled
+        (a fresh burst right after any config touch), per-account
+        round-robin health/backoff reset (a known-bad account was retried at
+        once), Web TUI runtime disables were undone, and a
+        ``missy providers switch`` default was lost. A provider whose config is
+        unchanged keeps its live instance; runtime-disabled names and the
+        runtime default carry over while they still exist.
+        """
+        with previous._lock:
+            prev_providers = dict(previous._providers)
+            prev_configs = dict(previous._provider_configs)
+            prev_keys = dict(previous._key_indices)
+            prev_disabled = set(previous._runtime_disabled)
+            prev_default = previous._default_name
+        with self._lock:
+            for name, config in list(self._provider_configs.items()):
+                old = prev_providers.get(name)
+                if old is not None and prev_configs.get(name) == config:
+                    self._providers[name] = old
+                    if name in prev_keys:
+                        self._key_indices[name] = prev_keys[name]
+            self._runtime_disabled |= {n for n in prev_disabled if n in self._providers}
+            if (
+                prev_default
+                and prev_default in self._providers
+                and prev_default not in self._runtime_disabled
+            ):
+                self._default_name = prev_default
 
     def get_default_name(self) -> str | None:
         """Return the name of the current default provider, or ``None``."""
@@ -660,6 +696,11 @@ def init_registry(config: MissyConfig) -> ProviderRegistry:
     """
     global _registry
     registry = ProviderRegistry.from_config(config)
+    registry._config_default_provider = str(getattr(config, "default_provider", "") or "")
+    with _lock:
+        previous = _registry
+    if previous is not None:
+        registry.adopt_runtime_state(previous)
     with _lock:
         _registry = registry
     return registry
