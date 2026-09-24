@@ -1265,12 +1265,14 @@ def _make_handler(
             try:
                 # PERF-04: read backwards from the end instead of streaming
                 # the whole (possibly very large) log on every poll.
+                from pathlib import Path as _Path
+
                 from missy.observability.audit_logger import _reverse_lines
 
                 tail: deque[str] = deque(maxlen=lines)
-                from pathlib import Path as _Path
-
-                for line in _reverse_lines(_Path(log_path)):
+                for index, line in enumerate(_reverse_lines(_Path(log_path))):
+                    if index == 0 and not line:
+                        continue  # the file's trailing newline
                     tail.appendleft(line)
                     if len(tail) >= lines:
                         break
