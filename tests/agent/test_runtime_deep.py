@@ -3865,9 +3865,7 @@ class TestExecuteToolMissingRequiredParams:
 
 
 class TestSleeptimeWiring:
-    """SR-4.1: SleeptimeWorker is constructed+started at __init__ time
-    exactly as its own module docstring documents (operator-confirmed:
-    enabled by default, matching SleeptimeConfig.enabled=True), with
+    """SleeptimeWorker is explicitly enabled only for its owner runtime, with
     record_activity() called on every real entry point and a real
     shutdown() path to stop the daemon thread."""
 
@@ -3875,7 +3873,7 @@ class TestSleeptimeWiring:
         provider = _make_provider()
         registry = _make_registry({"fake": provider})
         with patch("missy.agent.runtime.get_registry", return_value=registry):
-            rt = AgentRuntime(AgentConfig(provider="fake"))
+            rt = AgentRuntime(AgentConfig(provider="fake", sleeptime_enabled=True))
         return rt, provider
 
     def _registry_patch(self, provider):
@@ -3957,6 +3955,33 @@ class TestSleeptimeWiring:
             assert rt._sleeptime._memory_store is rt._memory_store
         finally:
             rt.shutdown()
+
+    def test_background_completion_has_scope_budget_and_cost_accounting(self):
+        provider = _make_provider()
+        provider.current_account_name.return_value = "claude-subscription"
+        response = _make_stop_response("summary")
+        provider.complete.return_value = response
+        registry = _make_registry({"acpx": provider})
+        rt = object.__new__(AgentRuntime)
+        rt._check_budget = MagicMock()
+        rt._record_cost = MagicMock()
+
+        with patch("missy.agent.runtime.get_registry", return_value=registry):
+            result = rt._run_sleeptime_completion(
+                "acpx", [], session_id="session-1", task_id="sleeptime-summary:1"
+            )
+
+        assert result is response
+        provider.complete.assert_called_once_with(
+            [], session_id="session-1", task_id="sleeptime-summary:1"
+        )
+        assert rt._check_budget.call_count == 2
+        rt._record_cost.assert_called_once_with(
+            response,
+            session_id="session-1",
+            provider_name="acpx",
+            account_name="claude-subscription",
+        )
 
     def test_conftest_fixture_prevents_thread_accumulation_across_tests(self):
         """Regression guard for the real thread-leak this checkpoint's

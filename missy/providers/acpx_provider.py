@@ -6,22 +6,16 @@ Despite the module name (kept for backward-compat with existing
 tool-specific validation run's headline finding, it spawns
 ``acp_bridge.mjs`` (a minimal, purpose-built Node.js client using the
 official ``@agentclientprotocol/sdk`` package) which talks the real
-Agent Client Protocol directly to ``@zed-industries/claude-agent-acp``.
+Agent Client Protocol directly to ``@agentclientprotocol/claude-agent-acp``.
 
-Why the bypass: acpx's own CLI only forwards ``model``/``allowedTools``/
-``maxTurns`` into the ACP ``session/new`` request. It has no flag for
-two fields the underlying agent genuinely supports at the protocol
-level -- ``_meta.systemPrompt`` (a real system-role prompt channel) and
-``_meta.disableBuiltInTools`` (which actually removes the delegate's own
-native Read/Write/Bash/etc. tools from its tool list, rather than
-exposing them and denying every call after the fact via ``--deny-all``).
-Without a genuine system-role channel, Missy's delegation envelope had
-to be smuggled as plain text inside a single user-role message -- which
-the delegate sometimes correctly flagged, from its own safety
-standpoint, as a jailbreak/identity-override attempt against itself
-(the "over-refusal spiral"). See ``acp_bridge.mjs`` for the full
-protocol-level rationale and ``AcpxProvider._run_acpx`` for the
-before/after reproduction numbers.
+Why the direct bridge remains: modern acpx (validated at 0.19.2) now
+exposes system-prompt, no-tools, filesystem, terminal, cancellation, and
+strict-NDJSON controls. Missy nevertheless needs only a single temporary
+turn and owns stricter process-group cleanup and audit boundaries, so the
+small bridge avoids the CLI's persistent-session/queue-owner layer while
+using the same current ACP SDK and Claude adapter range. It sends
+``_meta.systemPrompt`` through the genuine system channel and
+``_meta.disableBuiltInTools`` to remove the delegate's native tools.
 
 Tool Calling
 ~~~~~~~~~~~~
@@ -48,9 +42,8 @@ passed via the Agent Client Protocol, so this provider implements a
 This makes all 44+ Missy tools available through this delegate across
 Discord, CLI, webhook, or any other channel.
 
-Requires Node.js on ``PATH`` (``acp_bridge.mjs`` runs via ``npx
-@zed-industries/claude-agent-acp@latest``, fetched on demand -- no
-global install needed).
+Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the Claude adapter
+range validated by acpx 0.19.x, ``@agentclientprotocol/claude-agent-acp@^0.76.0``).
 
 Configure in ``config.yaml``::
 
@@ -104,15 +97,14 @@ _MAX_TIMEOUT_SECONDS = 600
 # `--allowed-tools ""` + `--non-interactive-permissions deny` +
 # `--deny-all` -- the last of these was the one actually proven (via
 # black-box ACP JSON-RPC transcript inspection against
-# acpx@0.3.1 + @zed-industries/claude-agent-acp@0.23.1) to make every
+# the Claude ACP adapter) to make every
 # native-tool permission request come back `{"outcome": "selected",
 # "optionId": "reject"}`. That mechanism exposed the delegate's native
 # tools and then denied every call after the fact.
 #
-# 6th tool-specific validation run: `--deny-all` is superseded by
+# `--deny-all` is superseded here by
 # `_meta.disableBuiltInTools: true` (see acp_bridge.mjs), a field the
-# underlying agent genuinely supports at the protocol level but which
-# acpx's own CLI never exposed. This removes the delegate's native tools
+# underlying agent genuinely supports at the protocol level. This removes the delegate's native tools
 # from its own tool list entirely, rather than exposing-then-denying --
 # strictly stronger (the delegate never sees a tool to reach for, and
 # never sees a stream of denial events to react to) and the mechanism
@@ -124,6 +116,21 @@ _MAX_TIMEOUT_SECONDS = 600
 # `acpx` binary. See the module docstring and `acp_bridge.mjs` itself for
 # the full rationale.
 _ACP_BRIDGE_SCRIPT_PATH = Path(__file__).resolve().parent / "acp_bridge.mjs"
+_ACTIVE_PROCESSES_LOCK = threading.Lock()
+_ACTIVE_PROCESSES: dict[subprocess.Popen, str] = {}
+
+
+def cancel_sleeptime_processes() -> int:
+    """Kill ACPX process groups launched by a SleeptimeWorker thread."""
+    with _ACTIVE_PROCESSES_LOCK:
+        processes = [
+            proc
+            for proc, thread_name in _ACTIVE_PROCESSES.items()
+            if thread_name == "missy-sleeptime"
+        ]
+    for proc in processes:
+        _kill_process_group(proc)
+    return len(processes)
 
 
 # ---------------------------------------------------------------------------
@@ -943,6 +950,8 @@ def _run_subprocess_with_group_kill(
         cwd=cwd,
         start_new_session=True,
     )
+    with _ACTIVE_PROCESSES_LOCK:
+        _ACTIVE_PROCESSES[proc] = threading.current_thread().name
     try:
         stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -952,6 +961,9 @@ def _run_subprocess_with_group_kill(
         with contextlib.suppress(Exception):
             proc.communicate(timeout=5)
         raise
+    finally:
+        with _ACTIVE_PROCESSES_LOCK:
+            _ACTIVE_PROCESSES.pop(proc, None)
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
@@ -966,7 +978,7 @@ class AcpxProvider(BaseProvider):
     Each completion call spawns ``node acp_bridge.mjs`` (see that file),
     passing the request as JSON on stdin and reading NDJSON events back
     from stdout. The bridge itself talks real ACP JSON-RPC to
-    ``@zed-industries/claude-agent-acp`` via ``npx``, with the delegate's
+    ``@agentclientprotocol/claude-agent-acp`` via ``npx``, with the delegate's
     own built-in tools disabled (``_meta.disableBuiltInTools``) and
     Missy's delegation envelope delivered through a genuine system-role
     channel (``_meta.systemPrompt``) rather than smuggled into a single
@@ -1025,7 +1037,7 @@ class AcpxProvider(BaseProvider):
 
         Verifies ``node`` is on ``PATH`` and ``acp_bridge.mjs`` exists
         alongside this module. Does not attempt a live ``npx`` fetch of
-        ``@zed-industries/claude-agent-acp`` here (that happens lazily on
+        ``@agentclientprotocol/claude-agent-acp`` here (that happens lazily on
         first real call, same as acpx's own CLI did) -- this check is
         about whether the bridge mechanism itself is runnable, not
         network reachability.
@@ -1079,13 +1091,20 @@ class AcpxProvider(BaseProvider):
         system_text, non_system_messages = _split_system_messages(messages)
         prompt = self._build_prompt(non_system_messages)
 
-        content, _raw_stdout = self._run_acpx(
-            prompt,
-            system_prompt=system_text,
-            session_id=session_id,
-            task_id=task_id,
-            cwd=cwd,
-        )
+        estimated_tokens = self._estimate_tokens(messages, system_text)
+        reservation = self._acquire_rate_limit(estimated_tokens, reconcile=True)
+
+        try:
+            content, raw_stdout = self._run_acpx(
+                prompt,
+                system_prompt=system_text,
+                session_id=session_id,
+                task_id=task_id,
+                cwd=cwd,
+            )
+        except Exception:
+            self._cancel_rate_limit_reservation(reservation)
+            raise
         content, leaked = _strip_leaked_transcript_markers(content)
 
         if leaked and not content.strip():
@@ -1097,6 +1116,7 @@ class AcpxProvider(BaseProvider):
             self._emit_event(
                 session_id, task_id, "error", "response was entirely a fabricated transcript"
             )
+            self._cancel_rate_limit_reservation(reservation)
             raise ProviderError(
                 "acpx delegate response contained only a fabricated transcript "
                 "continuation (leaked [User]:/[Assistant]:/[Tool result for ...]: marker) with no "
@@ -1105,13 +1125,15 @@ class AcpxProvider(BaseProvider):
 
         self._emit_event(session_id, task_id, "allow", "completion successful")
 
-        return CompletionResponse(
+        response = CompletionResponse(
             content=content,
             model=self._agent,
             provider=self.name,
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            raw={},
+            usage=self._parse_usage(raw_stdout),
+            raw={"usage": self._parse_usage_details(raw_stdout)},
         )
+        self._record_rate_limit_usage(response, estimated_tokens, reservation=reservation)
+        return response
 
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to text-based tool descriptions.
@@ -1170,8 +1192,6 @@ class AcpxProvider(BaseProvider):
             :class:`~missy.providers.base.ToolCall` instances parsed
             from ``<tool_call>`` blocks in the agent's text response.
         """
-        self._acquire_rate_limit()
-
         # Build the versioned delegation envelope (FX-A/FX-D): explicit
         # planning-for-Missy framing, disabled-built-in-tools statement,
         # and a prohibition on fabricating additional conversation turns.
@@ -1187,6 +1207,8 @@ class AcpxProvider(BaseProvider):
         augmented_system = _render_delegation_envelope(effective_system, tool_instructions)
 
         current_prompt = self._build_prompt(non_system_messages)
+        estimated_tokens = self._estimate_tokens(messages, augmented_system)
+        reservation = self._acquire_rate_limit(estimated_tokens, reconcile=True)
 
         # Run the bridge with the envelope delivered via the genuine
         # system-role channel (_meta.systemPrompt) and the delegate's own
@@ -1195,7 +1217,17 @@ class AcpxProvider(BaseProvider):
         # tool, retry once" case (FX-A residual, now historical): the
         # delegate never sees a native tool to reach for in the first
         # place, so a single call is sufficient.
-        raw_content, _raw_stdout = self._run_acpx(current_prompt, system_prompt=augmented_system)
+        try:
+            raw_content, raw_stdout = self._run_acpx(current_prompt, system_prompt=augmented_system)
+        except Exception:
+            self._cancel_rate_limit_reservation(reservation)
+            raise
+        usage = self._parse_usage(raw_stdout)
+        raw_usage = self._parse_usage_details(raw_stdout)
+
+        def _finish(response: CompletionResponse) -> CompletionResponse:
+            self._record_rate_limit_usage(response, estimated_tokens, reservation=reservation)
+            return response
 
         # Defensively cut off any fabricated transcript continuation
         # before parsing tool calls, so a leaked "[Assistant]:" marker
@@ -1210,6 +1242,7 @@ class AcpxProvider(BaseProvider):
                 # a fabricated transcript continuation with no legitimate
                 # content before it.
                 self._emit_event("", "", "error", "response was entirely a fabricated transcript")
+                self._cancel_rate_limit_reservation(reservation)
                 raise ProviderError(
                     "acpx delegate response contained only a fabricated transcript "
                     "continuation (leaked [User]:/[Assistant]:/[Tool result for ...]: marker) with no "
@@ -1230,27 +1263,31 @@ class AcpxProvider(BaseProvider):
             if valid_calls:
                 self._emit_event("", "", "allow", f"tool_calls: {len(valid_calls)}")
 
-                return CompletionResponse(
-                    content=remaining_text,
-                    model=self._agent,
-                    provider=self.name,
-                    usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                    raw={"raw_response": raw_content},
-                    tool_calls=valid_calls,
-                    finish_reason="tool_calls",
+                return _finish(
+                    CompletionResponse(
+                        content=remaining_text,
+                        model=self._agent,
+                        provider=self.name,
+                        usage=usage,
+                        raw={"raw_response": raw_content, "usage": raw_usage},
+                        tool_calls=valid_calls,
+                        finish_reason="tool_calls",
+                    )
                 )
 
         # No tool calls — regular text response
         self._emit_event("", "", "allow", "completion successful")
 
-        return CompletionResponse(
-            content=raw_content,
-            model=self._agent,
-            provider=self.name,
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            raw={},
-            tool_calls=[],
-            finish_reason="stop",
+        return _finish(
+            CompletionResponse(
+                content=raw_content,
+                model=self._agent,
+                provider=self.name,
+                usage=usage,
+                raw={"usage": raw_usage},
+                tool_calls=[],
+                finish_reason="stop",
+            )
         )
 
     def stream(self, messages: list[Message], system: str = "") -> Iterator[str]:
@@ -1593,6 +1630,57 @@ class AcpxProvider(BaseProvider):
             return stdout.strip()
 
         return ""
+
+    @staticmethod
+    def _parse_usage_details(stdout: str) -> dict[str, int]:
+        """Extract Claude/ACP usage counters from bridge NDJSON."""
+        result: dict[str, int] = {}
+        aliases = {
+            "input_tokens": "input_tokens",
+            "inputTokens": "input_tokens",
+            "prompt_tokens": "input_tokens",
+            "output_tokens": "output_tokens",
+            "outputTokens": "output_tokens",
+            "completion_tokens": "output_tokens",
+            "cache_creation_input_tokens": "cache_creation_input_tokens",
+            "cachedWriteTokens": "cache_creation_input_tokens",
+            "cache_read_input_tokens": "cache_read_input_tokens",
+            "cachedReadTokens": "cache_read_input_tokens",
+        }
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    canonical = aliases.get(str(key))
+                    if canonical and isinstance(item, int) and not isinstance(item, bool):
+                        result[canonical] = max(result.get(canonical, 0), item)
+                    elif isinstance(item, (dict, list)):
+                        visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+
+        for line in stdout.splitlines():
+            try:
+                visit(json.loads(line))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return result
+
+    @classmethod
+    def _parse_usage(cls, stdout: str) -> dict[str, int]:
+        details = cls._parse_usage_details(stdout)
+        prompt = (
+            details.get("input_tokens", 0)
+            + details.get("cache_creation_input_tokens", 0)
+            + details.get("cache_read_input_tokens", 0)
+        )
+        completion = details.get("output_tokens", 0)
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+        }
 
     @staticmethod
     def _extract_text_from_event(event: dict) -> str:

@@ -47,6 +47,25 @@ class TestRunJob:
         assert updated_job.run_count == 1
         assert updated_job.last_result == "Done!"
         assert updated_job.consecutive_failures == 0
+        mock_agent.shutdown.assert_called_once_with()
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_repeated_runs_shutdown_every_ephemeral_runtime(
+        self, mock_uuid, started_manager: SchedulerManager
+    ):
+        """Regression for the incident's accumulation of dozens of workers."""
+        mock_uuid.uuid4.side_effect = (str(index) for index in range(100))
+        job = started_manager.add_job("repeat", "every 5 minutes", "do stuff")
+        agents = [MagicMock() for _ in range(40)]
+        for agent in agents:
+            agent.run.return_value = "Done!"
+
+        with patch("missy.agent.runtime.AgentRuntime", side_effect=agents):
+            for _ in agents:
+                started_manager._run_job(job.id)
+
+        assert started_manager._jobs[job.id].run_count == 40
+        assert all(agent.shutdown.call_count == 1 for agent in agents)
 
     @patch("missy.scheduler.manager.uuid")
     def test_run_job_uses_job_capability_mode_default_safe_chat(
@@ -191,6 +210,7 @@ class TestRunJob:
         updated = started_manager._jobs[job.id]
         assert updated.consecutive_failures == 1
         assert "provider down" in updated.last_error
+        MockRuntime.return_value.shutdown.assert_called_once_with()
 
     @patch("missy.scheduler.manager.uuid")
     def test_run_job_blocks_detector_positive_stored_prompt(

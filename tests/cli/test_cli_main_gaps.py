@@ -740,10 +740,10 @@ class TestGatewayStartAgentRuntimeShutdown:
                 result = runner.invoke(cli, ["--config", cfg_path, "gateway", "start"])
 
             assert result.exit_code == 0
-            # _agent and _discord_agent are both constructed from the same
-            # patched AgentRuntime class, so both shutdown() calls land on
-            # the same .return_value -- once per runtime instance.
-            assert mock_agent_runtime_cls.return_value.shutdown.call_count == 2
+            # Every gateway-owned runtime is shut down: primary, Discord,
+            # proactive, and voice safe-chat. They share the patched return
+            # value here, so all four calls land on the same mock.
+            assert mock_agent_runtime_cls.return_value.shutdown.call_count == 4
         finally:
             import os as _os
 

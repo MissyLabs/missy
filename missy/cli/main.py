@@ -3106,6 +3106,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         provider=_provider_name,
         mcp_approval_gate=approval_gate,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
+        sleeptime_enabled=bool(getattr(getattr(cfg, "sleeptime", None), "enabled", False)),
+        sleeptime_provider=(getattr(getattr(cfg, "sleeptime", None), "provider", "") or None),
         **_agent_tool_policy_kwargs(cfg),
     )
     _agent = AgentRuntime(_agent_cfg)
@@ -3337,9 +3339,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             # scheduling.max_jobs in config.yaml while the gateway keeps
             # running would have no effect on this already-constructed
             # scheduler_manager until a full restart.
-            scheduler_manager._max_jobs = getattr(  # noqa: SLF001
-                new_cfg.scheduling, "max_jobs", 0
-            )
+            scheduler_manager._max_jobs = getattr(new_cfg.scheduling, "max_jobs", 0)  # noqa: SLF001
 
     config_watcher = ConfigWatcher(
         ctx.obj["config_path"], reload_fn=_apply_config_and_refresh_runtimes
@@ -3909,6 +3909,16 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 _discord_agent.shutdown()
             except Exception as _discord_agent_shutdown_exc:
                 logger.debug("discord agent: shutdown error: %s", _discord_agent_shutdown_exc)
+        if _proactive_runtime is not None:
+            try:
+                _proactive_runtime.shutdown()
+            except Exception as _proactive_shutdown_exc:
+                logger.debug("proactive runtime: shutdown error: %s", _proactive_shutdown_exc)
+        if _voice_safe_chat_agent is not None:
+            try:
+                _voice_safe_chat_agent.shutdown()
+            except Exception as _voice_shutdown_exc:
+                logger.debug("voice runtime: shutdown error: %s", _voice_shutdown_exc)
 
     console.print("[dim]Gateway stopped.[/]")
 
@@ -6747,9 +6757,11 @@ def vision_inspect(
         table.add_row("Sharpness", str(quality["sharpness"]))
         table.add_row(
             "Quality",
-            f"[green]{quality['quality']}[/]"
-            if quality["quality"] == "good"
-            else f"[yellow]{quality['quality']}[/]",
+            (
+                f"[green]{quality['quality']}[/]"
+                if quality["quality"] == "good"
+                else f"[yellow]{quality['quality']}[/]"
+            ),
         )
         if quality["issues"]:
             table.add_row("Issues", ", ".join(quality["issues"]))
