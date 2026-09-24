@@ -9,7 +9,7 @@ Example::
     from missy.config.settings import ProviderConfig
     from missy.providers.anthropic_provider import AnthropicProvider
 
-    config = ProviderConfig(name="anthropic", model="claude-sonnet-4-6",
+    config = ProviderConfig(name="anthropic", model="claude-opus-5-5",
                             api_key="<REDACTED>")
     provider = AnthropicProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
@@ -29,7 +29,7 @@ from .rate_limiter import parse_retry_after
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "claude-sonnet-4-6"
+_DEFAULT_MODEL = "claude-opus-5-5"
 
 try:
     import anthropic as _anthropic_sdk

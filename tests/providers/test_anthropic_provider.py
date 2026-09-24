@@ -37,7 +37,7 @@ class TestAnthropicInit:
 
     def test_default_model_when_empty(self):
         p = AnthropicProvider(_make_config(model=""))
-        assert p._model == "claude-sonnet-4-6"
+        assert p._model == "claude-opus-5-5"
 
     def test_custom_timeout(self):
         p = AnthropicProvider(_make_config(timeout=60))

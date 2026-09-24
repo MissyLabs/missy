@@ -65,7 +65,7 @@ Uses the official `anthropic` Python SDK to call the Messages API.  The SDK is
 imported lazily -- if the package is not installed, `is_available()` returns
 `False` without raising.
 
-**Default model**: `claude-sonnet-4-6`
+**Default model**: `claude-opus-5-5`
 
 **Required environment variable**: `ANTHROPIC_API_KEY`
 
@@ -86,7 +86,7 @@ it correctly.
 providers:
   anthropic:
     name: anthropic
-    model: "claude-sonnet-4-6"
+    model: "claude-opus-5-5"
     timeout: 30
 ```
 
@@ -125,7 +125,7 @@ policy posture, model selection, timeout/rate-limit settings, and supported
 capabilities. These checks do not make live OpenAI API calls and never include
 the configured API key or full `base_url` value in diagnostic output.
 
-**Default model**: `auto` (detects the best available current OpenAI chat model)
+**Default model**: `gpt-5.6-sol`
 
 **Required environment variable**: `OPENAI_API_KEY`
 
@@ -163,7 +163,7 @@ the configured API key or full `base_url` value in diagnostic output.
 providers:
   openai:
     name: openai
-    model: "auto"
+    model: "gpt-5.6-sol"
     timeout: 30
 ```
 
@@ -202,7 +202,7 @@ Example config:
 providers:
   openai-codex:
     name: openai-codex
-    model: "gpt-5.2-codex"
+    model: "gpt-5.6-sol"
     timeout: 60
 ```
 
@@ -301,7 +301,7 @@ removing its configuration:
 providers:
   openai:
     name: openai
-    model: "gpt-4o"
+    model: "gpt-5.6-sol"
     enabled: false        # Provider is loaded but will not be used
 ```
 

@@ -51,6 +51,22 @@ class TestCostTrackerEdgeCases:
         expected = (1000 / 1000) * 0.003 + (500 / 1000) * 0.015
         assert abs(rec.cost_usd - expected) < 1e-8
 
+    def test_claude_opus_5_5_pricing(self):
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        rec = tracker.record(model="claude-opus-5-5", prompt_tokens=1000, completion_tokens=500)
+        expected = (1000 / 1000) * 0.010 + (500 / 1000) * 0.050
+        assert abs(rec.cost_usd - expected) < 1e-8
+
+    def test_gpt_5_6_sol_pricing(self):
+        from missy.agent.cost_tracker import CostTracker
+
+        tracker = CostTracker()
+        rec = tracker.record(model="gpt-5.6-sol", prompt_tokens=1000, completion_tokens=500)
+        expected = (1000 / 1000) * 0.004 + (500 / 1000) * 0.020
+        assert abs(rec.cost_usd - expected) < 1e-8
+
     def test_gpt4o_pricing(self):
         """GPT-4o model should use correct pricing."""
         from missy.agent.cost_tracker import CostTracker

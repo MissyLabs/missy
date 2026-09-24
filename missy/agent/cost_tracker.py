@@ -43,6 +43,7 @@ class BudgetExceededError(Exception):
 
 _PRICING: list[tuple[str, float, float]] = [
     # Anthropic
+    ("claude-opus-5-5", 0.010, 0.050),
     ("claude-opus-4", 0.015, 0.075),
     ("claude-sonnet-4", 0.003, 0.015),
     ("claude-haiku-4", 0.0008, 0.004),
@@ -52,6 +53,7 @@ _PRICING: list[tuple[str, float, float]] = [
     ("claude-3-sonnet", 0.003, 0.015),
     ("claude-3-haiku", 0.00025, 0.00125),
     # OpenAI
+    ("gpt-5.6-sol", 0.004, 0.020),
     # gpt-4.1-mini/-nano must be checked before the bare "gpt-4.1" prefix:
     # "gpt-4.1-mini".startswith("gpt-4.1") is True, so if the base entry
     # came first every -mini/-nano call would match it instead and be
