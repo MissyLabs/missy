@@ -92,3 +92,15 @@ def _reset_voice_pairing_rate_limits():
     PairingManager._requests_by_ip.clear()
     yield
     PairingManager._requests_by_ip.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_trust_store(tmp_path_factory, monkeypatch):
+    """Keep AgentRuntime's shared TrustScorer (DATA-02) off the operator's
+    real ~/.missy/trust.json and fresh per test."""
+    import missy.security.trust as trust_mod
+
+    store = tmp_path_factory.mktemp("trust") / "trust.json"
+    monkeypatch.setattr(trust_mod, "DEFAULT_TRUST_PATH", str(store))
+    monkeypatch.setattr(trust_mod, "_SHARED", {})
+    yield

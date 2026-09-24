@@ -802,9 +802,11 @@ class AgentRuntime:
         # so scores survive restarts and are inspectable via `missy tools
         # trust`; a persistence failure degrades to in-memory, never fatal.
         try:
-            from missy.security.trust import DEFAULT_TRUST_PATH
+            from missy.security.trust import DEFAULT_TRUST_PATH, get_trust_scorer
 
-            self._trust_scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+            # DATA-02: one shared scorer per process, so every runtime's
+            # is_trusted() gate sees every other runtime's violations.
+            self._trust_scorer = get_trust_scorer(DEFAULT_TRUST_PATH)
         except Exception:
             logger.debug("TrustScorer persistence unavailable; using in-memory", exc_info=True)
             self._trust_scorer = TrustScorer()
@@ -5462,6 +5464,11 @@ class AgentRuntime:
         if self._sleeptime is not None:
             with contextlib.suppress(Exception):
                 self._sleeptime.stop()
+        # DATA-02: persist any batched trust-score updates.
+        trust = getattr(self, "_trust_scorer", None)
+        if trust is not None:
+            with contextlib.suppress(Exception):
+                trust.flush()
 
     def resume_checkpoint(self, checkpoint_id: str) -> str:
         """Resume an interrupted task from a persisted checkpoint (SR-4.3).
