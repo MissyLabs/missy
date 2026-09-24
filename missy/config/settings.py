@@ -336,11 +336,16 @@ class SchedulingPolicy:
         enabled: When False, no new jobs may be added or run.
         max_jobs: Maximum number of concurrent scheduled jobs (0 = unlimited).
         active_hours: Optional time window for job execution, e.g. "08:00-22:00".
+            Applied to every job that has no ``active_hours`` of its own.
+        misfire_grace_seconds: How late a run may still start after its
+            scheduled time (e.g. across a gateway restart). Runs missed by
+            more than this are skipped and audited as ``scheduler.job.missed``.
     """
 
     enabled: bool = True
     max_jobs: int = 0
     active_hours: str = ""
+    misfire_grace_seconds: int = 300
 
 
 @dataclass
@@ -1084,6 +1089,7 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
         enabled=_coerce_bool(data.get("enabled"), True),
         max_jobs=int(data.get("max_jobs", 0)),
         active_hours=str(data.get("active_hours", "")),
+        misfire_grace_seconds=max(1, int(data.get("misfire_grace_seconds", 300))),
     )
 
 

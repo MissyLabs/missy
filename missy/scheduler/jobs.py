@@ -91,11 +91,34 @@ class ScheduledJob:
     capability_mode: str = "safe-chat"
 
     # ------------------------------------------------------------------
+    # Cross-process merge stamp (SCHED-01). Bumped on every *configuration*
+    # change (add/pause/resume/edit) -- never on a run -- so that when two
+    # processes (the gateway and a `missy schedule ...` CLI invocation) both
+    # hold a copy of a job, the newer configuration wins the merge while
+    # run-state fields are merged independently by last_run.
+    # ------------------------------------------------------------------
+    updated_at: datetime | None = None
+
+    # ------------------------------------------------------------------
+    # Run traceability (DGAP-01): link each run to its session transcript
+    # and cost so an operator can answer "what did this job do / spend?".
+    # ------------------------------------------------------------------
+    last_session_id: str = ""
+    last_cost_usd: float = 0.0
+    total_cost_usd: float = 0.0
+    last_duration_seconds: float = 0.0
+
+    # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
 
-    def should_run_now(self) -> bool:
+    def should_run_now(self, default_active_hours: str = "") -> bool:
         """Check whether the current local time falls within :attr:`active_hours`.
+
+        Args:
+            default_active_hours: Window applied when this job has no
+                :attr:`active_hours` of its own (the operator's global
+                ``scheduling.active_hours``). The job's own window wins.
 
         Returns:
             ``True`` when no active-hours restriction is set or when the
@@ -106,10 +129,11 @@ class ScheduledJob:
         end time is earlier than start time) are handled correctly — e.g.
         ``"22:00-06:00"`` means "from 10 PM until 6 AM".
         """
-        if not self.active_hours:
+        window = self.active_hours or default_active_hours
+        if not window:
             return True
 
-        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", self.active_hours)
+        m = re.match(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", window)
         if not m:
             return True
 
@@ -176,6 +200,12 @@ class ScheduledJob:
             "timezone": self.timezone,
             # Capability mode
             "capability_mode": self.capability_mode,
+            # Merge stamp + run traceability
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "last_session_id": self.last_session_id,
+            "last_cost_usd": self.last_cost_usd,
+            "total_cost_usd": self.total_cost_usd,
+            "last_duration_seconds": self.last_duration_seconds,
         }
 
     @classmethod
@@ -199,7 +229,19 @@ class ScheduledJob:
         def _parse_dt(value: str | None) -> datetime | None:
             if value is None:
                 return None
-            return datetime.fromisoformat(value)
+            parsed = datetime.fromisoformat(value)
+            # DATA-06: every persisted datetime is UTC. Legacy records
+            # stored next_run naive; treat naive as UTC so aware/naive
+            # comparisons never raise.
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed
+
+        def _float(value: Any) -> float:
+            try:
+                return float(value or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
 
         return cls(
             id=str(data.get("id", str(uuid.uuid4()))),
@@ -236,4 +278,9 @@ class ScheduledJob:
                 if (cm := str(data.get("capability_mode", "safe-chat"))) in VALID_CAPABILITY_MODES
                 else "safe-chat"
             ),
+            updated_at=_parse_dt(data.get("updated_at")),
+            last_session_id=str(data.get("last_session_id", "") or ""),
+            last_cost_usd=_float(data.get("last_cost_usd")),
+            total_cost_usd=_float(data.get("total_cost_usd")),
+            last_duration_seconds=_float(data.get("last_duration_seconds")),
         )

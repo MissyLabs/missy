@@ -17,10 +17,14 @@ Example::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import threading
+import time
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -83,7 +87,69 @@ class SchedulerManager:
             adding 2 jobs previously succeeded identically both times.
             Enforced in :meth:`add_job` by counting existing jobs before
             allowing a new one.
+        default_active_hours: The operator's global ``scheduling.active_hours``
+            window (SCHED-02), applied to any job with no window of its own.
+        misfire_grace_seconds: How late (seconds) a run may still start after
+            its scheduled time -- e.g. across a gateway restart (SCHED-03).
+            APScheduler's own default is 1s, which silently dropped any run
+            missed by more than a second.
+        reconcile_interval_seconds: How often a *running* scheduler re-reads
+            ``jobs.json`` for changes made by another process (SCHED-01).
+            ``0`` disables the poll (runs still reconcile before executing).
+        default_feature_kwargs: Extra ``AgentConfig`` kwargs carrying the
+            operator's ``features:`` config (GAP-02), applied to every run.
     """
+
+    # Class-level fallbacks so instances built via ``__new__`` (tests,
+    # partial construction) still behave; __init__ always overrides them.
+    _default_active_hours: str = ""
+    _default_feature_kwargs: dict[str, Any] | None = None
+    _reconcile_interval_seconds: int = 0
+    _persisted_ids: frozenset[str] = frozenset()
+    _disk_signature: tuple[int, int] | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        # Lazily provide the state lock for instances that skipped __init__.
+        if name == "_lock":
+            lock = threading.RLock()
+            object.__setattr__(self, "_lock", lock)
+            return lock
+        raise AttributeError(name)
+
+    #: APScheduler id of the internal jobs.json reconcile poll.
+    _RECONCILE_JOB_ID = "__missy_scheduler_reconcile__"
+
+    #: Fields copied from the side with the newer ``updated_at`` on merge.
+    _CONFIG_FIELDS: tuple[str, ...] = (
+        "name",
+        "description",
+        "schedule",
+        "task",
+        "provider",
+        "enabled",
+        "max_attempts",
+        "backoff_seconds",
+        "retry_on",
+        "delete_after_run",
+        "active_hours",
+        "timezone",
+        "capability_mode",
+        "updated_at",
+    )
+
+    #: Fields copied from the side with the newer ``last_run`` on merge.
+    _RUN_FIELDS: tuple[str, ...] = (
+        "last_run",
+        "next_run",
+        "run_count",
+        "last_result",
+        "consecutive_failures",
+        "last_error",
+        "last_session_id",
+        "last_cost_usd",
+        "total_cost_usd",
+        "last_duration_seconds",
+    )
 
     def __init__(
         self,
@@ -91,13 +157,46 @@ class SchedulerManager:
         default_max_spend_usd: float = 0.0,
         default_tool_policy_kwargs: dict[str, Any] | None = None,
         max_jobs: int = 0,
+        default_active_hours: str = "",
+        misfire_grace_seconds: int = 300,
+        reconcile_interval_seconds: int = 30,
+        default_feature_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
         self._default_max_spend_usd = default_max_spend_usd
         self._default_tool_policy_kwargs = default_tool_policy_kwargs or {}
+        self._default_feature_kwargs = default_feature_kwargs or {}
         self._max_jobs = max_jobs
-        self._scheduler: BackgroundScheduler = BackgroundScheduler()
+        self._default_active_hours = default_active_hours or ""
+        self._reconcile_interval_seconds = max(0, int(reconcile_interval_seconds))
+        # SCHED-03: a run missed by up to misfire_grace_seconds (e.g. during a
+        # gateway restart) still fires once; overlapping runs coalesce into
+        # one and never run concurrently. Missed/overlap events are audited
+        # by _on_scheduler_event rather than only logged by APScheduler.
+        self._scheduler: BackgroundScheduler = BackgroundScheduler(
+            job_defaults={
+                "misfire_grace_time": max(1, int(misfire_grace_seconds)),
+                "coalesce": True,
+                "max_instances": 1,
+            }
+        )
+        with contextlib.suppress(Exception):
+            from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
+
+            self._scheduler.add_listener(
+                self._on_scheduler_event, EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES
+            )
         self._jobs: dict[str, ScheduledJob] = {}
+        # DATA-01: APScheduler runs _run_job on a thread pool while CLI/API
+        # threads add/pause/remove jobs; every _jobs mutation and every
+        # jobs.json read/merge/write happens under this lock.
+        self._lock = threading.RLock()
+        # SCHED-01: ids known to be on disk as of our last load/save. A job in
+        # memory but absent from disk *and* in this set was removed by another
+        # process (tombstone); one on disk but not in memory and not in this
+        # set was added by another process.
+        self._persisted_ids: set[str] = set()
+        self._disk_signature: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -109,7 +208,8 @@ class SchedulerManager:
         Raises:
             SchedulerError: When the scheduler fails to start.
         """
-        self._load_jobs()
+        with self._lock:
+            self._load_jobs()
         # Availability hardening: _load_jobs() already isolates malformed
         # *dict records* (skips them individually, logs a warning). But a
         # record that parses into a well-formed ScheduledJob can still have
@@ -141,7 +241,14 @@ class SchedulerManager:
         # if it's disabled -- so it's always present for a later resume,
         # in any process, while still never actually firing while paused.
         skipped: list[str] = []
-        for job in self._jobs.values():
+        with self._lock:
+            jobs_snapshot = list(self._jobs.values())
+        for job in jobs_snapshot:
+            if self._is_spent_one_shot(job):
+                # SCHED-03: a one-shot that already ran (and wasn't
+                # delete_after_run) must not be re-registered -- its past
+                # DateTrigger would only ever produce a spurious "missed" event.
+                continue
             try:
                 self._schedule_job(job)
                 if not job.enabled:
@@ -159,6 +266,19 @@ class SchedulerManager:
                     result="error",
                     detail={"job_id": job.id, "job_name": job.name, "error": str(exc)},
                 )
+
+        if self._reconcile_interval_seconds > 0:
+            try:
+                self._scheduler.add_job(
+                    func=self.reconcile,
+                    trigger="interval",
+                    seconds=self._reconcile_interval_seconds,
+                    id=self._RECONCILE_JOB_ID,
+                    name="jobs.json reconcile",
+                    replace_existing=True,
+                )
+            except Exception:
+                logger.warning("Could not register jobs.json reconcile poll", exc_info=True)
 
         try:
             self._scheduler.start()
@@ -182,6 +302,8 @@ class SchedulerManager:
         All in-progress jobs are allowed to finish.  This call blocks until
         the scheduler thread has exited.
         """
+        if not getattr(self._scheduler, "running", False):
+            return
         try:
             self._scheduler.shutdown(wait=True)
         except Exception as exc:
@@ -248,6 +370,8 @@ class SchedulerManager:
         # SCHED-003: enforce the operator's configured job cap before any
         # other validation, so a capped-out operator gets a clear refusal
         # rather than the job silently being created anyway.
+        # Pick up jobs other processes added before counting against max_jobs.
+        self._sync_from_disk()
         if self._max_jobs and len(self._jobs) >= self._max_jobs:
             self._emit_event(
                 event_type="scheduler.job.add",
@@ -304,17 +428,19 @@ class SchedulerManager:
             active_hours=active_hours,
             timezone=timezone,
             capability_mode=capability_mode,
+            updated_at=datetime.now(tz=UTC),
         )
-        self._jobs[job.id] = job
-
-        try:
-            self._schedule_job(job)
-        except SchedulerError:
-            # Roll back the in-memory entry so state stays consistent.
-            del self._jobs[job.id]
-            raise
-
-        self._save_jobs()
+        with self._lock:
+            self._jobs[job.id] = job
+            try:
+                # Always validates the trigger; on a non-started (offline CLI)
+                # scheduler this only queues it as pending and never fires.
+                self._schedule_job(job)
+            except SchedulerError:
+                # Roll back the in-memory entry so state stays consistent.
+                del self._jobs[job.id]
+                raise
+            self._save_jobs()
         logger.info("Added job %r (id=%s, schedule=%r).", name, job.id, schedule)
         self._emit_event(
             event_type="scheduler.job.add",
@@ -359,26 +485,28 @@ class SchedulerManager:
             KeyError: When no job with *job_id* exists.
             SchedulerError: When APScheduler fails to remove the job.
         """
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise KeyError(f"No job found with id {job_id!r}.")
+        self._sync_from_disk()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"No job found with id {job_id!r}.")
 
-        try:
-            if self._scheduler.get_job(job_id) is not None:
-                self._scheduler.remove_job(job_id)
-        except Exception as exc:
-            raise SchedulerError(f"Failed to remove APScheduler job {job_id!r}: {exc}") from exc
+            try:
+                if self._scheduler.get_job(job_id) is not None:
+                    self._scheduler.remove_job(job_id)
+            except Exception as exc:
+                raise SchedulerError(f"Failed to remove APScheduler job {job_id!r}: {exc}") from exc
 
-        # SR: removing a job is a more permanent action than pausing one, so
-        # it must clean up at least as thoroughly -- pause_job() already
-        # removes dangling pending-retry entries for exactly this reason;
-        # remove_job() previously didn't, leaving a stale scheduled callback
-        # referencing a deleted job lingering in the scheduler's internal
-        # state for up to the full retry backoff window.
-        self._remove_pending_retries(job_id)
+            # SR: removing a job is a more permanent action than pausing one, so
+            # it must clean up at least as thoroughly -- pause_job() already
+            # removes dangling pending-retry entries for exactly this reason;
+            # remove_job() previously didn't, leaving a stale scheduled callback
+            # referencing a deleted job lingering in the scheduler's internal
+            # state for up to the full retry backoff window.
+            self._remove_pending_retries(job_id)
 
-        del self._jobs[job_id]
-        self._save_jobs()
+            del self._jobs[job_id]
+            self._save_jobs()
         logger.info("Removed job id=%s name=%r.", job_id, job.name)
         self._emit_event(
             event_type="scheduler.job.remove",
@@ -396,18 +524,22 @@ class SchedulerManager:
             KeyError: When no job with *job_id* exists.
             SchedulerError: When APScheduler fails to pause the job.
         """
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise KeyError(f"No job found with id {job_id!r}.")
+        self._sync_from_disk()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"No job found with id {job_id!r}.")
 
-        try:
-            self._scheduler.pause_job(job_id)
-        except Exception as exc:
-            raise SchedulerError(f"Failed to pause job {job_id!r}: {exc}") from exc
+            if self._scheduler_has_job(job_id):
+                try:
+                    self._scheduler.pause_job(job_id)
+                except Exception as exc:
+                    raise SchedulerError(f"Failed to pause job {job_id!r}: {exc}") from exc
 
-        job.enabled = False
-        self._save_jobs()
-        self._remove_pending_retries(job_id)
+            job.enabled = False
+            job.updated_at = datetime.now(tz=UTC)
+            self._save_jobs()
+            self._remove_pending_retries(job_id)
 
         logger.info("Paused job id=%s name=%r.", job_id, job.name)
         self._emit_event(
@@ -426,17 +558,21 @@ class SchedulerManager:
             KeyError: When no job with *job_id* exists.
             SchedulerError: When APScheduler fails to resume the job.
         """
-        job = self._jobs.get(job_id)
-        if job is None:
-            raise KeyError(f"No job found with id {job_id!r}.")
+        self._sync_from_disk()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"No job found with id {job_id!r}.")
 
-        try:
-            self._scheduler.resume_job(job_id)
-        except Exception as exc:
-            raise SchedulerError(f"Failed to resume job {job_id!r}: {exc}") from exc
+            if self._scheduler_has_job(job_id):
+                try:
+                    self._scheduler.resume_job(job_id)
+                except Exception as exc:
+                    raise SchedulerError(f"Failed to resume job {job_id!r}: {exc}") from exc
 
-        job.enabled = True
-        self._save_jobs()
+            job.enabled = True
+            job.updated_at = datetime.now(tz=UTC)
+            self._save_jobs()
         logger.info("Resumed job id=%s name=%r.", job_id, job.name)
         self._emit_event(
             event_type="scheduler.job.resume",
@@ -450,7 +586,24 @@ class SchedulerManager:
         Returns:
             A new list of :class:`ScheduledJob` instances.
         """
-        return list(self._jobs.values())
+        with self._lock:
+            return list(self._jobs.values())
+
+    def open_offline(self) -> list[ScheduledJob]:
+        """Load jobs for editing from a short-lived process (SCHED-01).
+
+        ``missy schedule add/pause/resume/remove`` used to call :meth:`start`,
+        which spun up a real ``BackgroundScheduler`` thread in the CLI
+        process (so a due job could execute there) and then relied on a
+        private in-memory copy the running gateway never saw. Offline mode
+        loads ``jobs.json`` without starting APScheduler; every mutation is a
+        locked read-merge-write of ``jobs.json`` that a running gateway picks
+        up on its next reconcile (at most ``reconcile_interval_seconds``
+        later, and always before the affected job next executes).
+        """
+        with self._lock:
+            self._load_jobs()
+            return list(self._jobs.values())
 
     def load_jobs(self) -> list[ScheduledJob]:
         """Read persisted jobs from disk and return them, without starting APScheduler.
@@ -481,7 +634,7 @@ class SchedulerManager:
         Returns:
             A new list of :class:`ScheduledJob` instances.
         """
-        return list(self._jobs.values())
+        return self.list_jobs()
 
     def cleanup_memory(self, older_than_days: int = 30) -> int:
         """Delete conversation history older than *older_than_days* days.
@@ -528,7 +681,11 @@ class SchedulerManager:
         Args:
             job_id: ID of the job to execute.
         """
-        job = self._jobs.get(job_id)
+        # SCHED-01: pick up a pause/remove/edit made by another process (e.g.
+        # `missy schedule pause`) before deciding whether to run at all.
+        self._sync_from_disk()
+        with self._lock:
+            job = self._jobs.get(job_id)
         if job is None:
             logger.warning("Scheduled job %r no longer exists; skipping.", job_id)
             return
@@ -547,7 +704,7 @@ class SchedulerManager:
         # ------------------------------------------------------------------
         # Active-hours gate
         # ------------------------------------------------------------------
-        if not job.should_run_now():
+        if not job.should_run_now(self._default_active_hours):
             # A pending retry (consecutive_failures > 0) that lands outside the
             # active-hours window must NOT be silently dropped — reschedule it
             # to the next in-window time instead so retries are never lost.
@@ -559,6 +716,7 @@ class SchedulerManager:
 
         session_id = str(uuid.uuid4())
         task_id = str(uuid.uuid4())
+        run_started = time.monotonic()
 
         self._emit_event(
             event_type="scheduler.job.run.start",
@@ -608,15 +766,19 @@ class SchedulerManager:
                     capability_mode=job.capability_mode,
                     max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
                     **(getattr(self, "_default_tool_policy_kwargs", None) or {}),
+                    **(getattr(self, "_default_feature_kwargs", None) or {}),
                 )
             )
+            self._register_run_session(agent, job, session_id)
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)
-            job.last_run = datetime.now(tz=UTC)
-            job.last_result = f"ERROR: {exc}"
-            job.consecutive_failures += 1
-            job.last_error = str(exc)
+            with self._lock:
+                job.last_run = datetime.now(tz=UTC)
+                job.last_result = f"ERROR: {exc}"
+                job.consecutive_failures += 1
+                job.last_error = str(exc)
+                self._record_run_metrics(agent, job, session_id, run_started)
 
             self._emit_event(
                 event_type="scheduler.job.run.error",
@@ -706,18 +868,22 @@ class SchedulerManager:
         # ------------------------------------------------------------------
         # Successful run
         # ------------------------------------------------------------------
-        job.last_run = datetime.now(tz=UTC)
-        job.run_count += 1
-        job.last_result = result_text
-        job.consecutive_failures = 0
-        job.last_error = ""
+        with self._lock:
+            job.last_run = datetime.now(tz=UTC)
+            job.run_count += 1
+            job.last_result = result_text
+            job.consecutive_failures = 0
+            job.last_error = ""
+            self._record_run_metrics(agent, job, session_id, run_started)
 
-        # Update next_run from APScheduler if available.
-        ap_job = self._scheduler.get_job(job_id)
-        if ap_job is not None and ap_job.next_run_time is not None:
-            job.next_run = ap_job.next_run_time.replace(tzinfo=None)
+            # Update next_run from APScheduler if available. DATA-06: store
+            # aware UTC (the trigger's own tz is the job's local zone).
+            ap_job = self._scheduler.get_job(job_id)
+            next_fire = getattr(ap_job, "next_run_time", None) if ap_job is not None else None
+            if next_fire is not None:
+                job.next_run = next_fire.astimezone(UTC)
 
-        self._save_jobs()
+            self._save_jobs()
         logger.info(
             "Completed scheduled job %r (id=%s, run_count=%d).",
             job.name,
@@ -731,6 +897,8 @@ class SchedulerManager:
                 "job_id": job_id,
                 "name": job.name,
                 "run_count": job.run_count,
+                "cost_usd": job.last_cost_usd,
+                "duration_seconds": job.last_duration_seconds,
             },
             session_id=session_id,
             task_id=task_id,
@@ -781,7 +949,7 @@ class SchedulerManager:
         Args:
             job: The job whose retry landed outside ``active_hours``.
         """
-        run_date = self._next_active_window_start(job.active_hours)
+        run_date = self._next_active_window_start(job.active_hours or self._default_active_hours)
         if run_date is None:
             logger.info(
                 "Job %s outside active_hours %s but window unparseable; not rescheduling.",
@@ -829,46 +997,61 @@ class SchedulerManager:
     # Persistence
     # ------------------------------------------------------------------
 
-    def _save_jobs(self) -> None:
-        """Persist the current in-memory job list to the JSON file.
+    # ------------------------------------------------------------------
+    # Persistence (SCHED-01 / DATA-01)
+    # ------------------------------------------------------------------
 
-        The parent directory is created if it does not exist.  Errors are
-        logged but not re-raised to avoid interrupting the scheduler thread.
+    @contextlib.contextmanager
+    def _file_lock(self) -> Iterator[None]:
+        """Hold an exclusive cross-process ``flock`` on ``jobs.json.lock``.
+
+        Serializes every read-merge-write of ``jobs.json`` between the
+        gateway and any concurrent ``missy schedule ...`` CLI invocation.
+        Degrades to no cross-process locking (still thread-safe via
+        :attr:`_lock`) when ``fcntl`` is unavailable.
         """
         try:
-            import os
-            import tempfile
+            import fcntl
+        except ImportError:  # pragma: no cover - non-POSIX
+            yield
+            return
+        if not isinstance(self.jobs_file, Path):
+            yield  # a test double, not a real path
+            return
+        with contextlib.suppress(OSError):
+            os.makedirs(str(self.jobs_file.parent), mode=0o700, exist_ok=True)
+        lock_path = self.jobs_file.parent / (self.jobs_file.name + ".lock")
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            logger.warning("Could not open %s; continuing without a file lock.", lock_path)
+            yield
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
-            self.jobs_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            payload = [job.to_dict() for job in self._jobs.values()]
-            data = json.dumps(payload, indent=2, default=str).encode("utf-8")
-            # Atomic write with restrictive permissions (0o600)
-            fd, tmp_path = tempfile.mkstemp(dir=str(self.jobs_file.parent), suffix=".tmp")
-            try:
-                os.fchmod(fd, 0o600)
-                os.write(fd, data)
-                os.close(fd)
-                fd = -1  # mark as closed
-                os.replace(tmp_path, str(self.jobs_file))
-            except BaseException:
-                if fd >= 0:
-                    os.close(fd)
-                import contextlib
+    def _disk_signature_now(self) -> tuple[int, int] | None:
+        try:
+            st = self.jobs_file.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp_path)
-                raise
-        except Exception as exc:
-            logger.error("Failed to save jobs to %s: %s", self.jobs_file, exc)
+    def _read_disk_records(self) -> list[dict] | None:
+        """Return the validated record list from ``jobs.json``.
 
-    def _load_jobs(self) -> None:
-        """Load jobs from the JSON file into :attr:`_jobs`.
-
-        Malformed records are skipped with a warning.  If the file does not
-        exist the method returns without error.
+        Returns ``[]`` when the file does not exist, and ``None`` when it
+        exists but must not be trusted/parsed (wrong owner, unsafe mode,
+        unreadable, not a JSON array) -- callers must then leave the file
+        untouched rather than overwrite what they could not read.
         """
         if not self.jobs_file.exists():
-            return
+            return []
 
         # Verify file ownership and permissions before trusting content.
         try:
@@ -879,42 +1062,326 @@ class SchedulerManager:
                     self.jobs_file,
                     os.getuid(),
                 )
-                return
+                return None
             if st.st_mode & 0o022:  # group-writable or world-writable
                 logger.error(
                     "Jobs file %s has unsafe permissions (mode=%o) — refusing to load",
                     self.jobs_file,
                     st.st_mode & 0o777,
                 )
-                return
+                return None
         except OSError as exc:
             logger.error("Cannot stat jobs file %s: %s", self.jobs_file, exc)
-            return
+            return None
 
         try:
             raw_text = self.jobs_file.read_text(encoding="utf-8")
             records = json.loads(raw_text)
         except Exception as exc:
             logger.error("Failed to read jobs file %s: %s", self.jobs_file, exc)
-            return
+            return None
 
         if not isinstance(records, list):
             logger.error("Jobs file %s must contain a JSON array.", self.jobs_file)
-            return
+            return None
+        return records
 
-        loaded = 0
+    @staticmethod
+    def _parse_records(records: list) -> dict[str, ScheduledJob]:
+        jobs: dict[str, ScheduledJob] = {}
         for record in records:
             if not isinstance(record, dict):
                 logger.warning("Skipping non-dict job record: %r", record)
                 continue
             try:
                 job = ScheduledJob.from_dict(record)
-                self._jobs[job.id] = job
-                loaded += 1
+                jobs[job.id] = job
             except Exception as exc:
                 logger.warning("Skipping malformed job record: %s", exc)
+        return jobs
 
-        logger.debug("Loaded %d job(s) from %s.", loaded, self.jobs_file)
+    @staticmethod
+    def _stamp(value: datetime | None) -> datetime:
+        return value or datetime.min.replace(tzinfo=UTC)
+
+    def _merge_disk_jobs(
+        self, disk: dict[str, ScheduledJob]
+    ) -> tuple[list[ScheduledJob], list[ScheduledJob], list[ScheduledJob]]:
+        """Three-way merge *disk* into :attr:`_jobs` (caller holds :attr:`_lock`).
+
+        Returns ``(added, removed, reconfigured)`` job lists so a running
+        scheduler can apply them to APScheduler.
+        """
+        added: list[ScheduledJob] = []
+        removed: list[ScheduledJob] = []
+        reconfigured: list[ScheduledJob] = []
+
+        for job_id, disk_job in disk.items():
+            mem_job = self._jobs.get(job_id)
+            if mem_job is None:
+                if job_id in self._persisted_ids:
+                    continue  # we deleted it; our write will drop it
+                self._jobs[job_id] = disk_job
+                added.append(disk_job)
+                continue
+            # Configuration: newer updated_at wins (another process edited).
+            if self._stamp(disk_job.updated_at) > self._stamp(mem_job.updated_at):
+                changed = any(
+                    getattr(disk_job, f) != getattr(mem_job, f)
+                    for f in self._CONFIG_FIELDS
+                    if f != "updated_at"
+                )
+                for f in self._CONFIG_FIELDS:
+                    setattr(mem_job, f, getattr(disk_job, f))
+                if changed:
+                    reconfigured.append(mem_job)
+            # Run state: the side that ran most recently wins.
+            if self._stamp(disk_job.last_run) > self._stamp(mem_job.last_run):
+                for f in self._RUN_FIELDS:
+                    setattr(mem_job, f, getattr(disk_job, f))
+
+        for job_id in list(self._jobs):
+            if job_id not in disk and job_id in self._persisted_ids:
+                removed.append(self._jobs.pop(job_id))
+
+        return added, removed, reconfigured
+
+    def _write_jobs_locked(self) -> None:
+        """Atomically write :attr:`_jobs` to disk (caller holds both locks)."""
+        import tempfile
+
+        self.jobs_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        payload = [job.to_dict() for job in self._jobs.values()]
+        data = json.dumps(payload, indent=2, default=str).encode("utf-8")
+        # Atomic write with restrictive permissions (0o600)
+        fd, tmp_path = tempfile.mkstemp(dir=str(self.jobs_file.parent), suffix=".tmp")
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, data)
+            os.close(fd)
+            fd = -1  # mark as closed
+            os.replace(tmp_path, str(self.jobs_file))
+        except BaseException:
+            if fd >= 0:
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        self._persisted_ids = set(self._jobs)
+        self._disk_signature = self._disk_signature_now()
+
+    def _apply_merge_changes(
+        self,
+        added: list[ScheduledJob],
+        removed: list[ScheduledJob],
+        reconfigured: list[ScheduledJob],
+    ) -> None:
+        """Mirror a merge into the live APScheduler (only when it's running)."""
+        if not getattr(self._scheduler, "running", False):
+            return
+        for job in removed:
+            with contextlib.suppress(Exception):
+                if self._scheduler.get_job(job.id) is not None:
+                    self._scheduler.remove_job(job.id)
+            self._remove_pending_retries(job.id)
+            self._emit_event(
+                event_type="scheduler.job.reconciled",
+                result="allow",
+                detail={"job_id": job.id, "name": job.name, "change": "removed"},
+            )
+        for job in [*added, *reconfigured]:
+            try:
+                if self._is_spent_one_shot(job):
+                    continue
+                self._schedule_job(job)  # replace_existing=True
+                if not job.enabled:
+                    self._scheduler.pause_job(job.id)
+                    self._remove_pending_retries(job.id)
+            except Exception as exc:
+                logger.error("Reconcile: could not (re)register job %r: %s", job.id, exc)
+                continue
+            self._emit_event(
+                event_type="scheduler.job.reconciled",
+                result="allow",
+                detail={
+                    "job_id": job.id,
+                    "name": job.name,
+                    "change": "added" if job in added else "reconfigured",
+                    "enabled": job.enabled,
+                },
+            )
+
+    def _save_jobs(self) -> None:
+        """Merge in any other process's changes, then persist :attr:`_jobs`.
+
+        Never a blind overwrite (SCHED-01): under the cross-process file lock
+        the current file is re-read and three-way merged first, so a job
+        another process added/paused/removed since our last load is kept /
+        honored rather than clobbered by our stale in-memory copy. Errors
+        are logged but not re-raised to avoid interrupting the scheduler
+        thread.
+        """
+        try:
+            with self._lock, self._file_lock():
+                records = self._read_disk_records()
+                if records is None:
+                    logger.error(
+                        "Not saving jobs: %s exists but could not be trusted/read.",
+                        self.jobs_file,
+                    )
+                    return
+                changes = self._merge_disk_jobs(self._parse_records(records))
+                self._write_jobs_locked()
+                self._apply_merge_changes(*changes)
+        except Exception as exc:
+            logger.error("Failed to save jobs to %s: %s", self.jobs_file, exc)
+
+    def reconcile(self) -> bool:
+        """Re-read ``jobs.json`` if another process changed it (SCHED-01).
+
+        Runs periodically on a started scheduler and before every job
+        execution. Cheap when nothing changed (one ``stat``).
+
+        Returns:
+            ``True`` when the file had changed and was merged.
+        """
+        signature = self._disk_signature_now()
+        if signature is None or signature == self._disk_signature:
+            return False
+        try:
+            with self._lock, self._file_lock():
+                records = self._read_disk_records()
+                if records is None:
+                    return False
+                changes = self._merge_disk_jobs(self._parse_records(records))
+                self._persisted_ids = {
+                    r.get("id") for r in records if isinstance(r, dict) and r.get("id")
+                } | set(self._jobs)
+                self._disk_signature = self._disk_signature_now()
+                self._apply_merge_changes(*changes)
+        except Exception as exc:
+            logger.error("Failed to reconcile jobs from %s: %s", self.jobs_file, exc)
+            return False
+        return True
+
+    def _sync_from_disk(self) -> None:
+        """Best-effort :meth:`reconcile` that never raises."""
+        with contextlib.suppress(Exception):
+            self.reconcile()
+
+    def _load_jobs(self) -> None:
+        """Load jobs from the JSON file into :attr:`_jobs`.
+
+        Malformed records are skipped with a warning.  If the file does not
+        exist the method returns without error.
+        """
+        with self._lock, self._file_lock():
+            records = self._read_disk_records()
+            if not records:
+                return
+            jobs = self._parse_records(records)
+            self._jobs.update(jobs)
+            self._persisted_ids = set(jobs)
+            self._disk_signature = self._disk_signature_now()
+        logger.debug("Loaded %d job(s) from %s.", len(jobs), self.jobs_file)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _scheduler_has_job(self, job_id: str) -> bool:
+        try:
+            return self._scheduler.get_job(job_id) is not None
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_spent_one_shot(job: ScheduledJob) -> bool:
+        """True for a date-triggered job that has already run once."""
+        if job.run_count <= 0:
+            return False
+        try:
+            return parse_schedule(job.schedule, tz=job.timezone or None).get("trigger") == "date"
+        except Exception:
+            return False
+
+    def _register_run_session(self, agent: Any, job: ScheduledJob, session_id: str) -> None:
+        """Name the run's session ``job:<name>:<n>`` so it's findable (DGAP-01)."""
+        store = getattr(agent, "_memory_store", None)
+        register = getattr(store, "register_session", None)
+        if register is None:
+            return
+        with contextlib.suppress(Exception):
+            register(
+                session_id,
+                name=f"job:{job.name}:{job.run_count + 1}",
+                provider=job.provider,
+                channel="scheduler",
+            )
+
+    @staticmethod
+    def _record_run_metrics(agent: Any, job: ScheduledJob, session_id: str, started: float) -> None:
+        """Link the run to its session and spend (DGAP-01). Caller holds the lock."""
+        job.last_session_id = session_id
+        job.last_duration_seconds = round(max(0.0, time.monotonic() - started), 3)
+        cost = 0.0
+        peek = getattr(agent, "_peek_cost_tracker", None)
+        if peek is not None:
+            with contextlib.suppress(Exception):
+                tracker = peek(session_id)
+                if tracker is not None:
+                    cost = float(tracker.total_cost_usd or 0.0)
+        job.last_cost_usd = round(cost, 6)
+        job.total_cost_usd = round(job.total_cost_usd + cost, 6)
+
+    def _on_scheduler_event(self, event: Any) -> None:
+        """Audit APScheduler missed / overlap-skipped runs (SCHED-03)."""
+        job_id = getattr(event, "job_id", "") or ""
+        if job_id == self._RECONCILE_JOB_ID:
+            return
+        try:
+            from apscheduler.events import EVENT_JOB_MISSED
+        except Exception:  # pragma: no cover
+            return
+        base_id = job_id.split("_retry_", 1)[0]
+        with self._lock:
+            job = self._jobs.get(base_id)
+        name = job.name if job is not None else ""
+        scheduled = getattr(event, "scheduled_run_time", None)
+        if event.code == EVENT_JOB_MISSED:
+            logger.warning("Scheduled job %r (%s) missed its run at %s.", name, job_id, scheduled)
+            if job is not None and self._is_one_shot(job) and job.run_count == 0:
+                # A one-shot whose moment passed beyond the grace window will
+                # never fire again: record that instead of leaving it looking
+                # "pending" forever.
+                with self._lock:
+                    job.enabled = False
+                    job.last_error = "missed: scheduled run time passed while scheduler was down"
+                    job.updated_at = datetime.now(tz=UTC)
+                self._save_jobs()
+            self._emit_event(
+                event_type="scheduler.job.missed",
+                result="error",
+                detail={
+                    "job_id": base_id,
+                    "name": name,
+                    "scheduled_run_time": str(scheduled) if scheduled else None,
+                },
+            )
+        else:
+            logger.warning("Scheduled job %r (%s) still running; skipped overlap.", name, job_id)
+            self._emit_event(
+                event_type="scheduler.job.skipped_overlap",
+                result="deny",
+                detail={"job_id": base_id, "name": name},
+            )
+
+    @staticmethod
+    def _is_one_shot(job: ScheduledJob) -> bool:
+        try:
+            return parse_schedule(job.schedule, tz=job.timezone or None).get("trigger") == "date"
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # APScheduler registration
@@ -1001,6 +1468,11 @@ class SchedulerManager:
                 from apscheduler.triggers.date import DateTrigger
 
                 run_date = schedule_config.pop("run_date")
+                # APScheduler's date-string parser requires seconds, so the
+                # parser's own "YYYY-MM-DDTHH:MM" output was rejected ("Invalid
+                # date string") and every `at ...` one-shot failed to register.
+                if isinstance(run_date, str):
+                    run_date = datetime.fromisoformat(run_date)
                 date_tz = schedule_config.pop("timezone", None) or tz
                 trigger = DateTrigger(run_date=run_date, timezone=date_tz)
                 self._scheduler.add_job(

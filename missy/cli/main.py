@@ -1195,7 +1195,7 @@ def schedule_add(
     parsed_retry_on = [x.strip() for x in retry_on.split(",") if x.strip()] if retry_on else None
 
     try:
-        mgr.start()
+        mgr.open_offline()
         job = mgr.add_job(
             name=name,
             schedule=schedule_str,
@@ -1210,7 +1210,6 @@ def schedule_add(
             active_hours=active_hours,
             timezone=job_timezone,
         )
-        mgr.stop()
     except ValueError as exc:
         _print_error(
             f"Invalid schedule expression: {exc}",
@@ -1227,7 +1226,8 @@ def schedule_add(
         f"  Name    : {job.name}\n"
         f"  Schedule: {job.schedule}\n"
         f"  Provider: {job.provider}\n"
-        f"  Mode    : {job.capability_mode}"
+        f"  Mode    : {job.capability_mode}\n\n"
+        "A running gateway picks this job up automatically (within ~30s)."
     )
 
 
@@ -1258,8 +1258,14 @@ def schedule_list(ctx: click.Context) -> None:
 
     for job in jobs:
         enabled_text = Text("yes", style="green") if job.enabled else Text("no", style="red")
-        last_run = job.last_run.strftime("%Y-%m-%d %H:%M") if job.last_run else "[dim]never[/]"
-        next_run = job.next_run.strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
+        last_run = (
+            job.last_run.astimezone().strftime("%Y-%m-%d %H:%M")
+            if job.last_run
+            else "[dim]never[/]"
+        )
+        next_run = (
+            job.next_run.astimezone().strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
+        )
         table.add_row(
             job.id[:8] + "…",
             job.name,
@@ -1267,7 +1273,13 @@ def schedule_list(ctx: click.Context) -> None:
             job.provider,
             job.capability_mode,
             enabled_text,
-            str(job.run_count),
+            str(job.run_count)
+            + (
+                f" (${job.total_cost_usd:.2f})"
+                if isinstance(getattr(job, "total_cost_usd", None), (int, float))
+                and job.total_cost_usd
+                else ""
+            ),
             last_run,
             next_run,
         )
@@ -1287,9 +1299,8 @@ def schedule_pause(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.pause_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1297,7 +1308,9 @@ def schedule_pause(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] paused.")
+    _print_success(
+        f"Job [bold]{job_id}[/] paused. A running gateway applies this before the job next fires."
+    )
 
 
 @schedule.command("resume")
@@ -1312,9 +1325,8 @@ def schedule_resume(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.resume_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1322,7 +1334,9 @@ def schedule_resume(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] resumed.")
+    _print_success(
+        f"Job [bold]{job_id}[/] resumed. A running gateway applies this before the job next fires."
+    )
 
 
 @schedule.command("remove")
@@ -1338,9 +1352,8 @@ def schedule_remove(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.remove_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1348,7 +1361,9 @@ def schedule_remove(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] removed.")
+    _print_success(
+        f"Job [bold]{job_id}[/] removed. A running gateway applies this before the job next fires."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3205,6 +3220,8 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
                 max_jobs=getattr(cfg.scheduling, "max_jobs", 0),
+                default_active_hours=getattr(cfg.scheduling, "active_hours", ""),
+                misfire_grace_seconds=getattr(cfg.scheduling, "misfire_grace_seconds", 300),
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001

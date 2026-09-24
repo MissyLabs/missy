@@ -88,7 +88,9 @@ class TestStartIsolatesPerJobSchedulingFailures:
         mgr = SchedulerManager(jobs_file=tmp_jobs_file)
         try:
             mgr.start()  # must not raise
-            scheduled_ids = {j.id for j in mgr._scheduler.get_jobs()}
+            scheduled_ids = {
+                j.id for j in mgr._scheduler.get_jobs() if j.id != mgr._RECONCILE_JOB_ID
+            }
             assert scheduled_ids == {"good-job"}
             # The scheduler itself must have actually started -- not just
             # the loop silently continuing past the failed job.
@@ -174,7 +176,7 @@ class TestStartIsolatesPerJobSchedulingFailures:
         try:
             mgr.start()
             assert mgr._scheduler.running is True
-            assert mgr._scheduler.get_jobs() == []
+            assert [j for j in mgr._scheduler.get_jobs() if j.id != mgr._RECONCILE_JOB_ID] == []
         finally:
             with contextlib.suppress(Exception):
                 mgr.stop()
