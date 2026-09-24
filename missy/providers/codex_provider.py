@@ -25,7 +25,7 @@ Configure in ``config.yaml``::
     providers:
       openai-codex:
         name: openai-codex
-        model: "gpt-4o"
+        model: "gpt-5.6-sol"
         timeout: 60
 """
 
@@ -59,7 +59,7 @@ _CodexAccount = Account
 
 _CODEX_BASE = "https://chatgpt.com/backend-api"
 _CODEX_ENDPOINT = f"{_CODEX_BASE}/codex/responses"
-_DEFAULT_MODEL = "gpt-5.2"
+_DEFAULT_MODEL = "gpt-5.6-sol"
 _TOKEN_REFRESH_MARGIN_SECONDS = 300
 _AUTH_STATUS_CODES = {401, 403}
 

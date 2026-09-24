@@ -50,7 +50,7 @@ Configure in ``config.yaml``::
     providers:
       acpx:
         name: acpx
-        model: "claude"          # agent name (currently: claude)
+        model: "claude-opus-5-5"
         timeout: 120
         enabled: true
 
@@ -992,7 +992,9 @@ class AcpxProvider(BaseProvider):
     Args:
         config: Provider config.
 
-            * ``model`` — the ACP agent name. Defaults to ``"claude"``.
+            * ``model`` — the Claude model selected inside the ACP
+              session. The legacy value ``"claude"`` leaves model
+              selection to the adapter.
             * ``base_url`` — no longer used (the bridge takes no CLI
               flags); if set, logged and ignored.
             * ``api_key`` — unused (the delegate uses its own env-var
@@ -1003,7 +1005,13 @@ class AcpxProvider(BaseProvider):
     name = "acpx"
 
     def __init__(self, config: ProviderConfig) -> None:
-        self._agent: str = config.model or _DEFAULT_AGENT
+        # The bridge is intentionally pinned to the Claude ACP adapter, so
+        # ProviderConfig.model is the underlying Claude model, not an agent
+        # executable name. Preserve the historical ``model: claude`` value
+        # as "adapter default" for existing configurations.
+        self._agent: str = _DEFAULT_AGENT
+        configured_model = (config.model or "").strip()
+        self._model: str = "" if configured_model == _DEFAULT_AGENT else configured_model
         requested_timeout = config.timeout or _DEFAULT_TIMEOUT
         # FX-G: explicit safe upper bound. A misconfigured excessive
         # timeout would let a single delegate call hang indefinitely,
@@ -1080,6 +1088,7 @@ class AcpxProvider(BaseProvider):
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
         cwd = kwargs.pop("cwd", None)
+        model = str(kwargs.pop("model", self._model) or "").strip()
         if "approve_all" in kwargs:
             kwargs.pop("approve_all")
             logger.warning(
@@ -1101,6 +1110,7 @@ class AcpxProvider(BaseProvider):
                 session_id=session_id,
                 task_id=task_id,
                 cwd=cwd,
+                model=model,
             )
         except Exception:
             self._cancel_rate_limit_reservation(reservation)
@@ -1127,7 +1137,7 @@ class AcpxProvider(BaseProvider):
 
         response = CompletionResponse(
             content=content,
-            model=self._agent,
+            model=model or self._agent,
             provider=self.name,
             usage=self._parse_usage(raw_stdout),
             raw={"usage": self._parse_usage_details(raw_stdout)},
@@ -1218,7 +1228,11 @@ class AcpxProvider(BaseProvider):
         # delegate never sees a native tool to reach for in the first
         # place, so a single call is sufficient.
         try:
-            raw_content, raw_stdout = self._run_acpx(current_prompt, system_prompt=augmented_system)
+            raw_content, raw_stdout = self._run_acpx(
+                current_prompt,
+                system_prompt=augmented_system,
+                model=self._model,
+            )
         except Exception:
             self._cancel_rate_limit_reservation(reservation)
             raise
@@ -1266,7 +1280,7 @@ class AcpxProvider(BaseProvider):
                 return _finish(
                     CompletionResponse(
                         content=remaining_text,
-                        model=self._agent,
+                        model=self._model or self._agent,
                         provider=self.name,
                         usage=usage,
                         raw={"raw_response": raw_content, "usage": raw_usage},
@@ -1281,7 +1295,7 @@ class AcpxProvider(BaseProvider):
         return _finish(
             CompletionResponse(
                 content=raw_content,
-                model=self._agent,
+                model=self._model or self._agent,
                 provider=self.name,
                 usage=usage,
                 raw={"usage": raw_usage},
@@ -1409,6 +1423,7 @@ class AcpxProvider(BaseProvider):
         session_id: str = "",
         task_id: str = "",
         cwd: str | None = None,
+        model: str = "",
     ) -> tuple[str, str]:
         """Run the ACP bridge and return the parsed output text.
 
@@ -1444,6 +1459,7 @@ class AcpxProvider(BaseProvider):
             task_id: For audit events.
             cwd: Optional working directory for the subprocess. Defaults
                 to the isolated acpx sandbox directory.
+            model: Claude model identifier to select for this ACP session.
 
         Returns:
             A 2-tuple of ``(extracted text from the NDJSON output, raw
@@ -1459,6 +1475,7 @@ class AcpxProvider(BaseProvider):
                 "cwd": str(resolved_cwd),
                 "systemPrompt": system_prompt,
                 "prompt": prompt,
+                "model": model,
                 "timeoutMs": int(self._timeout * 1000),
             }
         )
@@ -1729,7 +1746,7 @@ class AcpxProvider(BaseProvider):
         result: str,
         detail_msg: str,
     ) -> None:
-        """Publish a provider audit event including the agent name."""
+        """Publish a provider audit event including the agent and model."""
         try:
             from missy.core.events import AuditEvent, event_bus
 
@@ -1742,6 +1759,7 @@ class AcpxProvider(BaseProvider):
                 detail={
                     "provider": self.name,
                     "agent": self._agent,
+                    "model": self._model or self._agent,
                     "message": detail_msg,
                 },
             )

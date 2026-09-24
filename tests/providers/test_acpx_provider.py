@@ -72,6 +72,7 @@ class TestAcpxInit:
     def test_defaults(self):
         p = AcpxProvider(_make_config())
         assert p._agent == "claude"
+        assert p._model == ""
         assert p._timeout == 30  # ProviderConfig default
 
     def test_timeout_within_bound_is_unchanged(self):
@@ -91,13 +92,15 @@ class TestAcpxInit:
             AcpxProvider(_make_config(timeout=99_999))
         assert any("exceeds the safe upper bound" in r.message for r in caplog.records)
 
-    def test_custom_agent(self):
-        p = AcpxProvider(_make_config(model="codex"))
-        assert p._agent == "codex"
+    def test_explicit_claude_model(self):
+        p = AcpxProvider(_make_config(model="claude-opus-5-5"))
+        assert p._agent == "claude"
+        assert p._model == "claude-opus-5-5"
 
     def test_default_agent_when_empty(self):
         p = AcpxProvider(_make_config(model=""))
         assert p._agent == "claude"
+        assert p._model == ""
 
     def test_base_url_logged_and_ignored(self, caplog):
         # 6th tool-specific validation run: base_url is no longer
@@ -271,6 +274,13 @@ class TestAcpxAvailability:
         assert _ACP_BRIDGE_SCRIPT_PATH.name == "acp_bridge.mjs"
         assert _ACP_BRIDGE_SCRIPT_PATH.is_file()
 
+    def test_bridge_applies_requested_model_before_prompting(self):
+        source = _ACP_BRIDGE_SCRIPT_PATH.read_text(encoding="utf-8")
+        model_selection = source.index("session.setConfigOption")
+        prompt = source.index("session.prompt(prompt)")
+        assert 'configId: "model"' in source
+        assert model_selection < prompt
+
 
 # ------------------------------------------------------------------
 # Completion
@@ -300,6 +310,36 @@ class TestAcpxComplete:
         assert resp.provider == "acpx"
         assert resp.model == "claude"
         assert resp.finish_reason == "stop"
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_configured_model_is_forwarded_to_bridge(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._ndjson({"type": "text_delta", "delta": "Hello"}),
+            stderr="",
+        )
+        p = AcpxProvider(_make_config(model="claude-opus-5-5"))
+
+        response = p.complete([Message(role="user", content="Hi")])
+
+        assert self._request(mock_run)["model"] == "claude-opus-5-5"
+        assert response.model == "claude-opus-5-5"
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_per_call_model_override_is_forwarded_to_bridge(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=self._ndjson({"type": "text_delta", "delta": "Hello"}),
+            stderr="",
+        )
+        p = AcpxProvider(_make_config(model="claude-opus-5-5"))
+
+        response = p.complete(
+            [Message(role="user", content="Hi")], model="claude-opus-5-5-20260922"
+        )
+
+        assert self._request(mock_run)["model"] == "claude-opus-5-5-20260922"
+        assert response.model == "claude-opus-5-5-20260922"
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_plain_text_fallback(self, mock_run):

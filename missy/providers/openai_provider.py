@@ -12,7 +12,7 @@ Example::
     from missy.config.settings import ProviderConfig
     from missy.providers.openai_provider import OpenAIProvider
 
-    config = ProviderConfig(name="openai", model="auto", api_key="<REDACTED>")
+    config = ProviderConfig(name="openai", model="gpt-5.6-sol", api_key="<REDACTED>")
     provider = OpenAIProvider(config)
     response = provider.complete([Message(role="user", content="Hello")])
 """
@@ -37,10 +37,11 @@ from .round_robin import Account, RoundRobinAccounts
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "auto"
-_FALLBACK_MODEL = "gpt-5.5"
+_DEFAULT_MODEL = "gpt-5.6-sol"
+_FALLBACK_MODEL = "gpt-5.6-sol"
 _AUTO_MODEL_SENTINELS = {"", "auto", "latest", "best"}
 _PREFERRED_CHAT_MODELS = (
+    "gpt-5.6-sol",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",

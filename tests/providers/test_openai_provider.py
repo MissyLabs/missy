@@ -42,7 +42,7 @@ class TestOpenAIInit:
 
     def test_default_model_when_empty(self):
         p = OpenAIProvider(_make_config(model=""))
-        assert p._model == "auto"
+        assert p._model == "gpt-5.6-sol"
 
     def test_api_key_setter_resets_cached_client(self):
         p = OpenAIProvider(_make_config())

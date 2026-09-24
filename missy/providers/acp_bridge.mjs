@@ -64,7 +64,7 @@ async function main() {
     return;
   }
 
-  const { cwd, systemPrompt, prompt, timeoutMs } = request;
+  const { cwd, systemPrompt, prompt, model, timeoutMs } = request;
   const effectiveTimeout = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : 120000;
 
   // detached: true makes this the leader of its own process group (setsid),
@@ -146,6 +146,13 @@ async function main() {
           };
 
           await ctx.buildSession(sessionRequest).withSession(async (session) => {
+            if (typeof model === "string" && model.trim()) {
+              await ctx.request(acp.methods.agent.session.setConfigOption, {
+                sessionId: session.sessionId,
+                configId: "model",
+                value: model.trim(),
+              });
+            }
             session.prompt(prompt);
             for (;;) {
               const message = await session.nextUpdate();
