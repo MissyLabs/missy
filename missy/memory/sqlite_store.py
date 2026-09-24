@@ -7,6 +7,7 @@ import logging
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -397,6 +398,12 @@ class SQLiteMemoryStore:
                 INSERT INTO summaries_fts(summaries_fts, rowid, id, session_id, content)
                 VALUES ('delete', old.rowid, old.id, old.session_id, old.content);
             END;
+            CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON summaries BEGIN
+                INSERT INTO summaries_fts(summaries_fts, rowid, id, session_id, content)
+                VALUES ('delete', old.rowid, old.id, old.session_id, old.content);
+                INSERT INTO summaries_fts(rowid, id, session_id, content)
+                VALUES (new.rowid, new.id, new.session_id, new.content);
+            END;
 
             CREATE TABLE IF NOT EXISTS large_content (
                 id              TEXT PRIMARY KEY,
@@ -470,8 +477,26 @@ class SQLiteMemoryStore:
             session_id: The session whose turns should be deleted.
         """
         conn = self._conn()
-        conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
-        conn.commit()
+        with conn:
+            conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM large_content WHERE session_id = ?", (session_id,))
+            self._refresh_turn_counts(conn, [session_id])
+
+    def _refresh_turn_counts(self, conn: sqlite3.Connection, session_ids: Iterable[str]) -> None:
+        """Recompute ``sessions.turn_count`` for *session_ids* (no commit).
+
+        DATA-04: every path that deletes turns must keep the denormalized
+        counter in the same transaction, or `missy sessions list` / the Web
+        TUI report turns that no longer exist.
+        """
+        now = datetime.now(UTC).isoformat()
+        for sid in {s for s in session_ids if s}:
+            conn.execute(
+                "UPDATE sessions SET turn_count = "
+                "(SELECT COUNT(*) FROM turns WHERE session_id = ?), updated_at = ? "
+                "WHERE session_id = ?",
+                (sid, now, sid),
+            )
 
     def clear_session_full(self, session_id: str) -> dict[str, int]:
         """Delete all turns AND all summaries for *session_id*.
@@ -496,11 +521,15 @@ class SQLiteMemoryStore:
             the ``None`` this method used to return.
         """
         conn = self._conn()
-        turns_cur = conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
-        turns_removed = turns_cur.rowcount if turns_cur.rowcount is not None else 0
-        summaries_cur = conn.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
-        summaries_removed = summaries_cur.rowcount if summaries_cur.rowcount is not None else 0
-        conn.commit()
+        with conn:
+            turns_cur = conn.execute("DELETE FROM turns WHERE session_id = ?", (session_id,))
+            turns_removed = turns_cur.rowcount if turns_cur.rowcount is not None else 0
+            summaries_cur = conn.execute(
+                "DELETE FROM summaries WHERE session_id = ?", (session_id,)
+            )
+            summaries_removed = summaries_cur.rowcount if summaries_cur.rowcount is not None else 0
+            conn.execute("DELETE FROM large_content WHERE session_id = ?", (session_id,))
+            self._refresh_turn_counts(conn, [session_id])
         return {"turns": max(0, turns_removed), "summaries": max(0, summaries_removed)}
 
     def count_session_turns(self, session_id: str) -> int:
@@ -540,8 +569,12 @@ class SQLiteMemoryStore:
             id existed.
         """
         conn = self._conn()
-        cur = conn.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
-        conn.commit()
+        with conn:
+            row = conn.execute("SELECT session_id FROM turns WHERE id = ?", (turn_id,)).fetchone()
+            cur = conn.execute("DELETE FROM turns WHERE id = ?", (turn_id,))
+            conn.execute("DELETE FROM large_content WHERE turn_id = ?", (turn_id,))
+            if row is not None:
+                self._refresh_turn_counts(conn, [row["session_id"]])
         return cur.rowcount > 0
 
     def set_turn_pinned(self, turn_id: str, pinned: bool) -> bool:
@@ -1368,7 +1401,13 @@ class SQLiteMemoryStore:
     # Maintenance
     # ------------------------------------------------------------------
 
-    def cleanup(self, older_than_days: int = 30, dry_run: bool = False) -> int:
+    def cleanup(
+        self,
+        older_than_days: int = 30,
+        dry_run: bool = False,
+        *,
+        include_summaries: bool = False,
+    ) -> int:
         """Delete turns older than *older_than_days* days.
 
         Turns pinned via :meth:`set_turn_pinned` are preserved regardless
@@ -1400,13 +1439,64 @@ class SQLiteMemoryStore:
                 (cutoff,),
             ).fetchone()
             return int(row[0]) if row else 0
-        cur = conn.execute(
-            "DELETE FROM turns WHERE timestamp < ? "
-            "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1",
+        where = "timestamp < ? AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1"
+        with conn:
+            affected = [
+                r["session_id"]
+                for r in conn.execute(
+                    f"SELECT DISTINCT session_id FROM turns WHERE {where}", (cutoff,)
+                ).fetchall()
+            ]
+            cur = conn.execute(f"DELETE FROM turns WHERE {where}", (cutoff,))
+            removed = cur.rowcount
+            # DATA-04: offloaded tool output belonging to deleted turns, and
+            # turn-less large content past the cutoff, go with them.
+            conn.execute(
+                "DELETE FROM large_content WHERE created_at < ? AND "
+                "(turn_id IS NULL OR turn_id NOT IN (SELECT id FROM turns))",
+                (cutoff,),
+            )
+            self._refresh_turn_counts(conn, affected)
+            if include_summaries:
+                self._delete_orphan_summaries(conn, cutoff)
+        return removed
+
+    def _delete_orphan_summaries(self, conn: sqlite3.Connection, cutoff: str) -> int:
+        """Delete summaries older than *cutoff* whose source turns are all gone."""
+        orphaned: list[str] = []
+        rows = conn.execute(
+            "SELECT id, source_turn_ids, source_summary_ids FROM summaries WHERE created_at < ?",
             (cutoff,),
-        )
-        conn.commit()
-        return cur.rowcount
+        ).fetchall()
+        for row in rows:
+            try:
+                turn_ids = json.loads(row["source_turn_ids"] or "[]")
+                child_ids = json.loads(row["source_summary_ids"] or "[]")
+            except ValueError:
+                continue
+            if child_ids or not turn_ids:
+                continue  # condensed/structural summaries are kept
+            placeholders = ",".join("?" for _ in turn_ids)
+            alive = conn.execute(
+                f"SELECT COUNT(*) FROM turns WHERE id IN ({placeholders})", turn_ids
+            ).fetchone()[0]
+            if alive == 0:
+                orphaned.append(row["id"])
+        for summary_id in orphaned:
+            conn.execute("DELETE FROM summaries WHERE id = ?", (summary_id,))
+        return len(orphaned)
+
+    def fts_integrity_check(self) -> dict[str, str]:
+        """Run FTS5 integrity checks; returns ``{index: "ok" | error}`` (DATA-04)."""
+        conn = self._conn()
+        results: dict[str, str] = {}
+        for table in ("turns_fts", "summaries_fts"):
+            try:
+                conn.execute(f"INSERT INTO {table}({table}) VALUES('integrity-check')")
+                results[table] = "ok"
+            except sqlite3.DatabaseError as exc:
+                results[table] = str(exc)
+        return results
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -4281,6 +4281,20 @@ def doctor(ctx: click.Context) -> None:
             # Quick connectivity check: count turns
             store.get_session_turns("__health_check__", limit=1)
             table.add_row("memory store", ok, f"sqlite: {mem_path} (accessible)")
+            # DATA-04: external-content FTS5 indexes silently desync if the
+            # base table is ever changed without the triggers.
+            fts = store.fts_integrity_check()
+            bad = {k: v for k, v in fts.items() if v != "ok"}
+            if bad:
+                table.add_row(
+                    "memory search index",
+                    fail,
+                    "FTS integrity check failed: "
+                    + "; ".join(f"{k}: {v}" for k, v in bad.items())
+                    + " (rebuild: INSERT INTO <index>(<index>) VALUES('rebuild'))",
+                )
+            else:
+                table.add_row("memory search index", ok, "FTS5 integrity check passed")
         else:
             table.add_row("memory store", warn, f"not found: {mem_path}")
     except Exception as exc:
@@ -4293,7 +4307,14 @@ def doctor(ctx: click.Context) -> None:
             import json
 
             mcp_data = json.loads(mcp_path.read_text())
-            servers = mcp_data.get("servers", {}) if isinstance(mcp_data, dict) else {}
+            # mcp.json is a list of {"name": ...} entries (McpManager's own
+            # format); a legacy {"servers": {...}} mapping is still accepted.
+            if isinstance(mcp_data, list):
+                servers = {str(e.get("name", "?")): e for e in mcp_data if isinstance(e, dict)}
+            elif isinstance(mcp_data, dict):
+                servers = mcp_data.get("servers", {}) or {}
+            else:
+                servers = {}
             if servers:
                 table.add_row(
                     "mcp servers",
