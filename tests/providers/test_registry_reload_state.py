@@ -83,3 +83,18 @@ def test_hotreload_only_reseeds_default_when_config_changes():
             back = copy.deepcopy(cfg)  # default_provider: openai again
             hotreload._apply_config(back)
             assert get_registry().get_default_name() == "openai"
+
+
+def test_provider_limiter_uses_configured_rpm():
+    """RATE-02: requests_per_minute from config is the effective limit."""
+    from missy.config.settings import ProviderConfig
+
+    cfg = _make_config(
+        {
+            "anthropic": ProviderConfig(
+                name="anthropic", model="m", api_key="k", requests_per_minute=600
+            )
+        }
+    )
+    limiter = init_registry(cfg).get("anthropic").rate_limiter
+    assert limiter.requests_per_minute == 600

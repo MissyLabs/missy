@@ -5142,18 +5142,23 @@ class AgentRuntime:
 
     @staticmethod
     def _make_rate_limiter() -> Any:
-        """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
+        """Return the optional runtime-level rate limiter (none by default).
+
+        RATE-02: this used to build a hardcoded 60 RPM / 100k TPM
+        ``RateLimiter`` per AgentRuntime, stacked on top of each provider's
+        own limiter. It ignored ``providers.<name>.requests_per_minute`` /
+        ``tokens_per_minute`` (so raising them for a higher plan tier had no
+        effect beyond 60 RPM per runtime), and with several runtimes per
+        gateway it was never an aggregate cap either. The provider-level
+        limiter -- config-driven, attached in ``ProviderRegistry.from_config``
+        and shared by every runtime through the process registry -- is the
+        single authority now. The hook is kept so an embedding caller can
+        still inject an extra limiter (``runtime._rate_limiter = ...``).
 
         Returns:
-            A :class:`~missy.providers.rate_limiter.RateLimiter` instance,
-            or ``None`` when the module is unavailable.
+            ``None``.
         """
-        try:
-            from missy.providers.rate_limiter import RateLimiter
-
-            return RateLimiter(requests_per_minute=60, tokens_per_minute=100_000)
-        except Exception:
-            return None
+        return None
 
     @staticmethod
     def _make_sanitizer() -> Any:
