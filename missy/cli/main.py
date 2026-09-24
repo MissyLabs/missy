@@ -3672,9 +3672,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     ) -> None:
                         while not stop.is_set():
                             with contextlib.suppress(Exception):
-                                await asyncio.to_thread(
-                                    ch._rest.trigger_typing, cid
-                                )  # noqa: SLF001
+                                await asyncio.to_thread(ch._rest.trigger_typing, cid)  # noqa: SLF001
                             with contextlib.suppress(asyncio.TimeoutError):
                                 await asyncio.wait_for(stop.wait(), timeout=7.0)
 
@@ -4170,7 +4168,9 @@ def doctor(ctx: click.Context) -> None:
                             status_text = (
                                 ok
                                 if item_status == "ok"
-                                else fail if item_status == "error" else warn
+                                else fail
+                                if item_status == "error"
+                                else warn
                             )
                             table.add_row(
                                 f"provider:{name}:{item.get('name', 'diagnostic')}",
