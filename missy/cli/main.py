@@ -5396,14 +5396,32 @@ def patches_list(ctx: click.Context) -> None:
 
 @patches.command("approve")
 @click.argument("patch_id")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Approve even if the content matches prompt-injection patterns.",
+)
 @click.pass_context
-def patches_approve(ctx: click.Context, patch_id: str) -> None:
-    """Approve a proposed patch."""
-    from missy.agent.prompt_patches import PromptPatchManager
+def patches_approve(ctx: click.Context, patch_id: str, force: bool) -> None:
+    """Approve a proposed patch.
+
+    Approved patches are appended to the system prompt of every run (picked
+    up by a running gateway on its next run, no restart needed).
+    """
+    from missy.agent.prompt_patches import PatchContentRejected, PromptPatchManager
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
-    if mgr.approve(patch_id):
+    try:
+        approved = mgr.approve(patch_id, force=force)
+    except PatchContentRejected as exc:
+        _print_error(
+            f"{exc}",
+            hint="Review the patch text; re-run with --force only if it is safe.",
+        )
+        sys.exit(1)
+    if approved:
         _print_success(f"Patch [bold]{patch_id}[/] approved.")
     else:
         _print_error(f"Patch {patch_id!r} not found or not awaiting review.")

@@ -72,3 +72,13 @@ def _reset_discord_rate_governor():
     rate_governor.reset()
     yield
     rate_governor.reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_prompt_patch_store(tmp_path_factory, monkeypatch):
+    """GAP-01: AgentRuntime now injects approved patches from the default
+    store into every system prompt; never let tests read (or write outcome
+    counters into) the operator's real ~/.missy/patches.json."""
+    store = tmp_path_factory.mktemp("patches") / "patches.json"
+    monkeypatch.setattr("missy.agent.prompt_patches.DEFAULT_STORE_PATH", str(store))
+    yield
