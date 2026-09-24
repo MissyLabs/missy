@@ -45,11 +45,14 @@ Example::
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from missy.memory.sqlite_store import SQLiteMemoryStore
@@ -94,12 +97,17 @@ class SleeptimeConfig:
             when no provider is reachable.
     """
 
-    enabled: bool = True
+    # Provider-backed background work is deliberately opt-in.  This is a
+    # safety boundary: constructing an AgentRuntime must never spend quota.
+    enabled: bool = False
     idle_threshold_seconds: float = 300.0
     min_unprocessed_turns: int = 5
     batch_size: int = 20
     check_interval_seconds: float = 60.0
-    use_llm_summarization: bool = True
+    use_llm_summarization: bool = False
+    provider: str | None = None
+    backoff_base_seconds: float = 60.0
+    backoff_max_seconds: float = 3600.0
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +140,11 @@ class SleeptimeStats:
     last_cycle_at: str | None = None
     total_processing_seconds: float = 0.0
     errors: int = 0
+    provider_calls: int = 0
+    provider_failures: int = 0
+    last_provider_call_at: str | None = None
+    last_provider_failure_at: str | None = None
+    next_retry_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +180,11 @@ class SleeptimeWorker:
             ingestion entirely — no extra write load.
     """
 
+    _owners_lock = threading.Lock()
+    _owners: dict[str, SleeptimeWorker] = {}
+    _provider_lock = threading.Lock()
+    _provider_backoff: dict[str, tuple[float, float]] = {}
+
     def __init__(
         self,
         config: SleeptimeConfig | None = None,
@@ -174,6 +192,7 @@ class SleeptimeWorker:
         provider_registry: ProviderRegistry | None = None,
         graph_store: object | None = None,
         semantic_index: object | None = None,
+        completion_runner: Callable[..., Any] | None = None,
     ) -> None:
         self._config = config or SleeptimeConfig()
         self._memory_store = memory_store
@@ -183,24 +202,57 @@ class SleeptimeWorker:
         # indexed into FAISS so memory_search / `missy memory semantic-search`
         # can do paraphrase recall. None (default) disables it (no write load).
         self._semantic_index = semantic_index
+        self._completion_runner = completion_runner
 
         self._last_activity: float = time.monotonic()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._processing = False
         self._stats = SleeptimeStats()
+        self._owner_key: str | None = None
+        self._abort_cycle = False
+
+    def _memory_store_key(self) -> str:
+        store = self._memory_store
+        if hasattr(store, "_primary"):
+            store = store._primary
+        path = getattr(store, "_path", None)
+        if path is not None:
+            try:
+                return f"sqlite:{path.resolve()}"
+            except Exception:
+                return f"sqlite:{path}"
+        return f"object:{id(store)}"
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self) -> bool:
         """Start the background worker daemon thread.
 
         No-op if the worker is already running.
         """
         if self._thread is not None and self._thread.is_alive():
-            return
+            return True
+        if not self._config.enabled or os.environ.get("MISSY_DISABLE_SLEEPTIME", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            logger.info("SleeptimeWorker disabled; no background thread started.")
+            return False
+        key = self._memory_store_key()
+        with self._owners_lock:
+            owner = self._owners.get(key)
+            if owner is not None and owner is not self:
+                logger.warning(
+                    "SleeptimeWorker owner already exists for %s; refusing duplicate.", key
+                )
+                return False
+            self._owners[key] = self
+            self._owner_key = key
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -211,6 +263,7 @@ class SleeptimeWorker:
         logger.debug(
             "SleeptimeWorker started (idle_threshold=%.0fs).", self._config.idle_threshold_seconds
         )
+        return True
 
     def stop(self, timeout: float = 10.0) -> None:
         """Signal the worker to stop and wait for it to finish.
@@ -222,7 +275,26 @@ class SleeptimeWorker:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                # A provider call may be blocked in ACPX.  Kill only child
+                # process groups launched by this background thread, then
+                # give it one final chance to unwind.
+                try:
+                    from missy.providers.acpx_provider import cancel_sleeptime_processes
+
+                    cancel_sleeptime_processes()
+                except Exception:
+                    logger.debug("SleeptimeWorker: ACPX cancellation failed", exc_info=True)
+                self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.error("SleeptimeWorker did not stop within %.1fs", timeout * 2)
+                return
             self._thread = None
+        if self._owner_key is not None:
+            with self._owners_lock:
+                if self._owners.get(self._owner_key) is self:
+                    del self._owners[self._owner_key]
+            self._owner_key = None
         logger.debug("SleeptimeWorker stopped.")
 
     def record_activity(self) -> None:
@@ -252,6 +324,28 @@ class SleeptimeWorker:
     def stats(self) -> SleeptimeStats:
         """Cumulative processing statistics."""
         return self._stats
+
+    @classmethod
+    def diagnostics(cls) -> dict[str, Any]:
+        """Return process-wide, operator-safe worker state."""
+        with cls._owners_lock:
+            workers = list(cls._owners.values())
+        return {
+            "worker_count": sum(bool(w._thread and w._thread.is_alive()) for w in workers),
+            "workers": [
+                {
+                    "store": w._owner_key,
+                    "provider": w._config.provider or "deterministic",
+                    "processing": w._processing,
+                    "provider_calls": w._stats.provider_calls,
+                    "provider_failures": w._stats.provider_failures,
+                    "last_provider_call_at": w._stats.last_provider_call_at,
+                    "last_provider_failure_at": w._stats.last_provider_failure_at,
+                    "next_retry_at": w._stats.next_retry_at,
+                }
+                for w in workers
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Internal loop
@@ -380,6 +474,7 @@ class SleeptimeWorker:
         cycle_summaries = 0
         cycle_learnings = 0
 
+        self._abort_cycle = False
         for session_id in sessions:
             turns = self._get_unsummarised_turns(session_id)
             if not turns:
@@ -390,6 +485,10 @@ class SleeptimeWorker:
             if summary_content:
                 self._persist_summary(session_id, batch, summary_content)
                 cycle_summaries += 1
+
+            if self._abort_cycle:
+                logger.warning("SleeptimeWorker: provider circuit opened; aborting cycle.")
+                break
 
             new_learnings = self._extract_batch_learnings(session_id, batch)
             for learning in new_learnings:
@@ -609,7 +708,7 @@ class SleeptimeWorker:
 
         if self._config.use_llm_summarization and self._provider_registry is not None:
             combined = self._turns_to_text(turns)
-            llm_result = self._llm_summarize(combined)
+            llm_result = self._llm_summarize(combined, session_id=session_id)
             if llm_result:
                 return llm_result
 
@@ -643,11 +742,11 @@ class SleeptimeWorker:
         except Exception:
             logger.warning("SleeptimeWorker: failed to persist summary.", exc_info=True)
 
-    def _llm_summarize(self, text: str) -> str | None:
+    def _llm_summarize(self, text: str, *, session_id: str = "sleeptime") -> str | None:
         """Use an LLM provider to summarise *text*.
 
-        Prefers the fast_model tier if the provider exposes one.  Returns
-        ``None`` on any failure so the caller can fall back gracefully.
+        Uses only the explicitly configured provider. Returns ``None`` on
+        failure so the caller can use deterministic summarisation.
 
         Args:
             text: The concatenated turn text to summarise.
@@ -658,20 +757,26 @@ class SleeptimeWorker:
         if self._provider_registry is None or not text.strip():
             return None
 
-        # Prefer a fast/cheap model tier.
-        provider = None
-        for name in self._provider_registry.list_providers():
-            candidate = self._provider_registry.get(name)
-            if candidate is not None:
-                try:
-                    if candidate.is_available():
-                        provider = candidate
-                        break
-                except Exception:
-                    continue
+        provider_name = (self._config.provider or "").strip()
+        if not provider_name:
+            return None
+
+        provider = self._provider_registry.get(provider_name)
 
         if provider is None:
-            logger.debug("SleeptimeWorker: no available provider for LLM summarisation.")
+            logger.warning(
+                "SleeptimeWorker: configured provider %r is not registered.", provider_name
+            )
+            return None
+
+        now = time.monotonic()
+        with self._provider_lock:
+            retry_at, _delay = self._provider_backoff.get(provider_name, (0.0, 0.0))
+        if retry_at > now:
+            self._abort_cycle = True
+            self._stats.next_retry_at = datetime.fromtimestamp(
+                time.time() + (retry_at - now), UTC
+            ).isoformat()
             return None
 
         from missy.providers.base import Message
@@ -683,10 +788,46 @@ class SleeptimeWorker:
             f"{text[:4000]}"
         )
         try:
-            response = provider.complete([Message(role="user", content=prompt)])
+            task_id = f"sleeptime-summary:{uuid.uuid4()}"
+            messages = [Message(role="user", content=prompt)]
+            if self._completion_runner is not None:
+                response = self._completion_runner(
+                    provider_name, messages, session_id=session_id, task_id=task_id
+                )
+            else:
+                response = provider.complete(messages, session_id=session_id, task_id=task_id)
+            self._stats.provider_calls += 1
+            self._stats.last_provider_call_at = datetime.now(UTC).isoformat()
+            with self._provider_lock:
+                self._provider_backoff.pop(provider_name, None)
+            self._stats.next_retry_at = None
             result = response.content.strip()
             return result if result else None
-        except Exception:
+        except Exception as exc:
+            self._stats.provider_calls += 1
+            self._stats.provider_failures += 1
+            self._stats.last_provider_call_at = datetime.now(UTC).isoformat()
+            self._stats.last_provider_failure_at = self._stats.last_provider_call_at
+            from missy.providers.health import ProviderFailureClass, classify_provider_error
+
+            failure_class = classify_provider_error(exc)
+            if failure_class in {
+                ProviderFailureClass.AUTH,
+                ProviderFailureClass.RATE_LIMIT,
+                ProviderFailureClass.TIMEOUT,
+            }:
+                with self._provider_lock:
+                    _old_retry, old_delay = self._provider_backoff.get(provider_name, (0.0, 0.0))
+                    delay = min(
+                        old_delay * 2 if old_delay else self._config.backoff_base_seconds,
+                        self._config.backoff_max_seconds,
+                    )
+                    retry_at = time.monotonic() + delay
+                    self._provider_backoff[provider_name] = (retry_at, delay)
+                self._stats.next_retry_at = datetime.fromtimestamp(
+                    time.time() + delay, UTC
+                ).isoformat()
+                self._abort_cycle = True
             logger.warning("SleeptimeWorker: LLM summarisation failed.", exc_info=True)
             return None
 

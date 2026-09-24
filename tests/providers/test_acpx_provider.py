@@ -1149,6 +1149,62 @@ class TestCompleteWithTools:
         assert "Just text, no tools." in resp.content
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_usage_metadata_is_reported_and_reconciled(self, mock_run):
+        stdout = "\n".join(
+            [
+                self._ndjson("done").strip(),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "ok": True,
+                        "usage": {
+                            "inputTokens": 10,
+                            "outputTokens": 5,
+                            "cachedWriteTokens": 20,
+                            "cachedReadTokens": 30,
+                        },
+                    }
+                ),
+            ]
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
+        p = AcpxProvider(_make_config())
+        limiter = MagicMock()
+        reservation = MagicMock()
+        limiter.acquire.return_value = reservation
+        p.rate_limiter = limiter
+
+        response = p.complete_with_tools([Message(role="user", content="hi")], [])
+
+        assert response.usage == {
+            "prompt_tokens": 60,
+            "completion_tokens": 5,
+            "total_tokens": 65,
+        }
+        limiter.acquire.assert_called_once()
+        limiter.record_usage.assert_called_once_with(
+            prompt_tokens=60,
+            completion_tokens=5,
+            estimated_tokens=limiter.acquire.call_args.kwargs["tokens"],
+            reservation=reservation,
+        )
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_plain_complete_uses_shared_rate_limiter(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout=self._ndjson("done"), stderr="")
+        p = AcpxProvider(_make_config())
+        limiter = MagicMock()
+        reservation = MagicMock()
+        limiter.acquire.return_value = reservation
+        p.rate_limiter = limiter
+
+        p.complete([Message(role="user", content="hello")])
+
+        limiter.acquire.assert_called_once()
+        assert limiter.acquire.call_args.kwargs["reconcile"] is True
+        limiter.record_usage.assert_called_once()
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
     def test_tool_call_parsed_and_returned(self, mock_run):
         response_text = (
             "Let me calculate that.\n\n"

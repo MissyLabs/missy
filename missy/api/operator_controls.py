@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from missy.api.audit_browser import redact_audit_value
 
 if TYPE_CHECKING:
+    from missy.agent.runtime import AgentRuntime
     from missy.providers.registry import ProviderRegistry
     from missy.scheduler.manager import SchedulerManager
     from missy.tools.benchmark.benchmark_store import BenchmarkStore
@@ -26,6 +27,7 @@ _CONTROL_CANDIDATE_IMPORT_BENCHMARKS = "tool_candidate.import_benchmarks"
 _CONTROL_CANDIDATE_APPROVE = "tool_candidate.approve"
 _CONTROL_CANDIDATE_ENABLE = "tool_candidate.enable"
 _CONTROL_CANDIDATE_DENY = "tool_candidate.deny"
+_CONTROL_SLEEPTIME_STOP = "sleeptime.stop"
 _SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
@@ -33,6 +35,7 @@ def list_operator_controls(
     provider_registry: ProviderRegistry | None = None,
     scheduler: SchedulerManager | None = None,
     candidate_store: CandidateStore | None = None,
+    runtime: AgentRuntime | None = None,
 ) -> dict[str, Any]:
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
@@ -44,6 +47,16 @@ def list_operator_controls(
     candidate_targets = _candidate_targets(candidate_store)
     return {
         "controls": [
+            {
+                "id": _CONTROL_SLEEPTIME_STOP,
+                "label": "Stop background memory",
+                "description": "Immediately stop this process's SleeptimeWorker.",
+                "subsystem": "sleeptime",
+                "requires_confirmation": True,
+                "confirmation_template": "stop-sleeptime",
+                "enabled": bool(runtime is not None and getattr(runtime, "_sleeptime", None)),
+                "targets": [],
+            },
             {
                 "id": _CONTROL_PROVIDER_SET_DEFAULT,
                 "label": "Set default provider",
@@ -190,6 +203,7 @@ def execute_operator_control(
     candidate_store: CandidateStore | None = None,
     benchmark_store: BenchmarkStore | None = None,
     config_path: str | None = None,
+    runtime: AgentRuntime | None = None,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
     """Execute a confirmed operator control.
 
@@ -202,6 +216,24 @@ def execute_operator_control(
             ``provider.set_weight`` to persist the new weight (the Web
             TUI's provider controls otherwise never write config.yaml).
     """
+    if control_id == _CONTROL_SLEEPTIME_STOP:
+        if runtime is None:
+            return (
+                503,
+                {"message": "Runtime unavailable"},
+                _audit_detail(control_id, "sleeptime", reason="runtime_unavailable"),
+            )
+        if body.get("confirm") != "stop-sleeptime":
+            return (
+                409,
+                {
+                    "message": "Explicit confirmation is required",
+                    "confirmation": "stop-sleeptime",
+                },
+                _audit_detail(control_id, "sleeptime", reason="confirmation_required"),
+            )
+        runtime.disable_sleeptime()
+        return 200, {"message": "SleeptimeWorker stopped"}, _audit_detail(control_id, "sleeptime")
     if control_id == _CONTROL_PROVIDER_SET_DEFAULT:
         return _execute_provider_set_default(body, provider_registry=provider_registry)
     if control_id in {_CONTROL_PROVIDER_ENABLE, _CONTROL_PROVIDER_DISABLE}:
@@ -1211,6 +1243,8 @@ def _audit_detail(control_id: str, target: str, **extra: Any) -> dict[str, Any]:
         subsystem = "scheduler"
     elif control_id.startswith("tool_candidate."):
         subsystem = "tool_candidate"
+    elif control_id.startswith("sleeptime."):
+        subsystem = "sleeptime"
     return redact_audit_value(
         {
             "subsystem": subsystem,

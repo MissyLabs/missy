@@ -496,6 +496,15 @@ scheduling:
   max_jobs: 0                             # 0 = unlimited
 
 # ---------------------------------------------------------------------------
+# Background memory processing
+# Off by default. With no provider, summaries are deterministic and local.
+# Set MISSY_DISABLE_SLEEPTIME=1 as an emergency process-level kill switch.
+# ---------------------------------------------------------------------------
+sleeptime:
+  enabled: false
+  provider: ""                            # Explicit registry key, e.g. ollama
+
+# ---------------------------------------------------------------------------
 # Provider configuration
 # API keys must be set as environment variables, not in this file.
 #   export ANTHROPIC_API_KEY="sk-ant-..."

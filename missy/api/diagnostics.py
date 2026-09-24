@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +39,7 @@ def build_diagnostics(
         _provider_section(provider_registry, runtime),
         _tool_section(tool_registry),
         _memory_section(memory_store),
+        _sleeptime_section(runtime),
         _policy_section(),
         _gateway_section(),
         _discord_section(),
@@ -199,6 +201,42 @@ def _memory_section(memory_store: SQLiteMemoryStore | None) -> dict[str, Any]:
         sessions = memory_store.list_sessions(limit=1)
         checks.append(_check("Session index", "ok", "present" if sessions else "empty"))
     return _section("memory", "Memory", checks)
+
+
+def _sleeptime_section(runtime: AgentRuntime | None) -> dict[str, Any]:
+    try:
+        from missy.agent.sleeptime import SleeptimeWorker
+
+        state = SleeptimeWorker.diagnostics()
+    except Exception as exc:
+        return _section(
+            "sleeptime", "Background memory", [_check("Status", "error", _safe_error(exc))]
+        )
+    enabled = bool(runtime and getattr(runtime, "_sleeptime", None) is not None)
+    kill_switch = os.environ.get("MISSY_DISABLE_SLEEPTIME", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    checks = [
+        _check(
+            "Background processing", "warn" if enabled else "ok", "running" if enabled else "off"
+        ),
+        _check(
+            "Environment kill switch",
+            "ok",
+            "active" if kill_switch else "available (set MISSY_DISABLE_SLEEPTIME=1)",
+        ),
+        _check(
+            "Worker count",
+            "ok" if state["worker_count"] <= 1 else "error",
+            state["worker_count"],
+            remediation="Set MISSY_DISABLE_SLEEPTIME=1 and restart the gateway.",
+        ),
+        _check("Workers", "ok", state["workers"]),
+    ]
+    return _section("sleeptime", "Background memory", checks)
 
 
 def _policy_section() -> dict[str, Any]:
@@ -376,9 +414,11 @@ def _discord_section() -> dict[str, Any]:
             _check(
                 f"Account {idx} token",
                 "ok" if token_present else "warn",
-                "present"
-                if token_present
-                else f"missing env:{getattr(account, 'token_env_var', '')}",
+                (
+                    "present"
+                    if token_present
+                    else f"missing env:{getattr(account, 'token_env_var', '')}"
+                ),
                 remediation="Set the configured Discord token environment variable or vault reference.",
             )
         )

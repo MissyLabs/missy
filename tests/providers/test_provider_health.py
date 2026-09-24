@@ -26,6 +26,10 @@ class TestClassifyProviderError:
         exc = ProviderError("request failed: 401 Unauthorized")
         assert classify_provider_error(exc) == ProviderFailureClass.AUTH
 
+    def test_acp_authentication_required(self):
+        exc = ProviderError("Authentication required. Please run /login")
+        assert classify_provider_error(exc) == ProviderFailureClass.AUTH
+
     def test_anthropic_rate_limited(self):
         exc = ProviderError("Anthropic rate limited: 429 Too Many Requests")
         assert classify_provider_error(exc) == ProviderFailureClass.RATE_LIMIT
@@ -36,6 +40,10 @@ class TestClassifyProviderError:
 
     def test_bare_429_marker(self):
         exc = ProviderError("upstream returned 429")
+        assert classify_provider_error(exc) == ProviderFailureClass.RATE_LIMIT
+
+    def test_account_limit_reached(self):
+        exc = ProviderError("You have hit your limit for this billing period")
         assert classify_provider_error(exc) == ProviderFailureClass.RATE_LIMIT
 
     def test_timeout_marker(self):
@@ -83,20 +91,10 @@ class TestClassifyProviderError:
         assert str(ProviderFailureClass.RATE_LIMIT) == "rate_limit"
 
 
-class TestClassifyProviderErrorAcpxBlindSpot:
-    """Documents a real, verified gap: unlike Anthropic/OpenAI/Codex (which
-    catch their SDK's own structured exception types and deliberately
-    construct a ProviderError mentioning "authentication failed"/"rate
-    limit(ed)"), AcpxProvider wraps an external CLI subprocess and has no
-    equivalent structured signal -- its generic nonzero-exit path just
-    relays the wrapped CLI's raw stderr text verbatim. Unless that
-    external, unowned CLI's own wording happens to contain one of this
-    module's marker words, a real acpx auth or rate-limit failure
-    classifies as UNKNOWN, silently skipping the rotate_key()/fallback
-    response an equivalent Anthropic/OpenAI/Codex failure would trigger.
-    """
+class TestClassifyProviderErrorAcpx:
+    """ACPX's relayed CLI errors use ACP-specific wording."""
 
-    def test_real_acpx_nonzero_exit_with_auth_like_stderr_is_not_classified_as_auth(self):
+    def test_real_acpx_nonzero_exit_with_auth_stderr_is_classified_as_auth(self):
         from unittest.mock import MagicMock, patch
 
         from missy.providers.acpx_provider import AcpxProvider
@@ -105,11 +103,7 @@ class TestClassifyProviderErrorAcpxBlindSpot:
 
         with patch("missy.providers.acpx_provider._run_subprocess_with_group_kill") as mock_run:
             # Realistic wording a wrapped CLI might plausibly use for an
-            # expired/invalid credential -- deliberately NOT the exact
-            # literal "authentication failed"/"unauthorized" markers this
-            # module's classifier looks for, since acpx never constructs
-            # that vocabulary itself; it only relays whatever the external
-            # CLI's stderr actually says.
+            # expired/invalid credential. ACPX relays this wording verbatim.
             mock_run.return_value = MagicMock(
                 returncode=1, stdout="", stderr="Error: not logged in. Run `claude login` first."
             )
@@ -120,10 +114,9 @@ class TestClassifyProviderErrorAcpxBlindSpot:
             except ProviderError as exc:
                 real_exc = exc
 
-        # The real, unmodified exception acpx_provider.py actually raises --
-        # confirms this is a genuine classification gap, not a hypothetical.
+        # Classify the real, unmodified exception acpx_provider.py raises.
         assert "not logged in" in str(real_exc)
-        assert classify_provider_error(real_exc) == ProviderFailureClass.UNKNOWN
+        assert classify_provider_error(real_exc) == ProviderFailureClass.AUTH
 
 
 class TestUserFacingProviderError:

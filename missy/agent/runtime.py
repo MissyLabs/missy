@@ -585,6 +585,12 @@ class AgentConfig:
     #: Minimum message count before the condenser pass runs (avoids compressing
     #: short conversations). Only consulted when condenser_pipeline_enabled.
     condenser_min_messages: int = 30
+    #: Background memory processing is opt-in and intended only for one
+    #: long-lived owner runtime (normally the gateway's primary runtime).
+    sleeptime_enabled: bool = False
+    #: Explicit provider registry key for LLM summaries.  ``None`` keeps
+    #: summaries deterministic/local and makes no provider calls.
+    sleeptime_provider: str | None = None
 
 
 #: System prompt for Discord channel.
@@ -5170,7 +5176,10 @@ class AgentRuntime:
             enhancement, not a required subsystem.
         """
         try:
-            from missy.agent.sleeptime import SleeptimeWorker
+            from missy.agent.sleeptime import SleeptimeConfig, SleeptimeWorker
+
+            if not bool(getattr(self.config, "sleeptime_enabled", False)):
+                return None
 
             try:
                 provider_registry = get_registry()
@@ -5199,16 +5208,46 @@ class AgentRuntime:
                 except Exception:
                     logger.debug("Semantic index unavailable; disabled", exc_info=True)
             worker = SleeptimeWorker(
+                config=SleeptimeConfig(
+                    enabled=True,
+                    use_llm_summarization=bool(self.config.sleeptime_provider),
+                    provider=self.config.sleeptime_provider,
+                ),
                 memory_store=self._memory_store,
                 provider_registry=provider_registry,
                 graph_store=graph_store,
                 semantic_index=semantic_index,
+                completion_runner=self._run_sleeptime_completion,
             )
-            worker.start()
-            return worker
+            return worker if worker.start() else None
         except Exception:
             logger.debug("SleeptimeWorker unavailable; continuing without it", exc_info=True)
             return None
+
+    def _run_sleeptime_completion(
+        self, provider_name: str, messages: list, *, session_id: str, task_id: str
+    ) -> Any:
+        """Run and account for one explicitly configured background call."""
+        registry = get_registry()
+        provider = registry.get(provider_name)
+        if provider is None:
+            raise RuntimeError(f"Sleeptime provider {provider_name!r} is not registered")
+        self._check_budget(session_id, task_id)
+        response = provider.complete(messages, session_id=session_id, task_id=task_id)
+        self._record_cost(
+            response,
+            session_id=session_id,
+            provider_name=provider_name,
+            account_name=self._safe_current_account_name(provider),
+        )
+        self._check_budget(session_id, task_id)
+        return response
+
+    def disable_sleeptime(self) -> None:
+        """Operator kill switch for this runtime's background worker."""
+        if self._sleeptime is not None:
+            self._sleeptime.stop()
+            self._sleeptime = None
 
     @staticmethod
     def _make_drift_detector() -> Any:

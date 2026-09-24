@@ -25,8 +25,27 @@ class ProviderFailureClass(StrEnum):
     UNKNOWN = "unknown"
 
 
-_AUTH_MARKERS = ("authentication failed", "unauthorized", "invalid api key", "invalid x-api-key")
-_RATE_LIMIT_MARKERS = ("rate limit", "rate limited", "429", "too many requests")
+_AUTH_MARKERS = (
+    "authentication failed",
+    "authentication required",
+    "auth required",
+    "unauthorized",
+    "please run /login",
+    "not logged in",
+    "invalid api key",
+    "invalid x-api-key",
+    "401",
+)
+_RATE_LIMIT_MARKERS = (
+    "rate limit",
+    "rate limited",
+    "hit your limit",
+    "limit reached",
+    "usage limit",
+    "quota exceeded",
+    "429",
+    "too many requests",
+)
 _TIMEOUT_MARKERS = ("timed out", "timeout")
 
 # Markers for a provider *content-policy / safety* refusal (as opposed to an

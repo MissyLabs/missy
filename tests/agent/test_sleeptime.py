@@ -80,12 +80,13 @@ def _make_store(
 class TestSleeptimeConfigDefaults:
     def test_defaults(self):
         cfg = SleeptimeConfig()
-        assert cfg.enabled is True
+        assert cfg.enabled is False
         assert cfg.idle_threshold_seconds == 300.0
         assert cfg.min_unprocessed_turns == 5
         assert cfg.batch_size == 20
         assert cfg.check_interval_seconds == 60.0
-        assert cfg.use_llm_summarization is True
+        assert cfg.use_llm_summarization is False
+        assert cfg.provider is None
 
     def test_custom_values(self):
         cfg = SleeptimeConfig(enabled=False, idle_threshold_seconds=10.0, batch_size=5)
@@ -118,7 +119,7 @@ class TestSleeptimeStats:
 
 class TestWorkerLifecycle:
     def test_start_creates_daemon_thread(self):
-        worker = SleeptimeWorker(config=SleeptimeConfig(check_interval_seconds=9999))
+        worker = SleeptimeWorker(config=SleeptimeConfig(enabled=True, check_interval_seconds=9999))
         worker.start()
         assert worker._thread is not None
         assert worker._thread.is_alive()
@@ -126,7 +127,7 @@ class TestWorkerLifecycle:
         worker.stop(timeout=2.0)
 
     def test_start_is_idempotent(self):
-        worker = SleeptimeWorker(config=SleeptimeConfig(check_interval_seconds=9999))
+        worker = SleeptimeWorker(config=SleeptimeConfig(enabled=True, check_interval_seconds=9999))
         worker.start()
         first_thread = worker._thread
         worker.start()  # second call — should not replace the thread
@@ -134,7 +135,7 @@ class TestWorkerLifecycle:
         worker.stop(timeout=2.0)
 
     def test_stop_joins_thread(self):
-        worker = SleeptimeWorker(config=SleeptimeConfig(check_interval_seconds=9999))
+        worker = SleeptimeWorker(config=SleeptimeConfig(enabled=True, check_interval_seconds=9999))
         worker.start()
         assert worker._thread is not None
         worker.stop(timeout=3.0)
@@ -454,7 +455,7 @@ class TestLlmSummarize:
     def test_returns_llm_output(self):
         registry = self._make_provider_registry("- Key fact extracted by LLM")
         worker = SleeptimeWorker(
-            config=SleeptimeConfig(use_llm_summarization=True),
+            config=SleeptimeConfig(use_llm_summarization=True, provider="anthropic"),
             provider_registry=registry,
         )
         result = worker._llm_summarize("USER: hello\nASSISTANT: world")
@@ -463,7 +464,7 @@ class TestLlmSummarize:
     def test_returns_none_on_empty_provider_response(self):
         registry = self._make_provider_registry("   ")
         worker = SleeptimeWorker(
-            config=SleeptimeConfig(use_llm_summarization=True),
+            config=SleeptimeConfig(use_llm_summarization=True, provider="anthropic"),
             provider_registry=registry,
         )
         result = worker._llm_summarize("some text")
@@ -477,7 +478,7 @@ class TestLlmSummarize:
         registry.list_providers.return_value = ["anthropic"]
         registry.get.return_value = provider
         worker = SleeptimeWorker(
-            config=SleeptimeConfig(use_llm_summarization=True),
+            config=SleeptimeConfig(use_llm_summarization=True, provider="anthropic"),
             provider_registry=registry,
         )
         result = worker._llm_summarize("text")

@@ -1348,6 +1348,7 @@ def _make_handler(
                     provider_registry=provider_registry,
                     scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
                     candidate_store=candidate_store,
+                    runtime=runtime,
                 )
             )
 
@@ -1361,6 +1362,7 @@ def _make_handler(
                 candidate_store=candidate_store,
                 benchmark_store=benchmark_store,
                 config_path=config_path,
+                runtime=runtime,
             )
             result = "allow" if status < 400 else "deny"
             severity = "info" if result == "allow" else "warning"

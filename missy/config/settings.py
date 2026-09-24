@@ -587,6 +587,18 @@ class ProactiveConfig:
     triggers: list[ProactiveTriggerConfig] = field(default_factory=list)
 
 
+@dataclass
+class SleeptimeConfig:
+    """Opt-in gateway background memory processing configuration.
+
+    With ``provider`` empty, summaries use deterministic local keyword
+    extraction and cannot consume model quota.
+    """
+
+    enabled: bool = False
+    provider: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -632,6 +644,7 @@ class MissyConfig:
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    sleeptime: SleeptimeConfig = field(default_factory=SleeptimeConfig)
     sandbox: SandboxConfig | None = None
     container: ContainerConfig | None = None
     vision: VisionConfig = field(default_factory=VisionConfig)
@@ -1206,6 +1219,14 @@ def _parse_vision(data: dict[str, Any]) -> VisionConfig:
     )
 
 
+def _parse_sleeptime(data: dict[str, Any]) -> SleeptimeConfig:
+    _warn_unknown_keys("sleeptime", data, SleeptimeConfig)
+    return SleeptimeConfig(
+        enabled=_coerce_bool(data.get("enabled"), False),
+        provider=str(data.get("provider", "") or "").strip(),
+    )
+
+
 def _parse_container(data: dict[str, Any]) -> ContainerConfig:
     """Parse the ``container`` section of a Missy config dict."""
     from missy.security.container import parse_container_config
@@ -1287,6 +1308,7 @@ def load_config(path: str) -> MissyConfig:
             observability=_parse_observability(data.get("observability") or {}),
             vault=_parse_vault(data.get("vault") or {}),
             proactive=_parse_proactive(data.get("proactive") or {}),
+            sleeptime=_parse_sleeptime(data.get("sleeptime") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
             container=_parse_container(data.get("container") or {}),
             vision=_parse_vision(data.get("vision") or {}),

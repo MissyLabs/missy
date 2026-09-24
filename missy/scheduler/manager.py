@@ -574,6 +574,7 @@ class SchedulerManager:
             task_id=task_id,
         )
 
+        agent = None
         try:
             # Import lazily to avoid circular imports at module load time.
             from missy.agent.runtime import AgentConfig, AgentRuntime
@@ -693,6 +694,14 @@ class SchedulerManager:
 
             self._save_jobs()
             return
+        finally:
+            if agent is not None:
+                try:
+                    agent.shutdown()
+                except Exception:
+                    logger.warning(
+                        "Failed to shut down scheduler runtime for %s", job_id, exc_info=True
+                    )
 
         # ------------------------------------------------------------------
         # Successful run

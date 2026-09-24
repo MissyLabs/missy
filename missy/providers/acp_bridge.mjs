@@ -1,21 +1,15 @@
 #!/usr/bin/env node
-// Minimal, purpose-built ACP client bridging Missy to @zed-industries/claude-agent-acp
+// Minimal, purpose-built ACP client bridging Missy to @agentclientprotocol/claude-agent-acp
 // directly, bypassing acpx's CLI.
 //
-// Why this exists (6th tool-specific validation run headline finding): acpx's own CLI
-// only forwards `model`/`allowedTools`/`maxTurns` into the ACP `session/new` request's
-// `_meta.claudeCode.options` -- it has no flag for the two fields that actually matter
-// here, which claude-agent-acp genuinely supports at the protocol level:
+// Modern acpx exposes equivalent system/no-tools controls. Missy keeps this bridge
+// because it needs one temporary turn with its own process-group cancellation and no
+// persistent session/queue-owner layer. The two key session fields are:
 //   - `_meta.systemPrompt`: a real system-role prompt, delivered through the agent's
-//     own system-prompt channel rather than smuggled as plain text inside a single
-//     user-role message (which is what acpx's CLI-based invocation forces Missy into,
-//     and which the delegate sometimes -- correctly, from its own safety standpoint --
-//     flagged as a jailbreak/identity-override attempt against itself).
+//     own system-prompt channel rather than plain text in the user prompt.
 //   - `_meta.disableBuiltInTools`: genuinely removes the agent's own native
 //     Read/Write/Bash/etc. tools from its own tool list, rather than exposing them and
-//     denying every call after the fact (acpx's `--deny-all`), which is what let the
-//     delegate see genuine, repeated tool-permission-denial events and react to them
-//     unpredictably.
+//     denying every call after the fact.
 //
 // Protocol reference: https://agentclientprotocol.com/ , using the official
 // @agentclientprotocol/sdk client-side helpers (the same package claude-agent-acp
@@ -37,15 +31,11 @@ import { spawn } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-// Matches acpx's own resolution exactly (acpx spawns "@latest" today,
-// confirmed via `acpx --verbose`) rather than a version-pinned range --
-// note that for a 0.x package, npm's caret range (`^0.21.0`) only allows
-// patch bumps (0.21.x), NOT the 0.23.x releases actually in use, so a
-// stale pin here would silently resolve to an incompatible version whose
-// session/new call fails outright ("Query closed before response
-// received") rather than a same-version, working one.
+// Match acpx 0.19.x's built-in Claude registry range.  This accepts the
+// adapter releases upstream validates while avoiding an unbounded @latest
+// upgrade in a paid-provider path.
 const AGENT_COMMAND = "npx";
-const AGENT_ARGS = ["-y", "@zed-industries/claude-agent-acp@latest"];
+const AGENT_ARGS = ["-y", "@agentclientprotocol/claude-agent-acp@^0.76.0"];
 
 async function readStdin() {
   const chunks = [];
@@ -133,6 +123,7 @@ async function main() {
   let stopReason = "unknown";
   let ok = true;
   let errorMessage = null;
+  let usage = null;
 
   try {
     await withTimeout(
@@ -160,6 +151,7 @@ async function main() {
               const message = await session.nextUpdate();
               if (message.kind === "stop") {
                 stopReason = message.stopReason;
+                usage = message.usage ?? message._meta?.usage ?? message._meta?.claudeCode?.usage ?? null;
                 return;
               }
               const update = message.update;
@@ -180,7 +172,7 @@ async function main() {
   }
 
   if (ok) {
-    process.stdout.write(JSON.stringify({ type: "result", ok: true, stopReason }) + "\n");
+    process.stdout.write(JSON.stringify({ type: "result", ok: true, stopReason, usage }) + "\n");
   } else {
     process.stdout.write(JSON.stringify({ type: "result", ok: false, error: errorMessage }) + "\n");
     process.exitCode = 1;
