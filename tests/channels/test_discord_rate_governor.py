@@ -151,3 +151,31 @@ class TestEventLoopNotBlocked:
         gaps = [b - a for a, b in zip([start, *stamps], stamps, strict=False)]
         # A blocked loop would show one ~0.5s gap; offloaded, ticks stay regular.
         assert max(gaps) < 0.3
+
+
+class TestInteractionTokenExpiry:
+    """Premortem: an expired interaction token (401) must not mute the bot."""
+
+    def test_webhook_and_interaction_401s_do_not_open_circuit(self):
+        base = "https://discord.com/api/v10"
+        rate_governor.after_response(
+            f"PATCH {base}/webhooks/123/tok/messages/@original", _resp(401)
+        )
+        rate_governor.after_response(f"POST {base}/interactions/9/tok/callback", _resp(401))
+        rate_governor.before_request(f"POST {base}/channels/1/messages")  # must not raise
+
+    def test_bot_route_401_still_opens_circuit(self):
+        base = "https://discord.com/api/v10"
+        with patch("missy.core.events.event_bus.publish"):
+            rate_governor.after_response(f"GET {base}/users/@me", _resp(401))
+        with pytest.raises(DiscordRateLimitedError):
+            rate_governor.before_request(f"POST {base}/channels/1/messages")
+
+    def test_edit_interaction_response_401_leaves_bot_usable(self):
+        http = MagicMock()
+        http.patch.return_value = _resp(401)
+        client = _client(http)
+        with contextlib.suppress(Exception):
+            client.edit_interaction_response("123", "expired-token", "late answer")
+        http.post.return_value = _resp(200)
+        assert client.send_message("123", "hi") == {"id": "1"}

@@ -129,3 +129,16 @@ def _clear_desktop_config_cache():
     _desktop_shared.clear_config_cache()
     yield
     _desktop_shared.clear_config_cache()
+
+
+@pytest.fixture(autouse=True)
+def _restore_policy_engine():
+    """Restore the process-global PolicyEngine after each test so a test that
+    initialises it can't change the behaviour of later tests in the same
+    xdist worker (order-dependent 'PolicyEngine has not been initialised'
+    expectations)."""
+    from missy.policy import engine as engine_mod
+
+    saved = engine_mod._engine
+    yield
+    engine_mod._engine = saved

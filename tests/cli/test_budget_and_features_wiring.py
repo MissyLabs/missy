@@ -152,5 +152,5 @@ class TestFeatures:
     def test_parse_retention_defaults_and_negatives(self):
         r = _parse_retention({"checkpoints_days": -3})
         assert r.checkpoints_days == 0
-        assert r.inbound_attachments_days == 3
+        assert r.inbound_attachments_days == 0  # content pruners are opt-in
         assert r.enabled is True

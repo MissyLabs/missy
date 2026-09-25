@@ -5439,12 +5439,19 @@ def patches_approve(ctx: click.Context, patch_id: str, force: bool) -> None:
     Approved patches are appended to the system prompt of every run (picked
     up by a running gateway on its next run, no restart needed).
     """
-    from missy.agent.prompt_patches import PatchContentRejected, PromptPatchManager
+    from missy.agent.prompt_patches import (
+        PatchContentRejected,
+        PatchStoreRefusedError,
+        PromptPatchManager,
+    )
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
     try:
         approved = mgr.approve(patch_id, force=force)
+    except PatchStoreRefusedError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
     except PatchContentRejected as exc:
         _print_error(
             f"{exc}",
@@ -5462,11 +5469,16 @@ def patches_approve(ctx: click.Context, patch_id: str, force: bool) -> None:
 @click.pass_context
 def patches_reject(ctx: click.Context, patch_id: str) -> None:
     """Reject a proposed patch."""
-    from missy.agent.prompt_patches import PromptPatchManager
+    from missy.agent.prompt_patches import PatchStoreRefusedError, PromptPatchManager
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
-    if mgr.reject(patch_id):
+    try:
+        rejected = mgr.reject(patch_id)
+    except PatchStoreRefusedError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+    if rejected:
         _print_success(f"Patch [bold]{patch_id}[/] rejected.")
     else:
         _print_error(f"Patch {patch_id!r} not found or not awaiting review.")

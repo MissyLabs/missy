@@ -148,6 +148,11 @@ class PatchContentRejected(ValueError):
         )
 
 
+class PatchStoreRefusedError(RuntimeError):
+    """The patch store exists but was refused (untrusted permissions/owner or
+    unparseable), so writing to it would silently erase its contents."""
+
+
 class PromptPatchManager:
     """Manages proposed/approved system prompt patches with file persistence.
 
@@ -161,7 +166,11 @@ class PromptPatchManager:
     def __init__(self, store_path: str | None = None) -> None:
         self._path = Path(store_path or DEFAULT_STORE_PATH).expanduser()
         self._lock = threading.Lock()
-        self._signature: tuple[int, int] | None = None
+        self._signature: tuple[int, ...] | None = None
+        #: Set by _load() when an existing store was not trusted/readable.
+        #: While set, _save() refuses to write (it would replace the file's
+        #: real contents with our empty view of it).
+        self._refused_reason: str | None = None
         self._patches: list[PromptPatch] = self._load()
         self._signature = self._file_signature()
 
@@ -169,12 +178,14 @@ class PromptPatchManager:
     # Persistence (SEC-04)
     # ------------------------------------------------------------------
 
-    def _file_signature(self) -> tuple[int, int] | None:
+    def _file_signature(self) -> tuple[int, ...] | None:
+        # Mode/owner are included so fixing a refused store with `chmod 600`
+        # is picked up without a restart (chmod changes neither mtime nor size).
         try:
             st = self._path.stat()
         except OSError:
             return None
-        return (st.st_mtime_ns, st.st_size)
+        return (st.st_mtime_ns, st.st_size, st.st_mode, st.st_uid)
 
     @contextlib.contextmanager
     def _file_lock(self) -> Iterator[None]:
@@ -211,25 +222,31 @@ class PromptPatchManager:
             A list of :class:`PromptPatch` instances, or an empty list when
             the file is absent, untrusted, or malformed.
         """
+        self._refused_reason = None
         if not self._path.exists():
             return []
         try:
             st = self._path.stat()
         except OSError as exc:
             logger.error("Cannot stat prompt patch store %s: %s", self._path, exc)
+            self._refused_reason = f"cannot stat: {exc}"
             return []
         if st.st_uid != os.getuid():
             logger.error(
                 "Prompt patch store %s is not owned by the current user — refusing to load",
                 self._path,
             )
+            self._refused_reason = "not owned by the current user"
             return []
         if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             logger.error(
-                "Prompt patch store %s is group/world-writable (mode=%o) — refusing to load",
+                "Prompt patch store %s is group/world-writable (mode=%o) — refusing to "
+                "load; run `chmod 600 %s`",
                 self._path,
                 st.st_mode & 0o777,
+                self._path,
             )
+            self._refused_reason = f"group/world-writable (mode {st.st_mode & 0o777:o})"
             return []
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
@@ -245,10 +262,21 @@ class PromptPatchManager:
             return patches
         except Exception:
             logger.warning("Failed to load prompt patches from %s", self._path, exc_info=True)
+            self._refused_reason = "unreadable or malformed"
             return []
 
     def _save(self) -> None:
-        """Atomically persist the patch list with 0600 permissions."""
+        """Atomically persist the patch list with 0600 permissions.
+
+        Raises:
+            PatchStoreRefusedError: When the existing store was refused at
+                load time -- overwriting it would erase patches we never read.
+        """
+        if self._refused_reason is not None:
+            raise PatchStoreRefusedError(
+                f"Not writing prompt patch store {self._path}: it was refused on load "
+                f"({self._refused_reason}). Fix it (e.g. `chmod 600 {self._path}`) first."
+            )
         os.makedirs(self._path.parent, mode=0o700, exist_ok=True)
         data = json.dumps([asdict(p) for p in self._patches], indent=2)
         fd, tmp = tempfile.mkstemp(dir=str(self._path.parent), prefix=".patches-", suffix=".tmp")
@@ -272,6 +300,12 @@ class PromptPatchManager:
         """
         with self._lock, self._file_lock():
             self._reload_if_changed_locked()
+            if self._refused_reason is not None:
+                raise PatchStoreRefusedError(
+                    f"Prompt patch store {self._path} was refused on load "
+                    f"({self._refused_reason}); fix it (e.g. `chmod 600 {self._path}`) "
+                    "before changing patches."
+                )
             return fn()
 
     def _reload_if_changed_locked(self) -> None:

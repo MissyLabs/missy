@@ -34,12 +34,14 @@ def prune_directory(
     older_than_days: int,
     *,
     exclude_top_level: Iterable[str] = (),
+    dry_run: bool = False,
 ) -> int:
     """Delete regular files under *base* older than *older_than_days* (by mtime).
 
     Symlinks are never followed or deleted, and nothing outside *base* is
     touched. Directories emptied by the prune are removed (never *base*
-    itself). Returns the number of files deleted.
+    itself). Returns the number of files deleted -- or, with *dry_run*, the
+    number that would be deleted (nothing is touched).
     """
     if older_than_days <= 0:
         return 0
@@ -65,11 +67,12 @@ def prune_directory(
             try:
                 st = path.lstat()
                 if stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
-                    path.unlink()
+                    if not dry_run:
+                        path.unlink()
                     removed += 1
             except OSError:
                 logger.debug("retention: could not prune %s", path, exc_info=True)
-        if current != root:
+        if current != root and not dry_run:
             try:
                 if not any(current.iterdir()) and not current.is_symlink():
                     current.rmdir()
@@ -199,6 +202,26 @@ def run_retention(
     return results
 
 
+def preview_file_retention(retention: Any, *, captures_dir: str | None = None) -> dict[str, int]:
+    """Count files the enabled file pruners would delete right now (nothing deleted)."""
+    captures_dir = captures_dir or CAPTURES_DIR
+    preview: dict[str, int] = {}
+    if not getattr(retention, "enabled", False):
+        return preview
+    captures_days = int(getattr(retention, "captures_days", 0) or 0)
+    if captures_days > 0:
+        preview["capture_files"] = prune_directory(
+            captures_dir, captures_days, exclude_top_level=INBOUND_DIR_NAMES, dry_run=True
+        )
+    inbound_days = int(getattr(retention, "inbound_attachments_days", 0) or 0)
+    if inbound_days > 0:
+        preview["inbound_attachment_files"] = sum(
+            prune_directory(Path(captures_dir).expanduser() / name, inbound_days, dry_run=True)
+            for name in INBOUND_DIR_NAMES
+        )
+    return preview
+
+
 def register_maintenance_job(
     scheduler: Any,
     config_loader: Callable[[], Any],
@@ -233,4 +256,17 @@ def register_maintenance_job(
     except Exception:
         logger.warning("Could not register retention maintenance job", exc_info=True)
         return False
+    # Say up front what the first run will delete, so an operator who opted
+    # in to file retention isn't surprised at 03:17.
+    try:
+        preview = preview_file_retention(getattr(config_loader(), "retention", None))
+        if any(preview.values()):
+            logger.warning(
+                "Retention maintenance will delete at its next run (%02d:%02d): %s",
+                hour,
+                minute,
+                ", ".join(f"{count} {name}" for name, count in preview.items()),
+            )
+    except Exception:
+        logger.debug("retention: preview failed", exc_info=True)
     return True

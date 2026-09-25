@@ -180,7 +180,7 @@ class _DiscordRateGovernor:
                 self._invalid.append(now)
             while self._invalid and now - self._invalid[0] > INVALID_REQUEST_WINDOW_SECONDS:
                 self._invalid.popleft()
-            if status == 401 and now >= self._circuit_until:
+            if status == 401 and _uses_bot_token(route) and now >= self._circuit_until:
                 self._circuit_until = now + UNAUTHORIZED_COOLDOWN_SECONDS
                 self._circuit_reason = "HTTP 401: bot token rejected"
                 opened = self._circuit_reason
@@ -212,6 +212,19 @@ class _DiscordRateGovernor:
 
 #: The process-wide governor instance.
 rate_governor = _DiscordRateGovernor()
+
+
+def _uses_bot_token(route: str) -> bool:
+    """True when *route* is authenticated by the bot token.
+
+    Interaction callbacks and follow-up/webhook edits are authorized by the
+    per-interaction token in the URL, which expires after 15 minutes; Discord
+    answers an expired one with 401. That says nothing about the bot token,
+    so it must not open the bot-wide 401 circuit (it still counts toward the
+    invalid-request budget, as Discord does).
+    """
+    path = route.split(" ", 1)[-1]
+    return "/interactions/" not in path and "/webhooks/" not in path
 
 
 def _route_key(method: str, url: str) -> str:

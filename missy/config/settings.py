@@ -627,6 +627,11 @@ class RetentionConfig:
 
     A value of ``0`` disables that pruner. Only regular files directly under
     the named Missy directories are ever deleted (symlinks are skipped).
+    Pruners that delete operator/user content (memory turns, vision
+    captures, Discord inbound attachments, graph entities) are opt-in and
+    default to ``0``; only internal bookkeeping (finished checkpoints,
+    request-tracker history, unapproved pairing requests) is pruned by
+    default.
 
     Attributes:
         enabled: Master switch for the daily maintenance job.
@@ -644,8 +649,8 @@ class RetentionConfig:
     enabled: bool = True
     memory_days: int = 0
     checkpoints_days: int = 7
-    captures_days: int = 14
-    inbound_attachments_days: int = 3
+    captures_days: int = 0
+    inbound_attachments_days: int = 0
     request_tracker_days: int = 30
     graph_memory_days: int = 0
     pending_pairing_hours: int = 24

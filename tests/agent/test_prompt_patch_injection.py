@@ -128,3 +128,63 @@ class TestCli:
         result = runner.invoke(cli, ["patches", "approve", patch.id, "--force"])
         assert result.exit_code == 0
         assert PromptPatchManager(str(store)).get_active_patches()[0].id == patch.id
+
+
+class TestRefusedStoreIsNeverOverwritten:
+    """Premortem: a refused (e.g. 0664) store must not be replaced by our
+    empty view of it."""
+
+    def _refused_store(self, store):
+        store.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "keep1",
+                        "patch_type": "workflow_pattern",
+                        "content": "existing approved",
+                        "confidence": 0.9,
+                        "status": "approved",
+                        "applications": 0,
+                        "successes": 0,
+                        "created_at": "x",
+                    }
+                ]
+            )
+        )
+        os.chmod(store, 0o664)
+
+    def test_propose_does_not_erase_refused_store(self, store):
+        from missy.agent.prompt_patches import PatchStoreRefusedError
+
+        self._refused_store(store)
+        mgr = PromptPatchManager(str(store))
+        with pytest.raises(PatchStoreRefusedError):
+            mgr.propose(PatchType.WORKFLOW_PATTERN, "new one")
+        assert [p["id"] for p in json.loads(store.read_text())] == ["keep1"]
+
+    def test_record_outcome_and_prompt_are_noops(self, store):
+        self._refused_store(store)
+        mgr = PromptPatchManager(str(store))
+        assert mgr.build_patch_prompt() == ""
+        with pytest.raises(Exception):  # noqa: B017 - refused store
+            mgr.record_outcome(success=True)
+        assert json.loads(store.read_text())[0]["applications"] == 0
+
+    def test_chmod_fix_is_picked_up_without_restart(self, store):
+        self._refused_store(store)
+        mgr = PromptPatchManager(str(store))
+        assert mgr.get_active_patches() == []
+        os.chmod(store, 0o600)
+        assert [p.id for p in mgr.get_active_patches()] == ["keep1"]
+
+    def test_cli_approve_reports_refused_store(self, store, monkeypatch):
+        from click.testing import CliRunner
+
+        from missy.cli.main import cli
+
+        self._refused_store(store)
+        monkeypatch.setattr("missy.agent.prompt_patches.DEFAULT_STORE_PATH", str(store))
+        monkeypatch.setattr("missy.cli.main._load_subsystems", lambda *_a, **_k: MagicMock())
+        result = CliRunner().invoke(cli, ["patches", "approve", "keep1"])
+        assert result.exit_code == 1
+        assert "Prompt patch store" in result.output

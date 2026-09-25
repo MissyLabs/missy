@@ -73,7 +73,12 @@ class TestRunRetention:
         zip_file.write_text("untrusted")
         _age(zip_file, 5)
         retention = RetentionConfig(
-            memory_days=90, request_tracker_days=0, checkpoints_days=7, graph_memory_days=0
+            memory_days=90,
+            request_tracker_days=0,
+            checkpoints_days=7,
+            graph_memory_days=0,
+            captures_days=14,
+            inbound_attachments_days=3,
         )
         with (
             patch("missy.memory.sqlite_store.SQLiteMemoryStore") as store_cls,
@@ -115,9 +120,10 @@ def test_register_uses_fresh_config_each_run():
     assert register_maintenance_job(scheduler, loader) is True
     kwargs = scheduler.add_job.call_args.kwargs
     assert kwargs["id"] == MAINTENANCE_JOB_ID and kwargs["trigger"] == "cron"
+    before = loader.call_count  # registration loads once for the preview
     kwargs["func"]()
     kwargs["func"]()
-    assert loader.call_count == 2
+    assert loader.call_count == before + 2
 
 
 def test_voice_step_expires_pending_pairings(tmp_path):
@@ -144,3 +150,51 @@ def test_voice_step_expires_pending_pairings(tmp_path):
     reg2 = DeviceRegistry(str(devices))
     reg2.load()
     assert reg2.get_node(node_id) is None
+
+
+def test_content_pruners_are_opt_in_by_default(tmp_path):
+    """Premortem: a first nightly run must not delete operator content."""
+    retention = RetentionConfig()
+    assert retention.memory_days == 0
+    assert retention.captures_days == 0
+    assert retention.inbound_attachments_days == 0
+    assert retention.graph_memory_days == 0
+    old = tmp_path / "vision.jpg"
+    old.write_bytes(b"x")
+    _age(old, 400)
+    inbound = tmp_path / "discord_inbound" / "a.png"
+    inbound.parent.mkdir()
+    inbound.write_bytes(b"x")
+    _age(inbound, 400)
+    with patch("missy.agent.checkpoint.CheckpointManager"):
+        results = run_retention(
+            RetentionConfig(request_tracker_days=0),
+            captures_dir=str(tmp_path),
+            devices_path=str(tmp_path / "devices.json"),
+        )
+    assert "capture_files" not in results and "inbound_attachment_files" not in results
+    assert old.exists() and inbound.exists()
+
+
+def test_dry_run_counts_without_deleting(tmp_path):
+    f = tmp_path / "old.jpg"
+    f.write_bytes(b"x")
+    _age(f, 30)
+    assert prune_directory(tmp_path, 14, dry_run=True) == 1
+    assert f.exists()
+
+
+def test_registration_logs_preview_of_enabled_file_pruners(tmp_path, caplog, monkeypatch):
+    import logging
+
+    from missy.scheduler import maintenance
+
+    monkeypatch.setattr(maintenance, "CAPTURES_DIR", str(tmp_path))
+    old = tmp_path / "vision.jpg"
+    old.write_bytes(b"x")
+    _age(old, 30)
+    cfg = SimpleNamespace(retention=RetentionConfig(captures_days=14))
+    with caplog.at_level(logging.WARNING, logger="missy.scheduler.maintenance"):
+        register_maintenance_job(MagicMock(), lambda: cfg)
+    assert "1 capture_files" in caplog.text
+    assert old.exists()
