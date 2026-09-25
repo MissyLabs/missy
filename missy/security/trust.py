@@ -72,7 +72,10 @@ class TrustScorer:
         self._flush_interval = max(0.0, float(flush_interval))
         #: Pending operations not yet persisted: (entity, "delta"|"set", value).
         self._pending: list[tuple[str, str, int]] = []
-        self._last_flush = 0.0
+        # None = never flushed: the first write always persists at once.
+        # (0.0 compared against time.monotonic() -- seconds since boot --
+        # silently deferred the first write on a freshly booted host.)
+        self._last_flush: float | None = None
         if self._path is not None:
             self._scores = self._read_disk()
 
@@ -160,7 +163,11 @@ class TrustScorer:
         if self._path is None:
             self._pending.clear()
             return
-        if force or time.monotonic() - self._last_flush >= self._flush_interval:
+        if (
+            force
+            or self._last_flush is None
+            or time.monotonic() - self._last_flush >= self._flush_interval
+        ):
             self._flush_locked()
 
     def flush(self) -> None:

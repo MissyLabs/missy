@@ -68,3 +68,14 @@ def test_file_mode_is_0600(tmp_path):
     p = tmp_path / "trust.json"
     TrustScorer(persist_path=p).record_success("x")
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
+def test_first_write_flushes_even_right_after_boot(tmp_path, monkeypatch):
+    """Regression (CI): time.monotonic() is seconds since boot, so a fresh
+    host has a small value; the first write must still persist at once."""
+    import missy.security.trust as trust_mod
+
+    monkeypatch.setattr(trust_mod.time, "monotonic", lambda: 5.0)
+    p = tmp_path / "trust.json"
+    TrustScorer(persist_path=p, flush_interval=3600).record_success("x")
+    assert json.loads(p.read_text())["x"] == DEFAULT_SCORE + 10
