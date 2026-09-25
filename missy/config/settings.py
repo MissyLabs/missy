@@ -118,11 +118,17 @@ class ShellPolicy:
             redirect-target-to-filesystem-policy check, subshell/brace-group
             rejection). Defaults to ``False`` so a config that never sets
             this key behaves identically to before this field existed.
+        allowed_env_vars: Explicit environment-variable names that may be
+            inherited by ``shell_exec`` subprocesses in addition to the
+            built-in non-secret allowlist. Empty by default so credentials
+            remain stripped unless an operator deliberately grants one for a
+            narrowly scoped integration.
     """
 
     enabled: bool = False
     allowed_commands: list[str] = field(default_factory=list)
     unrestricted: bool = False
+    allowed_env_vars: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -885,6 +891,7 @@ def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
         enabled=_coerce_bool(data.get("enabled"), False),
         allowed_commands=list(data.get("allowed_commands", [])),
         unrestricted=_coerce_bool(data.get("unrestricted"), False),
+        allowed_env_vars=_as_list_of_strings(data.get("allowed_env_vars")),
     )
 
 

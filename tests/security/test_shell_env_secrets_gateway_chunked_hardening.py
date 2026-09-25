@@ -99,6 +99,32 @@ class TestShellExecEnvSanitization:
             # Only PATH and HOME should be present
             assert set(env.keys()) == {"PATH", "HOME"}
 
+    def test_explicit_operator_allowlist_passes_named_variable(self):
+        """An operator may opt one named integration credential into a child."""
+        from missy.tools.builtin.shell_exec import ShellExecTool
+
+        tool = ShellExecTool(allowed_env_vars=["BOTRICK_DISCORD_BOT_TOKEN"])
+        with (
+            patch.dict(
+                os.environ,
+                {"PATH": "/bin", "BOTRICK_DISCORD_BOT_TOKEN": "test-token"},
+                clear=True,
+            ),
+            patch("missy.tools.builtin.shell_exec.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(stdout=b"", stderr=b"", returncode=0)
+            tool._execute_direct(command="true", cwd=None, timeout=10)
+            env = mock_run.call_args.kwargs["env"]
+
+        assert env["BOTRICK_DISCORD_BOT_TOKEN"] == "test-token"
+
+    def test_invalid_operator_allowlist_names_are_ignored(self):
+        """Only portable environment names can be configured for inheritance."""
+        from missy.tools.builtin.shell_exec import ShellExecTool
+
+        tool = ShellExecTool(allowed_env_vars=["GOOD_NAME", "BAD-NAME", "A=B", ""])
+        assert tool._allowed_env_vars == {"GOOD_NAME"}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Gateway chunked response body size limit

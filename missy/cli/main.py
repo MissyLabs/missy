@@ -230,7 +230,10 @@ def _load_subsystems(config_path: str) -> Any:
         from missy.tools.registry import init_tool_registry
 
         tool_registry = init_tool_registry()
-        register_builtin_tools(tool_registry)
+        register_builtin_tools(
+            tool_registry,
+            shell_allowed_env_vars=cfg.shell.allowed_env_vars,
+        )
         # ToolRegistry.disable()/is_enabled() were fully built and
         # tested (execute() refuses a disabled tool outright, and
         # AgentRuntime._get_tools() already filters is_enabled() tools

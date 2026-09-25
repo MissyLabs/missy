@@ -98,6 +98,7 @@ Controls shell command execution.  Disabled by default.
 |---|---|---|---|
 | `enabled` | bool | `false` | Master switch for shell execution.  When `false`, all shell commands are denied regardless of `allowed_commands`. |
 | `allowed_commands` | list of strings | `[]` | Whitelist of command names (not full paths) that may be executed when `enabled` is `true`.  An empty list means no commands are allowed even when the shell is enabled. |
+| `allowed_env_vars` | list of strings | `[]` | Extra environment-variable names to inherit into `shell_exec` children. Credential variables remain stripped unless explicitly listed; grant only variables required by a trusted child process. |
 
 Example:
 
@@ -108,6 +109,7 @@ shell:
     - "git"
     - "python3"
     - "ls"
+  allowed_env_vars: []
 ```
 
 ---
@@ -478,6 +480,7 @@ filesystem:
 shell:
   enabled: false
   allowed_commands: []                    # e.g. ["git", "python3", "ls"]
+  allowed_env_vars: []                    # extra names inherited by shell_exec
 
 # ---------------------------------------------------------------------------
 # Plugin policy

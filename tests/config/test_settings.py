@@ -65,6 +65,7 @@ class TestGetDefaultConfig:
     def test_shell_unrestricted_disabled_by_default(self):
         cfg = get_default_config()
         assert cfg.shell.unrestricted is False
+        assert cfg.shell.allowed_env_vars == []
 
     def test_plugins_disabled_by_default(self):
         cfg = get_default_config()
@@ -518,6 +519,19 @@ class TestLoadConfigShellUnrestricted:
         )
         cfg = load_config(path)
         assert cfg.shell.unrestricted is False
+
+    def test_allowed_env_vars_loaded(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            shell:
+              enabled: true
+              allowed_env_vars:
+                - BOTRICK_DISCORD_BOT_TOKEN
+            """,
+        )
+        cfg = load_config(path)
+        assert cfg.shell.allowed_env_vars == ["BOTRICK_DISCORD_BOT_TOKEN"]
 
 
 # ---------------------------------------------------------------------------

@@ -235,6 +235,7 @@ filesystem:
 shell:
   enabled: false
   allowed_commands: []           # e.g. ["git", "python3"]
+  allowed_env_vars: []           # explicit opt-in; secrets are otherwise stripped
 
 providers:
   anthropic:

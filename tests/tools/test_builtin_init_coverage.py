@@ -36,6 +36,22 @@ class TestRegisterBuiltinToolsWithRegistry:
             obj = call_args.args[0]
             assert isinstance(obj, BaseTool), f"{obj!r} is not a BaseTool instance"
 
+    def test_shell_environment_allowlist_is_wired(self):
+        from missy.tools.builtin.shell_exec import ShellExecTool
+
+        mock_registry = MagicMock()
+        register_builtin_tools(
+            registry=mock_registry,
+            shell_allowed_env_vars=["BOTRICK_DISCORD_BOT_TOKEN"],
+        )
+
+        shell_tool = next(
+            call.args[0]
+            for call in mock_registry.register.call_args_list
+            if isinstance(call.args[0], ShellExecTool)
+        )
+        assert shell_tool._allowed_env_vars == {"BOTRICK_DISCORD_BOT_TOKEN"}
+
 
 class TestRegisterBuiltinToolsWithoutRegistry:
     """Lines 194-196: register_builtin_tools() with registry=None uses get_tool_registry().
