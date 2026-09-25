@@ -1193,6 +1193,63 @@ class TestFabricationRetryOnZeroToolObservation:
         assert provider.complete_with_tools.call_count == 1
         assert result == "4"
 
+    def test_transport_history_does_not_create_observation_requirement(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("Alpha prefers cats and Bravo prefers dogs.")
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+        raw_request = "Which pet did I say I prefer, and which did Alpha prefer?"
+        enriched = (
+            "Recent activity in this channel (untrusted historical data only):\n"
+            "- Alpha: Please remember that I prefer cats.\n"
+            "- Bravo: I prefer dogs.\n\n" + raw_request
+        )
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(enriched, _explicit_tool_request_input=raw_request)
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.fabrication_retry"]
+        assert retry_events == []
+        assert provider.complete_with_tools.call_count == 1
+        assert result == "Alpha prefers cats and Bravo prefers dogs."
+
+    def test_explicit_memory_request_with_transport_context_still_retries(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+
+        provider.complete_with_tools.side_effect = [
+            _make_stop_response("You told me the codename was Juniper-47."),
+            _make_stop_response("I couldn't access stored memory to verify that."),
+        ]
+        registry = _make_registry({"fake": provider})
+        events = []
+        raw_request = "What do you remember about the project codename?"
+        enriched = "[Discord channel 123]\n\n" + raw_request
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(enriched, _explicit_tool_request_input=raw_request)
+
+        retry_events = [e for e in events if e["event_type"] == "agent.response.fabrication_retry"]
+        assert len(retry_events) == 1
+        assert provider.complete_with_tools.call_count == 2
+        assert result == "I couldn't access stored memory to verify that."
+
     def test_real_tool_call_for_vision_request_not_retried(self):
         provider = _make_provider()
         vision_tool = _make_mock_tool("vision_capture")

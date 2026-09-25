@@ -1077,9 +1077,10 @@ class AgentRuntime:
             _explicit_tool_request_input: Internal transport hook containing
                 only the human-authored request when *user_input* also has
                 trusted channel/attachment context prepended or appended.
-                Defaults to *user_input*. This text is used only by the
-                explicit-tool-request completion guard; provider context and
-                persisted history continue to use *user_input*.
+                Defaults to *user_input*. Request-classification guards use
+                this text so transport context cannot create requirements the
+                user did not ask for; provider context and persisted history
+                continue to use *user_input*.
             _provider: Internal per-call provider registry key. Used by
                 sub-agent delegation so concurrent children can select
                 different providers without mutating ``self.config.provider``.
@@ -1586,8 +1587,8 @@ class AgentRuntime:
             user_input: Original user prompt, forwarded to the tool loop for
                 checkpointing.
             explicit_tool_request_input: Human-authored portion of the prompt
-                used to recognize explicit named-tool requests. ``None`` uses
-                the complete *user_input*.
+                used by request-classification guards. ``None`` uses the
+                complete *user_input*.
             _delegation_depth: SR-4.2 -- internal, forwarded to
                 :meth:`_tool_loop`. See :meth:`run`.
             priority_tools: Tool names the :class:`~missy.agent.attention.AttentionSystem`
@@ -1672,8 +1673,8 @@ class AgentRuntime:
             task_id: For audit events.
             user_input: Original user prompt, used for checkpointing.
             explicit_tool_request_input: Human-authored portion of the prompt
-                used by the explicit named-tool completion guard. Trusted
-                transport context is intentionally excluded when supplied.
+                used by request-classification guards. Trusted transport
+                context is intentionally excluded when supplied.
 
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
@@ -3261,7 +3262,7 @@ class AgentRuntime:
                 # for this case; this check catches it directly instead.
                 if (
                     not tool_names_used
-                    and is_observation_task(user_input)
+                    and is_observation_task(_tool_request_input)
                     and _fabrication_retries < _MAX_FABRICATION_RETRIES
                 ):
                     _fabrication_retries += 1
@@ -3279,17 +3280,17 @@ class AgentRuntime:
                             task_id=task_id,
                             event_type="agent.response.fabrication_retry",
                             result="warn",
-                            detail={"user_input_excerpt": user_input[:200]},
+                            detail={"user_input_excerpt": _tool_request_input[:200]},
                         )
                     continue
-                if not tool_names_used and is_observation_task(user_input):
+                if not tool_names_used and is_observation_task(_tool_request_input):
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
                             task_id=task_id,
                             event_type="agent.response.fabrication_unresolved",
                             result="warn",
-                            detail={"user_input_excerpt": user_input[:200]},
+                            detail={"user_input_excerpt": _tool_request_input[:200]},
                         )
 
                 # SR-4.4: reject a completion claim when the round of tool
