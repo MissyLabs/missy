@@ -19,6 +19,11 @@ class ProviderFailureClass(StrEnum):
     """Coarse classification of a :class:`ProviderError`'s root cause."""
 
     AUTH = "auth"
+    #: The credential/account itself can't serve the request (HTTP 402
+    #: Payment Required, billing/subscription/entitlement problems). Unlike a
+    #: rate limit it won't clear on its own soon, but -- like one -- a
+    #: sibling account of a multi-account provider may well succeed.
+    ACCOUNT = "account"
     CONTENT_POLICY = "content_policy"
     RATE_LIMIT = "rate_limit"
     TIMEOUT = "timeout"
@@ -47,6 +52,13 @@ _RATE_LIMIT_MARKERS = (
     "too many requests",
 )
 _TIMEOUT_MARKERS = ("timed out", "timeout")
+_ACCOUNT_MARKERS = (
+    "402 payment required",
+    "http 402",
+    "error code: 402",
+    "payment required",
+    "insufficient_quota",
+)
 
 # Markers for a provider *content-policy / safety* refusal (as opposed to an
 # operational failure). These are message fragments the active backends emit
@@ -100,11 +112,40 @@ def classify_provider_error(exc: BaseException) -> ProviderFailureClass:
         return ProviderFailureClass.CONTENT_POLICY
     if any(marker in message for marker in _AUTH_MARKERS):
         return ProviderFailureClass.AUTH
+    if _http_status_of(exc) == 402 or any(marker in message for marker in _ACCOUNT_MARKERS):
+        return ProviderFailureClass.ACCOUNT
     if any(marker in message for marker in _RATE_LIMIT_MARKERS):
         return ProviderFailureClass.RATE_LIMIT
     if any(marker in message for marker in _TIMEOUT_MARKERS):
         return ProviderFailureClass.TIMEOUT
     return ProviderFailureClass.UNKNOWN
+
+
+def _http_status_of(exc: BaseException | None) -> int | None:
+    """Best-effort HTTP status from an httpx/OpenAI-SDK style exception (or its cause)."""
+    seen = 0
+    while exc is not None and seen < 3:
+        status = getattr(exc, "status_code", None)
+        if not isinstance(status, int):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        if isinstance(status, int):
+            return status
+        exc = exc.__cause__
+        seen += 1
+    return None
+
+
+def is_account_level_failure(exc: BaseException | None) -> bool:
+    """True when *exc* means this specific account/credential can't serve calls.
+
+    Used by multi-account providers to open that account's backoff
+    immediately instead of after the usual consecutive-failure threshold:
+    retrying a 402 on the same account on its next round-robin turn only
+    fails another real request.
+    """
+    if exc is None:
+        return False
+    return classify_provider_error(exc) == ProviderFailureClass.ACCOUNT
 
 
 def is_content_policy_error(exc: BaseException) -> bool:

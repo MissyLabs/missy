@@ -146,6 +146,13 @@ def _apply_config(new_config) -> None:
     PolicyEngine(new_config)
     ProviderRegistry.from_config(new_config)
 
+    try:
+        from missy.providers.registry import get_registry as _get_registry
+
+        previous_config_default = _get_registry()._config_default_provider
+    except Exception:
+        previous_config_default = None
+
     init_policy_engine(new_config)
     init_registry(new_config)
     logger.info("ConfigWatcher: policy engine and provider registry updated")
@@ -158,7 +165,9 @@ def _apply_config(new_config) -> None:
     # silently blank out the Web TUI's "default" indicator until someone
     # manually re-runs `missy providers switch`.
     default_provider = str(getattr(new_config, "default_provider", "") or "").strip()
-    if default_provider:
+    # DATA-05: init_registry() carried the live default over; only re-seed it
+    # when the operator actually changed default_provider in config.
+    if default_provider and default_provider != (previous_config_default or "").strip():
         try:
             from missy.providers.registry import get_registry
 

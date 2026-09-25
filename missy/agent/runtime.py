@@ -802,9 +802,11 @@ class AgentRuntime:
         # so scores survive restarts and are inspectable via `missy tools
         # trust`; a persistence failure degrades to in-memory, never fatal.
         try:
-            from missy.security.trust import DEFAULT_TRUST_PATH
+            from missy.security.trust import DEFAULT_TRUST_PATH, get_trust_scorer
 
-            self._trust_scorer = TrustScorer(persist_path=DEFAULT_TRUST_PATH)
+            # DATA-02: one shared scorer per process, so every runtime's
+            # is_trusted() gate sees every other runtime's violations.
+            self._trust_scorer = get_trust_scorer(DEFAULT_TRUST_PATH)
         except Exception:
             logger.debug("TrustScorer persistence unavailable; using in-memory", exc_info=True)
             self._trust_scorer = TrustScorer()
@@ -1352,6 +1354,7 @@ class AgentRuntime:
         # Persist the assistant turn (the user turn was already saved
         # above, before the provider call was attempted).
         self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
+        self._record_patch_outcome(final_response)
 
         # Extract learnings from tool-augmented runs
         if all_tool_names_used:
@@ -1546,6 +1549,7 @@ class AgentRuntime:
         # Persist turns
         self._save_turn(sid, "user", user_input)
         self._save_turn(sid, "assistant", full_text, provider=provider.name)
+        self._record_patch_outcome(full_text)
 
     # ------------------------------------------------------------------
     # Agentic loop
@@ -3849,7 +3853,7 @@ class AgentRuntime:
         try:
             from missy.agent.prompt_patches import PatchType, PromptPatchManager
 
-            if self._patch_manager is None:
+            if self._get_patch_manager() is None:
                 self._patch_manager = PromptPatchManager()
             short_err = (error or "unknown error").strip().splitlines()[0][:160]
             content = (
@@ -4404,11 +4408,12 @@ class AgentRuntime:
         root so it supplies absolute file paths and an explicit ``cwd`` for
         shell calls instead of guessing from the launcher directory.
         """
+        base = self.config.system_prompt + self._prompt_patch_block()
         workspace = self.config.workspace_path
         if not workspace:
-            return self.config.system_prompt
+            return base
         return (
-            f"{self.config.system_prompt}\n\n"
+            f"{base}\n\n"
             "CONFIGURED WORKSPACE ROOT (trusted operator configuration): "
             f"{workspace}\n"
             "Treat this as the current project workspace. Resolve every relative "
@@ -4417,6 +4422,51 @@ class AgentRuntime:
             "names another policy-approved directory. Never infer the workspace from "
             "the gateway process's launch directory."
         )
+
+    def _get_patch_manager(self) -> Any | None:
+        """Return the (lazily created) shared PromptPatchManager, or None."""
+        manager = getattr(self, "_patch_manager", None)
+        if manager is None:
+            try:
+                from missy.agent.prompt_patches import PromptPatchManager
+
+                manager = PromptPatchManager()
+            except Exception:
+                logger.debug("PromptPatchManager unavailable", exc_info=True)
+                return None
+            self._patch_manager = manager
+        return manager
+
+    def _prompt_patch_block(self) -> str:
+        """GAP-01: operator-approved prompt patches for the system prompt.
+
+        Approval via `missy patches approve` is the gate; nothing here ever
+        activates a PROPOSED patch. The manager re-reads patches.json when it
+        changes, so an approval takes effect on the next run without a
+        restart. Never raises.
+        """
+        manager = self._get_patch_manager()
+        if manager is None:
+            return ""
+        try:
+            return manager.build_patch_prompt()
+        except Exception:
+            logger.debug("Prompt patch block failed", exc_info=True)
+            return ""
+
+    def _record_patch_outcome(self, final_response: str) -> None:
+        """GAP-01: feed run outcomes back so poorly performing patches expire."""
+        manager = getattr(self, "_patch_manager", None)
+        if manager is None:
+            return
+        try:
+            if not manager.get_active_patches():
+                return
+            from missy.agent.learnings import extract_outcome
+
+            manager.record_outcome(success=extract_outcome(final_response or "") == "success")
+        except Exception:
+            logger.debug("Recording prompt patch outcome failed", exc_info=True)
 
     def _synthesize_memory(
         self,
@@ -5092,18 +5142,23 @@ class AgentRuntime:
 
     @staticmethod
     def _make_rate_limiter() -> Any:
-        """Create a :class:`~missy.providers.rate_limiter.RateLimiter`.
+        """Return the optional runtime-level rate limiter (none by default).
+
+        RATE-02: this used to build a hardcoded 60 RPM / 100k TPM
+        ``RateLimiter`` per AgentRuntime, stacked on top of each provider's
+        own limiter. It ignored ``providers.<name>.requests_per_minute`` /
+        ``tokens_per_minute`` (so raising them for a higher plan tier had no
+        effect beyond 60 RPM per runtime), and with several runtimes per
+        gateway it was never an aggregate cap either. The provider-level
+        limiter -- config-driven, attached in ``ProviderRegistry.from_config``
+        and shared by every runtime through the process registry -- is the
+        single authority now. The hook is kept so an embedding caller can
+        still inject an extra limiter (``runtime._rate_limiter = ...``).
 
         Returns:
-            A :class:`~missy.providers.rate_limiter.RateLimiter` instance,
-            or ``None`` when the module is unavailable.
+            ``None``.
         """
-        try:
-            from missy.providers.rate_limiter import RateLimiter
-
-            return RateLimiter(requests_per_minute=60, tokens_per_minute=100_000)
-        except Exception:
-            return None
+        return None
 
     @staticmethod
     def _make_sanitizer() -> Any:
@@ -5414,6 +5469,11 @@ class AgentRuntime:
         if self._sleeptime is not None:
             with contextlib.suppress(Exception):
                 self._sleeptime.stop()
+        # DATA-02: persist any batched trust-score updates.
+        trust = getattr(self, "_trust_scorer", None)
+        if trust is not None:
+            with contextlib.suppress(Exception):
+                trust.flush()
 
     def resume_checkpoint(self, checkpoint_id: str) -> str:
         """Resume an interrupted task from a persisted checkpoint (SR-4.3).
@@ -5552,6 +5612,7 @@ class AgentRuntime:
 
         self._track_request(original_prompt, sid, all_tool_names_used, provider.name)
         self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
+        self._record_patch_outcome(final_response)
         if all_tool_names_used:
             self._record_learnings(all_tool_names_used, final_response, original_prompt)
         self._maybe_compact(sid, provider)
@@ -5966,8 +6027,13 @@ class AgentRuntime:
             # health was already recorded (_record_account_outcome(False)
             # inside the provider) before this exception reached here, so
             # a fresh call's account selection is biased away from it.
+            # ACCOUNT (e.g. HTTP 402 on one ChatGPT account) is retried the
+            # same way: the sibling account is a different credential and
+            # frequently healthy, whereas skipping straight to a
+            # cross-provider fallback failed turns a healthy sibling could
+            # have served.
             if (
-                failure_class == ProviderFailureClass.RATE_LIMIT
+                failure_class in (ProviderFailureClass.RATE_LIMIT, ProviderFailureClass.ACCOUNT)
                 and getattr(provider, "is_multi_account", False)
                 and getattr(provider, "account_count", 0) > 1
             ):

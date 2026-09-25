@@ -252,7 +252,7 @@ class TestWebFetchBlockedHeaders:
             mock_resp = MagicMock()
             mock_resp.text = "OK"
             mock_resp.status_code = 200
-            mock_http.get.return_value = mock_resp
+            mock_http.get_capped.return_value = mock_resp
             mock_create.return_value = mock_http
 
             result = tool.execute(
@@ -264,7 +264,7 @@ class TestWebFetchBlockedHeaders:
                 },
             )
             assert result.success
-            call_kwargs = mock_http.get.call_args[1]
+            call_kwargs = mock_http.get_capped.call_args[1]
             passed_headers = call_kwargs.get("headers", {})
             assert "Authorization" not in passed_headers
             assert "Cookie" not in passed_headers

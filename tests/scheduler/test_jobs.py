@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob
 
@@ -76,6 +76,11 @@ class TestScheduledJobToDict:
             "active_hours",
             "timezone",
             "capability_mode",
+            "updated_at",
+            "last_session_id",
+            "last_cost_usd",
+            "total_cost_usd",
+            "last_duration_seconds",
         }
         assert expected_keys == set(d.keys())
 
@@ -138,7 +143,8 @@ class TestScheduledJobFromDict:
         assert restored.enabled == original.enabled
         assert restored.run_count == original.run_count
         assert restored.last_result == original.last_result
-        assert restored.created_at == original.created_at
+        # DATA-06: persisted datetimes are normalised to aware UTC.
+        assert restored.created_at == original.created_at.replace(tzinfo=UTC)
 
     def test_from_dict_handles_missing_optional_fields(self):
         data = {"name": "minimal", "schedule": "daily at 06:00", "task": "Wake up"}
@@ -157,7 +163,8 @@ class TestScheduledJobFromDict:
     def test_from_dict_parses_last_run_datetime(self):
         ts = "2025-03-15T10:30:00"
         job = ScheduledJob.from_dict({"last_run": ts})
-        assert job.last_run == datetime(2025, 3, 15, 10, 30, 0)
+        # DATA-06: a legacy naive timestamp is read back as UTC.
+        assert job.last_run == datetime(2025, 3, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_from_dict_preserves_capability_mode(self):
         job = ScheduledJob.from_dict({"capability_mode": "full"})

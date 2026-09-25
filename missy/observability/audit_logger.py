@@ -29,6 +29,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -380,6 +381,43 @@ class AuditLogger:
             lines = lines[1:]
         return lines[-limit:]
 
+    def log_files_newest_first(self) -> list[Path]:
+        """Return the active log followed by rotated logs, newest first."""
+        files: list[Path] = []
+        if self.log_path.exists():
+            files.append(self.log_path)
+        rotated = [
+            p
+            for p in self.log_path.parent.glob(f"{self.log_path.name}.*")
+            if p.is_file() and not p.name.endswith((".lock", ".tmp"))
+        ]
+        # Rotated names embed a sortable timestamp (plus an optional _N).
+        files.extend(sorted(rotated, key=lambda p: p.name, reverse=True))
+        return files
+
+    def iter_lines_newest_first(self, max_lines: int) -> Iterator[str]:
+        """Yield up to *max_lines* non-empty lines, newest first, across rotations.
+
+        DGAP-03: the audit browser previously only looked at a tail window of
+        the active file, so filtered searches silently missed everything in
+        rotated logs. Reads each file backwards in blocks, never loading a
+        whole file.
+        """
+        remaining = max(0, int(max_lines))
+        for path in self.log_files_newest_first():
+            if remaining <= 0:
+                return
+            try:
+                for line in _reverse_lines(path):
+                    if not line.strip():
+                        continue
+                    yield line
+                    remaining -= 1
+                    if remaining <= 0:
+                        return
+            except OSError:
+                continue
+
     def get_recent_events(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return the last *limit* events from the audit log file.
 
@@ -655,3 +693,22 @@ def verify_audit_log(log_path: str, identity: Any) -> list[AuditLineVerification
             is_first_line = False
 
     return results
+
+
+def _reverse_lines(path: Path, block_size: int = 65536) -> Iterator[str]:
+    """Yield the lines of *path* last-to-first, reading backwards in blocks."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        position = fh.tell()
+        buffer = b""
+        while position > 0:
+            step = min(block_size, position)
+            position -= step
+            fh.seek(position)
+            buffer = fh.read(step) + buffer
+            parts = buffer.split(b"\n")
+            buffer = parts[0]
+            for raw in reversed(parts[1:]):
+                yield raw.decode("utf-8", errors="replace")
+        if buffer:
+            yield buffer.decode("utf-8", errors="replace")

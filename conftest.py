@@ -60,3 +60,85 @@ def deterministic_public_dns(request):
     public_dns = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443))]
     with patch("missy.policy.network.socket.getaddrinfo", return_value=public_dns):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_discord_rate_governor():
+    """The Discord REST rate governor is process-wide by design (RATE-01/03);
+    reset it around each test so one test's 401/429 responses can't open the
+    circuit for unrelated tests."""
+    from missy.channels.discord.rest import rate_governor
+
+    rate_governor.reset()
+    yield
+    rate_governor.reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_prompt_patch_store(tmp_path_factory, monkeypatch):
+    """GAP-01: AgentRuntime now injects approved patches from the default
+    store into every system prompt; never let tests read (or write outcome
+    counters into) the operator's real ~/.missy/patches.json."""
+    store = tmp_path_factory.mktemp("patches") / "patches.json"
+    monkeypatch.setattr("missy.agent.prompt_patches.DEFAULT_STORE_PATH", str(store))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_voice_pairing_rate_limits():
+    """SEC-03's per-IP pair-request budget is process-wide; isolate tests."""
+    from missy.channels.voice.pairing import PairingManager
+
+    PairingManager._requests_by_ip.clear()
+    yield
+    PairingManager._requests_by_ip.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_trust_store(tmp_path_factory, monkeypatch):
+    """Keep AgentRuntime's shared TrustScorer (DATA-02) off the operator's
+    real ~/.missy/trust.json and fresh per test."""
+    import missy.security.trust as trust_mod
+
+    store = tmp_path_factory.mktemp("trust") / "trust.json"
+    monkeypatch.setattr(trust_mod, "DEFAULT_TRUST_PATH", str(store))
+    monkeypatch.setattr(trust_mod, "_SHARED", {})
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_memory_db(tmp_path_factory, monkeypatch):
+    """Never let tests read/write the operator's real ~/.missy/memory.db.
+
+    Every AgentRuntime builds a default SQLiteMemoryStore; before this the
+    suite wrote turns into the real database, and with RATE-04's
+    cross-process SleeptimeWorker lock parallel workers also contended for
+    one real lock file.
+    """
+    db = tmp_path_factory.mktemp("memory") / "memory.db"
+    monkeypatch.setattr("missy.memory.sqlite_store.DEFAULT_DB_PATH", str(db))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_desktop_config_cache():
+    """PERF-01's config cache is keyed by file mtime; tests that patch
+    load_config must not see a previous test's cached object."""
+    from missy.tools.builtin import _desktop_shared
+
+    _desktop_shared.clear_config_cache()
+    yield
+    _desktop_shared.clear_config_cache()
+
+
+@pytest.fixture(autouse=True)
+def _restore_policy_engine():
+    """Restore the process-global PolicyEngine after each test so a test that
+    initialises it can't change the behaviour of later tests in the same
+    xdist worker (order-dependent 'PolicyEngine has not been initialised'
+    expectations)."""
+    from missy.policy import engine as engine_mod
+
+    saved = engine_mod._engine
+    yield
+    engine_mod._engine = saved

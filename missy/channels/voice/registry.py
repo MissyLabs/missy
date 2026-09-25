@@ -94,6 +94,9 @@ class EdgeNode:
     audio_logging: bool = False
     audio_log_dir: str = ""
     audio_log_retention_days: int = 7
+    #: Unix time the (unauthenticated) pairing request arrived; used to
+    #: expire requests an operator never approved (SEC-03). 0 = unknown.
+    requested_at: float = 0.0
     sensor_data: dict[str, Any] = field(
         default_factory=lambda: {
             "occupancy": None,

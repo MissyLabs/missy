@@ -21,8 +21,22 @@ Example::
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+
+#: ``(session_id, task_id)`` of the tool call currently executing (DGAP-02).
+#: Set by :meth:`ToolRegistry.execute` around ``tool.execute()`` so a tool can
+#: attribute its own audit events (e.g. outbound HTTP) to the real session
+#: without changing every tool's ``execute`` signature.
+_TOOL_CALL_CONTEXT: ContextVar[tuple[str, str]] = ContextVar(
+    "missy_tool_call_context", default=("", "")
+)
+
+
+def current_tool_context() -> tuple[str, str]:
+    """Return ``(session_id, task_id)`` for the tool call in progress."""
+    return _TOOL_CALL_CONTEXT.get()
 
 
 @dataclass

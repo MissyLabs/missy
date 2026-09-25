@@ -698,11 +698,32 @@ class VoiceServer:
             data: The decoded JSON frame containing ``friendly_name``, ``room``,
                 and ``hardware_profile`` keys.
         """
-        friendly_name = data.get("friendly_name", "unknown")
-        room = data.get("room", "unknown")
-        hardware_profile = data.get("hardware_profile", {})
+        from missy.channels.voice.pairing import PairingRequestRejected, validate_pair_request
+
         remote_addr = websocket.remote_address
         ip_address = str(remote_addr[0]) if remote_addr else "unknown"
+
+        # SEC-03: this frame is unauthenticated and its result is persisted to
+        # devices.json, so validate every field and apply flood limits before
+        # anything is written.
+        try:
+            friendly_name, room, hardware_profile = validate_pair_request(
+                data.get("friendly_name", "unknown"),
+                data.get("room", "unknown"),
+                data.get("hardware_profile", {}),
+            )
+            self._pairing_manager.admit_network_request(ip_address)
+        except PairingRequestRejected as exc:
+            _emit(
+                session_id="unknown",
+                event_type="voice.pair_request.rejected",
+                result="deny",
+                detail={"ip_address": ip_address, "reason": str(exc)},
+            )
+            logger.warning("VoiceServer: pair_request from %s rejected: %s", ip_address, exc)
+            await self._send_json(websocket, {"type": "pair_rejected", "reason": str(exc)})
+            await websocket.close(1008, "Pairing request rejected")
+            return
 
         node_id = self._pairing_manager.initiate_pairing(
             node_id="",
@@ -710,6 +731,9 @@ class VoiceServer:
             room=room,
             ip_address=ip_address,
             hardware_profile=hardware_profile,
+            # Least privilege until an operator explicitly grants more with
+            # `missy devices pair --mode full`.
+            policy_mode="safe-chat",
         )
 
         _emit(

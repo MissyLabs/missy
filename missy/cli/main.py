@@ -379,6 +379,57 @@ def _agent_tool_policy_kwargs(
     }
 
 
+def _install_global_budget(cfg: Any, *, announce: bool = False) -> None:
+    """Install (or re-install) the process-wide global spend ceiling (BUDGET-01).
+
+    Must run before anything in the process can spend: every entry point that
+    constructs an AgentRuntime calls this first, and ``gateway start`` calls it
+    before starting proactive triggers or the scheduler (and again on config
+    hot-reload). ``global_max_spend_usd <= 0`` installs a disabled budget, so
+    turning the cap off via hot reload actually takes effect.
+    """
+    try:
+        from missy.agent.global_budget import init_global_budget
+
+        raw_max = getattr(cfg, "global_max_spend_usd", 0.0)
+        gmax = float(raw_max) if isinstance(raw_max, (int, float)) else 0.0
+        raw_period = getattr(cfg, "global_budget_period", "total")
+        period = raw_period if isinstance(raw_period, str) and raw_period else "total"
+        init_global_budget(
+            max(0.0, gmax),
+            period=period,
+            alert_fn=lambda msg: console.print(f"[yellow]BUDGET ALERT:[/] {msg}"),
+        )
+        if announce and gmax > 0:
+            console.print(f"[green]Global budget[/] ${gmax:.2f} ({period})")
+    except Exception as exc:
+        logger.warning("Global budget init error: %s", exc, exc_info=True)
+
+
+def _agent_feature_kwargs(cfg: Any) -> dict[str, Any]:
+    """Return AgentConfig keyword args for the ``features:`` config section (GAP-02).
+
+    Only real bool/int values are honored, so a missing section (or a test
+    double) falls back to AgentConfig's own off-by-default values.
+    """
+    features = getattr(cfg, "features", None)
+    kwargs: dict[str, Any] = {}
+    for flag in (
+        "graph_memory_enabled",
+        "semantic_memory_enabled",
+        "prompt_patch_proposals_enabled",
+        "model_routing_enabled",
+        "condenser_pipeline_enabled",
+    ):
+        value = getattr(features, flag, None)
+        if isinstance(value, bool):
+            kwargs[flag] = value
+    min_messages = getattr(features, "condenser_min_messages", None)
+    if isinstance(min_messages, int) and not isinstance(min_messages, bool) and min_messages > 0:
+        kwargs["condenser_min_messages"] = min_messages
+    return kwargs
+
+
 def _resolve_provider_name(cfg: Any, explicit: str | None = None) -> str:
     """Resolve which provider registry key a new AgentConfig should use.
 
@@ -916,11 +967,13 @@ def ask(
     # Resolve provider.
     provider_name = _resolve_provider_name(cfg, provider)
 
+    _install_global_budget(cfg)
     agent_cfg = AgentConfig(
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
 
@@ -992,11 +1045,13 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
 
     provider_name = _resolve_provider_name(cfg, provider)
 
+    _install_global_budget(cfg)
     agent_cfg = AgentConfig(
         provider=provider_name,
         capability_mode=capability_mode,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     agent = AgentRuntime(agent_cfg)
     channel = CLIChannel()
@@ -1195,7 +1250,7 @@ def schedule_add(
     parsed_retry_on = [x.strip() for x in retry_on.split(",") if x.strip()] if retry_on else None
 
     try:
-        mgr.start()
+        mgr.open_offline()
         job = mgr.add_job(
             name=name,
             schedule=schedule_str,
@@ -1210,7 +1265,6 @@ def schedule_add(
             active_hours=active_hours,
             timezone=job_timezone,
         )
-        mgr.stop()
     except ValueError as exc:
         _print_error(
             f"Invalid schedule expression: {exc}",
@@ -1227,7 +1281,8 @@ def schedule_add(
         f"  Name    : {job.name}\n"
         f"  Schedule: {job.schedule}\n"
         f"  Provider: {job.provider}\n"
-        f"  Mode    : {job.capability_mode}"
+        f"  Mode    : {job.capability_mode}\n\n"
+        "A running gateway picks this job up automatically (within ~30s)."
     )
 
 
@@ -1258,8 +1313,14 @@ def schedule_list(ctx: click.Context) -> None:
 
     for job in jobs:
         enabled_text = Text("yes", style="green") if job.enabled else Text("no", style="red")
-        last_run = job.last_run.strftime("%Y-%m-%d %H:%M") if job.last_run else "[dim]never[/]"
-        next_run = job.next_run.strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
+        last_run = (
+            job.last_run.astimezone().strftime("%Y-%m-%d %H:%M")
+            if job.last_run
+            else "[dim]never[/]"
+        )
+        next_run = (
+            job.next_run.astimezone().strftime("%Y-%m-%d %H:%M") if job.next_run else "[dim]—[/]"
+        )
         table.add_row(
             job.id[:8] + "…",
             job.name,
@@ -1267,7 +1328,13 @@ def schedule_list(ctx: click.Context) -> None:
             job.provider,
             job.capability_mode,
             enabled_text,
-            str(job.run_count),
+            str(job.run_count)
+            + (
+                f" (${job.total_cost_usd:.2f})"
+                if isinstance(getattr(job, "total_cost_usd", None), (int, float))
+                and job.total_cost_usd
+                else ""
+            ),
             last_run,
             next_run,
         )
@@ -1287,9 +1354,8 @@ def schedule_pause(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.pause_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1297,7 +1363,9 @@ def schedule_pause(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] paused.")
+    _print_success(
+        f"Job [bold]{job_id}[/] paused. A running gateway applies this before the job next fires."
+    )
 
 
 @schedule.command("resume")
@@ -1312,9 +1380,8 @@ def schedule_resume(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.resume_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1322,7 +1389,9 @@ def schedule_resume(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] resumed.")
+    _print_success(
+        f"Job [bold]{job_id}[/] resumed. A running gateway applies this before the job next fires."
+    )
 
 
 @schedule.command("remove")
@@ -1338,9 +1407,8 @@ def schedule_remove(ctx: click.Context, job_id: str) -> None:
     mgr = SchedulerManager()
 
     try:
-        mgr.start()
+        mgr.open_offline()
         mgr.remove_job(job_id)
-        mgr.stop()
     except KeyError:
         _print_error(f"No job found with ID: {job_id!r}")
         sys.exit(1)
@@ -1348,7 +1416,9 @@ def schedule_remove(ctx: click.Context, job_id: str) -> None:
         _print_error(f"Scheduler error: {exc}")
         sys.exit(1)
 
-    _print_success(f"Job [bold]{job_id}[/] removed.")
+    _print_success(
+        f"Job [bold]{job_id}[/] removed. A running gateway applies this before the job next fires."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3037,6 +3107,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     # Populated below only when a proactive-trigger AgentRuntime is actually
     # constructed; used by the config hot-reload callback further down to
     # propagate a changed max_spend_usd to this runtime too.
+    # Global budget ceiling (F19 / BUDGET-01). Installed before proactive
+    # triggers and the scheduler start, so no background run can spend
+    # before the process-wide cap exists.
+    _install_global_budget(cfg, announce=True)
+
     _proactive_runtime = None
     try:
         if hasattr(cfg, "proactive") and cfg.proactive.enabled and cfg.proactive.triggers:
@@ -3070,6 +3145,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     provider=_provider_name,
                     max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                     **_agent_tool_policy_kwargs(cfg),
+                    **_agent_feature_kwargs(cfg),
                 )
                 _runtime = AgentRuntime(_agent_cfg)
                 _proactive_runtime = _runtime
@@ -3109,6 +3185,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         sleeptime_enabled=bool(getattr(getattr(cfg, "sleeptime", None), "enabled", False)),
         sleeptime_provider=(getattr(getattr(cfg, "sleeptime", None), "provider", "") or None),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     _agent = AgentRuntime(_agent_cfg)
 
@@ -3120,6 +3197,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         mcp_approval_gate=approval_gate,
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     _discord_agent = AgentRuntime(_discord_agent_cfg)
 
@@ -3204,10 +3282,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             scheduler_manager = SchedulerManager(
                 default_max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 default_tool_policy_kwargs=_agent_tool_policy_kwargs(cfg),
+                default_feature_kwargs=_agent_feature_kwargs(cfg),
                 max_jobs=getattr(cfg.scheduling, "max_jobs", 0),
+                default_active_hours=getattr(cfg.scheduling, "active_hours", ""),
+                misfire_grace_seconds=getattr(cfg.scheduling, "misfire_grace_seconds", 300),
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
+            # SCHED-04: daily retention pass (internal job, not in jobs.json).
+            from missy.config.settings import load_config as _load_config_only
+            from missy.scheduler.maintenance import register_maintenance_job
+
+            _cfg_path = str(Path(ctx.obj["config_path"]).expanduser())
+            register_maintenance_job(
+                scheduler_manager._scheduler,  # noqa: SLF001
+                lambda: _load_config_only(_cfg_path),
+            )
             console.print(
                 f"[green]Scheduler started[/] ({len(scheduler_manager.list_jobs())} job(s) loaded)"
             )
@@ -3216,26 +3306,6 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     except Exception as _sched_exc:
         console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
         logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
-
-    # Global budget ceiling (F19). Install the process-wide cross-session
-    # spend cap from config so every session/job/proactive run records into
-    # (and is bounded by) one shared total. No-op when global_max_spend_usd<=0.
-    try:
-        from missy.agent.global_budget import init_global_budget
-
-        _gmax = float(getattr(cfg, "global_max_spend_usd", 0.0) or 0.0)
-        if _gmax > 0:
-            init_global_budget(
-                _gmax,
-                period=str(getattr(cfg, "global_budget_period", "total") or "total"),
-                alert_fn=lambda msg: console.print(f"[yellow]BUDGET ALERT:[/] {msg}"),
-            )
-            console.print(
-                f"[green]Global budget[/] ${_gmax:.2f} "
-                f"({getattr(cfg, 'global_budget_period', 'total')})"
-            )
-    except Exception as _gb_exc:
-        logger.warning("Global budget init error: %s", _gb_exc, exc_info=True)
 
     # Heartbeat (F06). HeartbeatRunner (missy/agent/heartbeat.py) — periodic
     # HEARTBEAT.md-driven synthetic agent invocation with active-hours gating
@@ -3307,6 +3377,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
     def _apply_config_and_refresh_runtimes(new_cfg: Any) -> None:
         _apply_config(new_cfg)
+        # BUDGET-01: global_max_spend_usd / global_budget_period edits take
+        # effect on the running gateway, not only after a restart.
+        _install_global_budget(new_cfg)
         new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
         _agent.config.max_spend_usd = new_max_spend
         _discord_agent.config.max_spend_usd = new_max_spend
@@ -3389,6 +3462,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 capability_mode="safe-chat",
                 max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
                 **_agent_tool_policy_kwargs(cfg),
+                **_agent_feature_kwargs(cfg),
             )
             _voice_safe_chat_agent = AgentRuntime(_voice_safe_chat_agent_cfg)
             voice_channel.start(_agent, safe_chat_agent_runtime=_voice_safe_chat_agent)
@@ -4216,6 +4290,20 @@ def doctor(ctx: click.Context) -> None:
             # Quick connectivity check: count turns
             store.get_session_turns("__health_check__", limit=1)
             table.add_row("memory store", ok, f"sqlite: {mem_path} (accessible)")
+            # DATA-04: external-content FTS5 indexes silently desync if the
+            # base table is ever changed without the triggers.
+            fts = store.fts_integrity_check()
+            bad = {k: v for k, v in fts.items() if v != "ok"}
+            if bad:
+                table.add_row(
+                    "memory search index",
+                    fail,
+                    "FTS integrity check failed: "
+                    + "; ".join(f"{k}: {v}" for k, v in bad.items())
+                    + " (rebuild: INSERT INTO <index>(<index>) VALUES('rebuild'))",
+                )
+            else:
+                table.add_row("memory search index", ok, "FTS5 integrity check passed")
         else:
             table.add_row("memory store", warn, f"not found: {mem_path}")
     except Exception as exc:
@@ -4228,7 +4316,14 @@ def doctor(ctx: click.Context) -> None:
             import json
 
             mcp_data = json.loads(mcp_path.read_text())
-            servers = mcp_data.get("servers", {}) if isinstance(mcp_data, dict) else {}
+            # mcp.json is a list of {"name": ...} entries (McpManager's own
+            # format); a legacy {"servers": {...}} mapping is still accepted.
+            if isinstance(mcp_data, list):
+                servers = {str(e.get("name", "?")): e for e in mcp_data if isinstance(e, dict)}
+            elif isinstance(mcp_data, dict):
+                servers = mcp_data.get("servers", {}) or {}
+            else:
+                servers = {}
             if servers:
                 table.add_row(
                     "mcp servers",
@@ -4477,10 +4572,12 @@ def recover(
 
         cfg = _load_subsystems(ctx.obj["config_path"])
         provider_name = _resolve_provider_name(cfg, provider)
+        _install_global_budget(cfg)
         agent_cfg = AgentConfig(
             provider=provider_name,
             max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
             **_agent_tool_policy_kwargs(cfg),
+            **_agent_feature_kwargs(cfg),
         )
         agent = AgentRuntime(agent_cfg)
         with console.status(f"[bold cyan]Resuming {resume_id[:12]}...[/]", spinner="dots"):
@@ -5329,14 +5426,39 @@ def patches_list(ctx: click.Context) -> None:
 
 @patches.command("approve")
 @click.argument("patch_id")
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Approve even if the content matches prompt-injection patterns.",
+)
 @click.pass_context
-def patches_approve(ctx: click.Context, patch_id: str) -> None:
-    """Approve a proposed patch."""
-    from missy.agent.prompt_patches import PromptPatchManager
+def patches_approve(ctx: click.Context, patch_id: str, force: bool) -> None:
+    """Approve a proposed patch.
+
+    Approved patches are appended to the system prompt of every run (picked
+    up by a running gateway on its next run, no restart needed).
+    """
+    from missy.agent.prompt_patches import (
+        PatchContentRejected,
+        PatchStoreRefusedError,
+        PromptPatchManager,
+    )
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
-    if mgr.approve(patch_id):
+    try:
+        approved = mgr.approve(patch_id, force=force)
+    except PatchStoreRefusedError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+    except PatchContentRejected as exc:
+        _print_error(
+            f"{exc}",
+            hint="Review the patch text; re-run with --force only if it is safe.",
+        )
+        sys.exit(1)
+    if approved:
         _print_success(f"Patch [bold]{patch_id}[/] approved.")
     else:
         _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
@@ -5347,11 +5469,16 @@ def patches_approve(ctx: click.Context, patch_id: str) -> None:
 @click.pass_context
 def patches_reject(ctx: click.Context, patch_id: str) -> None:
     """Reject a proposed patch."""
-    from missy.agent.prompt_patches import PromptPatchManager
+    from missy.agent.prompt_patches import PatchStoreRefusedError, PromptPatchManager
 
     _load_subsystems(ctx.obj["config_path"])
     mgr = PromptPatchManager()
-    if mgr.reject(patch_id):
+    try:
+        rejected = mgr.reject(patch_id)
+    except PatchStoreRefusedError as exc:
+        _print_error(str(exc))
+        sys.exit(1)
+    if rejected:
         _print_success(f"Patch [bold]{patch_id}[/] rejected.")
     else:
         _print_error(f"Patch {patch_id!r} not found or not awaiting review.")
@@ -5530,8 +5657,16 @@ def devices_list(ctx: click.Context) -> None:
 @click.option(
     "--node-id", default=None, help="Node ID to approve (omit to list pending and prompt)."
 )
+@click.option(
+    "--mode",
+    "policy_mode",
+    type=click.Choice(["full", "safe-chat", "muted"]),
+    default=None,
+    help="Capability mode to grant. Network pairing requests start as safe-chat; "
+    "pass --mode full to grant full access.",
+)
 @click.pass_context
-def devices_pair(ctx: click.Context, node_id: str | None) -> None:
+def devices_pair(ctx: click.Context, node_id: str | None, policy_mode: str | None) -> None:
     """Approve a pending edge node pairing request.
 
     If --node-id is omitted, lists pending nodes and prompts for selection.
@@ -5559,8 +5694,10 @@ def devices_pair(ctx: click.Context, node_id: str | None) -> None:
         node_id = pending[idx].node_id
 
     try:
-        token = mgr.approve_pairing(node_id)
-        _print_success(f"Node [bold]{node_id[:8]}[/] approved.")
+        token = mgr.approve_pairing(node_id, policy_mode=policy_mode)
+        approved = reg.get_node(node_id)
+        mode = getattr(approved, "policy_mode", policy_mode) or "full"
+        _print_success(f"Node [bold]{node_id[:8]}[/] approved (mode: {mode}).")
         console.print(f"[bold yellow]Auth token (shown once):[/] [green]{token}[/]")
     except Exception as exc:
         _print_error(f"Failed to approve node: {exc}")
@@ -7170,10 +7307,12 @@ def api_start(
         logger.debug("Memory store unavailable: %s", _mem_exc)
         memory_store = None
 
+    _install_global_budget(cfg)
     agent_config = AgentConfig(
         provider=_resolve_provider_name(cfg, provider),
         max_spend_usd=getattr(cfg, "max_spend_usd", 0.0),
         **_agent_tool_policy_kwargs(cfg),
+        **_agent_feature_kwargs(cfg),
     )
     runtime = AgentRuntime(agent_config)
 

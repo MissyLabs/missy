@@ -308,7 +308,7 @@ class RoundRobinAccounts:
             account.backoff_seconds = 0.0
             account.unhealthy_until = 0.0
 
-    def record_failure(self, account: Account) -> None:
+    def record_failure(self, account: Account, *, immediate: bool = False) -> None:
         """Report that a call on *account* failed.
 
         After *failure_threshold* consecutive failures, *account* is skipped
@@ -318,9 +318,17 @@ class RoundRobinAccounts:
         the base duration, up to *max_backoff_seconds* -- the same shape as
         :class:`~missy.agent.circuit_breaker.CircuitBreaker`'s HALF_OPEN
         probe-failed case.
+
+        *immediate* opens the backoff on this failure regardless of the
+        threshold -- for account-level failures (e.g. HTTP 402) that will
+        not clear by retrying the same credential on its next turn.
         """
         with self._lock:
             account.consecutive_failures += 1
+            if immediate:
+                account.consecutive_failures = max(
+                    account.consecutive_failures, self._failure_threshold
+                )
             if account.consecutive_failures < self._failure_threshold:
                 return
             account.backoff_seconds = (

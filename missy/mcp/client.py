@@ -17,6 +17,31 @@ from missy.mcp.annotations import ToolAnnotation
 logger = logging.getLogger(__name__)
 
 
+class _PolicyMcpHttp:
+    """Minimal ``post``/``close`` adapter over :class:`PolicyHTTPClient`.
+
+    Merges the server's fixed headers (content negotiation + auth) into each
+    request, since :class:`PolicyHTTPClient` deliberately has no client-level
+    default headers.
+    """
+
+    def __init__(self, base_headers: dict[str, str], *, session_id: str) -> None:
+        from missy.gateway.client import PolicyHTTPClient
+
+        self._base_headers = dict(base_headers)
+        self._client = PolicyHTTPClient(session_id=session_id, task_id="mcp", category="tool")
+
+    def post(self, url: str, *, json: Any = None, headers: dict | None = None, timeout: Any = None):
+        merged = {**self._base_headers, **(headers or {})}
+        kwargs: dict[str, Any] = {"json": json, "headers": merged}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return self._client.post(url, **kwargs)
+
+    def close(self) -> None:
+        self._client.close()
+
+
 class McpClient:
     """JSON-RPC client for a single MCP server.
 
@@ -39,8 +64,10 @@ class McpClient:
         command: str | None = None,
         url: str | None = None,
         headers: dict[str, str] | None = None,
+        allow_insecure_auth: bool = False,
     ) -> None:
         self.name = name
+        self._allow_insecure_auth = bool(allow_insecure_auth)
         self._command = command
         self._url = url
         self._headers = dict(headers or {})
@@ -91,19 +118,52 @@ class McpClient:
                 )
             self._initialize()
         elif self._url:
-            import httpx
-
-            self._http = httpx.Client(
-                timeout=30.0,
-                headers={
+            self._check_auth_transport()
+            self._http = self._build_http_client(
+                {
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
                     **self._headers,
-                },
+                }
             )
             self._initialize()
         else:
             raise RuntimeError("MCP client requires either a command or a url")
+
+    def _check_auth_transport(self) -> None:
+        """Refuse to send credentials over cleartext HTTP to a non-loopback host.
+
+        A bearer token (or any credential header) on a plain ``http://`` URL is
+        readable by anything on the network path. Loopback is exempt (a local
+        server never leaves the host); any other host needs an explicit
+        ``allow_insecure_auth`` opt-in on the server entry.
+        """
+        from urllib.parse import urlparse
+
+        if not self._headers or self._allow_insecure_auth:
+            return
+        parsed = urlparse(self._url or "")
+        if parsed.scheme != "http":
+            return
+        host = (parsed.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"} or host.startswith("127."):
+            return
+        raise RuntimeError(
+            f"MCP server {self.name!r}: refusing to send credentials over plain "
+            f"http:// to {host!r}. Use https://, or set allow_insecure_auth: true "
+            "on this server entry if the network path is trusted."
+        )
+
+    def _build_http_client(self, base_headers: dict[str, str]) -> Any:
+        """Return the policy-enforcing HTTP adapter for this server.
+
+        Every MCP HTTP request goes through
+        :class:`~missy.gateway.client.PolicyHTTPClient` (category ``"tool"``)
+        so network policy, REST policy, the pinned transport, response-size
+        limits and request auditing all apply -- the same single enforcement
+        point every other outbound HTTP call uses.
+        """
+        return _PolicyMcpHttp(base_headers, session_id=f"mcp:{self.name}")
 
     def _initialize(self) -> None:
         resp = self._rpc(

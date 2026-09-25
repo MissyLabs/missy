@@ -169,14 +169,15 @@ class TestRunStream:
 
 
 class TestRateLimitIntegration:
-    def test_rate_limiter_created(self, mock_registry):
+    def test_no_hardcoded_runtime_limiter(self, mock_registry):
+        """RATE-02: the provider-level, config-driven limiter is the only one."""
         registry, _ = mock_registry
         with (
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
         ):
             agent = AgentRuntime(AgentConfig(provider="test"))
-            assert agent._rate_limiter is not None
+            assert agent._rate_limiter is None
 
     def test_rate_limiter_called_before_completion(self, mock_registry):
         registry, provider = mock_registry

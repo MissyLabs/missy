@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import posixpath
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
@@ -60,6 +61,24 @@ def set_interactive_approval(approval: object | None) -> None:
     """
     global _interactive_approval
     _interactive_approval = approval
+
+
+@dataclass(frozen=True)
+class CappedResponse:
+    """Result of :meth:`PolicyHTTPClient.get_capped`."""
+
+    status_code: int
+    headers: dict[str, str]
+    content: bytes
+    encoding: str
+    truncated: bool
+
+    @property
+    def text(self) -> str:
+        try:
+            return self.content.decode(self.encoding, errors="replace")
+        except LookupError:
+            return self.content.decode("utf-8", errors="replace")
 
 
 class PolicyHTTPClient:
@@ -260,6 +279,45 @@ class PolicyHTTPClient:
         self._check_response_size(response, url)
         self._emit_request_event("HEAD", url, response.status_code)
         return response
+
+    def get_capped(self, url: str, max_bytes: int, **kwargs: Any) -> CappedResponse:
+        """Policy-checked streaming GET that stops reading after *max_bytes*.
+
+        PERF-02: callers that only keep a bounded prefix of a body (e.g.
+        ``web_fetch``) previously downloaded and buffered up to
+        :attr:`max_response_bytes` (50 MB) just to truncate it. This reads at
+        most ``max_bytes + 1`` bytes and closes the connection.
+
+        Raises:
+            PolicyViolationError: When the destination host is denied.
+            httpx.HTTPError: On network or protocol errors.
+        """
+        self._check_url(url, "GET")
+        limit = max(0, int(max_bytes))
+        chunks: list[bytes] = []
+        received = 0
+        truncated = False
+        with self._get_sync_client().stream(
+            "GET", url, **self._sanitize_kwargs(kwargs)
+        ) as response:
+            for chunk in response.iter_bytes():
+                chunks.append(chunk)
+                received += len(chunk)
+                if received > limit:
+                    truncated = True
+                    break
+            body = b"".join(chunks)[:limit]
+            status = response.status_code
+            encoding = response.encoding or "utf-8"
+            headers = dict(response.headers)
+        self._emit_request_event("GET", url, status)
+        return CappedResponse(
+            status_code=status,
+            headers=headers,
+            content=body,
+            encoding=encoding,
+            truncated=truncated,
+        )
 
     # ------------------------------------------------------------------
     # Context manager support

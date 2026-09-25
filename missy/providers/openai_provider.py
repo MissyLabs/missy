@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -278,7 +279,13 @@ class OpenAIProvider(BaseProvider):
         if success:
             self._rr.record_success(account)
         else:
-            self._rr.record_failure(account)
+            # Called from inside the failing call's ``except`` block, so the
+            # in-flight exception is available: an account-level failure
+            # (HTTP 402 etc.) benches this account immediately rather than
+            # after N more real requests fail on it.
+            from missy.providers.health import is_account_level_failure
+
+            self._rr.record_failure(account, immediate=is_account_level_failure(sys.exc_info()[1]))
 
     @property
     def api_key(self) -> str | None:

@@ -336,11 +336,16 @@ class SchedulingPolicy:
         enabled: When False, no new jobs may be added or run.
         max_jobs: Maximum number of concurrent scheduled jobs (0 = unlimited).
         active_hours: Optional time window for job execution, e.g. "08:00-22:00".
+            Applied to every job that has no ``active_hours`` of its own.
+        misfire_grace_seconds: How late a run may still start after its
+            scheduled time (e.g. across a gateway restart). Runs missed by
+            more than this are skipped and audited as ``scheduler.job.missed``.
     """
 
     enabled: bool = True
     max_jobs: int = 0
     active_hours: str = ""
+    misfire_grace_seconds: int = 300
 
 
 @dataclass
@@ -599,6 +604,58 @@ class SleeptimeConfig:
     provider: str = ""
 
 
+@dataclass
+class FeaturesConfig:
+    """Opt-in agent features (GAP-02). All off by default.
+
+    These map 1:1 onto the same-named :class:`~missy.agent.runtime.AgentConfig`
+    fields and are applied to every runtime an entry point constructs
+    (``ask``/``run``/``recover``/``gateway start``/``api start``/scheduled jobs).
+    """
+
+    graph_memory_enabled: bool = False
+    semantic_memory_enabled: bool = False
+    prompt_patch_proposals_enabled: bool = False
+    model_routing_enabled: bool = False
+    condenser_pipeline_enabled: bool = False
+    condenser_min_messages: int = 30
+
+
+@dataclass
+class RetentionConfig:
+    """Automatic data retention run daily by the gateway (SCHED-04).
+
+    A value of ``0`` disables that pruner. Only regular files directly under
+    the named Missy directories are ever deleted (symlinks are skipped).
+    Pruners that delete operator/user content (memory turns, vision
+    captures, Discord inbound attachments, graph entities) are opt-in and
+    default to ``0``; only internal bookkeeping (finished checkpoints,
+    request-tracker history, unapproved pairing requests) is pruned by
+    default.
+
+    Attributes:
+        enabled: Master switch for the daily maintenance job.
+        memory_days: Conversation turns older than this are deleted (pinned
+            turns kept). Off by default -- history is user data.
+        checkpoints_days: Completed/abandoned task checkpoints.
+        captures_days: Files under ``~/.missy/captures/`` (vision captures).
+        inbound_attachments_days: Discord inbound attachments and extracted
+            zip archives (untrusted content) under ``~/.missy/captures/discord_inbound*``.
+        request_tracker_days: Tool-intelligence request-tracker history.
+        graph_memory_days: Graph-memory entities not seen within this window.
+        pending_pairing_hours: Unapproved voice pairing requests.
+    """
+
+    enabled: bool = True
+    memory_days: int = 0
+    checkpoints_days: int = 7
+    captures_days: int = 0
+    inbound_attachments_days: int = 0
+    request_tracker_days: int = 30
+    graph_memory_days: int = 0
+    pending_pairing_hours: int = 24
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -645,6 +702,8 @@ class MissyConfig:
     vault: VaultConfig = field(default_factory=VaultConfig)
     proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
     sleeptime: SleeptimeConfig = field(default_factory=SleeptimeConfig)
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
     sandbox: SandboxConfig | None = None
     container: ContainerConfig | None = None
     vision: VisionConfig = field(default_factory=VisionConfig)
@@ -1084,6 +1143,7 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
         enabled=_coerce_bool(data.get("enabled"), True),
         max_jobs=int(data.get("max_jobs", 0)),
         active_hours=str(data.get("active_hours", "")),
+        misfire_grace_seconds=max(1, int(data.get("misfire_grace_seconds", 300))),
     )
 
 
@@ -1227,6 +1287,53 @@ def _parse_sleeptime(data: dict[str, Any]) -> SleeptimeConfig:
     )
 
 
+def _nonneg_int(value: Any, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_features(data: dict[str, Any]) -> FeaturesConfig:
+    _warn_unknown_keys("features", data, FeaturesConfig)
+    return FeaturesConfig(
+        graph_memory_enabled=_coerce_bool(data.get("graph_memory_enabled"), False),
+        semantic_memory_enabled=_coerce_bool(data.get("semantic_memory_enabled"), False),
+        prompt_patch_proposals_enabled=_coerce_bool(
+            data.get("prompt_patch_proposals_enabled"), False
+        ),
+        model_routing_enabled=_coerce_bool(data.get("model_routing_enabled"), False),
+        condenser_pipeline_enabled=_coerce_bool(data.get("condenser_pipeline_enabled"), False),
+        condenser_min_messages=max(1, _nonneg_int(data.get("condenser_min_messages"), 30)),
+    )
+
+
+def _parse_retention(data: dict[str, Any]) -> RetentionConfig:
+    _warn_unknown_keys("retention", data, RetentionConfig)
+    d = RetentionConfig()
+    return RetentionConfig(
+        enabled=_coerce_bool(data.get("enabled"), True),
+        memory_days=_nonneg_int(data.get("memory_days", d.memory_days), d.memory_days),
+        checkpoints_days=_nonneg_int(
+            data.get("checkpoints_days", d.checkpoints_days), d.checkpoints_days
+        ),
+        captures_days=_nonneg_int(data.get("captures_days", d.captures_days), d.captures_days),
+        inbound_attachments_days=_nonneg_int(
+            data.get("inbound_attachments_days", d.inbound_attachments_days),
+            d.inbound_attachments_days,
+        ),
+        request_tracker_days=_nonneg_int(
+            data.get("request_tracker_days", d.request_tracker_days), d.request_tracker_days
+        ),
+        graph_memory_days=_nonneg_int(
+            data.get("graph_memory_days", d.graph_memory_days), d.graph_memory_days
+        ),
+        pending_pairing_hours=_nonneg_int(
+            data.get("pending_pairing_hours", d.pending_pairing_hours), d.pending_pairing_hours
+        ),
+    )
+
+
 def _parse_container(data: dict[str, Any]) -> ContainerConfig:
     """Parse the ``container`` section of a Missy config dict."""
     from missy.security.container import parse_container_config
@@ -1309,6 +1416,8 @@ def load_config(path: str) -> MissyConfig:
             vault=_parse_vault(data.get("vault") or {}),
             proactive=_parse_proactive(data.get("proactive") or {}),
             sleeptime=_parse_sleeptime(data.get("sleeptime") or {}),
+            features=_parse_features(data.get("features") or {}),
+            retention=_parse_retention(data.get("retention") or {}),
             sandbox=_parse_sandbox(data.get("sandbox") or {}),
             container=_parse_container(data.get("container") or {}),
             vision=_parse_vision(data.get("vision") or {}),

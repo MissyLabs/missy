@@ -1263,8 +1263,19 @@ def _make_handler(
             if not os.path.exists(log_path):
                 return ApiResponse.ok({"path": None, "lines": []})
             try:
-                with open(log_path, encoding="utf-8", errors="replace") as fh:
-                    tail = deque(fh, maxlen=lines)
+                # PERF-04: read backwards from the end instead of streaming
+                # the whole (possibly very large) log on every poll.
+                from pathlib import Path as _Path
+
+                from missy.observability.audit_logger import _reverse_lines
+
+                tail: deque[str] = deque(maxlen=lines)
+                for index, line in enumerate(_reverse_lines(_Path(log_path))):
+                    if index == 0 and not line:
+                        continue  # the file's trailing newline
+                    tail.appendleft(line)
+                    if len(tail) >= lines:
+                        break
             except OSError as exc:
                 return ApiResponse.error(f"Could not read application log: {exc}", 500)
 

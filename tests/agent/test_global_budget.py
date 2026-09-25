@@ -132,6 +132,10 @@ class TestResetAndSummary:
         p = str(tmp_path / "gb.json")
         Path(p).write_text("not json{{{")
         b = GlobalBudget(max_spend_usd=1.0, path=p)
-        assert b.total_spent() == 0.0  # starts fresh, no crash
+        # BUDGET-01: a corrupt file must fail closed (treated as fully spent,
+        # quarantined), never silently re-grant the ceiling.
+        assert b.total_spent() == pytest.approx(1.0)  # no crash, at cap
+        assert Path(p + ".corrupt").exists()
+        b.reset()  # operator override recovers
         b.record(0.1)
         assert b.total_spent() == pytest.approx(0.1)

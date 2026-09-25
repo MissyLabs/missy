@@ -328,6 +328,9 @@ class ToolRegistry:
         tool_kwargs = {
             k: v for k, v in argument_snapshot.items() if k not in ("session_id", "task_id")
         }
+        from missy.tools.base import _TOOL_CALL_CONTEXT
+
+        context_token = _TOOL_CALL_CONTEXT.set((session_id or "", task_id or ""))
         try:
             result = tool.execute(**tool_kwargs)
         except Exception as exc:
@@ -335,6 +338,8 @@ class ToolRegistry:
             logger.error("Tool %r raised an exception; details withheld.", tool_name)
             self._emit_event(tool_name, session_id, task_id, "error", safe_error)
             return ToolResult(success=False, output=None, error=safe_error)
+        finally:
+            _TOOL_CALL_CONTEXT.reset(context_token)
         if not isinstance(result, ToolResult):
             error = "Tool returned an invalid result type."
             self._emit_event(tool_name, session_id, task_id, "error", error)

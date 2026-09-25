@@ -35,6 +35,7 @@ import base64
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -149,6 +150,13 @@ def _codex_request_error(exc: Exception) -> ProviderError:
             "`missy providers auth openai-codex --method oauth`, then retry."
             f"{suffix}"
         )
+    if status_code is not None:
+        # Every HTTP error carries a body excerpt: a 402 says whether it's
+        # quota, subscription, or model entitlement -- previously only
+        # 401/403 kept it, so those causes were indistinguishable.
+        detail = _http_body_excerpt(exc)
+        suffix = f" Upstream response: {detail}" if detail else ""
+        return ProviderError(f"openai-codex request failed (HTTP {status_code}): {exc}{suffix}")
     return ProviderError(f"openai-codex request failed: {exc}")
 
 
@@ -390,7 +398,13 @@ class CodexProvider(BaseProvider):
         if success:
             self._rr.record_success(account)
         else:
-            self._rr.record_failure(account)
+            # Called from inside the failing call's ``except`` block, so the
+            # in-flight exception is available: an account-level failure
+            # (HTTP 402 etc.) benches this account immediately rather than
+            # after N more real requests fail on it.
+            from missy.providers.health import is_account_level_failure
+
+            self._rr.record_failure(account, immediate=is_account_level_failure(sys.exc_info()[1]))
 
     def _prepare_call(self, estimated_tokens: int = 0) -> None:
         """Select this thread's round-robin account (if any) and acquire its rate limit.

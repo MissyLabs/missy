@@ -653,6 +653,7 @@ class TestPromptPatchManagerPersistence:
             }
         ]
         store.write_text(json.dumps(data))
+        store.chmod(0o600)  # SEC-04: group/world-writable stores are refused
 
         mgr = PromptPatchManager(store_path=str(store))
         patches = mgr.list_all()

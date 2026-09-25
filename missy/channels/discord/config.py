@@ -23,10 +23,17 @@ Example YAML::
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+#: A Discord snowflake (role/user/channel ID).
+_SNOWFLAKE_RE = re.compile(r"^\d{15,20}$")
 
 
 class DiscordDMPolicy(StrEnum):
@@ -57,8 +64,11 @@ class DiscordGuildPolicy:
             explicitly @-mentioned in the message.
         allowed_channels: Whitelist of channel names (not IDs) that the bot
             will respond in.  Empty list means all channels are permitted.
-        allowed_roles: Whitelist of role names that users must hold to
-            interact with the bot.  Empty means all roles are permitted.
+        allowed_roles: Whitelist of role *names* (deprecated, SEC-02): role
+            names aren't unique, so anyone who can create a role can copy
+            one. Entries that are numeric snowflakes are treated as IDs.
+        allowed_role_ids: Whitelist of role IDs (snowflakes) users must
+            hold. Preferred; when set, name entries are ignored.
         allowed_users: Whitelist of user IDs permitted to interact.  Empty
             means all users are permitted (subject to role rules).
         mode: Feature mode for this guild.  One of ``"safe_chat_only"``,
@@ -71,6 +81,7 @@ class DiscordGuildPolicy:
     allowed_roles: list[str] = field(default_factory=list)
     allowed_users: list[str] = field(default_factory=list)
     mode: str = "full"
+    allowed_role_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -203,13 +214,31 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     """Construct a :class:`DiscordGuildPolicy` from a raw YAML dict."""
     from missy.config.settings import _coerce_bool
 
+    role_ids = [str(r).strip() for r in data.get("allowed_role_ids", []) or [] if str(r).strip()]
+    role_names: list[str] = []
+    for entry in data.get("allowed_roles", []) or []:
+        text = str(entry).strip()
+        if not text:
+            continue
+        if _SNOWFLAKE_RE.match(text):
+            role_ids.append(text)  # an ID written under allowed_roles
+        else:
+            role_names.append(text)
+    if role_names:
+        logger.warning(
+            "Discord guild policy uses role names %s in allowed_roles; names are not "
+            "unique and can be spoofed by anyone able to create roles. Use "
+            "allowed_role_ids (role snowflakes) instead.",
+            role_names,
+        )
     return DiscordGuildPolicy(
         enabled=_coerce_bool(data.get("enabled"), True),
         require_mention=_coerce_bool(data.get("require_mention"), False),
         allowed_channels=list(data.get("allowed_channels", [])),
-        allowed_roles=list(data.get("allowed_roles", [])),
+        allowed_roles=role_names,
         allowed_users=list(data.get("allowed_users", [])),
         mode=str(data.get("mode", "full")),
+        allowed_role_ids=list(dict.fromkeys(role_ids)),
     )
 
 

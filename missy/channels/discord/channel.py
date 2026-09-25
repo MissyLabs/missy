@@ -258,7 +258,8 @@ class DiscordChannel(BaseChannel):
             try:
                 from missy.channels.discord.commands import SLASH_COMMANDS
 
-                self._rest.register_slash_commands(
+                await asyncio.to_thread(
+                    self._rest.register_slash_commands,
                     application_id=self.account_config.application_id,
                     commands=SLASH_COMMANDS,
                 )
@@ -386,7 +387,7 @@ class DiscordChannel(BaseChannel):
         """
         # Send typing indicator as an in-progress UX signal.
         with contextlib.suppress(Exception):
-            self._rest.trigger_typing(channel_id)
+            await asyncio.to_thread(self._rest.trigger_typing, channel_id)
 
         target_channel = thread_id if thread_id else channel_id
 
@@ -399,7 +400,8 @@ class DiscordChannel(BaseChannel):
         last_message_id: str | None = None
         try:
             for idx, chunk in enumerate(chunks):
-                result = self._rest.send_message(
+                result = await asyncio.to_thread(
+                    self._rest.send_message,
                     channel_id=target_channel,
                     content=chunk,
                     reply_to_message_id=reply_to if idx == 0 else None,
@@ -615,7 +617,9 @@ class DiscordChannel(BaseChannel):
                     deleted = False
                     if message_id and self._rest is not None:
                         try:
-                            deleted = self._rest.delete_message(channel_id, message_id)
+                            deleted = await asyncio.to_thread(
+                                self._rest.delete_message, channel_id, message_id
+                            )
                         except Exception as _del_exc:
                             logger.warning("Failed to delete credential message: %s", _del_exc)
 
@@ -638,7 +642,8 @@ class DiscordChannel(BaseChannel):
                     # Send a warning back to the channel.
                     if self._rest is not None:
                         with contextlib.suppress(Exception):
-                            self._rest.send_message(
+                            await asyncio.to_thread(
+                                self._rest.send_message,
                                 channel_id,
                                 f"\u26a0\ufe0f <@{author_id}> Your message appeared to contain"
                                 f" credentials or secrets and has been"
@@ -667,7 +672,8 @@ class DiscordChannel(BaseChannel):
                 )
                 if self._rest is not None:
                     with contextlib.suppress(Exception):
-                        self._rest.send_message(
+                        await asyncio.to_thread(
+                            self._rest.send_message,
                             channel_id,
                             f"<@{author_id}> I couldn't safely inspect that message, so it "
                             "was not processed. Please try again.",
@@ -697,7 +703,9 @@ class DiscordChannel(BaseChannel):
         if guild_id is None:
             allowed = self._check_dm_policy(author_id, content)
         else:
-            allowed = self._check_guild_policy(guild_id, channel_id, author_id, content, data)
+            allowed = await asyncio.to_thread(
+                self._check_guild_policy, guild_id, channel_id, author_id, content, data
+            )
 
         if not allowed:
             return
@@ -718,7 +726,8 @@ class DiscordChannel(BaseChannel):
                 },
             )
             with contextlib.suppress(Exception):
-                self._rest.send_message(
+                await asyncio.to_thread(
+                    self._rest.send_message,
                     channel_id,
                     f"⏳ <@{author_id}> You're sending commands too quickly. "
                     f"Please wait {rate_result.retry_after_seconds:.0f}s and try again.",
@@ -840,7 +849,8 @@ class DiscordChannel(BaseChannel):
                     names = ", ".join(
                         a.get("filename", "attachment") for a, _v in denied_attachments
                     )
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"⚠️ <@{author_id}> I can't accept {names} — only image, "
                         f"text file (.md/.txt/.json/.yaml/.csv/.log, under "
@@ -1136,7 +1146,9 @@ class DiscordChannel(BaseChannel):
                         "error": str(exc),
                     },
                 )
-                self._rest.send_message(channel_id, f"Voice unavailable: {exc}")
+                await asyncio.to_thread(
+                    self._rest.send_message, channel_id, f"Voice unavailable: {exc}"
+                )
                 return True
         else:
             from missy.channels.discord.voice_binding import set_voice_binding
@@ -1156,7 +1168,7 @@ class DiscordChannel(BaseChannel):
             voice=self._voice,
         )
         if result.handled and result.reply:
-            self._rest.send_message(channel_id, result.reply)
+            await asyncio.to_thread(self._rest.send_message, channel_id, result.reply)
         return result.handled
 
     async def _maybe_handle_image_command(
@@ -1187,7 +1199,7 @@ class DiscordChannel(BaseChannel):
 
         # Show typing indicator while processing.
         if self._rest is not None:
-            self._rest.trigger_typing(channel_id)
+            await asyncio.to_thread(self._rest.trigger_typing, channel_id)
 
         result = await maybe_handle_image_command(
             content=text,
@@ -1198,11 +1210,13 @@ class DiscordChannel(BaseChannel):
             # Analysis responses can be long — use message splitting.
             reply = result.reply
             if len(reply) <= 2000:
-                self._rest.send_message(channel_id, reply)
+                await asyncio.to_thread(self._rest.send_message, channel_id, reply)
             else:
                 # Split into 1990-char chunks.
                 for i in range(0, len(reply), 1990):
-                    self._rest.send_message(channel_id, reply[i : i + 1990])
+                    await asyncio.to_thread(
+                        self._rest.send_message, channel_id, reply[i : i + 1990]
+                    )
         return result.handled
 
     async def _maybe_handle_screen_command(
@@ -1239,10 +1253,12 @@ class DiscordChannel(BaseChannel):
         if result.handled and result.reply:
             reply = result.reply
             if len(reply) <= 2000:
-                self._rest.send_message(channel_id, reply)
+                await asyncio.to_thread(self._rest.send_message, channel_id, reply)
             else:
                 for i in range(0, len(reply), 1990):
-                    self._rest.send_message(channel_id, reply[i : i + 1990])
+                    await asyncio.to_thread(
+                        self._rest.send_message, channel_id, reply[i : i + 1990]
+                    )
         return result.handled
 
     async def _handle_interaction(self, data: dict[str, Any]) -> None:
@@ -1275,13 +1291,20 @@ class DiscordChannel(BaseChannel):
         if guild_id is None:
             allowed = self._check_dm_policy(author_id, "")
         else:
-            allowed = self._check_guild_policy(
-                guild_id, channel_id, author_id, "", data, skip_mention_check=True
+            allowed = await asyncio.to_thread(
+                self._check_guild_policy,
+                guild_id,
+                channel_id,
+                author_id,
+                "",
+                data,
+                skip_mention_check=True,
             )
 
         if not allowed:
             try:
-                self._rest.send_interaction_response(
+                await asyncio.to_thread(
+                    self._rest.send_interaction_response,
                     interaction_id,
                     interaction_token,
                     response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
@@ -1306,7 +1329,8 @@ class DiscordChannel(BaseChannel):
                 },
             )
             try:
-                self._rest.send_interaction_response(
+                await asyncio.to_thread(
+                    self._rest.send_interaction_response,
                     interaction_id,
                     interaction_token,
                     response_type=4,  # CHANNEL_MESSAGE_WITH_SOURCE
@@ -1323,7 +1347,12 @@ class DiscordChannel(BaseChannel):
 
         # Send deferred response immediately (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
         try:
-            self._rest.send_interaction_response(interaction_id, interaction_token, response_type=5)
+            await asyncio.to_thread(
+                self._rest.send_interaction_response,
+                interaction_id,
+                interaction_token,
+                response_type=5,
+            )
         except Exception as exc:
             logger.error("Discord: deferred interaction response failed: %s", exc)
             return
@@ -1343,7 +1372,9 @@ class DiscordChannel(BaseChannel):
                     "Discord: no application_id configured, cannot edit interaction response"
                 )
                 return
-            self._rest.edit_interaction_response(app_id, interaction_token, response_text)
+            await asyncio.to_thread(
+                self._rest.edit_interaction_response, app_id, interaction_token, response_text
+            )
         except Exception as exc:
             logger.error("Discord: editing interaction response failed: %s", exc)
 
@@ -1561,14 +1592,22 @@ class DiscordChannel(BaseChannel):
             return False
 
         # Role allowlist check. The Gateway's message `member` object
-        # carries the author's role IDs (snowflakes); allowed_roles is
-        # documented and configured as role *names*, so the IDs are
-        # resolved via a cached guild role lookup before comparing.
-        if guild_policy.allowed_roles:
+        # carries the author's role IDs (snowflakes). SEC-02: role IDs are
+        # the only unforgeable identity -- role *names* aren't unique, so
+        # anyone able to create a role could copy an allowlisted name. When
+        # allowed_role_ids is configured it's authoritative and names are
+        # ignored; legacy name-only configs still work (resolved via a
+        # cached guild role lookup) but are flagged by `missy security scan`.
+        role_ids_allow = list(getattr(guild_policy, "allowed_role_ids", None) or [])
+        if role_ids_allow or guild_policy.allowed_roles:
             member = data.get("member") or {}
-            member_role_ids = member.get("roles") or []
-            member_role_names = self._resolve_role_names(guild_id, member_role_ids)
-            if not member_role_names & set(guild_policy.allowed_roles):
+            member_role_ids = [str(r) for r in (member.get("roles") or [])]
+            if role_ids_allow:
+                role_ok = bool(set(member_role_ids) & set(role_ids_allow))
+            else:
+                member_role_names = self._resolve_role_names(guild_id, member_role_ids)
+                role_ok = bool(member_role_names & set(guild_policy.allowed_roles))
+            if not role_ok:
                 self._emit_audit(
                     "discord.channel.allowlist_denied",
                     "deny",
@@ -1693,7 +1732,8 @@ class DiscordChannel(BaseChannel):
             The thread ID on success, or None on failure.
         """
         try:
-            result = self._rest.create_thread(
+            result = await asyncio.to_thread(
+                self._rest.create_thread,
                 channel_id=channel_id,
                 name=name,
                 message_id=message_id,
@@ -1993,7 +2033,8 @@ class DiscordChannel(BaseChannel):
             resolved = False
 
             if not is_owner:
-                self._rest.send_message(
+                await asyncio.to_thread(
+                    self._rest.send_message,
                     channel_id,
                     f"\u26a0\ufe0f <@{user_id}> is not a configured owner for this "
                     f"bot, so evolution **{proposal_id}** cannot be {action}d from "
@@ -2014,7 +2055,8 @@ class DiscordChannel(BaseChannel):
             elif action == "approve":
                 if mgr.approve(proposal_id):
                     resolved = True
-                    sent = self._rest.send_message(
+                    sent = await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"\u2705 Evolution **{proposal_id}** approved by <@{user_id}>. "
                         f"React \u2705 below to apply it now (patches the file, runs "
@@ -2035,7 +2077,8 @@ class DiscordChannel(BaseChannel):
                     if apply_message_id:
                         self._add_apply_reactions(channel_id, apply_message_id, proposal_id)
                 else:
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"Could not approve evolution **{proposal_id}** — "
                         f"it may already be resolved.",
@@ -2043,7 +2086,8 @@ class DiscordChannel(BaseChannel):
             else:
                 if mgr.reject(proposal_id):
                     resolved = True
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"\u274c Evolution **{proposal_id}** rejected by <@{user_id}>.",
                     )
@@ -2057,7 +2101,8 @@ class DiscordChannel(BaseChannel):
                         },
                     )
                 else:
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"Could not reject evolution **{proposal_id}** — "
                         f"it may already be resolved.",
@@ -2077,7 +2122,8 @@ class DiscordChannel(BaseChannel):
 
         except Exception as exc:
             logger.error("Discord: evolution reaction handling failed: %s", exc)
-            self._rest.send_message(
+            await asyncio.to_thread(
+                self._rest.send_message,
                 channel_id,
                 f"Error processing evolution reaction: {exc}",
             )
@@ -2116,7 +2162,8 @@ class DiscordChannel(BaseChannel):
             resolved = False
 
             if not is_owner:
-                self._rest.send_message(
+                await asyncio.to_thread(
+                    self._rest.send_message,
                     channel_id,
                     f"\u26a0\ufe0f <@{user_id}> is not a configured owner for this "
                     f"bot, so evolution **{proposal_id}** cannot be {action}ed from "
@@ -2151,7 +2198,8 @@ class DiscordChannel(BaseChannel):
                 # a background thread via run_in_executor instead, the
                 # same pattern cli/main.py's _process_channel() already
                 # uses for the (also potentially slow) agent.run() call.
-                self._rest.send_message(
+                await asyncio.to_thread(
+                    self._rest.send_message,
                     channel_id,
                     f"⏳ Applying evolution **{proposal_id}** (patching the file "
                     "and running the test suite -- this can take a few minutes)...",
@@ -2160,7 +2208,8 @@ class DiscordChannel(BaseChannel):
                 result = await loop.run_in_executor(None, mgr.apply, proposal_id)
                 if result.get("success"):
                     commit_sha = str(result.get("commit_sha", ""))[:8]
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"\u2705 Evolution **{proposal_id}** applied by <@{user_id}> "
                         f"and committed ({commit_sha}).",
@@ -2177,7 +2226,8 @@ class DiscordChannel(BaseChannel):
                     )
                 else:
                     message = str(result.get("message", "Apply failed."))
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"\u26a0\ufe0f Evolution **{proposal_id}** apply "
                         f"attempted by <@{user_id}> but failed: {message}",
@@ -2195,7 +2245,8 @@ class DiscordChannel(BaseChannel):
             else:
                 if mgr.reject(proposal_id):
                     resolved = True
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"\u274c Evolution **{proposal_id}** apply cancelled by <@{user_id}>.",
                     )
@@ -2209,7 +2260,8 @@ class DiscordChannel(BaseChannel):
                         },
                     )
                 else:
-                    self._rest.send_message(
+                    await asyncio.to_thread(
+                        self._rest.send_message,
                         channel_id,
                         f"Could not cancel evolution **{proposal_id}** — "
                         f"it may already be resolved.",
@@ -2221,7 +2273,8 @@ class DiscordChannel(BaseChannel):
 
         except Exception as exc:
             logger.error("Discord: evolution apply reaction handling failed: %s", exc)
-            self._rest.send_message(
+            await asyncio.to_thread(
+                self._rest.send_message,
                 channel_id,
                 f"Error processing evolution apply reaction: {exc}",
             )

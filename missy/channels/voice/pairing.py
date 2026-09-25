@@ -40,8 +40,14 @@ Example::
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import threading
+import time
 import uuid
+from collections import defaultdict, deque
+from typing import Any
 
 from missy.channels.voice.registry import DeviceRegistry, EdgeNode
 from missy.core.events import AuditEvent, event_bus
@@ -50,6 +56,62 @@ logger = logging.getLogger(__name__)
 
 _PAIRING_SESSION_ID = "system"
 _PAIRING_TASK_ID = "device-pairing"
+
+# SEC-03: pair_request is unauthenticated and persisted, so it is bounded.
+#: Maximum unapproved nodes held at once; further requests are rejected.
+MAX_PENDING_PAIRINGS = 20
+#: Maximum pair requests accepted per source IP per hour.
+MAX_PAIR_REQUESTS_PER_IP_PER_HOUR = 3
+#: Allowed ``friendly_name``/``room``: short, plain labels only.
+_LABEL_RE = re.compile(r"^[\w .\-]{1,64}$")
+#: Maximum serialized size of a ``hardware_profile``.
+MAX_HARDWARE_PROFILE_BYTES = 4096
+
+
+class PairingRequestRejected(ValueError):
+    """An unauthenticated pairing request failed validation or rate limits."""
+
+
+def validate_pair_request(
+    friendly_name: Any, room: Any, hardware_profile: Any
+) -> tuple[str, str, dict[str, str]]:
+    """Validate and normalize the fields of a network ``pair_request`` (SEC-03).
+
+    ``friendly_name``/``room`` must be short plain labels and pass the
+    prompt-injection scanner (``room`` is surfaced to the agent as context
+    once a node is approved). ``hardware_profile`` must be a small flat dict
+    of scalar values.
+
+    Raises:
+        PairingRequestRejected: With a short, client-safe reason.
+    """
+    name = str(friendly_name if friendly_name is not None else "unknown").strip()
+    room_s = str(room if room is not None else "unknown").strip()
+    for label, value in (("friendly_name", name), ("room", room_s)):
+        if not _LABEL_RE.match(value):
+            raise PairingRequestRejected(
+                f"{label} must be 1-64 letters, digits, spaces, '.', '-' or '_'"
+            )
+    try:
+        from missy.security.sanitizer import InputSanitizer
+
+        flagged = InputSanitizer().check_for_injection(f"{name}\n{room_s}")
+    except Exception:
+        flagged = ["scanner unavailable"]
+    if flagged:
+        raise PairingRequestRejected("friendly_name/room rejected by content scanner")
+
+    profile = hardware_profile if hardware_profile is not None else {}
+    if not isinstance(profile, dict):
+        raise PairingRequestRejected("hardware_profile must be an object")
+    flat: dict[str, str] = {}
+    for key, value in profile.items():
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise PairingRequestRejected("hardware_profile values must be scalars")
+        flat[str(key)[:64]] = value if isinstance(value, (int, float, bool)) else str(value)
+    if len(json.dumps(flat)) > MAX_HARDWARE_PROFILE_BYTES:
+        raise PairingRequestRejected("hardware_profile too large")
+    return name, room_s, flat
 
 
 class PairingManager:
@@ -64,6 +126,45 @@ class PairingManager:
             caller's responsibility to call :meth:`~DeviceRegistry.load`
             before constructing a ``PairingManager``.
     """
+
+    #: Per-IP request timestamps shared by every manager in the process.
+    _requests_by_ip: defaultdict[str, deque[float]] = defaultdict(deque)
+    _requests_lock = threading.Lock()
+
+    def admit_network_request(self, ip_address: str) -> None:
+        """Apply SEC-03 flood limits to an unauthenticated pair request.
+
+        Raises:
+            PairingRequestRejected: When the source IP exceeded its hourly
+                budget or too many requests are already pending.
+        """
+        now = time.monotonic()
+        with self._requests_lock:
+            window = self._requests_by_ip[ip_address]
+            while window and now - window[0] > 3600:
+                window.popleft()
+            if len(window) >= MAX_PAIR_REQUESTS_PER_IP_PER_HOUR:
+                raise PairingRequestRejected("too many pairing requests; try again later")
+            if len(self._registry.list_pending()) >= MAX_PENDING_PAIRINGS:
+                raise PairingRequestRejected("too many pending pairing requests")
+            window.append(now)
+
+    def expire_pending(self, max_age_hours: float) -> int:
+        """Reject unapproved nodes whose request is older than *max_age_hours*.
+
+        Returns:
+            Number of pending nodes removed.
+        """
+        if max_age_hours <= 0:
+            return 0
+        cutoff = time.time() - max_age_hours * 3600
+        removed = 0
+        for node in list(self._registry.list_pending()):
+            stamp = getattr(node, "requested_at", 0.0) or getattr(node, "last_seen", 0.0)
+            if stamp and stamp < cutoff:
+                self.reject_pairing(node.node_id)
+                removed += 1
+        return removed
 
     def __init__(self, registry: DeviceRegistry) -> None:
         self._registry = registry
@@ -133,6 +234,7 @@ class PairingManager:
             audio_logging=audio_logging,
             audio_log_dir=audio_log_dir,
             audio_log_retention_days=audio_log_retention_days,
+            requested_at=time.time(),
         )
         self._registry.add_node(node)
 
@@ -159,7 +261,7 @@ class PairingManager:
         )
         return node_id
 
-    def approve_pairing(self, node_id: str) -> str:
+    def approve_pairing(self, node_id: str, policy_mode: str | None = None) -> str:
         """Approve a pending node and return the plaintext auth token.
 
         The token is generated once and stored only as a PBKDF2 hash in the
@@ -170,6 +272,10 @@ class PairingManager:
 
         Args:
             node_id: The pending node to approve.
+            policy_mode: Optional final capability mode (``full``,
+                ``safe-chat``, ``muted``). Network-originated requests are
+                created as ``safe-chat``; granting ``full`` is an explicit
+                operator decision made here.
 
         Returns:
             The plaintext auth token to be delivered to the edge device.
@@ -186,6 +292,10 @@ class PairingManager:
                 f"Node {node_id!r} is already paired — unpair it first to re-issue a token."
             )
 
+        if policy_mode is not None:
+            if policy_mode not in ("full", "safe-chat", "muted"):
+                raise ValueError(f"Invalid policy_mode: {policy_mode!r}")
+            self._registry.update_node(node_id, policy_mode=policy_mode)
         self._registry.approve_node(node_id)
         token = self._registry.generate_token(node_id)
 
@@ -196,7 +306,10 @@ class PairingManager:
                 event_type="voice.pairing.approved",
                 category="plugin",
                 result="allow",
-                detail={"node_id": node_id},
+                detail={
+                    "node_id": node_id,
+                    "policy_mode": getattr(self._registry.get_node(node_id), "policy_mode", None),
+                },
             )
         )
         logger.info("Pairing approved for node %r.", node_id)

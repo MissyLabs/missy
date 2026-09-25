@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import unicodedata
-from datetime import datetime
+from collections import OrderedDict
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ class ResilientMemoryStore:
             ``get_learnings``, ``cleanup``).
         max_failures: Number of consecutive failures before the store is
             considered unhealthy.
+        max_cached_turns_per_session: Most recent turns kept per session in
+            the fallback cache (DATA-03: previously every turn ever written
+            was retained for the life of the process).
+        max_cached_sessions: Sessions kept in the cache; least recently
+            written sessions are evicted first.
 
     Example::
 
@@ -38,7 +44,14 @@ class ResilientMemoryStore:
         print(store.is_healthy)
     """
 
-    def __init__(self, primary, max_failures: int = 3) -> None:
+    def __init__(
+        self,
+        primary,
+        max_failures: int = 3,
+        *,
+        max_cached_turns_per_session: int = 200,
+        max_cached_sessions: int = 500,
+    ) -> None:
         if isinstance(max_failures, bool) or not isinstance(max_failures, int):
             raise TypeError("max_failures must be an integer")
         if not 1 <= max_failures <= 100:
@@ -46,7 +59,10 @@ class ResilientMemoryStore:
         self._primary = primary
         self._max_failures = max_failures
         self._failures = 0
-        self._cache: dict[str, list] = {}  # session_id -> list of turns
+        self._max_cached_turns = max(1, int(max_cached_turns_per_session))
+        self._max_cached_sessions = max(1, int(max_cached_sessions))
+        # session_id -> list of turns, LRU-ordered by last write.
+        self._cache: OrderedDict[str, list] = OrderedDict()
         self._lock = threading.Lock()
         self._recovery_lock = threading.Lock()
         self._pending_ops: list[tuple[str, tuple]] = []
@@ -124,9 +140,13 @@ class ResilientMemoryStore:
         """
         with self._lock:
             sid = turn.session_id
-            if sid not in self._cache:
-                self._cache[sid] = []
-            self._cache[sid].append(turn)
+            turns = self._cache.setdefault(sid, [])
+            turns.append(turn)
+            if len(turns) > self._max_cached_turns:
+                del turns[: len(turns) - self._max_cached_turns]
+            self._cache.move_to_end(sid)
+            while len(self._cache) > self._max_cached_sessions:
+                self._cache.popitem(last=False)
 
         if not self._replay_pending():
             self._queue_pending("add_turn", turn)
@@ -159,7 +179,7 @@ class ResilientMemoryStore:
             self._queue_pending("clear_session", session_id)
             self._on_failure(exc)
 
-    def clear_session_full(self, session_id: str) -> None:
+    def clear_session_full(self, session_id: str) -> dict[str, int]:
         """Remove all turns AND all summaries for *session_id*.
 
         Falls back to :meth:`clear_session` when the primary store has no
@@ -169,6 +189,11 @@ class ResilientMemoryStore:
 
         Args:
             session_id: The session to fully reset.
+
+        Returns:
+            The primary's ``{"turns": n, "summaries": m}`` removal counts
+            (matching :meth:`SQLiteMemoryStore.clear_session_full`); zeros
+            when the operation was queued for later replay.
         """
         with self._lock:
             self._cache.pop(session_id, None)
@@ -177,19 +202,23 @@ class ResilientMemoryStore:
             if getattr(self._primary, "clear_session_full", None) is not None
             else "clear_session"
         )
+        empty = {"turns": 0, "summaries": 0}
         if not self._replay_pending():
             self._queue_pending(operation, session_id)
-            return
+            return empty
         try:
             full_reset = getattr(self._primary, "clear_session_full", None)
             if full_reset is not None:
-                full_reset(session_id)
+                result = full_reset(session_id)
             else:
                 self._primary.clear_session(session_id)
+                result = None
             self._on_success()
+            return dict(result) if isinstance(result, dict) else empty
         except Exception as exc:
             self._queue_pending(operation, session_id)
             self._on_failure(exc)
+            return empty
 
     def delete_turn(self, turn_id: str) -> bool:
         """Delete a single turn from the cache and the primary store.
@@ -238,6 +267,28 @@ class ResilientMemoryStore:
         except Exception as exc:
             self._queue_pending("set_turn_pinned", turn_id, pinned)
             self._set_cached_pin(turn_id, pinned)
+            self._on_failure(exc)
+            return False
+
+    def update_turn_content(self, turn_id: str, content: str) -> bool:
+        """Edit a turn's content in the primary and mirror it into the cache.
+
+        Without the mirror, a fallback read after a primary outage would
+        serve the pre-edit text (e.g. a secret an operator had redacted).
+
+        Returns:
+            ``True`` if the primary store updated a matching row.
+        """
+        self._set_cached_content(turn_id, content)
+        if not self._replay_pending():
+            self._queue_pending("update_turn_content", turn_id, content)
+            return False
+        try:
+            result = self._primary.update_turn_content(turn_id, content)
+            self._on_success()
+            return result
+        except Exception as exc:
+            self._queue_pending("update_turn_content", turn_id, content)
             self._on_failure(exc)
             return False
 
@@ -498,10 +549,14 @@ class ResilientMemoryStore:
         try:
             result = self._primary.cleanup(older_than_days=older_than_days, dry_run=dry_run)
             self._on_success()
-            return result
         except Exception as exc:
             self._on_failure(exc)
             return 0
+        if not dry_run:
+            # DATA-03: turns retention just deleted must not come back via
+            # fallback reads.
+            self._prune_cache_older_than(datetime.now(UTC) - timedelta(days=older_than_days))
+        return result
 
     # ------------------------------------------------------------------
     # Properties
@@ -523,6 +578,25 @@ class ResilientMemoryStore:
         with self._lock:
             self._read_status[operation] = status
 
+    def _set_cached_content(self, turn_id: str, content: str) -> None:
+        with self._lock:
+            for turns in self._cache.values():
+                for turn in turns:
+                    if getattr(turn, "id", None) == turn_id:
+                        try:
+                            turn.content = content
+                        except Exception:
+                            return
+
+    def _prune_cache_older_than(self, cutoff: datetime) -> None:
+        with self._lock:
+            for sid in list(self._cache):
+                kept = [t for t in self._cache[sid] if _is_pinned(t) or not _older_than(t, cutoff)]
+                if kept:
+                    self._cache[sid] = kept
+                else:
+                    del self._cache[sid]
+
     def _set_cached_pin(self, turn_id: str, pinned: bool) -> None:
         with self._lock:
             for turns in self._cache.values():
@@ -532,6 +606,31 @@ class ResilientMemoryStore:
                             turn.pinned = pinned
                         except Exception:
                             return
+
+
+def _is_pinned(turn: object) -> bool:
+    if getattr(turn, "pinned", False) is True:
+        return True
+    metadata = getattr(turn, "metadata", None)
+    return isinstance(metadata, dict) and metadata.get("pinned") in (True, 1)
+
+
+def _older_than(turn: object, cutoff: datetime) -> bool:
+    timestamp = getattr(turn, "timestamp", None)
+    try:
+        if isinstance(timestamp, datetime):
+            ts = timestamp
+        elif isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool):
+            ts = datetime.fromtimestamp(float(timestamp), tz=UTC)
+        elif isinstance(timestamp, str) and timestamp:
+            ts = datetime.fromisoformat(timestamp)
+        else:
+            return False
+    except (ValueError, OverflowError, OSError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return ts < cutoff
 
 
 def _validated_limit(limit: int) -> int:

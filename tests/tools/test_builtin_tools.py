@@ -783,7 +783,7 @@ class TestWebFetchTool:
     @staticmethod
     def _make_client(response: MagicMock) -> MagicMock:
         client = MagicMock()
-        client.get.return_value = response
+        client.get_capped.return_value = response
         return client
 
     # ------------------------------------------------------------------
@@ -818,7 +818,7 @@ class TestWebFetchTool:
     def test_execute_with_invalid_url_returns_failure(self) -> None:
         """A URL that causes the client to raise is treated as failure."""
         mock_client = MagicMock()
-        mock_client.get.side_effect = ValueError("Invalid URL: not-a-url")
+        mock_client.get_capped.side_effect = ValueError("Invalid URL: not-a-url")
 
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             result = WebFetchTool().execute(url="not-a-url")
@@ -858,7 +858,7 @@ class TestWebFetchTool:
 
     def test_network_exception_returns_failure(self) -> None:
         mock_client = MagicMock()
-        mock_client.get.side_effect = ConnectionError("network unreachable")
+        mock_client.get_capped.side_effect = ConnectionError("network unreachable")
 
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             result = WebFetchTool().execute(url="https://example.com")
@@ -872,8 +872,10 @@ class TestWebFetchTool:
     # ------------------------------------------------------------------
 
     def test_response_truncated_at_max_bytes(self) -> None:
-        long_text = "x" * (_MAX_RESPONSE_BYTES + 100)
-        mock_resp = self._make_response(text=long_text)
+        # PERF-02: the capped streaming read returns at most the limit and
+        # flags truncation; the tool appends the marker.
+        mock_resp = self._make_response(text="x" * _MAX_RESPONSE_BYTES)
+        mock_resp.truncated = True
         mock_client = self._make_client(mock_resp)
 
         with patch("missy.gateway.client.create_client", return_value=mock_client):
@@ -904,7 +906,7 @@ class TestWebFetchTool:
             result = WebFetchTool().execute(url="https://api.example.com", headers=headers)
 
         assert result.success is True
-        call_kwargs = mock_client.get.call_args.kwargs
+        call_kwargs = mock_client.get_capped.call_args.kwargs
         passed_headers = call_kwargs.get("headers", {})
         for blocked in (
             "Authorization",
@@ -925,7 +927,7 @@ class TestWebFetchTool:
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             WebFetchTool().execute(url="https://example.com", headers=headers)
 
-        call_kwargs = mock_client.get.call_args.kwargs
+        call_kwargs = mock_client.get_capped.call_args.kwargs
         assert "headers" not in call_kwargs
 
     def test_no_headers_argument_omits_headers_kwarg(self) -> None:
@@ -935,7 +937,7 @@ class TestWebFetchTool:
         with patch("missy.gateway.client.create_client", return_value=mock_client):
             WebFetchTool().execute(url="https://example.com")
 
-        assert "headers" not in mock_client.get.call_args.kwargs
+        assert "headers" not in mock_client.get_capped.call_args.kwargs
 
     # ------------------------------------------------------------------
     # Timeout
