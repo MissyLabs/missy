@@ -1,440 +1,143 @@
-"""Providers page: usage stats, capacity, config, availability, and controls."""
+"""Provider control center: fleet telemetry, routing, and safe configuration."""
 
 from __future__ import annotations
 
 
 def content() -> str:
-    """Return the providers page body."""
+    """Return the provider control-center body."""
     return """
-    <section class="page-head">
+    <section class="page-head provider-hero">
       <div>
-        <p class="eyebrow">PRV&middot;01</p>
-        <h2>Providers</h2>
-        <p class="muted">Registered AI providers: usage stats, remaining rate-limit capacity, and configuration. Toggle a provider out of dispatch, switch the default, set a weight for balancing, or click a name to edit its configuration.</p>
+        <p class="eyebrow">PRV&middot;CONTROL</p>
+        <h2>Provider control center</h2>
+        <p class="muted">One operational view for model traffic, provider health, rate capacity, account balancing, failover policy, and agent orchestration.</p>
       </div>
-      <div class="page-head-actions">
-        <button id="providers-refresh" type="button" class="secondary">Refresh</button>
+      <div class="page-head-actions provider-refresh-controls">
+        <label class="auto-refresh"><input id="providers-auto-refresh" type="checkbox" checked> Auto-refresh</label>
+        <button id="providers-refresh" type="button" class="secondary">Refresh now</button>
         <span id="provider-health" class="pill">Loading</span>
       </div>
     </section>
-    <section class="panel" aria-labelledby="usage-heading">
-      <div class="panel-head">
-        <div class="panel-id"><span class="mod-code">PRV&middot;02</span><h3 id="usage-heading">Usage over time</h3></div>
-        <div class="usage-metric-toggle" id="usage-metric-toggle">
-          <button type="button" class="secondary small active" data-metric="call_count">Calls</button>
-          <button type="button" class="secondary small" data-metric="total_tokens">Tokens</button>
-          <button type="button" class="secondary small" data-metric="total_cost_usd">Cost</button>
+    <section class="provider-kpis" id="provider-kpis" aria-label="Provider fleet summary">
+      <div class="provider-kpi"><span class="kpi-label">Fleet online</span><strong id="kpi-online">&mdash;</strong><span id="kpi-online-note" class="kpi-note">loading</span></div>
+      <div class="provider-kpi"><span class="kpi-label">Total calls</span><strong id="kpi-calls">&mdash;</strong><span class="kpi-note">lifetime</span></div>
+      <div class="provider-kpi"><span class="kpi-label">Tokens</span><strong id="kpi-tokens">&mdash;</strong><span class="kpi-note">prompt + completion</span></div>
+      <div class="provider-kpi"><span class="kpi-label">Spend</span><strong id="kpi-spend">&mdash;</strong><span class="kpi-note">recorded lifetime</span></div>
+      <div class="provider-kpi"><span class="kpi-label">Accounts healthy</span><strong id="kpi-accounts">&mdash;</strong><span class="kpi-note">balanced credentials</span></div>
+      <div class="provider-kpi"><span class="kpi-label">Last sync</span><strong id="kpi-sync">&mdash;</strong><span class="kpi-note">30 second cadence</span></div>
+    </section>
+    <div class="provider-dashboard-grid">
+      <section class="panel provider-traffic-panel" aria-labelledby="usage-heading">
+        <div class="panel-head">
+          <div class="panel-id"><span class="mod-code">PRV&middot;01</span><h3 id="usage-heading">Traffic &amp; spend</h3></div>
+          <div class="usage-metric-toggle" id="usage-metric-toggle">
+            <button type="button" class="secondary small active" data-metric="call_count">Calls</button>
+            <button type="button" class="secondary small" data-metric="total_tokens">Tokens</button>
+            <button type="button" class="secondary small" data-metric="total_cost_usd">Cost</button>
+          </div>
+          <select id="usage-days" aria-label="Usage time range"><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
-        <select id="usage-days" aria-label="Time range">
-          <option value="7">7 days</option>
-          <option value="14" selected>14 days</option>
-          <option value="30">30 days</option>
-          <option value="90">90 days</option>
-        </select>
-      </div>
-      <p class="muted">Which providers are actually serving calls, at a glance. Click a legend entry to isolate/hide that provider.</p>
-      <div class="usage-chart-wrap"><div id="usage-chart"><div class="empty">Loading usage...</div></div></div>
-      <div class="usage-legend" id="usage-legend"></div>
+        <p class="muted">Daily provider contribution. Toggle a legend item to focus the graph.</p>
+        <div class="usage-chart-wrap"><div id="usage-chart"><div class="empty">Loading usage&hellip;</div></div></div>
+        <div class="usage-legend" id="usage-legend"></div>
+      </section>
+      <section class="panel provider-policy-panel" aria-labelledby="policy-heading">
+        <div class="panel-head"><div class="panel-id"><span class="mod-code">PRV&middot;02</span><h3 id="policy-heading">Agent orchestration</h3></div><span class="pill ok">hot reload</span></div>
+        <p class="muted">Limits apply across the running agent and delegated work. Zero-dollar budgets mean unlimited.</p>
+        <div id="agent-settings"><div class="empty">Loading agent settings&hellip;</div></div>
+      </section>
+    </div>
+    <section class="panel" aria-labelledby="fleet-heading">
+      <div class="panel-head"><div class="panel-id"><span class="mod-code">PRV&middot;03</span><h3 id="fleet-heading">Provider fleet</h3></div><span id="provider-default" class="pill">&mdash;</span></div>
+      <p class="muted">The default is sticky. Weight controls proportional selection only when fallback/balancing chooses among eligible providers.</p>
+      <div id="providers" class="provider-fleet"><div class="empty">Loading providers&hellip;</div></div>
     </section>
-    <section class="panel" aria-labelledby="providers-heading">
-      <div class="panel-head">
-        <div class="panel-id"><span class="mod-code">PRV&middot;01</span><h3 id="providers-heading">Registered providers</h3></div>
-        <span id="provider-default" class="pill">-</span>
-      </div>
-      <p class="muted">Weight governs the provider-preference hierarchy's weighted fallback/balancing pool: when the default provider (or a candidate in the same tier) is unavailable, the next pick is drawn proportionally to weight. Weight has no effect on which provider is the sticky default.</p>
-      <div id="providers"><div class="empty">Loading providers...</div></div>
+    <section class="panel" aria-labelledby="balancing-heading">
+      <div class="panel-head"><div class="panel-id"><span class="mod-code">PRV&middot;04</span><h3 id="balancing-heading">Routing &amp; account balancing</h3></div><span class="pill">live capacity</span></div>
+      <p class="muted">Cross-provider share is based on enabled weights. Account lanes show credential health, configured share, remaining capacity, usage, and last activity without exposing secrets.</p>
+      <div id="balancing-board"><div class="empty">Loading routing state&hellip;</div></div>
     </section>
-"""
+    """
 
 
 def script() -> str:
-    """Return the providers page script."""
+    """Return the provider control-center browser logic."""
     return r"""
 let latestUsage = null;
 let chartMetric = 'call_count';
 let chartDays = 14;
+let autoRefreshTimer = null;
 const hiddenProviders = new Set();
-
 const PALETTE = ['#4fb3ff', '#3ddc84', '#f5b942', '#ef5350', '#a78bfa', '#f472b6', '#22d3ee', '#fb923c'];
-function colorForProvider(name) {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return PALETTE[hash % PALETTE.length];
+function colorForProvider(name) { let hash=0; for(let i=0;i<name.length;i++) hash=(hash*31+name.charCodeAt(i))>>>0; return PALETTE[hash%PALETTE.length]; }
+function fmtNum(value) { return Number(value||0).toLocaleString(); }
+function fmtUsd(value) { const number=Number(value||0); return '$'+number.toFixed(number<1?4:2); }
+function fmtPct(value) { return Number(value||0).toFixed(1)+'%'; }
+function fmtTime(value) { if(!value) return 'never'; const date=new Date(value); return Number.isNaN(date.getTime())?String(value):date.toLocaleString(); }
+function usageStat(label,value,detail='') { return `<div class="usage-stat"><span class="value">${esc(value)}</span><span class="label">${esc(label)}</span>${detail?`<span class="detail">${esc(detail)}</span>`:''}</div>`; }
+function capacityBar(label,capacity,limit,unlimited) {
+  if(unlimited) return `<div class="usage-bar-row"><div class="usage-bar-label"><span>${esc(label)}</span><span>unlimited</span></div><div class="usage-bar unlimited"><div class="usage-bar-fill"></div></div></div>`;
+  if(!limit) return `<div class="usage-bar-row"><div class="usage-bar-label"><span>${esc(label)}</span><span>not configured</span></div></div>`;
+  const pct=Math.max(0,Math.min(100,(Number(capacity||0)/Number(limit))*100)); const cls=pct<15?'crit':(pct<40?'warn':'');
+  return `<div class="usage-bar-row"><div class="usage-bar-label"><span>${esc(label)}</span><span>${fmtNum(Math.round(capacity||0))} / ${fmtNum(limit)} · ${fmtPct(pct)}</span></div><div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
 }
-function fmtNum(n) { return Number(n || 0).toLocaleString(); }
-function fmtUsd(n) {
-  const value = Number(n || 0);
-  return '$' + value.toFixed(value < 1 ? 4 : 2);
+function rateLimitBars(rate) { if(!rate) return '<p class="muted compact">Runtime capacity is not reported.</p>'; return capacityBar('Requests/min',rate.request_capacity,rate.requests_per_minute,rate.request_unlimited)+capacityBar('Tokens/min',rate.token_capacity,rate.tokens_per_minute,rate.token_unlimited); }
+function renderKpis() {
+  const summary=latestUsage.summary||{}, totals=latestUsage.totals||{};
+  setText('kpi-online',`${summary.available_count||0}/${summary.provider_count||0}`); setText('kpi-online-note',summary.degraded_count?`${summary.degraded_count} degraded`:'all enabled providers ready');
+  setText('kpi-calls',fmtNum(totals.call_count)); setText('kpi-tokens',fmtNum((totals.total_prompt_tokens||0)+(totals.total_completion_tokens||0))); setText('kpi-spend',fmtUsd(totals.total_cost_usd));
+  setText('kpi-accounts',summary.account_count?`${summary.healthy_account_count||0}/${summary.account_count}`:'n/a'); setText('kpi-sync',new Date(latestUsage.generated_at||Date.now()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}));
 }
-const METRIC_LABEL = {call_count: 'calls', total_tokens: 'tokens', total_cost_usd: 'cost'};
-function fmtMetric(metric, value) { return metric === 'total_cost_usd' ? fmtUsd(value) : fmtNum(value); }
-
-// ---------------------------------------------------------------------
-// Capacity gauges
-// ---------------------------------------------------------------------
-function capacityBar(label, capacity, limit, unlimited) {
-  if (unlimited) {
-    return `<div class="usage-bar-row"><div class="usage-bar-label"><span>${esc(label)}</span><span>unlimited</span></div></div>`;
-  }
-  if (!limit) return '';
-  const pct = Math.max(0, Math.min(100, (capacity / limit) * 100));
-  const cls = pct < 15 ? 'crit' : (pct < 40 ? 'warn' : '');
-  return `<div class="usage-bar-row">
-    <div class="usage-bar-label"><span>${esc(label)}</span><span>${fmtNum(Math.round(capacity))} / ${fmtNum(limit)}</span></div>
-    <div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
-  </div>`;
-}
-function rateLimitBars(rl) {
-  if (!rl) return '<p class="muted" style="font-size:.78rem;margin-top:.4rem">No rate limiter configured for this provider.</p>';
-  return capacityBar('Requests/min', rl.request_capacity, rl.requests_per_minute, rl.request_unlimited)
-    + capacityBar('Tokens/min', rl.token_capacity, rl.tokens_per_minute, rl.token_unlimited);
-}
-
-// ---------------------------------------------------------------------
-// Provider cards
-// ---------------------------------------------------------------------
-function usageStatChip(label, value) {
-  return `<div class="usage-stat"><span class="value">${esc(value)}</span><span class="label">${esc(label)}</span></div>`;
-}
-function providerCard(p) {
-  const statusLed = !p.enabled ? 'crit' : (p.available ? 'ok' : 'warn');
-  const statusLabel = !p.enabled ? 'disabled' : (p.available ? 'available' : 'offline');
-  const defaultPill = p.is_default ? '<span class="pill ok">default</span>' : '';
-  const model = p.model ? `model ${p.model}` : 'model unset';
-  const toggleLabel = p.enabled ? 'Disable' : 'Enable';
-  const toggleClass = p.enabled ? 'danger' : '';
-  const toggleDisabled = p.enabled && p.is_default ? 'disabled title="Switch the default provider before disabling this one"' : '';
-  const defaultDisabled = p.is_default || !p.enabled || !p.available ? 'disabled' : '';
-  const weight = typeof p.weight === 'number' ? p.weight : 1;
-  const unhealthyCount = p.is_multi_account && p.accounts_healthy != null ? (p.account_count - p.accounts_healthy) : 0;
-  const healthNote = unhealthyCount > 0 ? ` &middot; <span class="warn">${unhealthyCount} backing off</span>` : '';
-  const balancingNote = p.is_multi_account ? `<span class="provider-meta">round_robin &middot; ${p.account_count} accounts${healthNote}</span>` : '';
-  const usage = p.usage || {call_count: 0, total_tokens: 0, total_cost_usd: 0};
-  const usageStats = usageStatChip('calls', fmtNum(usage.call_count))
-    + usageStatChip('tokens', fmtNum(usage.total_tokens))
-    + usageStatChip('cost', fmtUsd(usage.total_cost_usd));
-  const capacityMini = p.rate_limit ? `<div class="capacity-mini">${rateLimitBars(p.rate_limit)}</div>` : '';
-  return `<div class="provider-card">
-    <div class="provider-card-row">
-      <button class="provider-name" type="button" data-provider-detail="${esc(p.name)}"><span class="led ${statusLed}" aria-hidden="true"></span>${esc(p.name)}</button>
-      ${defaultPill}
-      <span class="provider-meta">${esc(statusLabel)} &middot; ${esc(model)}</span>
-      ${balancingNote}
-      <div class="provider-actions">
-        <button class="secondary small provider-default" type="button" data-provider="${esc(p.name)}" ${defaultDisabled}>Make default</button>
-        <button class="secondary small ${toggleClass} provider-toggle" type="button" data-provider="${esc(p.name)}" data-enable="${p.enabled ? '0' : '1'}" ${toggleDisabled}>${toggleLabel}</button>
-        <label class="provider-weight-label">weight
-          <input class="provider-weight-input" type="number" min="0" step="0.1" value="${weight}" data-provider="${esc(p.name)}" aria-label="Weight for ${esc(p.name)}">
-        </label>
-        <button class="secondary small provider-weight-set" type="button" data-provider="${esc(p.name)}">Set weight</button>
-      </div>
-    </div>
-    <div class="usage-mini">${usageStats}${capacityMini}</div>
-  </div>`;
-}
-
-// ---------------------------------------------------------------------
-// Usage-over-time chart (dependency-free inline SVG, stacked per provider)
-// ---------------------------------------------------------------------
-function renderLegend() {
-  const providers = (latestUsage && latestUsage.providers) || [];
-  const items = providers.map(p => {
-    const off = hiddenProviders.has(p.name) ? ' off' : '';
-    return `<button type="button" class="usage-legend-item${off}" data-legend="${esc(p.name)}">
-      <span class="usage-legend-swatch" style="background:${colorForProvider(p.name)}"></span>${esc(p.name)}
-    </button>`;
-  });
-  document.getElementById('usage-legend').innerHTML = items.join('');
-}
+function renderChartLegend() { const providers=latestUsage.providers||[]; document.getElementById('usage-legend').innerHTML=providers.map(provider=>`<button type="button" class="usage-legend-item${hiddenProviders.has(provider.name)?' off':''}" data-legend="${esc(provider.name)}"><span class="usage-legend-swatch" style="background:${colorForProvider(provider.name)}"></span>${esc(provider.name)}</button>`).join(''); }
 function renderChart() {
-  const container = document.getElementById('usage-chart');
-  const series = (latestUsage && latestUsage.series) || [];
-  const providers = (latestUsage && latestUsage.providers) || [];
-  const visibleNames = providers.map(p => p.name).filter(name => !hiddenProviders.has(name));
-  if (!series.length || !visibleNames.length) {
-    container.innerHTML = '<div class="usage-chart-empty muted">No usage recorded in this window yet.</div>';
-    return;
-  }
-  const dates = [...new Set(series.map(row => row.date))].sort();
-  const byDateProvider = {};
-  for (const row of series) {
-    byDateProvider[row.date] = byDateProvider[row.date] || {};
-    byDateProvider[row.date][row.provider] = row;
-  }
-  const totals = dates.map(date => visibleNames.reduce((sum, name) => {
-    const row = (byDateProvider[date] || {})[name];
-    return sum + (row ? Number(row[chartMetric] || 0) : 0);
-  }, 0));
-  const maxTotal = Math.max(1, ...totals);
-
-  const barWidth = 26, gap = 10, padLeft = 44, padBottom = 24, padTop = 10;
-  const chartHeight = 200;
-  const chartWidth = padLeft + dates.length * (barWidth + gap);
-  const labelEvery = Math.max(1, Math.ceil(dates.length / 14));
-
-  let bars = '';
-  dates.forEach((date, i) => {
-    const x = padLeft + i * (barWidth + gap);
-    let y = chartHeight - padBottom;
-    visibleNames.forEach(name => {
-      const row = (byDateProvider[date] || {})[name];
-      const value = row ? Number(row[chartMetric] || 0) : 0;
-      if (value <= 0) return;
-      const segHeight = (value / maxTotal) * (chartHeight - padTop - padBottom);
-      y -= segHeight;
-      const label = `${esc(name)}: ${fmtMetric(chartMetric, value)} on ${esc(date)}`;
-      bars += `<rect x="${x}" y="${y.toFixed(1)}" width="${barWidth}" height="${segHeight.toFixed(1)}" fill="${colorForProvider(name)}" rx="1"><title>${label}</title></rect>`;
-    });
-    if (i % labelEvery === 0) {
-      bars += `<text x="${x + barWidth / 2}" y="${chartHeight - 6}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${esc(date.slice(5))}</text>`;
-    }
-  });
-  const axisLabel = `<text x="4" y="${padTop + 8}" font-size="10" fill="var(--muted)" font-family="var(--mono)">${fmtMetric(chartMetric, maxTotal)}</text>`;
-  container.innerHTML = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" width="${chartWidth}" height="${chartHeight}" role="img" aria-label="Provider usage over time (${esc(METRIC_LABEL[chartMetric])})">
-    <line x1="${padLeft - 6}" y1="${chartHeight - padBottom}" x2="${chartWidth}" y2="${chartHeight - padBottom}" stroke="var(--line)" stroke-width="1"></line>
-    ${axisLabel}
-    ${bars}
-  </svg>`;
+  const container=document.getElementById('usage-chart'),series=latestUsage.series||[],names=(latestUsage.providers||[]).map(p=>p.name).filter(name=>!hiddenProviders.has(name));
+  if(!series.length||!names.length){container.innerHTML='<div class="usage-chart-empty muted">No attributed usage in this window.</div>';return;}
+  const dates=[...new Set(series.map(row=>row.date))].sort(),index={}; for(const row of series){index[row.date]=index[row.date]||{};index[row.date][row.provider]=row;}
+  const totals=dates.map(date=>names.reduce((sum,name)=>sum+Number((index[date]?.[name]||{})[chartMetric]||0),0)),maxTotal=Math.max(1,...totals),barWidth=26,gap=10,left=50,bottom=25,top=12,height=215,width=left+dates.length*(barWidth+gap),every=Math.max(1,Math.ceil(dates.length/14)); let marks='';
+  dates.forEach((date,position)=>{const x=left+position*(barWidth+gap);let y=height-bottom;names.forEach(name=>{const value=Number((index[date]?.[name]||{})[chartMetric]||0);if(value<=0)return;const segment=value/maxTotal*(height-top-bottom);y-=segment;const formatted=chartMetric==='total_cost_usd'?fmtUsd(value):fmtNum(value);marks+=`<rect x="${x}" y="${y.toFixed(1)}" width="${barWidth}" height="${segment.toFixed(1)}" fill="${colorForProvider(name)}" rx="2"><title>${esc(name)} · ${esc(date)} · ${esc(formatted)}</title></rect>`;});if(position%every===0)marks+=`<text x="${x+barWidth/2}" y="${height-6}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${esc(date.slice(5))}</text>`;});
+  const peak=chartMetric==='total_cost_usd'?fmtUsd(maxTotal):fmtNum(maxTotal); container.innerHTML=`<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Provider usage"><line x1="${left-6}" y1="${height-bottom}" x2="${width}" y2="${height-bottom}" stroke="var(--line)"/><text x="4" y="${top+8}" font-size="10" fill="var(--muted)" font-family="var(--mono)">${esc(peak)}</text>${marks}</svg>`;
 }
-function refreshChart() { renderLegend(); renderChart(); }
-
-// ---------------------------------------------------------------------
-// Load + inspector
-// ---------------------------------------------------------------------
-async function loadProviders() {
-  try {
-    const resp = await api(`/providers/usage?days=${chartDays}`);
-    latestUsage = resp.data;
-    const providers = latestUsage.providers || [];
-    const cards = providers.map(providerCard);
-    document.getElementById('providers').innerHTML = cards.length ? cards.join('') : empty('No providers registered.');
-    const enabledCount = providers.filter(p => p.enabled).length;
-    setText('provider-health', `${enabledCount}/${providers.length} enabled`);
-    const currentDefault = providers.find(p => p.is_default);
-    setText('provider-default', currentDefault ? `default: ${currentDefault.name}` : 'no default');
-    refreshChart();
-  } catch (error) {
-    setText('provider-health', 'Error');
-    document.getElementById('providers').innerHTML = empty('Providers unavailable: ' + error.message);
-    document.getElementById('usage-chart').innerHTML = empty('Usage unavailable: ' + error.message);
-  }
+function providerCard(provider) {
+  const usage=provider.usage||{},config=provider.config||{},status=!provider.enabled?['crit','disabled']:provider.available?['ok','online']:['warn','degraded'],breaker=provider.circuit_breaker||{state:'not_observed',failure_count:0};
+  const calls=Number(usage.call_count||0),callShare=Number(latestUsage.totals?.call_count||0)?calls/Number(latestUsage.totals.call_count)*100:0,avgTokens=calls?Number(usage.total_tokens||0)/calls:0,avgCost=calls?Number(usage.total_cost_usd||0)/calls:0,authCount=Number(config.oauth_accounts_count||config.api_keys_count||(config.api_key_configured?1:0)),toggleDisabled=provider.enabled&&provider.is_default?'disabled title="Switch the default before disabling"':'';
+  return `<article class="provider-control-card" style="--provider-color:${colorForProvider(provider.name)}"><div class="provider-control-head"><button class="provider-name" type="button" data-provider-detail="${esc(provider.name)}"><span class="led ${status[0]}"></span><span>${esc(provider.name)}</span></button>${provider.is_default?'<span class="pill ok">default</span>':''}<span class="pill ${breaker.state==='open'?'crit':''}">circuit ${esc(breaker.state)}</span><span class="provider-state">${esc(status[1])}</span></div><div class="provider-model-stack"><strong>${esc(provider.model||'model unset')}</strong><span>fast: ${esc(config.fast_model||'inherit')}</span><span>premium: ${esc(config.premium_model||'inherit')}</span></div><div class="provider-stat-row">${usageStat('calls',fmtNum(usage.call_count),`${fmtPct(callShare)} share`)}${usageStat('tokens',fmtNum(usage.total_tokens),`${fmtNum(Math.round(avgTokens))} avg/call`)}${usageStat('cost',fmtUsd(usage.total_cost_usd),`${fmtUsd(avgCost)} avg/call`)}${usageStat('accounts',authCount||'env/default',config.key_rotation_strategy||'failover')}</div><div class="provider-capacity">${rateLimitBars(provider.rate_limit)}</div><div class="provider-config-strip"><span>timeout <b>${esc(config.timeout??'—')}s</b></span><span>max wait <b>${esc(config.max_wait_seconds??'—')}s</b></span><span>breaker <b>${esc(config.circuit_breaker_threshold??'—')} / ${esc(config.circuit_breaker_cooldown_seconds??'—')}s</b></span><span>last call <b>${esc(fmtTime(usage.last_call))}</b></span></div><div class="provider-card-actions"><button class="secondary small provider-default" type="button" data-provider="${esc(provider.name)}" ${provider.is_default||!provider.enabled||!provider.available?'disabled':''}>Make default</button><button class="secondary small ${provider.enabled?'danger':''} provider-toggle" type="button" data-provider="${esc(provider.name)}" data-enable="${provider.enabled?'0':'1'}" ${toggleDisabled}>${provider.enabled?'Disable':'Enable'}</button><label class="provider-weight-label">Routing weight<input class="provider-weight-input" type="number" min="0" step="0.1" value="${esc(provider.weight??1)}" aria-label="Routing weight for ${esc(provider.name)}"></label><button class="secondary small provider-weight-set" type="button" data-provider="${esc(provider.name)}">Apply weight</button><button class="secondary small" type="button" data-provider-detail="${esc(provider.name)}">Configure</button></div></article>`;
 }
-
-const EDITABLE_FIELDS = [
-  {key: 'model', label: 'Model', type: 'text'},
-  {key: 'fast_model', label: 'Fast model', type: 'text'},
-  {key: 'premium_model', label: 'Premium model', type: 'text'},
-  {key: 'context_worker_provider', label: 'Context worker provider', type: 'text'},
-  {key: 'context_worker_model', label: 'Context worker model', type: 'text'},
-  {key: 'base_url', label: 'Base URL', type: 'text'},
-  {key: 'timeout', label: 'Timeout (s, 0=default)', type: 'number'},
-  {key: 'requests_per_minute', label: 'Requests/min (0=unlimited)', type: 'number'},
-  {key: 'tokens_per_minute', label: 'Tokens/min (0=unlimited)', type: 'number'},
-];
-function editFormHtml(name, current) {
-  const rows = EDITABLE_FIELDS.map(f => {
-    const value = current[f.key] != null ? current[f.key] : '';
-    return `<div><label class="field-label" for="pf-${f.key}">${esc(f.label)}</label>
-      <input id="pf-${f.key}" type="${f.type}" ${f.type === 'number' ? 'min="0"' : ''} value="${esc(value)}" data-field="${f.key}" data-original="${esc(value)}">
-    </div>`;
-  }).join('');
-  return `<form class="provider-edit-form op-form" data-provider="${esc(name)}">
-    <div class="op-form-grid">${rows}</div>
-    <div class="op-form-actions"><button type="submit" class="secondary small">Save configuration</button></div>
-  </form>`;
+function accountLane(provider,account) { const usage=account.usage||{},state=account.healthy?(account.client_ready?['ok','healthy']:['warn','idle']):['crit','backing off']; return `<div class="account-lane"><div class="account-lane-head"><span class="led ${state[0]}"></span><strong>${esc(account.name)}</strong><span class="pill">${esc(state[1])}</span><span class="account-weight">weight ${esc(account.weight??1)}</span></div><div class="account-lane-meta"><span>${fmtNum(usage.call_count)} calls</span><span>${fmtNum(usage.total_tokens)} tokens</span><span>${fmtUsd(usage.total_cost_usd)}</span><span>${esc(fmtTime(usage.last_call))}</span></div>${rateLimitBars(account.rate_limit)}</div>`; }
+function renderBalancing() {
+  const providers=latestUsage.providers||[],eligible=providers.filter(provider=>provider.enabled&&provider.available&&Number(provider.weight||0)>0),totalWeight=eligible.reduce((sum,provider)=>sum+Number(provider.weight||0),0);
+  const routes=providers.map(provider=>{const share=totalWeight&&eligible.includes(provider)?Number(provider.weight||0)/totalWeight*100:0;return `<div class="route-row"><span class="route-provider"><span class="usage-legend-swatch" style="background:${colorForProvider(provider.name)}"></span><strong>${esc(provider.name)}</strong>${provider.is_default?'<span class="pill ok">default</span>':''}</span><div class="route-track"><span style="width:${share}%"></span></div><span class="route-share">${fmtPct(share)} · w ${esc(provider.weight??1)}</span></div>`;}).join('');
+  const groups=providers.filter(provider=>provider.accounts?.length).map(provider=>`<div class="account-group"><div class="account-group-head"><strong>${esc(provider.name)}</strong><span>${esc(provider.config?.key_rotation_strategy||'failover')} · ${provider.accounts.length} accounts</span></div>${provider.accounts.map(account=>accountLane(provider,account)).join('')}<button class="secondary small account-weights-open" type="button" data-provider-detail="${esc(provider.name)}">Edit account weights</button></div>`).join('');
+  document.getElementById('balancing-board').innerHTML=`<div class="balancing-columns"><div><h4>Eligible provider share</h4><p class="muted compact">Projected weighted share after the sticky default cannot serve a request.</p><div class="route-list">${routes||empty('No providers registered.')}</div></div><div><h4>Account lanes</h4><p class="muted compact">Health and quotas are independent per account.</p><div class="account-groups">${groups||empty('No multi-account round-robin providers are active.')}</div></div></div>`;
 }
-function accountRowHtml(account) {
-  const led = !account.healthy ? 'crit' : (account.client_ready ? 'ok' : 'warn');
-  const statusLabel = !account.healthy
-    ? `backing off (${account.consecutive_failures} consecutive failures)`
-    : (account.client_ready ? 'healthy' : 'healthy · not yet used this run');
-  const usage = account.usage || {call_count: 0, total_prompt_tokens: 0, total_completion_tokens: 0, total_cost_usd: 0, last_call: null};
-  const weightNote = account.weight != null && account.weight !== 1 ? ` &middot; weight ${account.weight}` : '';
-  return `<div class="account-card">
-    <div class="account-card-head">
-      <span class="led ${led}" aria-hidden="true"></span>
-      <strong>${esc(account.name)}</strong>
-      <span class="provider-meta">${esc(statusLabel)}${weightNote}</span>
-    </div>
-    <div class="usage-stats" style="margin:.4rem 0">
-      ${usageStatChip('calls', fmtNum(usage.call_count))}
-      ${usageStatChip('prompt tok', fmtNum(usage.total_prompt_tokens))}
-      ${usageStatChip('completion tok', fmtNum(usage.total_completion_tokens))}
-      ${usageStatChip('cost', fmtUsd(usage.total_cost_usd))}
-    </div>
-    ${rateLimitBars(account.rate_limit)}
-    ${usage.last_call ? `<p class="muted" style="font-size:.74rem;margin-top:.35rem">Last call: ${esc(usage.last_call)}</p>` : ''}
-  </div>`;
-}
-function accountsBlockHtml(accounts) {
-  if (!accounts || !accounts.length) return '';
-  const rows = accounts.map(accountRowHtml).join('');
-  return `<div class="field-block"><span class="field-label">Per-account breakdown (${accounts.length} balanced accounts)</span>
-    <div class="account-list">${rows}</div>
-  </div>`;
-}
+const AGENT_FIELDS=[['max_iterations','Max tool-loop iterations','number',1,1],['temperature','Sampling temperature','number',0,0.1],['max_sub_agents','Max agents per delegation','number',1,1],['max_concurrent_agents','Max concurrent agents','number',1,1],['max_sub_agent_depth','Delegation depth','number',0,1],['max_spend_usd','Per-session budget (USD)','number',0,0.01],['global_max_spend_usd','Global budget (USD)','number',0,0.01]];
+function renderAgentSettings() { const settings=latestUsage.agent_settings||{},fields=AGENT_FIELDS.map(([key,label,type,min,step])=>`<label class="agent-setting"><span>${esc(label)}</span><input type="${type}" min="${min}" step="${step}" value="${esc(settings[key]??'')}" data-agent-field="${key}" data-original="${esc(settings[key]??'')}"></label>`).join(''); document.getElementById('agent-settings').innerHTML=`<form id="agent-settings-form" class="agent-settings-form">${fields}<label class="agent-setting"><span>Global budget period</span><select data-agent-field="global_budget_period" data-original="${esc(settings.global_budget_period||'total')}">${['total','daily','monthly'].map(value=>`<option value="${value}" ${settings.global_budget_period===value?'selected':''}>${value}</option>`).join('')}</select></label><div class="agent-setting-readonly"><span>Complexity model routing</span><strong>${settings.model_routing_enabled?'enabled':'disabled'}</strong></div><div class="agent-settings-actions"><span class="muted compact">Changes are backed up and hot-reloaded.</span><button type="submit" class="secondary small">Save agent settings</button></div></form>`; }
+const EDITABLE_FIELDS=[['model','Primary model','text'],['fast_model','Fast model','text'],['premium_model','Premium model','text'],['context_worker_provider','Context worker provider','text'],['context_worker_model','Context worker model','text'],['base_url','Base URL override','text'],['timeout','Request timeout (s)','number'],['requests_per_minute','Requests/min (0 unlimited)','number'],['tokens_per_minute','Tokens/min (0 unlimited)','number'],['max_wait_seconds','Capacity wait ceiling (s)','number'],['circuit_breaker_threshold','Breaker failure threshold','number'],['circuit_breaker_cooldown_seconds','Breaker cooldown (s)','number']];
+function providerEditForm(name,config,accounts) { const rows=EDITABLE_FIELDS.map(([key,label,type])=>`<label><span class="field-label">${esc(label)}</span><input type="${type}" ${type==='number'?'min="0" step="any"':''} value="${esc(config[key]??'')}" data-field="${key}" data-original="${esc(config[key]??'')}"></label>`).join(''),rotation=`<label><span class="field-label">Account strategy</span><select data-field="key_rotation_strategy" data-original="${esc(config.key_rotation_strategy||'failover')}"><option value="failover" ${config.key_rotation_strategy!=='round_robin'?'selected':''}>failover</option><option value="round_robin" ${config.key_rotation_strategy==='round_robin'?'selected':''}>round robin</option></select></label>`,weights=accounts?.length?`<label class="provider-account-weights"><span class="field-label">Account weights (${accounts.map(a=>a.name).join(', ')})</span><input type="text" value="${esc(accounts.map(a=>a.weight??1).join(', '))}" data-account-weights data-original="${esc(accounts.map(a=>a.weight??1).join(', '))}"><span class="muted compact">Comma-separated positive values, in account order.</span></label>`:''; return `<form class="provider-edit-form" data-provider="${esc(name)}"><div class="provider-edit-grid">${rows}${rotation}${weights}</div><div class="op-form-actions"><button type="submit" class="secondary small">Save provider configuration</button></div></form>`; }
+function accountDetail(account) { const usage=account.usage||{}; return `<div class="account-card"><div class="account-card-head"><span class="led ${account.healthy?'ok':'crit'}"></span><strong>${esc(account.name)}</strong><span class="pill">weight ${esc(account.weight??1)}</span></div><div class="provider-stat-row">${usageStat('calls',fmtNum(usage.call_count))}${usageStat('prompt',fmtNum(usage.total_prompt_tokens))}${usageStat('completion',fmtNum(usage.total_completion_tokens))}${usageStat('cost',fmtUsd(usage.total_cost_usd))}</div>${rateLimitBars(account.rate_limit)}<p class="muted compact">Last call: ${esc(fmtTime(usage.last_call))} · failures: ${esc(account.consecutive_failures||0)}</p></div>`; }
 async function openProviderInspector(name) {
-  openInspector('PRV', name, 'Loading configuration...', empty('Loading provider detail...'));
-  try {
-    const detail = await api('/providers/' + encodeURIComponent(name));
-    const p = detail.data;
-    const config = p.config || {};
-    const keySummary = config.api_key_configured
-      ? 'configured'
-      : (config.api_keys_count ? `${config.api_keys_count} rotation keys` : 'not configured');
-    const usage = p.usage || {call_count: 0, total_prompt_tokens: 0, total_completion_tokens: 0, total_tokens: 0, total_cost_usd: 0, last_call: null};
-    const usageBlock = `<div class="field-block"><span class="field-label">Usage (lifetime, all accounts combined)</span>
-      <div class="usage-stats" style="margin-top:.35rem">
-        ${usageStatChip('calls', fmtNum(usage.call_count))}
-        ${usageStatChip('prompt tok', fmtNum(usage.total_prompt_tokens))}
-        ${usageStatChip('completion tok', fmtNum(usage.total_completion_tokens))}
-        ${usageStatChip('cost', fmtUsd(usage.total_cost_usd))}
-      </div>
-      ${usage.last_call ? `<p class="muted" style="font-size:.76rem;margin-top:.35rem">Last call: ${esc(usage.last_call)}</p>` : ''}
-    </div>`;
-    const capacityLabel = p.accounts && p.accounts.length ? 'Rate-limit capacity (live, combined across accounts)' : 'Rate-limit capacity (live)';
-    const capacityBlock = `<div class="field-block"><span class="field-label">${esc(capacityLabel)}</span>${rateLimitBars(p.rate_limit)}</div>`;
-    const body = inspectorField('Status', !p.enabled ? 'Disabled' : (p.available ? 'Available' : 'Offline'))
-      + inspectorField('Default provider', p.is_default ? 'Yes' : 'No')
-      + inspectorField('Balancing weight', config.weight != null ? `${config.weight}` : '1')
-      + inspectorField('API key', keySummary)
-      + (config.api_keys_count > 1 ? inspectorField('Key rotation', config.key_rotation_strategy || 'failover') : '')
-      + (config.account_weights && config.account_weights.length ? inspectorField('Account weights', config.account_weights.join(', ')) : '')
-      + usageBlock
-      + capacityBlock
-      + accountsBlockHtml(p.accounts)
-      + `<div class="field-block"><span class="field-label">Edit configuration</span>${editFormHtml(p.name, config)}</div>`
-      + (p.diagnostics ? inspectorJson('Diagnostics', p.diagnostics) : '');
-    openInspector('PRV', p.name, p.available ? 'Available' : 'Offline', body);
-  } catch (error) {
-    openInspector('PRV', name, 'Error', empty('Could not load provider: ' + esc(error.message)));
-  }
+  openInspector('PRV',name,'Loading provider control plane…',empty('Loading provider detail…'));
+  try { const response=await api('/providers/' + encodeURIComponent(name)),provider=response.data,config=provider.config||{},usage=provider.usage||{},credentials=config.oauth_accounts_count?`${config.oauth_accounts_count} OAuth accounts`:config.api_keys_count?`${config.api_keys_count} configured keys`:config.api_key_configured?'configured':'environment/default',accounts=provider.accounts||[];
+    const body=`<div class="inspector-summary-grid">${inspectorField('Runtime status',provider.enabled?(provider.available?'Online':'Degraded'):'Disabled')}${inspectorField('Default',provider.is_default?'Yes':'No')}${inspectorField('Credentials',credentials)}${inspectorField('Circuit',`${provider.circuit_breaker?.state||'unknown'} · ${provider.circuit_breaker?.failure_count||0} failures`)}</div>`+`<div class="field-block"><span class="field-label">Lifetime usage</span><div class="provider-stat-row">${usageStat('calls',fmtNum(usage.call_count))}${usageStat('prompt tokens',fmtNum(usage.total_prompt_tokens))}${usageStat('completion tokens',fmtNum(usage.total_completion_tokens))}${usageStat('cost',fmtUsd(usage.total_cost_usd))}</div></div>`+`<div class="field-block"><span class="field-label">Live capacity</span>${rateLimitBars(provider.rate_limit)}</div>`+(accounts.length?`<div class="field-block"><span class="field-label">Account telemetry</span><div class="account-list">${accounts.map(accountDetail).join('')}</div></div>`:'')+`<div class="field-block"><span class="field-label">Safe configuration</span><p class="muted compact">Credential material is never returned to this page. Use the provider auth CLI to change secrets.</p>${providerEditForm(provider.name,config,accounts)}</div>`+(provider.diagnostics?inspectorJson('Redacted diagnostics',provider.diagnostics):'');
+    openInspector('PRV',provider.name,`${provider.model||config.model||'model unset'} · ${provider.available?'online':'offline'}`,body);
+  } catch(error){openInspector('PRV',name,'Error',empty('Could not load provider: '+error.message));}
 }
-
-// ---------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------
-document.getElementById('providers').addEventListener('click', async event => {
-  const detailButton = event.target.closest('[data-provider-detail]');
-  if (detailButton) {
-    openProviderInspector(detailButton.dataset.providerDetail);
-    return;
-  }
-  const defaultButton = event.target.closest('.provider-default');
-  if (defaultButton && !defaultButton.disabled) {
-    const name = defaultButton.dataset.provider;
-    if (!window.confirm(`Set default provider: ${name}?`)) return;
-    defaultButton.disabled = true;
-    try {
-      await api('/controls/provider.set_default', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({target: name, confirm: 'set-default:' + name})
-      });
-    } catch (error) {
-      window.alert('Could not set default: ' + error.message);
-    }
-    await loadProviders();
-    return;
-  }
-  const toggleButton = event.target.closest('.provider-toggle');
-  if (toggleButton && !toggleButton.disabled) {
-    const name = toggleButton.dataset.provider;
-    const enable = toggleButton.dataset.enable === '1';
-    const action = enable ? 'enable' : 'disable';
-    if (!window.confirm(`${enable ? 'Enable' : 'Disable'} provider ${name}?`)) return;
-    toggleButton.disabled = true;
-    try {
-      await api('/controls/provider.' + action, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({target: name, confirm: action + '-provider:' + name})
-      });
-    } catch (error) {
-      window.alert(`Could not ${action} provider: ` + error.message);
-    }
-    await loadProviders();
-    return;
-  }
-  const weightButton = event.target.closest('.provider-weight-set');
-  if (weightButton && !weightButton.disabled) {
-    const name = weightButton.dataset.provider;
-    const card = weightButton.closest('.provider-card');
-    const input = card ? card.querySelector('.provider-weight-input') : null;
-    const value = input ? parseFloat(input.value) : NaN;
-    if (!Number.isFinite(value) || value < 0) {
-      window.alert('Weight must be a number >= 0.');
-      return;
-    }
-    if (!window.confirm(`Set weight for ${name} to ${value}? A running gateway picks this up via config hot-reload.`)) return;
-    weightButton.disabled = true;
-    try {
-      await api('/controls/provider.set_weight', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({target: name, value: value, confirm: `set-weight:${name}:${value}`})
-      });
-    } catch (error) {
-      window.alert('Could not set weight: ' + error.message);
-    }
-    await loadProviders();
-  }
+async function loadProviders() {
+  const refresh=document.getElementById('providers-refresh');refresh.disabled=true;
+  try { const response=await api(`/providers/usage?days=${chartDays}`);latestUsage=response.data;const providers=latestUsage.providers||[];renderKpis();renderChartLegend();renderChart();renderAgentSettings();renderBalancing();document.getElementById('providers').innerHTML=providers.length?providers.map(providerCard).join(''):empty('No providers registered.');const summary=latestUsage.summary||{};setText('provider-health',summary.degraded_count?`${summary.degraded_count} degraded`:`${summary.available_count||0}/${summary.provider_count||0} online`);document.getElementById('provider-health').className=`pill ${summary.degraded_count?'warn':'ok'}`;const current=providers.find(provider=>provider.is_default);setText('provider-default',current?`default · ${current.name}`:'no default'); }
+  catch(error){setText('provider-health','Unavailable');document.getElementById('providers').innerHTML=empty('Provider control plane unavailable: '+error.message);document.getElementById('balancing-board').innerHTML=empty('Routing state unavailable.');}
+  finally{refresh.disabled=false;}
+}
+document.getElementById('providers').addEventListener('click',async event=>{
+  const detail=event.target.closest('[data-provider-detail]');if(detail){openProviderInspector(detail.dataset.providerDetail);return;}
+  const defaultButton=event.target.closest('.provider-default');if(defaultButton&&!defaultButton.disabled){const name=defaultButton.dataset.provider;if(!window.confirm(`Make ${name} the sticky default provider?`))return;try{await api('/controls/provider.set_default',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:name,confirm:'set-default:' + name})});await loadProviders();}catch(error){window.alert('Could not set default: '+error.message);}return;}
+  const toggle=event.target.closest('.provider-toggle');if(toggle&&!toggle.disabled){const name=toggle.dataset.provider,action=toggle.dataset.enable==='1'?'enable':'disable';if(!window.confirm(`${action==='enable'?'Enable':'Disable'} ${name}?`))return;try{await api('/controls/provider.'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:name,confirm:action + '-provider:' + name})});await loadProviders();}catch(error){window.alert(`Could not ${action} provider: `+error.message);}return;}
+  const weightButton=event.target.closest('.provider-weight-set');if(weightButton){const name=weightButton.dataset.provider,input=weightButton.closest('.provider-control-card').querySelector('.provider-weight-input'),value=Number(input.value);if(!Number.isFinite(value)||value<0){window.alert('Weight must be a number >= 0.');return;}if(!window.confirm(`Set ${name} routing weight to ${value}?`))return;try{await api('/controls/provider.set_weight',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:name,value,confirm:`set-weight:${name}:${value}`})});await loadProviders();}catch(error){window.alert('Could not set weight: '+error.message);}}
 });
-document.getElementById('inspector-body').addEventListener('submit', async event => {
-  const form = event.target.closest('.provider-edit-form');
-  if (!form) return;
-  event.preventDefault();
-  const name = form.dataset.provider;
-  const inputs = [...form.querySelectorAll('[data-field]')];
-  const changes = inputs
-    .map(input => ({field: input.dataset.field, value: input.value, original: input.dataset.original}))
-    .filter(change => change.value !== change.original);
-  if (!changes.length) {
-    window.alert('No changes to save.');
-    return;
-  }
-  const summary = changes.map(c => `${c.field}: ${c.original || '(unset)'} -> ${c.value || '(unset)'}`).join('\n');
-  if (!window.confirm(`Save configuration changes for ${name}?\n\n${summary}\n\nA running gateway picks this up via config hot-reload.`)) return;
-  const submitButton = form.querySelector('button[type="submit"]');
-  submitButton.disabled = true;
-  try {
-    for (const change of changes) {
-      await api('/controls/provider.set_field', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          target: name,
-          field: change.field,
-          value: change.value,
-          confirm: `set-field:${name}:${change.field}:${change.value}`
-        })
-      });
-    }
-    await openProviderInspector(name);
-    await loadProviders();
-  } catch (error) {
-    window.alert('Could not save configuration: ' + error.message);
-    submitButton.disabled = false;
-  }
-});
-document.getElementById('usage-legend').addEventListener('click', event => {
-  const item = event.target.closest('[data-legend]');
-  if (!item) return;
-  const name = item.dataset.legend;
-  if (hiddenProviders.has(name)) hiddenProviders.delete(name); else hiddenProviders.add(name);
-  refreshChart();
-});
-document.getElementById('usage-metric-toggle').addEventListener('click', event => {
-  const button = event.target.closest('[data-metric]');
-  if (!button) return;
-  chartMetric = button.dataset.metric;
-  [...document.querySelectorAll('#usage-metric-toggle button')].forEach(b => b.classList.toggle('active', b === button));
-  renderChart();
-});
-document.getElementById('usage-days').addEventListener('change', event => {
-  chartDays = parseInt(event.target.value, 10) || 14;
-  loadProviders();
-});
-document.getElementById('providers-refresh').addEventListener('click', loadProviders);
-loadProviders();
+document.getElementById('balancing-board').addEventListener('click',event=>{const button=event.target.closest('[data-provider-detail]');if(button)openProviderInspector(button.dataset.providerDetail);});
+document.getElementById('agent-settings').addEventListener('submit',async event=>{const form=event.target.closest('#agent-settings-form');if(!form)return;event.preventDefault();const changes=[...form.querySelectorAll('[data-agent-field]')].map(input=>({field:input.dataset.agentField,value:input.value,original:input.dataset.original})).filter(change=>change.value!==change.original);if(!changes.length){window.alert('No agent settings changed.');return;}if(!window.confirm('Save these agent orchestration changes?\n\n'+changes.map(c=>`${c.field}: ${c.original} → ${c.value}`).join('\n')))return;const maxAgents=changes.find(change=>change.field==='max_sub_agents'),concurrency=changes.find(change=>change.field==='max_concurrent_agents');if(maxAgents&&concurrency){const first=Number(maxAgents.value)<Number(maxAgents.original)?concurrency:maxAgents,second=first===maxAgents?concurrency:maxAgents;changes.splice(changes.indexOf(first),1);changes.splice(changes.indexOf(second),1);changes.unshift(first,second);}try{for(const change of changes)await api('/controls/agent.set_field',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({field:change.field,value:change.value,confirm:`set-agent-field:${change.field}:${change.value}`})});await loadProviders();}catch(error){window.alert('Could not save agent settings: '+error.message);}});
+document.getElementById('inspector-body').addEventListener('submit',async event=>{const form=event.target.closest('.provider-edit-form');if(!form)return;event.preventDefault();const name=form.dataset.provider,changes=[...form.querySelectorAll('[data-field]')].map(input=>({field:input.dataset.field,value:input.value,original:input.dataset.original})).filter(change=>change.value!==change.original),weightInput=form.querySelector('[data-account-weights]'),weightsChanged=weightInput&&weightInput.value!==weightInput.dataset.original;if(!changes.length&&!weightsChanged){window.alert('No provider settings changed.');return;}if(!window.confirm(`Save configuration changes for ${name}?`))return;try{for(const change of changes)await api('/controls/provider.set_field',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:name,field:change.field,value:change.value,confirm:`set-field:${name}:${change.field}:${change.value}`})});if(weightsChanged){const weights=weightInput.value.trim()?weightInput.value.split(',').map(value=>Number(value.trim())):[];if(weights.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Account weights must be positive numbers.');const normalized=weights.map(value=>Number(value).toString()).join(',');await api('/controls/provider.set_account_weights',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:name,value:weights,confirm:`set-account-weights:${name}:${normalized}`})});}await loadProviders();await openProviderInspector(name);}catch(error){window.alert('Could not save provider configuration: '+error.message);}});
+document.getElementById('usage-legend').addEventListener('click',event=>{const item=event.target.closest('[data-legend]');if(!item)return;hiddenProviders.has(item.dataset.legend)?hiddenProviders.delete(item.dataset.legend):hiddenProviders.add(item.dataset.legend);renderChartLegend();renderChart();});
+document.getElementById('usage-metric-toggle').addEventListener('click',event=>{const button=event.target.closest('[data-metric]');if(!button)return;chartMetric=button.dataset.metric;document.querySelectorAll('#usage-metric-toggle button').forEach(item=>item.classList.toggle('active',item===button));renderChart();});
+document.getElementById('usage-days').addEventListener('change',event=>{chartDays=parseInt(event.target.value,10)||14;loadProviders();});document.getElementById('providers-refresh').addEventListener('click',loadProviders);
+document.getElementById('providers-auto-refresh').addEventListener('change',event=>{if(autoRefreshTimer)clearInterval(autoRefreshTimer);autoRefreshTimer=event.target.checked?setInterval(loadProviders,30000):null;});autoRefreshTimer=setInterval(loadProviders,30000);loadProviders();
 """

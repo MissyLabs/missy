@@ -25,7 +25,7 @@ class DelegateTaskTool(BaseTool):
         "Decompose a compound, multi-step task into sub-agent calls and run "
         "them, respecting any sequential dependencies you describe (e.g. "
         "numbered steps or 'first...then...') and running independent steps "
-        "concurrently (up to 3 at a time). Each step runs as a full agent "
+        "concurrently (up to the operator-configured concurrency limit). Each step runs as a full agent "
         "turn with the same tools and permissions available to you right "
         "now -- it does not grant any additional capability. Use this for "
         "genuinely decomposable work (e.g. 'research X, then Y, then "
@@ -60,7 +60,7 @@ class DelegateTaskTool(BaseTool):
                 "define a name, role, focus, success criteria, provider registry key, tool hints, and "
                 "depends_on list of zero-based agent indexes. Use complementary "
                 "roles instead of giving every agent the same generic assignment. "
-                "At most 10 agents are allowed."
+                "The operator-configured maximum agent count applies."
             ),
             "items": {
                 "type": "object",
@@ -132,6 +132,7 @@ class DelegateTaskTool(BaseTool):
         **_kwargs,
     ) -> ToolResult:
         from missy.agent.sub_agent import (
+            MAX_CONCURRENT,
             MAX_SUB_AGENT_DEPTH,
             MAX_SUB_AGENTS,
             DelegationPlanError,
@@ -149,12 +150,24 @@ class DelegateTaskTool(BaseTool):
                 error="delegate_task requires runtime context and cannot be called directly.",
             )
 
-        if _depth >= MAX_SUB_AGENT_DEPTH:
+        runtime_config = getattr(_runtime, "config", None)
+
+        def _configured_limit(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = getattr(runtime_config, name, default)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return default
+            return max(minimum, min(value, maximum))
+
+        max_depth = _configured_limit("max_sub_agent_depth", MAX_SUB_AGENT_DEPTH, 0, 5)
+        max_agents = _configured_limit("max_sub_agents", MAX_SUB_AGENTS, 1, 50)
+        max_concurrent = _configured_limit("max_concurrent_agents", MAX_CONCURRENT, 1, max_agents)
+
+        if _depth >= max_depth:
             return ToolResult(
                 success=False,
                 output="",
                 error=(
-                    f"Delegation depth limit ({MAX_SUB_AGENT_DEPTH}) reached; "
+                    f"Delegation depth limit ({max_depth}) reached; "
                     "a sub-agent cannot delegate further. Complete this step "
                     "directly instead."
                 ),
@@ -184,11 +197,11 @@ class DelegateTaskTool(BaseTool):
             )
 
         if agents:
-            if len(agents) > MAX_SUB_AGENTS:
+            if len(agents) > max_agents:
                 return ToolResult(
                     success=False,
                     output="",
-                    error=f"At most {MAX_SUB_AGENTS} explicit agents are allowed.",
+                    error=f"At most {max_agents} explicit agents are allowed.",
                 )
             subtasks = []
             for index, spec in enumerate(agents):
@@ -259,8 +272,8 @@ class DelegateTaskTool(BaseTool):
         # Truncate the same way here so the two stay the same length for
         # the zip(..., strict=True) below, instead of that raising an
         # unhandled ValueError and crashing tool execution.
-        if len(subtasks) > MAX_SUB_AGENTS:
-            subtasks = subtasks[:MAX_SUB_AGENTS]
+        if len(subtasks) > max_agents:
+            subtasks = subtasks[:max_agents]
         try:
             validate_subtasks(subtasks)
         except DelegationPlanError as exc:
@@ -280,8 +293,9 @@ class DelegateTaskTool(BaseTool):
             parent_task_id=_parent_task_id,
             failure_policy=failure_policy,
             default_provider=_parent_provider,
+            max_concurrent=max_concurrent,
         )
-        results = runner.run_all(subtasks)
+        results = runner.run_all(subtasks, max_total=max_agents)
 
         succeeded = sum(t.status == "complete" for t in subtasks)
         failed = sum(t.status == "error" for t in subtasks)

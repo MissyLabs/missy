@@ -300,6 +300,7 @@ class SubAgentRunner:
         parent_task_id: str = "",
         failure_policy: str = "continue",
         default_provider: str = "",
+        max_concurrent: int = MAX_CONCURRENT,
     ) -> None:
         if failure_policy not in FAILURE_POLICIES:
             allowed = ", ".join(sorted(FAILURE_POLICIES))
@@ -311,7 +312,8 @@ class SubAgentRunner:
         self._parent_task_id = parent_task_id
         self._failure_policy = failure_policy
         self._default_provider = default_provider
-        self._semaphore = threading.Semaphore(MAX_CONCURRENT)
+        self._max_concurrent = max(1, min(int(max_concurrent), 50))
+        self._semaphore = threading.Semaphore(self._max_concurrent)
 
     def run_subtask(self, subtask: SubTask, context: str = "") -> str:
         """Execute a single subtask, optionally prepending *context*.
@@ -342,10 +344,10 @@ class SubAgentRunner:
             prompt = subtask.description
 
         # Defense in depth: run_all() already caps concurrency via its own
-        # ThreadPoolExecutor(max_workers=MAX_CONCURRENT), but a caller that
+        # ThreadPoolExecutor(max_workers=self._max_concurrent), but a caller that
         # invokes run_subtask() directly from several threads (bypassing
         # run_all() entirely) must still be bounded -- this semaphore is
-        # what enforces MAX_CONCURRENT for that path too.
+        # what enforces the configured concurrency for that path too.
         with self._semaphore:
             subtask.status = "running"
             subtask.started_at = datetime.now(UTC).isoformat()
@@ -421,7 +423,7 @@ class SubAgentRunner:
         done: set[int] = set()
         remaining = list(subtasks)
 
-        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+        with ThreadPoolExecutor(max_workers=self._max_concurrent) as pool:
             while remaining:
                 ready = [t for t in remaining if all(d in done for d in t.depends_on)]
                 if not ready:

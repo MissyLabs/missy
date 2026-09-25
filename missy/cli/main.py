@@ -367,10 +367,20 @@ def _agent_tool_policy_kwargs(
     ):
         configured_max_iterations = 10
 
+    def _number(name: str, default: int | float, expected: type | tuple[type, ...]) -> int | float:
+        value = getattr(cfg, name, default)
+        if isinstance(value, bool) or not isinstance(value, expected):
+            return default
+        return value
+
     return {
         "agent_id": agent_id,
         "workspace_path": workspace_path,
         "max_iterations": configured_max_iterations,
+        "temperature": float(_number("temperature", 0.7, (int, float))),
+        "max_sub_agents": int(_number("max_sub_agents", 10, int)),
+        "max_concurrent_agents": int(_number("max_concurrent_agents", 3, int)),
+        "max_sub_agent_depth": int(_number("max_sub_agent_depth", 2, int)),
         "tool_policy": _policy(getattr(cfg, "tools", None)),
         "agent_tool_policy": _policy(getattr(agent_cfg, "tools", None)),
         "sandbox_tool_policy": _policy(getattr(sandbox, "tools", None)),
@@ -3381,12 +3391,22 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         # effect on the running gateway, not only after a restart.
         _install_global_budget(new_cfg)
         new_max_spend = getattr(new_cfg, "max_spend_usd", 0.0)
-        _agent.config.max_spend_usd = new_max_spend
-        _discord_agent.config.max_spend_usd = new_max_spend
+        live_runtimes = [_agent, _discord_agent]
         if _proactive_runtime is not None:
-            _proactive_runtime.config.max_spend_usd = new_max_spend
+            live_runtimes.append(_proactive_runtime)
         if _voice_safe_chat_agent is not None:
-            _voice_safe_chat_agent.config.max_spend_usd = new_max_spend
+            live_runtimes.append(_voice_safe_chat_agent)
+        for live_runtime in live_runtimes:
+            live_runtime.config.max_spend_usd = new_max_spend
+            live_runtime.config.max_iterations = int(getattr(new_cfg, "max_iterations", 10))
+            live_runtime.config.temperature = float(getattr(new_cfg, "temperature", 0.7))
+            live_runtime.config.max_sub_agents = int(getattr(new_cfg, "max_sub_agents", 10))
+            live_runtime.config.max_concurrent_agents = int(
+                getattr(new_cfg, "max_concurrent_agents", 3)
+            )
+            live_runtime.config.max_sub_agent_depth = int(
+                getattr(new_cfg, "max_sub_agent_depth", 2)
+            )
         # Provider-preference hierarchy: default_provider is read once at
         # gateway_start() bootstrap into each runtime's AgentConfig.provider
         # (a plain, mutable field, not rebuilt on reload) -- same

@@ -38,8 +38,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
+
+import yaml
 
 from missy.api.agent_activity import query_agent_activity
 from missy.api.audit_browser import query_audit_events, redact_audit_value
@@ -209,6 +212,15 @@ def _healthy_account_count(provider: Any) -> int | None:
     return sum(1 for account in accounts if account.get("healthy", True))
 
 
+def _provider_weight(config: Any) -> float:
+    """Return a provider weight while preserving the meaningful value zero."""
+    value = getattr(config, "weight", 1.0)
+    try:
+        return 1.0 if value is None else float(value)
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def _rate_limit_json(provider: Any) -> dict[str, Any] | None:
     """Return *provider*'s live rate-limit budget as JSON-safe data, or ``None``.
 
@@ -241,6 +253,74 @@ def _rate_limit_json(provider: Any) -> dict[str, Any] | None:
         "token_capacity": None if token_unlimited else token_capacity,
         "token_unlimited": token_unlimited,
     }
+
+
+def _agent_settings_json(runtime: Any, config_path: str | None) -> dict[str, Any]:
+    """Return the redacted, operator-editable orchestration settings."""
+    runtime_config = getattr(runtime, "config", None)
+    raw: dict[str, Any] = {}
+    if config_path:
+        with contextlib.suppress(OSError, yaml.YAMLError):
+            loaded = yaml.safe_load(Path(config_path).expanduser().read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw = loaded
+    features = raw.get("features") if isinstance(raw.get("features"), dict) else {}
+
+    def _number(key: str, runtime_default: int | float, cast: type) -> int | float:
+        value = raw.get(key, runtime_default)
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            return cast(runtime_default)
+
+    return {
+        "max_iterations": _number(
+            "max_iterations", getattr(runtime_config, "max_iterations", 10), int
+        ),
+        "temperature": _number("temperature", getattr(runtime_config, "temperature", 0.7), float),
+        "max_sub_agents": _number(
+            "max_sub_agents", getattr(runtime_config, "max_sub_agents", 10), int
+        ),
+        "max_concurrent_agents": _number(
+            "max_concurrent_agents",
+            getattr(runtime_config, "max_concurrent_agents", 3),
+            int,
+        ),
+        "max_sub_agent_depth": _number(
+            "max_sub_agent_depth", getattr(runtime_config, "max_sub_agent_depth", 2), int
+        ),
+        "max_spend_usd": _number(
+            "max_spend_usd", getattr(runtime_config, "max_spend_usd", 0.0), float
+        ),
+        "global_max_spend_usd": _number("global_max_spend_usd", 0.0, float),
+        "global_budget_period": str(raw.get("global_budget_period", "total") or "total"),
+        "model_routing_enabled": bool(features.get("model_routing_enabled", False)),
+        "editable": bool(config_path),
+        "hot_reload": bool(config_path),
+    }
+
+
+def _circuit_breaker_json(runtime: Any, provider_name: str) -> dict[str, Any] | None:
+    """Return current breaker state without creating a new breaker."""
+    if runtime is None:
+        return None
+    breaker = None
+    runtime_config = getattr(runtime, "config", None)
+    if provider_name == getattr(runtime_config, "provider", None):
+        breaker = getattr(runtime, "_circuit_breaker", None)
+    if breaker is None:
+        breaker = (getattr(runtime, "_fallback_breakers", {}) or {}).get(provider_name)
+    if breaker is None:
+        return {"state": "not_observed", "failure_count": 0}
+    try:
+        state = getattr(breaker, "state", "unknown")
+        return {
+            "state": str(getattr(state, "value", state)),
+            "failure_count": int(getattr(breaker, "_failure_count", 0)),
+            "recovery_timeout_seconds": float(getattr(breaker, "_recovery_timeout", 0.0)),
+        }
+    except Exception:
+        return {"state": "unknown", "failure_count": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -1001,10 +1081,7 @@ def _make_handler(
                     config = None
                     with contextlib.suppress(Exception):
                         config = reg.get_config(name)
-                    try:
-                        weight = float(getattr(config, "weight", 1.0) or 1.0)
-                    except (TypeError, ValueError):
-                        weight = 1.0
+                    weight = _provider_weight(config)
                     result.append(
                         {
                             "name": name,
@@ -1048,10 +1125,7 @@ def _make_handler(
             config = None
             with contextlib.suppress(Exception):
                 config = reg.get_config(name)
-            try:
-                weight = float(getattr(config, "weight", 1.0) or 1.0)
-            except (TypeError, ValueError):
-                weight = 1.0
+            weight = _provider_weight(config)
 
             detail: dict[str, Any] = {
                 "name": name,
@@ -1073,8 +1147,14 @@ def _make_handler(
                     ),
                     "api_key_configured": bool(getattr(config, "api_key", "") or ""),
                     "api_keys_count": len(getattr(config, "api_keys", []) or []),
+                    "oauth_accounts_count": len(getattr(config, "oauth_accounts", []) or []),
                     "requests_per_minute": getattr(config, "requests_per_minute", None),
                     "tokens_per_minute": getattr(config, "tokens_per_minute", None),
+                    "max_wait_seconds": getattr(config, "max_wait_seconds", None),
+                    "circuit_breaker_threshold": getattr(config, "circuit_breaker_threshold", None),
+                    "circuit_breaker_cooldown_seconds": getattr(
+                        config, "circuit_breaker_cooldown_seconds", None
+                    ),
                     "weight": weight,
                     "account_weights": list(getattr(config, "account_weights", []) or []),
                 },
@@ -1084,6 +1164,7 @@ def _make_handler(
                 with contextlib.suppress(Exception):
                     detail["diagnostics"] = redact_audit_value(diagnostics())
             detail["rate_limit"] = _rate_limit_json(provider)
+            detail["circuit_breaker"] = _circuit_breaker_json(runtime, name)
             if memory_store is not None:
                 with contextlib.suppress(Exception):
                     for row in memory_store.get_cost_totals_by_provider():
@@ -1159,10 +1240,7 @@ def _make_handler(
                         config = None
                         with contextlib.suppress(Exception):
                             config = reg.get_config(name)
-                        try:
-                            weight = float(getattr(config, "weight", 1.0) or 1.0)
-                        except (TypeError, ValueError):
-                            weight = 1.0
+                        weight = _provider_weight(config)
                         usage = usage_by_provider.get(
                             name,
                             {
@@ -1189,13 +1267,74 @@ def _make_handler(
                                 "account_count": int(getattr(provider, "account_count", 0) or 0),
                                 "accounts_healthy": _healthy_account_count(provider),
                                 "rate_limit": _rate_limit_json(provider),
+                                "accounts": _provider_accounts_json(provider, name, memory_store),
+                                "circuit_breaker": _circuit_breaker_json(runtime, name),
+                                "config": {
+                                    "fast_model": str(getattr(config, "fast_model", "") or ""),
+                                    "premium_model": str(
+                                        getattr(config, "premium_model", "") or ""
+                                    ),
+                                    "context_worker_provider": str(
+                                        getattr(config, "context_worker_provider", "") or ""
+                                    ),
+                                    "context_worker_model": str(
+                                        getattr(config, "context_worker_model", "") or ""
+                                    ),
+                                    "base_url": str(getattr(config, "base_url", "") or ""),
+                                    "timeout": getattr(config, "timeout", None),
+                                    "key_rotation_strategy": str(
+                                        getattr(config, "key_rotation_strategy", "failover")
+                                    ),
+                                    "api_key_configured": bool(
+                                        getattr(config, "api_key", "") or ""
+                                    ),
+                                    "api_keys_count": len(getattr(config, "api_keys", []) or []),
+                                    "oauth_accounts_count": len(
+                                        getattr(config, "oauth_accounts", []) or []
+                                    ),
+                                    "requests_per_minute": getattr(
+                                        config, "requests_per_minute", None
+                                    ),
+                                    "tokens_per_minute": getattr(config, "tokens_per_minute", None),
+                                    "max_wait_seconds": getattr(config, "max_wait_seconds", None),
+                                    "circuit_breaker_threshold": getattr(
+                                        config, "circuit_breaker_threshold", None
+                                    ),
+                                    "circuit_breaker_cooldown_seconds": getattr(
+                                        config, "circuit_breaker_cooldown_seconds", None
+                                    ),
+                                    "account_weights": list(
+                                        getattr(config, "account_weights", []) or []
+                                    ),
+                                },
                                 "usage": usage,
                             }
                         )
                 except Exception as exc:
                     logger.warning("Error listing providers for usage: %s", exc)
 
-            data = {"days": days, "providers": providers, "series": series, "totals": totals}
+            data = {
+                "days": days,
+                "providers": providers,
+                "series": series,
+                "totals": totals,
+                "summary": {
+                    "provider_count": len(providers),
+                    "available_count": sum(
+                        1 for item in providers if item["available"] and item["enabled"]
+                    ),
+                    "degraded_count": sum(
+                        1 for item in providers if item["enabled"] and not item["available"]
+                    ),
+                    "enabled_count": sum(1 for item in providers if item["enabled"]),
+                    "account_count": sum(int(item.get("account_count") or 0) for item in providers),
+                    "healthy_account_count": sum(
+                        int(item.get("accounts_healthy") or 0) for item in providers
+                    ),
+                },
+                "agent_settings": _agent_settings_json(runtime, config_path),
+                "generated_at": datetime.now(UTC).isoformat(),
+            }
             if unattributed:
                 data["unattributed_usage"] = unattributed
             return ApiResponse.ok(data)
@@ -1360,6 +1499,7 @@ def _make_handler(
                     scheduler=getattr(runtime, "_scheduler", None) if runtime is not None else None,
                     candidate_store=candidate_store,
                     runtime=runtime,
+                    config_path=config_path,
                 )
             )
 
@@ -2158,10 +2298,8 @@ class ApiServer:
             ``/tool-candidates`` and candidate operator controls.
         benchmark_store: Optional benchmark result store used by the candidate
             benchmark-import operator control.
-        config_path: Optional path to ``config.yaml``, used only by the
-            ``provider.set_weight`` operator control to persist a new
-            provider weight (every other control here only mutates
-            in-process state).
+        config_path: Optional path to ``config.yaml``, used by provider and
+            agent configuration controls for backed-up, atomic persistence.
     """
 
     def __init__(
