@@ -226,6 +226,11 @@ class SleeptimeWorker:
         """
         if not key.startswith("sqlite:"):
             return True
+        db_path = key[len("sqlite:") :]
+        # Only real, resolved on-disk stores get a lock file (a test double's
+        # path is neither absolute nor inside an existing directory).
+        if not os.path.isabs(db_path) or not os.path.isdir(os.path.dirname(db_path)):
+            return True
         try:
             import fcntl
         except ImportError:  # pragma: no cover - non-POSIX

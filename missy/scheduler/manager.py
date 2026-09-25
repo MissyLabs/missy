@@ -1015,12 +1015,16 @@ class SchedulerManager:
         except ImportError:  # pragma: no cover - non-POSIX
             yield
             return
-        if not isinstance(self.jobs_file, Path):
+        try:
+            jobs_path = os.fspath(self.jobs_file)
+        except TypeError:
+            jobs_path = None
+        if not isinstance(jobs_path, str) or not os.path.isabs(jobs_path):
             yield  # a test double, not a real path
             return
         with contextlib.suppress(OSError):
-            os.makedirs(str(self.jobs_file.parent), mode=0o700, exist_ok=True)
-        lock_path = self.jobs_file.parent / (self.jobs_file.name + ".lock")
+            os.makedirs(os.path.dirname(jobs_path) or ".", mode=0o700, exist_ok=True)
+        lock_path = jobs_path + ".lock"
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
         except OSError:
