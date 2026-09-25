@@ -11,7 +11,12 @@ from click.testing import CliRunner
 
 from missy.agent.cost_tracker import BudgetExceededError
 from missy.agent.global_budget import GlobalBudget, get_global_budget, init_global_budget
-from missy.cli.main import _agent_feature_kwargs, _install_global_budget, cli
+from missy.cli.main import (
+    _agent_feature_kwargs,
+    _agent_tool_policy_kwargs,
+    _install_global_budget,
+    cli,
+)
 from missy.config.settings import FeaturesConfig, _parse_features, _parse_retention
 
 
@@ -154,3 +159,34 @@ class TestFeatures:
         assert r.checkpoints_days == 0
         assert r.inbound_attachments_days == 0  # content pruners are opt-in
         assert r.enabled is True
+
+
+class TestAgentOrchestrationWiring:
+    def test_runtime_limits_reach_agent_config_kwargs(self):
+        cfg = MagicMock()
+        cfg.workspace_path = None
+        cfg.max_iterations = 14
+        cfg.temperature = 1.1
+        cfg.max_sub_agents = 12
+        cfg.max_concurrent_agents = 4
+        cfg.max_sub_agent_depth = 3
+
+        kwargs = _agent_tool_policy_kwargs(cfg)
+
+        assert kwargs["max_iterations"] == 14
+        assert kwargs["temperature"] == 1.1
+        assert kwargs["max_sub_agents"] == 12
+        assert kwargs["max_concurrent_agents"] == 4
+        assert kwargs["max_sub_agent_depth"] == 3
+
+    def test_mock_runtime_limits_use_safe_defaults(self):
+        cfg = MagicMock()
+        cfg.workspace_path = None
+
+        kwargs = _agent_tool_policy_kwargs(cfg)
+
+        assert kwargs["max_iterations"] == 10
+        assert kwargs["temperature"] == 0.7
+        assert kwargs["max_sub_agents"] == 10
+        assert kwargs["max_concurrent_agents"] == 3
+        assert kwargs["max_sub_agent_depth"] == 2

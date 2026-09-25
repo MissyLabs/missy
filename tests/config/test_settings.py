@@ -1555,3 +1555,44 @@ class TestDesktopConfigParsing:
         )
         with pytest.raises(ConfigurationError, match="Cannot interpret"):
             load_config(path)
+
+
+class TestAgentOrchestrationConfig:
+    def test_parses_control_center_settings(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            """
+            providers: {}
+            max_iterations: 18
+            temperature: 1.1
+            max_sub_agents: 12
+            max_concurrent_agents: 4
+            max_sub_agent_depth: 3
+            """,
+        )
+
+        cfg = load_config(path)
+
+        assert cfg.max_iterations == 18
+        assert cfg.temperature == 1.1
+        assert cfg.max_sub_agents == 12
+        assert cfg.max_concurrent_agents == 4
+        assert cfg.max_sub_agent_depth == 3
+
+    @pytest.mark.parametrize(
+        ("setting", "message"),
+        [
+            ("temperature: 2.1", "temperature"),
+            ("max_sub_agents: 51", "max_sub_agents"),
+            (
+                "max_sub_agents: 2\nmax_concurrent_agents: 3",
+                "max_concurrent_agents",
+            ),
+            ("max_sub_agent_depth: 6", "max_sub_agent_depth"),
+        ],
+    )
+    def test_rejects_unsafe_orchestration_limits(self, tmp_path: Path, setting: str, message: str):
+        path = _write_yaml(tmp_path, f"providers: {{}}\n{setting}\n")
+
+        with pytest.raises(ConfigurationError, match=message):
+            load_config(path)

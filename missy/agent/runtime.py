@@ -540,6 +540,9 @@ class AgentConfig:
     )
     max_iterations: int = 10
     temperature: float = 0.7
+    max_sub_agents: int = 10
+    max_concurrent_agents: int = 3
+    max_sub_agent_depth: int = 2
     workspace_path: str | None = None
     capability_mode: str = "full"  # "full" | "safe-chat" | "discord" | "no-tools"
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session cost cap

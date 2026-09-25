@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,8 @@ _CONTROL_PROVIDER_ENABLE = "provider.enable"
 _CONTROL_PROVIDER_DISABLE = "provider.disable"
 _CONTROL_PROVIDER_SET_WEIGHT = "provider.set_weight"
 _CONTROL_PROVIDER_SET_FIELD = "provider.set_field"
+_CONTROL_PROVIDER_SET_ACCOUNT_WEIGHTS = "provider.set_account_weights"
+_CONTROL_AGENT_SET_FIELD = "agent.set_field"
 _CONTROL_SCHEDULER_PAUSE = "scheduler.pause_job"
 _CONTROL_SCHEDULER_RESUME = "scheduler.resume_job"
 _CONTROL_SCHEDULER_REMOVE = "scheduler.remove_job"
@@ -36,6 +39,7 @@ def list_operator_controls(
     scheduler: SchedulerManager | None = None,
     candidate_store: CandidateStore | None = None,
     runtime: AgentRuntime | None = None,
+    config_path: str | None = None,
 ) -> dict[str, Any]:
     """Return the available operator controls and target state."""
     providers = _provider_targets(provider_registry)
@@ -117,6 +121,26 @@ def list_operator_controls(
                 "confirmation_template": "set-field:{target}:{field}:{value}",
                 "enabled": bool(provider_registry is not None and field_targets),
                 "targets": field_targets,
+            },
+            {
+                "id": _CONTROL_PROVIDER_SET_ACCOUNT_WEIGHTS,
+                "label": "Set provider account weights",
+                "description": "Set relative traffic weights across a provider's configured accounts.",
+                "subsystem": "provider",
+                "requires_confirmation": True,
+                "confirmation_template": "set-account-weights:{target}:{value}",
+                "enabled": bool(provider_registry is not None and field_targets),
+                "targets": field_targets,
+            },
+            {
+                "id": _CONTROL_AGENT_SET_FIELD,
+                "label": "Edit agent orchestration",
+                "description": "Set validated loop, sampling, delegation, and budget limits.",
+                "subsystem": "agent",
+                "requires_confirmation": True,
+                "confirmation_template": "set-agent-field:{field}:{value}",
+                "enabled": bool(config_path),
+                "targets": [],
             },
             {
                 "id": _CONTROL_SCHEDULER_PAUSE,
@@ -212,9 +236,8 @@ def execute_operator_control(
     event.
 
     Args:
-        config_path: Path to ``config.yaml``, used only by
-            ``provider.set_weight`` to persist the new weight (the Web
-            TUI's provider controls otherwise never write config.yaml).
+        config_path: Path to ``config.yaml`` used by allow-listed provider
+            and agent controls for backed-up, atomic persistence.
     """
     if control_id == _CONTROL_SLEEPTIME_STOP:
         if runtime is None:
@@ -246,6 +269,12 @@ def execute_operator_control(
         return _execute_provider_set_field(
             body, provider_registry=provider_registry, config_path=config_path
         )
+    if control_id == _CONTROL_PROVIDER_SET_ACCOUNT_WEIGHTS:
+        return _execute_provider_set_account_weights(
+            body, provider_registry=provider_registry, config_path=config_path
+        )
+    if control_id == _CONTROL_AGENT_SET_FIELD:
+        return _execute_agent_set_field(body, config_path=config_path)
     if control_id in {_CONTROL_SCHEDULER_PAUSE, _CONTROL_SCHEDULER_RESUME}:
         return _execute_scheduler_control(control_id, body, scheduler=scheduler)
     if control_id == _CONTROL_SCHEDULER_REMOVE:
@@ -464,7 +493,7 @@ def _execute_provider_set_weight(
     except (TypeError, ValueError):
         detail["reason"] = "invalid_value"
         return 400, {"message": "weight 'value' must be a number"}, detail
-    if value < 0:
+    if not math.isfinite(value) or value < 0:
         detail["reason"] = "invalid_value"
         return 400, {"message": "weight must be >= 0"}, detail
 
@@ -604,6 +633,97 @@ def _execute_provider_set_field(
         {"control": control_id, "target": target, "field": field, "value": coerced},
         detail,
     )
+
+
+def _execute_provider_set_account_weights(
+    body: dict[str, Any],
+    *,
+    provider_registry: ProviderRegistry | None,
+    config_path: str | None,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    control_id = _CONTROL_PROVIDER_SET_ACCOUNT_WEIGHTS
+    target = str(body.get("target") or "").strip()
+    detail = _audit_detail(control_id, target)
+    if provider_registry is None:
+        detail["reason"] = "provider_registry_unavailable"
+        return 503, {"message": "Provider registry is not attached"}, detail
+    if not _SAFE_TARGET_RE.fullmatch(target):
+        detail["reason"] = "invalid_target"
+        return 400, {"message": "Invalid provider target"}, detail
+    try:
+        names = set(provider_registry.list_providers())
+    except Exception:
+        names = set()
+    if target not in names:
+        detail["reason"] = "unknown_provider"
+        return 404, {"message": f"Provider {target!r} is not registered"}, detail
+    raw_weights = body.get("value", [])
+    if not isinstance(raw_weights, list):
+        detail["reason"] = "invalid_value"
+        return 400, {"message": "value must be a list of account weights"}, detail
+    try:
+        weights = [float(value) for value in raw_weights]
+    except (TypeError, ValueError):
+        detail["reason"] = "invalid_value"
+        return 400, {"message": "Every account weight must be a number"}, detail
+    normalized = ",".join(f"{value:g}" for value in weights)
+    expected = f"set-account-weights:{target}:{normalized}"
+    if str(body.get("confirm") or "") != expected:
+        detail["reason"] = "confirmation_required"
+        return (
+            409,
+            {"message": "Explicit confirmation is required", "confirmation": expected},
+            detail,
+        )
+    if not config_path:
+        detail["reason"] = "config_path_unavailable"
+        return 503, {"message": "Config file path is not attached to this server"}, detail
+    from missy.config.writer import ConfigWriteError, set_account_weights
+
+    try:
+        set_account_weights(config_path, target, weights)
+    except ConfigWriteError as exc:
+        detail["reason"] = "config_write_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+    detail.update(reason="confirmed", value=weights)
+    return 200, {"control": control_id, "target": target, "value": weights}, detail
+
+
+def _execute_agent_set_field(
+    body: dict[str, Any], *, config_path: str | None
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    control_id = _CONTROL_AGENT_SET_FIELD
+    field = str(body.get("field") or "").strip()
+    detail = _audit_detail(control_id, "runtime", field=field)
+    from missy.config.writer import EDITABLE_AGENT_FIELDS
+
+    if field not in EDITABLE_AGENT_FIELDS:
+        detail["reason"] = "invalid_field"
+        return 400, {"message": f"Field {field!r} is not editable"}, detail
+    raw_value = body.get("value", "")
+    value_str = str(raw_value)
+    expected = f"set-agent-field:{field}:{value_str}"
+    if str(body.get("confirm") or "") != expected:
+        detail["reason"] = "confirmation_required"
+        return (
+            409,
+            {"message": "Explicit confirmation is required", "confirmation": expected},
+            detail,
+        )
+    if not config_path:
+        detail["reason"] = "config_path_unavailable"
+        return 503, {"message": "Config file path is not attached to this server"}, detail
+    from missy.config.writer import ConfigWriteError, set_agent_field
+
+    try:
+        coerced = set_agent_field(config_path, field, raw_value)
+    except ConfigWriteError as exc:
+        detail["reason"] = "config_write_failed"
+        detail["error"] = _safe_error(exc)
+        return 409, {"message": _safe_error(exc)}, detail
+    detail.update(reason="confirmed", value=coerced)
+    return 200, {"control": control_id, "field": field, "value": coerced}, detail
 
 
 def _execute_scheduler_control(
@@ -1040,8 +1160,9 @@ def _provider_weight_targets(provider_registry: ProviderRegistry | None) -> list
             config = provider_registry.get_config(name)
         except Exception:
             config = None
+        raw_weight = getattr(config, "weight", 1.0)
         try:
-            weight = float(getattr(config, "weight", 1.0) or 1.0)
+            weight = 1.0 if raw_weight is None else float(raw_weight)
         except (TypeError, ValueError):
             weight = 1.0
         targets.append(

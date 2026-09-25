@@ -313,3 +313,34 @@ class TestSchema:
         ]
         agent_properties = properties["agents"]["items"]["properties"]
         assert {"role", "focus", "success_criteria", "tool_hints"} <= set(agent_properties)
+
+
+class TestConfiguredLimits:
+    def test_runtime_agent_limit_truncates_decomposed_work(self, tool):
+        runtime = MagicMock()
+        runtime.config.max_sub_agents = 2
+        runtime.config.max_concurrent_agents = 1
+        runtime.config.max_sub_agent_depth = 2
+        runtime.run.return_value = "ok"
+
+        result = tool.execute(
+            prompt="1. first\n2. second\n3. third",
+            _runtime=runtime,
+            _session_id="session",
+        )
+
+        assert result.success
+        assert result.output.count("Step ") == 2
+        assert runtime.run.call_count == 2
+
+    def test_zero_configured_depth_disables_delegation(self, tool):
+        runtime = MagicMock()
+        runtime.config.max_sub_agents = 10
+        runtime.config.max_concurrent_agents = 3
+        runtime.config.max_sub_agent_depth = 0
+
+        result = tool.execute(prompt="1. first", _runtime=runtime, _session_id="session")
+
+        assert not result.success
+        assert "limit (0)" in result.error
+        runtime.run.assert_not_called()

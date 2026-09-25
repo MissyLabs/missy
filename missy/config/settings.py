@@ -711,6 +711,13 @@ class MissyConfig:
     # accepted in operator YAML by older examples but omitted from the parsed
     # schema, so the gateway silently fell back to AgentConfig's value of 10.
     max_iterations: int = 10
+    temperature: float = 0.7
+    # Delegation limits are operator-configurable but bounded at config-load
+    # time so an accidental Web TUI/YAML edit cannot create an unbounded
+    # thread fan-out.  ``max_sub_agent_depth: 0`` disables delegation.
+    max_sub_agents: int = 10
+    max_concurrent_agents: int = 3
+    max_sub_agent_depth: int = 2
     max_spend_usd: float = 0.0  # 0 = unlimited; per-session budget cap
     # F19: global cross-session spend ceiling (0 = unlimited). Aggregates
     # every session/job/proactive run; period is "total" | "daily" | "monthly".
@@ -1397,6 +1404,19 @@ def load_config(path: str) -> MissyConfig:
 
             discord_cfg = parse_discord_config(discord_raw, vault_dir=vault_dir)
 
+        max_sub_agents = int(data.get("max_sub_agents", 10))
+        max_concurrent_agents = int(data.get("max_concurrent_agents", 3))
+        max_sub_agent_depth = int(data.get("max_sub_agent_depth", 2))
+        temperature = float(data.get("temperature", 0.7))
+        if not 1 <= max_sub_agents <= 50:
+            raise ConfigurationError("max_sub_agents must be between 1 and 50.")
+        if not 1 <= max_concurrent_agents <= max_sub_agents:
+            raise ConfigurationError("max_concurrent_agents must be between 1 and max_sub_agents.")
+        if not 0 <= max_sub_agent_depth <= 5:
+            raise ConfigurationError("max_sub_agent_depth must be between 0 and 5.")
+        if not 0.0 <= temperature <= 2.0:
+            raise ConfigurationError("temperature must be between 0 and 2.")
+
         return MissyConfig(
             network=_parse_network(data.get("network") or {}),
             filesystem=_parse_filesystem(data.get("filesystem") or {}),
@@ -1425,6 +1445,10 @@ def load_config(path: str) -> MissyConfig:
             vtube=_parse_vtube(data.get("vtube") or {}, vault_dir=vault_dir),
             desktop=_parse_desktop(data.get("desktop") or {}),
             max_iterations=max(1, int(data.get("max_iterations", 10))),
+            temperature=temperature,
+            max_sub_agents=max_sub_agents,
+            max_concurrent_agents=max_concurrent_agents,
+            max_sub_agent_depth=max_sub_agent_depth,
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
             global_budget_period=str(data.get("global_budget_period", "total") or "total"),

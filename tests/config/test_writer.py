@@ -10,6 +10,7 @@ import yaml
 from missy.config.writer import (
     ConfigWriteError,
     set_account_weights,
+    set_agent_field,
     set_default_provider,
     set_provider_field,
     set_provider_weight,
@@ -148,3 +149,61 @@ class TestSetAccountWeights:
         set_account_weights(str(path), "openai", [])
         data = yaml.safe_load(path.read_text())
         assert data["providers"]["openai"]["account_weights"] == []
+
+
+class TestProviderControlCenterWrites:
+    def test_persists_extended_provider_tuning(self, tmp_path: Path):
+        path = _write_config(tmp_path)
+
+        assert set_provider_field(str(path), "openai", "max_wait_seconds", "12.5") == 12.5
+        assert set_provider_field(str(path), "openai", "circuit_breaker_threshold", "3") == 3
+        assert (
+            set_provider_field(str(path), "openai", "key_rotation_strategy", "round_robin")
+            == "round_robin"
+        )
+
+        provider = yaml.safe_load(path.read_text())["providers"]["openai"]
+        assert provider["max_wait_seconds"] == 12.5
+        assert provider["circuit_breaker_threshold"] == 3
+        assert provider["key_rotation_strategy"] == "round_robin"
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("temperature", 1.2),
+            ("max_iterations", 16),
+            ("max_sub_agents", 12),
+            ("max_concurrent_agents", 4),
+            ("max_sub_agent_depth", 3),
+            ("max_spend_usd", 5.5),
+            ("global_budget_period", "daily"),
+        ],
+    )
+    def test_persists_agent_orchestration_fields(self, tmp_path: Path, field: str, value):
+        path = _write_config(tmp_path)
+
+        assert set_agent_field(str(path), field, value) == value
+        assert yaml.safe_load(path.read_text())[field] == value
+
+    def test_rejects_concurrency_above_agent_limit(self, tmp_path: Path):
+        path = _write_config(tmp_path)
+        set_agent_field(str(path), "max_sub_agents", 4)
+
+        with pytest.raises(ConfigWriteError, match="cannot exceed"):
+            set_agent_field(str(path), "max_concurrent_agents", 5)
+
+    def test_rejects_unallowlisted_agent_field(self, tmp_path: Path):
+        path = _write_config(tmp_path)
+
+        with pytest.raises(ConfigWriteError, match="not editable"):
+            set_agent_field(str(path), "api_key", "secret")
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("temperature", "nan"), ("max_spend_usd", "inf")],
+    )
+    def test_rejects_non_finite_agent_values(self, tmp_path: Path, field: str, value: str):
+        path = _write_config(tmp_path)
+
+        with pytest.raises(ConfigWriteError):
+            set_agent_field(str(path), field, value)
