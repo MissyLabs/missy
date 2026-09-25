@@ -318,7 +318,7 @@ _ALL_TOOL_CLASSES = [
 ]
 
 
-def register_builtin_tools(registry=None) -> None:
+def register_builtin_tools(registry=None, *, shell_allowed_env_vars=None) -> None:
     """Register all built-in tools with a :class:`~missy.tools.registry.ToolRegistry`.
 
     When *registry* is ``None`` the process-level registry returned by
@@ -330,6 +330,8 @@ def register_builtin_tools(registry=None) -> None:
         registry: An explicit :class:`~missy.tools.registry.ToolRegistry`
             instance to register tools into, or ``None`` to use the
             process-level singleton.
+        shell_allowed_env_vars: Extra operator-approved environment-variable
+            names inherited only by the registered ``shell_exec`` tool.
 
     Raises:
         RuntimeError: When *registry* is ``None`` and
@@ -342,4 +344,7 @@ def register_builtin_tools(registry=None) -> None:
         registry = get_tool_registry()
 
     for tool_cls in _ALL_TOOL_CLASSES:
-        registry.register(tool_cls())
+        if tool_cls is ShellExecTool:
+            registry.register(tool_cls(allowed_env_vars=shell_allowed_env_vars))
+        else:
+            registry.register(tool_cls())

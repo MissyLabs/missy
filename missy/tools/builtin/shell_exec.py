@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -77,6 +78,8 @@ _SAFE_ENV_VARS = frozenset(
     }
 )
 
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class ShellExecTool(BaseTool):
     """Execute a whitelisted shell command as a subprocess.
@@ -118,8 +121,18 @@ class ShellExecTool(BaseTool):
     )
     permissions = ToolPermissions(shell=True)
 
-    def __init__(self, sandbox_config: Any | None = None) -> None:
+    def __init__(
+        self,
+        sandbox_config: Any | None = None,
+        *,
+        allowed_env_vars: Iterable[str] | None = None,
+    ) -> None:
         self._sandbox = None
+        self._allowed_env_vars = frozenset(
+            name
+            for raw_name in (allowed_env_vars or ())
+            if (name := str(raw_name).strip()) and _ENV_NAME_RE.fullmatch(name)
+        )
         if sandbox_config is not None:
             try:
                 from missy.security.sandbox import get_sandbox
@@ -233,7 +246,8 @@ class ShellExecTool(BaseTool):
         try:
             # Sanitize environment: only pass safe variables to prevent
             # API keys and tokens from leaking to arbitrary shell commands.
-            safe_env = {k: os.environ[k] for k in _SAFE_ENV_VARS if k in os.environ}
+            inherited_names = _SAFE_ENV_VARS | self._allowed_env_vars
+            safe_env = {k: os.environ[k] for k in inherited_names if k in os.environ}
             proc = subprocess.run(
                 command,
                 shell=True,
