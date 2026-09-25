@@ -6027,8 +6027,13 @@ class AgentRuntime:
             # health was already recorded (_record_account_outcome(False)
             # inside the provider) before this exception reached here, so
             # a fresh call's account selection is biased away from it.
+            # ACCOUNT (e.g. HTTP 402 on one ChatGPT account) is retried the
+            # same way: the sibling account is a different credential and
+            # frequently healthy, whereas skipping straight to a
+            # cross-provider fallback failed turns a healthy sibling could
+            # have served.
             if (
-                failure_class == ProviderFailureClass.RATE_LIMIT
+                failure_class in (ProviderFailureClass.RATE_LIMIT, ProviderFailureClass.ACCOUNT)
                 and getattr(provider, "is_multi_account", False)
                 and getattr(provider, "account_count", 0) > 1
             ):

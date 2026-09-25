@@ -120,6 +120,21 @@ async function main() {
     return { outcome: { outcome: "selected", optionId } };
   }
 
+  function describeError(err) {
+    const parts = [err?.message ?? String(err)];
+    if (err && err.code !== undefined) parts.push(`code=${err.code}`);
+    if (err && err.data !== undefined) {
+      let data;
+      try {
+        data = typeof err.data === "string" ? err.data : JSON.stringify(err.data);
+      } catch {
+        data = String(err.data);
+      }
+      parts.push(`data=${String(data).slice(0, 1000)}`);
+    }
+    return parts.join(" ");
+  }
+
   let stopReason = "unknown";
   let ok = true;
   let errorMessage = null;
@@ -173,7 +188,9 @@ async function main() {
     );
   } catch (err) {
     ok = false;
-    errorMessage = `${err.message}${stderrBuf ? ` (stderr: ${stderrBuf.slice(0, 2000)})` : ""}`;
+    // JSON-RPC errors carry the real cause in `code`/`data`; `message` alone
+    // is often just the generic "Internal error" (-32603).
+    errorMessage = `${describeError(err)}${stderrBuf ? ` (stderr: ${stderrBuf.slice(0, 2000)})` : ""}`;
   } finally {
     killAgentProcessGroup();
   }
