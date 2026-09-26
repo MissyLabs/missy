@@ -86,11 +86,11 @@ class TestShouldRetryBoundary:
 
     def test_zero_failures_always_retries(self) -> None:
         job = ScheduledJob(max_attempts=3, consecutive_failures=0)
-        assert job.should_retry("any error") is True
+        assert job.should_retry("network error") is True
 
     def test_failures_below_max_retries(self) -> None:
         job = ScheduledJob(max_attempts=3, consecutive_failures=2)
-        assert job.should_retry("transient") is True
+        assert job.should_retry("provider error") is True
 
     def test_failures_equal_max_does_not_retry(self) -> None:
         job = ScheduledJob(max_attempts=3, consecutive_failures=3)
@@ -102,15 +102,15 @@ class TestShouldRetryBoundary:
 
     def test_max_attempts_1_retries_on_first_failure_only(self) -> None:
         job = ScheduledJob(max_attempts=1, consecutive_failures=0)
-        assert job.should_retry("first") is True
+        assert job.should_retry("network error") is True
         job.consecutive_failures = 1
         assert job.should_retry("second") is False
 
-    def test_error_string_is_ignored(self) -> None:
-        """The error argument does not gate retry decisions."""
-        job = ScheduledJob(max_attempts=5, consecutive_failures=1)
-        for error in ["network", "provider_error", "unknown_category", ""]:
-            assert job.should_retry(error) is True
+    def test_retry_on_filters_error_categories(self) -> None:
+        job = ScheduledJob(max_attempts=5, consecutive_failures=1, retry_on=["network"])
+        assert job.should_retry("network connection reset") is True
+        assert job.should_retry("provider error") is False
+        assert job.should_retry("unknown category") is False
 
 
 # ===========================================================================

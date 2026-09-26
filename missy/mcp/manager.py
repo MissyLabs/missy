@@ -899,8 +899,10 @@ class McpManager:
             clients = list(self._clients.items())
         for name, client in clients:
             entry = existing_entries.setdefault(name, {"name": name})
-            entry["command"] = client._command
-            entry["url"] = client._url
+            command = getattr(client, "_command", None)
+            url = getattr(client, "_url", None)
+            entry["command"] = command if isinstance(command, str) else None
+            entry["url"] = url if isinstance(url, str) else None
         entries = list(existing_entries.values())
         self._config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Write with restrictive permissions (owner read/write only) to
