@@ -77,6 +77,40 @@ def test_loads_enabled_delegated_candidate(tmp_path: Path) -> None:
     assert registry.execute("echo_alias", text="hello").output == "hello"
 
 
+def test_loading_same_candidate_for_second_provider_is_idempotent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    candidate = _candidate(provider_enabled={"mock": True, "other": True})
+    store.add(candidate)
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+
+    first = CandidateRuntimeLoader(store, registry).load_enabled("mock")
+    second = CandidateRuntimeLoader(store, registry).load_enabled("other")
+
+    assert first.loaded == ["echo_alias"]
+    assert second.loaded == ["echo_alias"]
+    assert registry.execute("echo_alias", text="hello").output == "hello"
+
+
+def test_disabled_candidate_is_revoked_at_dispatch_and_reconciled(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    candidate = _candidate()
+    store.add(candidate)
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    loader = CandidateRuntimeLoader(store, registry)
+    loader.load_enabled("mock")
+
+    store.transition(candidate.id, ToolLifecycleState.DISABLED, actor="operator")
+
+    denied = registry.execute("echo_alias", text="hello")
+    assert denied.success is False
+    assert "disabled or changed" in (denied.error or "")
+
+    loader.load_enabled("mock")
+    assert registry.get("echo_alias") is None
+
+
 def test_skips_candidate_without_implementation(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.add(_candidate(implementation={}))

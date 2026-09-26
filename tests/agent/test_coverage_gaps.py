@@ -947,6 +947,38 @@ class TestRuntimeExecuteToolAllowSet:
         assert result.content == "4"
         tool_reg.execute.assert_called_once()
 
+    def test_candidate_alias_cannot_dispatch_policy_excluded_target(self):
+        from missy.agent.runtime import AgentConfig, AgentRuntime
+
+        provider = _make_provider()
+        reg = _make_registry({"fake": provider})
+        alias = MagicMock()
+        alias.target_tool = "file_delete"
+        target = MagicMock()
+        target.target_tool = None
+        tool_reg = MagicMock()
+        tool_reg.get.side_effect = lambda name: {
+            "friendly_alias": alias,
+            "file_delete": target,
+        }.get(name)
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=reg),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            tc = ToolCall(id="alias-1", name="friendly_alias", arguments={})
+            result = runtime._execute_tool(
+                tc,
+                session_id="s",
+                task_id="t",
+                allowed_tool_names={"friendly_alias"},
+            )
+
+        assert result.is_error is True
+        assert "file_delete" in result.content
+        tool_reg.execute.assert_not_called()
+
     def test_none_allow_set_skips_check_for_backward_compatibility(self):
         """Call sites with no resolved per-turn set (allowed_tool_names=None,
         the default) must behave exactly as before this fix."""

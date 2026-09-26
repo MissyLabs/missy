@@ -55,7 +55,13 @@ class CandidateLoadReport:
 class CandidateDelegatedTool(BaseTool):
     """Runtime wrapper that delegates execution to an existing registered tool."""
 
-    def __init__(self, candidate: ToolCandidate, target_tool: str, registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        candidate: ToolCandidate,
+        target_tool: str,
+        registry: ToolRegistry,
+        store: CandidateStore,
+    ) -> None:
         self.name = candidate.name
         self.description = candidate.description
         self.permissions = _permissions_from_candidate(candidate.permissions)
@@ -67,6 +73,7 @@ class CandidateDelegatedTool(BaseTool):
         self._candidate_id = candidate.id
         self._target_tool = target_tool
         self._registry = registry
+        self._store = store
         self._provider_enabled = dict(candidate.provider_enabled)
 
     @property
@@ -84,7 +91,46 @@ class CandidateDelegatedTool(BaseTool):
     def get_schema(self) -> dict[str, Any]:
         return dict(self._schema)
 
+    def matches_candidate(self, candidate: ToolCandidate) -> bool:
+        """Return whether this wrapper is current for *candidate*."""
+        implementation = (
+            candidate.implementation if isinstance(candidate.implementation, dict) else {}
+        )
+        return bool(
+            candidate.id == self._candidate_id
+            and candidate.name == self.name
+            and candidate.state is ToolLifecycleState.ENABLED
+            and implementation.get("type") == "delegated_tool"
+            and implementation.get("tool") == self._target_tool
+            and dict(candidate.provider_enabled) == self._provider_enabled
+            and candidate.schema == self._schema["parameters"]
+            and candidate.description == self.description
+            and _permissions_from_candidate(candidate.permissions) == self.permissions
+        )
+
     def execute(self, **kwargs: Any) -> ToolResult:
+        # Lifecycle state is an execution-time authorization decision.  A
+        # candidate can be disabled after schemas were offered but before a
+        # provider dispatches the call, so a cached wrapper must fail closed.
+        try:
+            current = self._store.get(self._candidate_id)
+        except Exception:
+            logger.warning(
+                "Candidate %s lifecycle lookup failed at dispatch; denying execution.",
+                self._candidate_id,
+                exc_info=True,
+            )
+            return ToolResult(
+                success=False,
+                output=None,
+                error="Candidate authorization could not be verified at dispatch.",
+            )
+        if current is None or not self.matches_candidate(current):
+            return ToolResult(
+                success=False,
+                output=None,
+                error="Candidate is disabled or changed; refresh tools before retrying.",
+            )
         return self._registry.execute(self._target_tool, **kwargs)
 
 
@@ -104,7 +150,22 @@ class CandidateRuntimeLoader:
         """
         loaded: list[str] = []
         skipped: list[CandidateLoadIssue] = []
-        for candidate in self._store.list_all(state=ToolLifecycleState.ENABLED, limit=1000):
+        enabled = self._store.list_all(state=ToolLifecycleState.ENABLED, limit=1000)
+        enabled_by_id = {candidate.id: candidate for candidate in enabled}
+
+        # Reconcile wrappers left behind by a lifecycle/configuration change.
+        # Provider filtering is intentionally not part of removal: the shared
+        # registry may serve another provider for which the candidate remains
+        # enabled, and ``is_enabled_for_provider`` handles publication.
+        for name in self._registry.list_tools():
+            existing = self._registry.get(name)
+            if not isinstance(existing, CandidateDelegatedTool):
+                continue
+            candidate = enabled_by_id.get(existing.candidate_id)
+            if candidate is None or not existing.matches_candidate(candidate):
+                self._registry.unregister(name, expected_type=CandidateDelegatedTool)
+
+        for candidate in enabled:
             reason = self._validate(candidate, provider_name)
             if reason:
                 skipped.append(CandidateLoadIssue(candidate.id, candidate.name, reason))
@@ -112,7 +173,15 @@ class CandidateRuntimeLoader:
                 continue
 
             target_tool = str(candidate.implementation["tool"])
-            self._registry.register(CandidateDelegatedTool(candidate, target_tool, self._registry))
+            existing = self._registry.get(candidate.name)
+            if isinstance(existing, CandidateDelegatedTool) and existing.matches_candidate(
+                candidate
+            ):
+                loaded.append(candidate.name)
+                continue
+            self._registry.register(
+                CandidateDelegatedTool(candidate, target_tool, self._registry, self._store)
+            )
             loaded.append(candidate.name)
             _emit_audit(
                 "tool.candidate.loaded", candidate, provider_name, f"delegates:{target_tool}"
@@ -148,8 +217,11 @@ class CandidateRuntimeLoader:
         if self._registry.get(target_tool) is None:
             return f"delegated tool target {target_tool!r} is not registered"
         existing = self._registry.get(candidate.name)
-        if existing is not None and not isinstance(existing, CandidateDelegatedTool):
-            return f"tool name {candidate.name!r} already exists"
+        if existing is not None:
+            if not isinstance(existing, CandidateDelegatedTool):
+                return f"tool name {candidate.name!r} already exists"
+            if existing.candidate_id != candidate.id:
+                return f"tool name {candidate.name!r} belongs to another candidate"
         if provider_name and candidate.provider_enabled.get(provider_name) is not True:
             return f"provider {provider_name!r} is not enabled for candidate"
         return ""

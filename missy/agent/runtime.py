@@ -779,11 +779,8 @@ class AgentRuntime:
         # inherit its policy and budget, but each concurrent worker still needs
         # a distinct identity for audit logs and operator visibility.
         self._agent_execution_local = threading.local()
-        # Candidate tools can be enabled for one provider and denied for
-        # another. Track loading per provider (under a lock because delegated
-        # agents call _get_tools concurrently) instead of letting whichever
-        # provider runs first permanently decide the shared runtime's set.
-        self._candidate_runtime_loaded_providers: set[str] = set()
+        # Candidate reconciliation is serialized because delegated agents may
+        # call _get_tools concurrently against the shared registry.
         self._candidate_runtime_load_lock = threading.Lock()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
@@ -3613,19 +3610,12 @@ class AgentRuntime:
             lock = threading.Lock()
             self._candidate_runtime_load_lock = lock
         with lock:
-            loaded = getattr(self, "_candidate_runtime_loaded_providers", None)
-            if loaded is None:
-                loaded = set()
-                self._candidate_runtime_loaded_providers = loaded
-            if effective_provider in loaded:
-                return
             try:
                 from missy.tools.intelligence import CandidateRuntimeLoader, get_candidate_store
 
                 report = CandidateRuntimeLoader(get_candidate_store(), registry).load_enabled(
                     effective_provider
                 )
-                loaded.add(effective_provider)
                 if report.skipped:
                     logger.info(
                         "Candidate runtime loader skipped %d candidate(s) for provider %r.",
@@ -4000,6 +3990,53 @@ class AgentRuntime:
                 content="Tool registry not initialised.",
                 is_error=True,
             )
+
+        # A candidate alias is an alternate schema, not authority to escape
+        # this turn's capability policy. Authorize every delegated target in
+        # the chain before any wrapper executes. The registry still performs
+        # the target's ordinary filesystem/network/shell permission checks.
+        if allowed_tool_names is not None:
+            delegated_name = tool_call.name
+            delegated_tool = registry.get(delegated_name)
+            seen_delegates = {delegated_name}
+            while delegated_tool is not None:
+                target_name = getattr(delegated_tool, "target_tool", None)
+                if not isinstance(target_name, str) or not target_name:
+                    break
+                if target_name in seen_delegates or target_name not in allowed_tool_names:
+                    reason = (
+                        "delegated_tool_cycle"
+                        if target_name in seen_delegates
+                        else "delegated_target_not_in_per_turn_allow_set"
+                    )
+                    logger.warning(
+                        "Tool %r delegates to unavailable target %r; refusing dispatch.",
+                        tool_call.name,
+                        target_name,
+                    )
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="tool_execute",
+                        result="deny",
+                        detail={
+                            "tool": tool_call.name,
+                            "delegated_target": target_name,
+                            "reason": reason,
+                        },
+                    )
+                    self._score_tool_trust(tool_call.name, success=False)
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        name=tool_call.name,
+                        content=(
+                            f"Tool {tool_call.name!r} delegates to {target_name!r}, "
+                            "which is not available under this turn's capability policy."
+                        ),
+                        is_error=True,
+                    )
+                seen_delegates.add(target_name)
+                delegated_tool = registry.get(target_name)
 
         # Log tool name and argument keys only — values may contain secrets.
         logger.info(
