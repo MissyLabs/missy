@@ -391,8 +391,17 @@ class TestMcpConfigPermissions:
         ):
             mgr.connect_all()
 
-        # Stat failure → silently skip with a warning, no clients connected.
-        assert mgr.list_servers() == []
+        # Stat failure leaves the last trusted desired state visible, but no
+        # client is connected from the now-unreadable configuration.
+        assert mgr.list_servers() == [
+            {
+                "name": "srv",
+                "alive": False,
+                "tools": 0,
+                "desired": True,
+                "annotation_states": {},
+            }
+        ]
         assert any("cannot stat" in r.message.lower() for r in caplog.records)
 
     def test_skips_loading_on_uid_mismatch_logs_warning(self, tmp_path, caplog):

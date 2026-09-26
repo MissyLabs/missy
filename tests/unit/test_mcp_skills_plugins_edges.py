@@ -140,7 +140,12 @@ def tmp_mcp_config(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def mcp_mgr(tmp_mcp_config: Path) -> McpManager:
-    return McpManager(config_path=str(tmp_mcp_config))
+    from missy.mcp.annotations import ToolAnnotation
+
+    manager = McpManager(config_path=str(tmp_mcp_config))
+    for name in ("tool_with_underscores", "a__b"):
+        manager._annotation_registry.register(f"srv__{name}", ToolAnnotation(read_only=True))
+    return manager
 
 
 class TestMcpManagerEmptyConfig:

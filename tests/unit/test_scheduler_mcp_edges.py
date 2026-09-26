@@ -496,9 +496,13 @@ def tmp_mcp_config(tmp_path: Path) -> str:
 
 @pytest.fixture
 def mcp_manager(tmp_mcp_config: str):
+    from missy.mcp.annotations import ToolAnnotation
     from missy.mcp.manager import McpManager
 
-    return McpManager(config_path=tmp_mcp_config)
+    manager = McpManager(config_path=tmp_mcp_config)
+    for name in ("empty_tool", "ping", "find", "evil"):
+        manager._annotation_registry.register(f"srv__{name}", ToolAnnotation(read_only=True))
+    return manager
 
 
 class TestMcpAddServerInvalidNames:
