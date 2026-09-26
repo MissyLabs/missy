@@ -426,7 +426,13 @@ class TestScanForRecoveryCorruptedDB:
 
         db_path = str(tmp_path / "checkpoints.db")
         cm = _make_checkpoint_manager(tmp_path)
-        cm.create("sess-y", "task-y", "Incomplete task")
+        checkpoint_id = cm.create("sess-y", "task-y", "Incomplete task")
+        conn = cm._connect()
+        conn.execute(
+            "UPDATE checkpoints SET lease_expires_at = 0 WHERE id = ?",
+            (checkpoint_id,),
+        )
+        conn.commit()
         result = scan_for_recovery(db_path=db_path)
         assert len(result) == 1
         assert result[0].prompt == "Incomplete task"
