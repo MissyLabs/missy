@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 import threading
 import uuid
 from collections.abc import Iterable
@@ -283,7 +284,12 @@ class SQLiteMemoryStore:
         self._path = Path(db_path or DEFAULT_DB_PATH).expanduser()
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         resolved_parent = self._path.parent.resolve()
-        unsafe_to_repermission = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+        unsafe_to_repermission = {
+            Path("/").resolve(),
+            Path.home().resolve(),
+            Path.cwd().resolve(),
+            Path(tempfile.gettempdir()).resolve(),
+        }
         if resolved_parent not in unsafe_to_repermission:
             os.chmod(self._path.parent, 0o700)
         if self._path.is_symlink():
