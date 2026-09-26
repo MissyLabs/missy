@@ -338,8 +338,17 @@ class TestMcpConfigPermissions:
         ):
             mgr.connect_all()
 
-        # No clients should be connected — the config was refused.
-        assert mgr.list_servers() == []
+        # The last trusted desired state remains visible for diagnostics, but
+        # the now-untrusted config must not result in a live connection.
+        assert mgr.list_servers() == [
+            {
+                "name": "srv",
+                "alive": False,
+                "tools": 0,
+                "desired": True,
+                "annotation_states": {},
+            }
+        ]
 
     def test_refuses_when_group_writable(self, tmp_path):
         """A group-writable config file must be silently skipped."""

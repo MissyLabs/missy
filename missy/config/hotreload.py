@@ -124,8 +124,10 @@ class ConfigWatcher:
             from missy.config.settings import load_config
 
             new_config = load_config(str(self._path))
-            if self._active_config is not None and _is_security_widening(
-                self._active_config, new_config
+            if (
+                self._active_config is not None
+                and self._active_config is not new_config
+                and _is_security_widening(self._active_config, new_config)
             ):
                 digest = candidate_config_digest(new_config)
                 if not self._consume_widening_approval(digest):
