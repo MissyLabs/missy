@@ -309,13 +309,18 @@ class TestDigestPinning:
 
     def test_digest_mismatch_disconnects_and_raises(self, tmp_path):
         cfg = tmp_path / "mcp.json"
-        cfg.write_text(json.dumps([{"name": "srv", "command": "echo", "digest": "sha256:wrong"}]))
+        cfg.write_text(
+            json.dumps([{"name": "srv", "command": "echo", "digest": "sha256:v2:wrong"}])
+        )
         cfg.chmod(0o600)
         mgr = McpManager(config_path=str(cfg))
         mc = _make_mock_client(tools=[{"name": "tool", "description": "T"}])
         with (
             patch("missy.mcp.manager.McpClient", return_value=mc),
-            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:actual"),
+            patch(
+                "missy.mcp.digest.compute_tool_manifest_digest",
+                return_value="sha256:v2:actual",
+            ),
             patch("missy.mcp.digest.verify_digest", return_value=False),
             patch("missy.core.events.event_bus"),
             pytest.raises(ValueError, match="digest mismatch"),
@@ -325,13 +330,18 @@ class TestDigestPinning:
 
     def test_digest_mismatch_does_not_add_to_clients(self, tmp_path):
         cfg = tmp_path / "mcp.json"
-        cfg.write_text(json.dumps([{"name": "srv", "command": "echo", "digest": "sha256:wrong"}]))
+        cfg.write_text(
+            json.dumps([{"name": "srv", "command": "echo", "digest": "sha256:v2:wrong"}])
+        )
         cfg.chmod(0o600)
         mgr = McpManager(config_path=str(cfg))
         mc = _make_mock_client(tools=[{"name": "t", "description": "T"}])
         with (
             patch("missy.mcp.manager.McpClient", return_value=mc),
-            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:actual"),
+            patch(
+                "missy.mcp.digest.compute_tool_manifest_digest",
+                return_value="sha256:v2:actual",
+            ),
             patch("missy.mcp.digest.verify_digest", return_value=False),
             patch("missy.core.events.event_bus"),
             pytest.raises(ValueError),

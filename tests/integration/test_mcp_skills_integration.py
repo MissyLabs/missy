@@ -470,7 +470,7 @@ class TestMcpDigestPinning:
         tools = [{"name": "ping", "description": "Ping"}]
         self._write_config(
             tmp_mcp_config,
-            [{"name": "srv", "command": "mcp-srv", "digest": "sha256:deadbeef00"}],
+            [{"name": "srv", "command": "mcp-srv", "digest": "sha256:v2:deadbeef00"}],
         )
         mock_client = _make_mock_client(tools=tools)
 
@@ -489,7 +489,7 @@ class TestMcpDigestPinning:
         tools = [{"name": "t", "description": "T"}]
         self._write_config(
             tmp_mcp_config,
-            [{"name": "srv", "command": "mcp-srv", "digest": "sha256:wrongdigest"}],
+            [{"name": "srv", "command": "mcp-srv", "digest": "sha256:v2:wrongdigest"}],
         )
         mock_client = _make_mock_client(tools=tools)
 
@@ -1186,7 +1186,7 @@ class TestToolExecutionAuditTrail:
         config_path = Path(tmp_mcp_config)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
-            json.dumps([{"name": "srv", "command": "c", "digest": "sha256:badhash"}])
+            json.dumps([{"name": "srv", "command": "c", "digest": "sha256:v2:badhash"}])
         )
         mock_client = _make_mock_client(tools=tools)
 

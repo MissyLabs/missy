@@ -337,12 +337,15 @@ class TestMcpDigestPinning:
         self, mcp_mgr: McpManager, tmp_mcp_config: Path
     ) -> None:
         tmp_mcp_config.write_text(
-            json.dumps([{"name": "srv", "command": "echo", "digest": "correct-hash"}])
+            json.dumps([{"name": "srv", "command": "echo", "digest": "sha256:v2:correct-hash"}])
         )
         mock_client = _make_mock_client(tools=[{"name": "t1"}])
         with (
             patch("missy.mcp.manager.McpClient", return_value=mock_client),
-            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="correct-hash"),
+            patch(
+                "missy.mcp.digest.compute_tool_manifest_digest",
+                return_value="sha256:v2:correct-hash",
+            ),
             patch("missy.mcp.digest.verify_digest", return_value=True),
         ):
             client = mcp_mgr.add_server("srv", command="echo")

@@ -673,7 +673,7 @@ class TestMcpDigestPinVerification:
         """When the stored digest matches the actual manifest, connection succeeds."""
         from missy.mcp.manager import McpManager
 
-        real_digest = "sha256:aabbccdd"
+        real_digest = "sha256:v2:aabbccdd"
         config = [{"name": "srv", "command": "echo", "digest": real_digest}]
         Path(tmp_mcp_config).write_text(json.dumps(config))
         os.chmod(tmp_mcp_config, 0o600)
@@ -698,7 +698,7 @@ class TestMcpDigestPinVerification:
         """When the stored digest does not match, the server is disconnected and ValueError raised."""
         from missy.mcp.manager import McpManager
 
-        config = [{"name": "srv", "command": "echo", "digest": "sha256:expected"}]
+        config = [{"name": "srv", "command": "echo", "digest": "sha256:v2:expected"}]
         Path(tmp_mcp_config).write_text(json.dumps(config))
         os.chmod(tmp_mcp_config, 0o600)
 
@@ -708,7 +708,10 @@ class TestMcpDigestPinVerification:
 
         with (
             patch("missy.mcp.manager.McpClient", return_value=mock_client),
-            patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:actual"),
+            patch(
+                "missy.mcp.digest.compute_tool_manifest_digest",
+                return_value="sha256:v2:actual",
+            ),
             patch("missy.mcp.digest.verify_digest", return_value=False),
             patch("missy.core.events.event_bus"),
             pytest.raises(ValueError, match="digest mismatch"),
@@ -732,13 +735,15 @@ class TestMcpDigestPinVerification:
         mock_client.tools = [{"name": "tool_a"}]
         mcp_manager._clients["pinme"] = mock_client
 
-        with patch("missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:newpin"):
+        with patch(
+            "missy.mcp.digest.compute_tool_manifest_digest", return_value="sha256:v2:newpin"
+        ):
             digest = mcp_manager.pin_server_digest("pinme")
 
-        assert digest == "sha256:newpin"
+        assert digest == "sha256:v2:newpin"
         saved = json.loads(Path(tmp_mcp_config).read_text())
         pinned_entry = next(e for e in saved if e["name"] == "pinme")
-        assert pinned_entry["digest"] == "sha256:newpin"
+        assert pinned_entry["digest"] == "sha256:v2:newpin"
 
 
 class TestMcpCallToolEdgeCases:
