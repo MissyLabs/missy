@@ -33,6 +33,7 @@ from missy.config.settings import (
     ShellPolicy,
 )
 from missy.core.events import event_bus
+from missy.mcp.annotations import ToolAnnotation
 from missy.mcp.digest import compute_tool_manifest_digest
 from missy.mcp.manager import McpManager
 from missy.policy.engine import init_policy_engine
@@ -396,6 +397,7 @@ class TestMcpToolNamespacing:
         assert "net__fetch" in names
 
     def test_call_tool_routes_to_correct_server(self, manager: McpManager) -> None:
+        manager._annotation_registry.register("svc_b__do_work", ToolAnnotation(read_only=True))
         client_a = _make_mock_client(tools=[])
         client_b = _make_mock_client(tools=[])
         client_a.call_tool.return_value = "result-from-a"
@@ -548,6 +550,10 @@ class TestMcpConcurrentToolCalls:
         manager._clients["worker"] = client
 
         n_threads = 20
+        for idx in range(n_threads):
+            manager._annotation_registry.register(
+                f"worker__tool_{idx}", ToolAnnotation(read_only=True)
+            )
         results: list[str] = []
         results_lock = threading.Lock()
 
@@ -567,6 +573,7 @@ class TestMcpConcurrentToolCalls:
 
     def test_concurrent_calls_to_different_servers(self, manager: McpManager) -> None:
         for name in ("srv_a", "srv_b", "srv_c"):
+            manager._annotation_registry.register(f"{name}__op", ToolAnnotation(read_only=True))
             c = _make_mock_client(tools=[])
             c.call_tool.return_value = f"ok-from-{name}"
             manager._clients[name] = c
