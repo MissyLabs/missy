@@ -23,21 +23,21 @@ import pytest
 class TestCostTrackerEdgeCases:
     """Edge cases in CostTracker."""
 
-    def test_unknown_model_zero_cost(self):
-        """Unknown model names should default to zero cost."""
+    def test_unknown_model_uses_conservative_cost(self):
+        """Unknown paid model names must not silently bypass budgets."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         rec = tracker.record(model="unknown-model", prompt_tokens=1000, completion_tokens=500)
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)
 
-    def test_empty_model_string(self):
-        """Empty model string should default to zero cost."""
+    def test_empty_model_string_uses_conservative_cost(self):
+        """Missing model metadata must not silently bypass budgets."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         rec = tracker.record(model="", prompt_tokens=1000, completion_tokens=500)
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)
 
     def test_claude_sonnet_pricing(self):
         """Claude sonnet model should use correct pricing."""
@@ -132,12 +132,12 @@ class TestCostTrackerEdgeCases:
         assert rec.cost_usd == 0.0
 
     def test_negative_tokens(self):
-        """Negative tokens should produce negative cost (no validation)."""
+        """Negative usage is invalid rather than reducing accumulated spend."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4", prompt_tokens=-100, completion_tokens=0)
-        assert rec.cost_usd < 0
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=-100, completion_tokens=0)
 
     def test_budget_enforcement_no_limit(self):
         """No budget limit (0) should never raise."""

@@ -223,21 +223,21 @@ class TestRecordKnownModels:
 
 
 # ---------------------------------------------------------------------------
-# 3. record() — unknown model falls back to zero cost
+# 3. record() — unknown model uses conservative pricing
 # ---------------------------------------------------------------------------
 
 
 class TestRecordUnknownModel:
-    def test_unknown_model_cost_is_zero(self):
+    def test_unknown_model_cost_is_conservative(self):
         rec = CostTracker().record(
             "my-custom-local-model-v99", prompt_tokens=5000, completion_tokens=2000
         )
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.3)
 
-    def test_unknown_model_total_cost_stays_zero(self):
+    def test_unknown_model_total_cost_is_conservative(self):
         tracker = CostTracker()
         tracker.record("mystery-model", prompt_tokens=10_000, completion_tokens=5000)
-        assert tracker.total_cost_usd == 0.0
+        assert tracker.total_cost_usd == pytest.approx(0.675)
 
     def test_unknown_model_still_accumulates_prompt_tokens(self):
         tracker = CostTracker()
@@ -256,12 +256,53 @@ class TestRecordUnknownModel:
 
     def test_empty_model_string_is_unknown(self):
         rec = CostTracker().record("", prompt_tokens=100, completion_tokens=50)
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.00675)
 
     def test_unknown_model_does_not_raise(self):
         """Calling record() on an unknown model must never raise."""
         tracker = CostTracker()
         tracker.record("totally-unknown-model-v99", prompt_tokens=1000, completion_tokens=500)
+
+
+class TestRestore:
+    def test_restores_persisted_totals_and_enforces_budget(self):
+        tracker = CostTracker(max_spend_usd=0.01)
+        tracker.restore(
+            [
+                {
+                    "model": "gpt-5.6-sol",
+                    "prompt_tokens": 1_000,
+                    "completion_tokens": 500,
+                    "cost_usd": 0.014,
+                }
+            ]
+        )
+        assert tracker.total_prompt_tokens == 1_000
+        assert tracker.total_completion_tokens == 500
+        assert tracker.total_cost_usd == pytest.approx(0.014)
+        with pytest.raises(BudgetExceededError):
+            tracker.check_budget()
+
+    @pytest.mark.parametrize("bad_cost", [float("nan"), float("inf"), -1.0])
+    def test_rejects_invalid_persisted_cost(self, bad_cost):
+        tracker = CostTracker(max_spend_usd=1.0)
+        with pytest.raises(ValueError, match="invalid values"):
+            tracker.restore(
+                [
+                    {
+                        "model": "gpt-5.6-sol",
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "cost_usd": bad_cost,
+                    }
+                ]
+            )
+
+    def test_fail_closed_marks_configured_budget_spent(self):
+        tracker = CostTracker(max_spend_usd=0.25)
+        tracker.fail_closed()
+        with pytest.raises(BudgetExceededError):
+            tracker.check_budget()
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +448,7 @@ class TestRecordFromResponseEdge:
         )
         rec = tracker.record_from_response(resp)
         assert rec is not None
-        assert rec.cost_usd == 0.0  # empty model → unknown pricing → zero cost
+        assert rec.cost_usd == pytest.approx(0.00675)
 
     def test_none_token_values_in_usage_do_not_raise(self):
         """None token values in usage dict are coerced to 0 via 'or 0'."""
@@ -946,9 +987,9 @@ class TestPricingTablePrefixMatching:
         assert inp_lower == inp_upper
         assert out_lower == out_upper
 
-    def test_completely_unknown_model_returns_zero(self):
+    def test_completely_unknown_model_returns_conservative_rates(self):
         inp, out = _lookup_pricing("some-completely-unknown-model")
-        assert inp == 0.0 and out == 0.0
+        assert inp == 0.03 and out == 0.075
 
     def test_gpt4_1_matches_gpt4_1_entry(self):
         """gpt-4.1 (base) matches the gpt-4.1 pricing entry."""

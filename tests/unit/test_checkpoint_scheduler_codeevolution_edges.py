@@ -137,7 +137,7 @@ class TestScanForRecoveryExceptions:
 
         mock_cm = MagicMock()
         mock_cm.abandon_old.return_value = 0
-        mock_cm.get_incomplete.return_value = [
+        mock_cm.get_recoverable.return_value = [
             {
                 "id": "cp1",
                 "session_id": "s1",

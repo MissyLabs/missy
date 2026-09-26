@@ -12,6 +12,7 @@ lines based on the full 451-line file):
 from __future__ import annotations
 
 import sqlite3
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,6 +40,12 @@ def clear_event_bus():
     event_bus.clear()
     yield
     event_bus.clear()
+
+
+def _expire_all(tmp_db: str) -> None:
+    with sqlite3.connect(tmp_db) as conn:
+        conn.execute("UPDATE checkpoints SET lease_expires_at=?", (time.time() - 1,))
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +163,8 @@ class TestScanForRecoveryAbandonOldFailure:
 
         mock_cm = MagicMock(spec=CheckpointManager)
         mock_cm.abandon_old.side_effect = RuntimeError("abandon blew up")
-        # get_incomplete must return the real records so we can verify continuation.
-        mock_cm.get_incomplete.return_value = cm_real.get_incomplete()
+        # get_recoverable must return records so we can verify continuation.
+        mock_cm.get_recoverable.return_value = cm_real.get_incomplete()
         mock_cm.classify.return_value = "resume"
 
         with patch("missy.agent.checkpoint.CheckpointManager", return_value=mock_cm):
@@ -165,8 +172,8 @@ class TestScanForRecoveryAbandonOldFailure:
 
         # Scan continued past the abandon_old failure.
         assert isinstance(results, list)
-        # get_incomplete was still called.
-        mock_cm.get_incomplete.assert_called_once()
+        # get_recoverable was still called.
+        mock_cm.get_recoverable.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +182,13 @@ class TestScanForRecoveryAbandonOldFailure:
 
 
 class TestScanForRecoveryGetIncompleteFailure:
-    """Lines 410-412: get_incomplete() raises → warning logged, return []."""
+    """A recoverable-query failure logs a warning and returns []."""
 
     def test_returns_empty_list_when_get_incomplete_raises(self, tmp_db):
         """get_incomplete() failure causes scan to return []."""
         mock_cm = MagicMock(spec=CheckpointManager)
         mock_cm.abandon_old.return_value = 0
-        mock_cm.get_incomplete.side_effect = sqlite3.OperationalError("table missing")
+        mock_cm.get_recoverable.side_effect = sqlite3.OperationalError("table missing")
 
         with patch("missy.agent.checkpoint.CheckpointManager", return_value=mock_cm):
             results = scan_for_recovery(db_path=tmp_db)
@@ -202,6 +209,7 @@ class TestScanForRecoveryAuditEmitFailure:
         cm_real = CheckpointManager(db_path=tmp_db)
         cm_real.create("sess-1", "task-1", "my prompt")
         cm_real.create("sess-2", "task-2", "other prompt")
+        _expire_all(tmp_db)
 
         with patch("missy.core.events.event_bus.publish", side_effect=RuntimeError("bus error")):
             results = scan_for_recovery(db_path=tmp_db)
@@ -214,6 +222,7 @@ class TestScanForRecoveryAuditEmitFailure:
         """RecoveryResult fields are correct even when audit emission fails."""
         cm_real = CheckpointManager(db_path=tmp_db)
         cm_real.create("my-session", "my-task", "the prompt text")
+        _expire_all(tmp_db)
 
         with patch("missy.core.events.event_bus.publish", side_effect=Exception("boom")):
             results = scan_for_recovery(db_path=tmp_db)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import tempfile
 import threading
@@ -119,7 +120,12 @@ class GlobalBudget:
         if not isinstance(data, dict):
             return self._fail_closed("not a JSON object")
         spent = data.get("spent", 0.0)
-        if isinstance(spent, bool) or not isinstance(spent, (int, float)) or spent < 0:
+        if (
+            isinstance(spent, bool)
+            or not isinstance(spent, (int, float))
+            or not math.isfinite(float(spent))
+            or spent < 0
+        ):
             return self._fail_closed(f"invalid spent value {spent!r}")
         return data
 
@@ -170,7 +176,8 @@ class GlobalBudget:
         except OSError:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            logger.debug("GlobalBudget: could not persist to %s", self._path, exc_info=True)
+            logger.error("GlobalBudget: could not persist to %s", self._path, exc_info=True)
+            raise
 
     def _current(self, data: dict, now: datetime) -> dict:
         """Return the record for the current period, resetting on rollover."""
@@ -187,6 +194,8 @@ class GlobalBudget:
 
     def record(self, cost_usd: float) -> None:
         """Add *cost_usd* to the current-period total; fire the alert on cross."""
+        if not math.isfinite(cost_usd):
+            raise ValueError("cost_usd must be finite")
         if not self.enabled or cost_usd <= 0:
             return
         with self._lock, self._cross_process_locked():
