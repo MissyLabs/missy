@@ -513,29 +513,26 @@ class TestGatewayClientThreadSafety:
 class TestCostTrackerEdgeCases:
     """CostTracker handles pathological token counts gracefully."""
 
-    def test_negative_prompt_tokens_does_not_crash(self):
+    def test_negative_prompt_tokens_are_rejected(self):
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4", prompt_tokens=-100, completion_tokens=50)
-        assert rec is not None
-        # Totals incorporate the negative value without raising.
-        assert tracker.total_prompt_tokens == -100
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=-100, completion_tokens=50)
 
-    def test_negative_completion_tokens_does_not_crash(self):
+    def test_negative_completion_tokens_are_rejected(self):
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4", prompt_tokens=100, completion_tokens=-50)
-        assert rec is not None
-        assert tracker.total_completion_tokens == -50
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=100, completion_tokens=-50)
 
-    def test_both_negative_tokens_does_not_crash(self):
+    def test_both_negative_tokens_are_rejected(self):
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="gpt-4o", prompt_tokens=-1, completion_tokens=-1)
-        assert rec is not None
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="gpt-4o", prompt_tokens=-1, completion_tokens=-1)
 
     def test_very_large_prompt_tokens(self):
         """Token counts in the billions should not raise OverflowError."""
@@ -624,12 +621,12 @@ class TestCostTrackerEdgeCases:
         rec = tracker.record(model="llama", prompt_tokens=0, completion_tokens=0)
         assert rec.cost_usd == 0.0
 
-    def test_unknown_model_records_zero_cost(self):
+    def test_unknown_model_records_conservative_cost(self):
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         rec = tracker.record(model="unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)
 
 
 # ---------------------------------------------------------------------------

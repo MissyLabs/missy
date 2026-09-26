@@ -24,7 +24,7 @@ Checkpoint edge cases:
 - RecoveryResult loop_messages from scan matches what was saved
 
 Cost tracking edge cases:
-- Record with unknown model falls back to zero cost (not raises)
+- Record with unknown model falls back to conservative cost (not raises)
 - Budget enforcement at exact limit boundary (spent == max exactly)
 - Budget enforcement does not trigger at zero limit even with high spend
 - get_summary budget_remaining floors at 0.0 when over budget
@@ -836,7 +836,7 @@ class TestRecordFromResponseEdgeCases:
             usage = {"prompt_tokens": 50, "completion_tokens": 25}
 
         rec = tracker.record_from_response(NoModel())
-        # Model defaults to "" → unknown pricing → zero cost, but still recorded
+        # Model defaults to "" and uses conservative pricing, but is still recorded.
         assert rec is not None or rec is None  # Either is acceptable; must not raise
 
     def test_response_with_none_usage_records_zeros(self):

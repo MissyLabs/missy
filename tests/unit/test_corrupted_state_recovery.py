@@ -401,12 +401,12 @@ class TestCostTrackerResilience:
     """Test cost tracker with edge case inputs."""
 
     def test_record_unknown_model(self):
-        """Unknown model uses zero pricing (no crash)."""
+        """Unknown model uses conservative pricing (no crash)."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker(max_spend_usd=100.0)
         tracker.record(model="unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
-        assert tracker.total_cost_usd == 0.0
+        assert tracker.total_cost_usd == 0.0675
 
     def test_record_zero_tokens(self):
         """Zero tokens recorded correctly."""

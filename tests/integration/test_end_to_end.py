@@ -564,11 +564,11 @@ class TestCostTrackerWithBudget:
         assert tracker.call_count == 2
         assert tracker.total_tokens == 1200
 
-    def test_unknown_model_records_zero_cost(self) -> None:
+    def test_unknown_model_records_conservative_cost(self) -> None:
         tracker = CostTracker()
         tracker.record("unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
 
-        assert tracker.total_cost_usd == 0.0
+        assert tracker.total_cost_usd == pytest.approx(0.0675)
         assert tracker.call_count == 1
 
     def test_check_budget_does_nothing_when_unlimited(self) -> None:

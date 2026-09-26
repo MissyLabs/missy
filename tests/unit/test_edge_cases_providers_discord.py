@@ -276,14 +276,13 @@ class TestCostTrackerEdgeCases:
         tracker.record(model="gpt-4", prompt_tokens=1_000_000, completion_tokens=1_000_000)
         # Should not raise — 0 means unlimited
 
-    def test_negative_token_count_handled(self) -> None:
-        """Negative token counts should not crash the tracker."""
+    def test_negative_token_count_rejected(self) -> None:
+        """Negative token counts cannot reduce tracked spend."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        tracker.record(model="gpt-4", prompt_tokens=-1, completion_tokens=-1)
-        summary = tracker.get_summary()
-        assert "total_cost_usd" in summary
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="gpt-4", prompt_tokens=-1, completion_tokens=-1)
 
     def test_unknown_model_uses_default_pricing(self) -> None:
         """Unknown model name should use fallback pricing, not crash."""
@@ -293,6 +292,7 @@ class TestCostTrackerEdgeCases:
         tracker.record(model="totally-made-up-model-xyz", prompt_tokens=100, completion_tokens=50)
         summary = tracker.get_summary()
         assert summary["total_tokens"] == 150
+        assert summary["total_cost_usd"] == pytest.approx(0.00675)
 
 
 # ---------------------------------------------------------------------------

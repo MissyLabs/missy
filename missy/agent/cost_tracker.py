@@ -170,6 +170,15 @@ class CostTracker:
         Returns:
             The :class:`UsageRecord` that was appended.
         """
+        if (
+            isinstance(prompt_tokens, bool)
+            or not isinstance(prompt_tokens, int)
+            or prompt_tokens < 0
+            or isinstance(completion_tokens, bool)
+            or not isinstance(completion_tokens, int)
+            or completion_tokens < 0
+        ):
+            raise ValueError("token counts must be non-negative integers")
         inp_rate, out_rate = _lookup_pricing(model)
         cost = (prompt_tokens / 1000.0) * inp_rate + (completion_tokens / 1000.0) * out_rate
         if not math.isfinite(cost) or cost < 0:

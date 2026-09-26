@@ -3,7 +3,7 @@
 Covers:
 1.  CostTracker init with various max_spend_usd values (0, None, positive)
 2.  record() with known models — verify correct cost computation
-3.  record() with unknown model — verify zero cost
+3.  record() with unknown model — verify conservative fallback cost
 4.  record_from_response() with valid CompletionResponse-like objects
 5.  record_from_response() with missing attributes / None usage
 6.  check_budget() — no raise when unlimited, under budget, raises when over
