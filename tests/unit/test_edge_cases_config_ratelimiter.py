@@ -534,9 +534,7 @@ class TestCostTrackerNegativeTokens:
 
         tracker = CostTracker(max_spend_usd=1.0)
         with pytest.raises(ValueError, match="non-negative"):
-            tracker.record(
-                model="claude-sonnet-4", prompt_tokens=-1_000_000, completion_tokens=0
-            )
+            tracker.record(model="claude-sonnet-4", prompt_tokens=-1_000_000, completion_tokens=0)
 
     def test_zero_token_record_returns_zero_cost(self) -> None:
         from missy.agent.cost_tracker import CostTracker
