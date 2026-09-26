@@ -123,27 +123,8 @@ class TestMemoryToolsWorkThroughRealDispatch:
         assert "session A" in result.content
         assert "session B" not in result.content
 
-    def test_memory_search_explicit_session_id_still_overridable(self, runtime_with_real_registry):
-        """The model may still explicitly request a different session's
-        history -- this is documented, intentional behavior for a
-        single-user local assistant retrieving related earlier context,
-        not a leak (the tool schema documents session_id as an explicit
-        opt-in override, and it is not the default).
-
-        This test previously asserted only
-        `"unique-marker-xyz" in result.content.lower()`, which is a
-        false-pass: the tool's own "No results found for
-        'unique-marker-xyz'." failure message echoes the query term, so
-        the assertion was trivially satisfied even while the override was
-        silently discarded and no session-B content was actually
-        retrieved (`_execute_tool()` stripped `session_id` from the tool
-        call's arguments -- to avoid colliding with the `session_id=`
-        kwarg passed to `registry.execute()` -- before the memory-tool
-        injection block ever saw it, so `_session_id` was always set to
-        the *current* session regardless of what the model requested).
-        Assert on the actual match content and the absence of the
-        no-results message so a regression is caught for real.
-        """
+    def test_memory_search_cannot_override_authenticated_session(self, runtime_with_real_registry):
+        """A model-selected session ID cannot cross a principal boundary."""
         runtime = runtime_with_real_registry
         runtime._memory_store.add_turn(
             ConversationTurn.new("sess-B", "user", "unique-marker-xyz in session B")
@@ -157,8 +138,14 @@ class TestMemoryToolsWorkThroughRealDispatch:
         result = runtime._execute_tool(tc, session_id="sess-A", task_id="task1")
 
         assert not result.is_error
-        assert "No results found" not in result.content
-        assert "session B" in result.content
+        assert "No results found" in result.content
+        assert "session B" not in result.content
+
+    def test_memory_tool_schema_does_not_expose_session_selector(self):
+        from missy.tools.builtin.memory_tools import MemorySearchTool
+
+        properties = MemorySearchTool().get_schema()["parameters"]["properties"]
+        assert "session_id" not in properties
 
 
 class TestMemoryStoreInjectionScopedToMemoryTools:

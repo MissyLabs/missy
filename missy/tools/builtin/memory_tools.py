@@ -11,9 +11,18 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult, current_tool_context
 
 logger = logging.getLogger(__name__)
+
+
+def _current_session_id(kwargs: dict[str, Any]) -> str:
+    """Return the runtime-authorized session, never a public model field."""
+    injected = str(kwargs.get("_session_id") or "")
+    if injected:
+        return injected
+    registry_session, _ = current_tool_context()
+    return str(registry_session or "")
 
 
 def _ok(text: str) -> ToolResult:
@@ -57,10 +66,6 @@ class MemorySearchTool(BaseTool):
                         "enum": ["messages", "summaries", "both"],
                         "description": "What to search: messages, summaries, or both.",
                     },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Restrict to a specific session. Empty = current session.",
-                    },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum results to return.",
@@ -73,7 +78,7 @@ class MemorySearchTool(BaseTool):
     def execute(self, **kwargs: Any) -> ToolResult:
         query = kwargs.get("query", "")
         scope = kwargs.get("scope", "both")
-        session_id = kwargs.get("session_id", "") or kwargs.get("_session_id", "")
+        session_id = _current_session_id(kwargs)
         limit = min(kwargs.get("limit", 10), 50)
 
         if not query:
@@ -82,6 +87,8 @@ class MemorySearchTool(BaseTool):
         store = kwargs.get("_memory_store")
         if store is None:
             return _err("Memory store is not available.")
+        if not session_id:
+            return _err("Current memory session is not available.")
 
         parts: list[str] = []
 
@@ -149,22 +156,25 @@ class MemoryDescribeTool(BaseTool):
 
     def execute(self, **kwargs: Any) -> ToolResult:
         item_id = kwargs.get("item_id", "")
+        session_id = _current_session_id(kwargs)
         if not item_id:
             return _err("item_id is required.")
 
         store = kwargs.get("_memory_store")
         if store is None:
             return _err("Memory store is not available.")
+        if not session_id:
+            return _err("Current memory session is not available.")
 
         if item_id.startswith("sum_"):
-            return self._describe_summary(store, item_id)
+            return self._describe_summary(store, item_id, session_id)
         if item_id.startswith("ref_"):
-            return self._describe_large_content(store, item_id)
+            return self._describe_large_content(store, item_id, session_id)
 
         return _err(f"Unknown ID format: {item_id}. Expected sum_* or ref_*.")
 
     @staticmethod
-    def _describe_summary(store: Any, summary_id: str) -> ToolResult:
+    def _describe_summary(store: Any, summary_id: str, session_id: str) -> ToolResult:
         # FX-C: a lookup exception must never be presented as "not found" --
         # those are different facts. A missing record means the ID is
         # genuinely absent; a raised exception means the lookup itself
@@ -178,8 +188,8 @@ class MemoryDescribeTool(BaseTool):
                 "This does not mean the ID does not exist -- the record's existence is "
                 "unverified. Retry or report the failure; do not claim the record is missing."
             )
-        if summary is None:
-            return _err(f"Summary '{summary_id}' not found.")
+        if summary is None or summary.session_id != session_id:
+            return _err(f"Summary '{summary_id}' not found in the current session.")
 
         lines = [
             f"## Summary: {summary.id}",
@@ -196,7 +206,11 @@ class MemoryDescribeTool(BaseTool):
             summary.content,
         ]
 
-        children = store.get_child_summaries(summary_id)
+        children = [
+            child
+            for child in store.get_child_summaries(summary_id)
+            if child.session_id == session_id
+        ]
         if children:
             lines.append("")
             lines.append(f"### Children ({len(children)})")
@@ -206,7 +220,7 @@ class MemoryDescribeTool(BaseTool):
         return _ok("\n".join(lines))
 
     @staticmethod
-    def _describe_large_content(store: Any, content_id: str) -> ToolResult:
+    def _describe_large_content(store: Any, content_id: str, session_id: str) -> ToolResult:
         try:
             record = store.get_large_content(content_id)
         except Exception as exc:
@@ -216,8 +230,8 @@ class MemoryDescribeTool(BaseTool):
                 "This does not mean the ID does not exist -- the record's existence is "
                 "unverified. Retry or report the failure; do not claim the record is missing."
             )
-        if record is None:
-            return _err(f"Large content '{content_id}' not found.")
+        if record is None or record.session_id != session_id:
+            return _err(f"Large content '{content_id}' not found in the current session.")
 
         lines = [
             f"## Large Content: {record.id}",
@@ -268,6 +282,7 @@ class MemoryExpandTool(BaseTool):
     def execute(self, **kwargs: Any) -> ToolResult:
         item_id = kwargs.get("item_id", "")
         max_tokens = min(kwargs.get("max_tokens", 4000), 20_000)
+        session_id = _current_session_id(kwargs)
 
         if not item_id:
             return _err("item_id is required.")
@@ -275,16 +290,20 @@ class MemoryExpandTool(BaseTool):
         store = kwargs.get("_memory_store")
         if store is None:
             return _err("Memory store is not available.")
+        if not session_id:
+            return _err("Current memory session is not available.")
 
         if item_id.startswith("ref_"):
-            return self._expand_large_content(store, item_id, max_tokens)
+            return self._expand_large_content(store, item_id, max_tokens, session_id)
         if item_id.startswith("sum_"):
-            return self._expand_summary(store, item_id, max_tokens)
+            return self._expand_summary(store, item_id, max_tokens, session_id)
 
         return _err(f"Unknown ID format: {item_id}. Expected sum_* or ref_*.")
 
     @staticmethod
-    def _expand_large_content(store: Any, content_id: str, max_tokens: int) -> ToolResult:
+    def _expand_large_content(
+        store: Any, content_id: str, max_tokens: int, session_id: str
+    ) -> ToolResult:
         try:
             record = store.get_large_content(content_id)
         except Exception as exc:
@@ -294,8 +313,8 @@ class MemoryExpandTool(BaseTool):
                 "This does not mean the ID does not exist -- the record's existence is "
                 "unverified. Retry or report the failure; do not claim the record is missing."
             )
-        if record is None:
-            return _err(f"Large content '{content_id}' not found.")
+        if record is None or record.session_id != session_id:
+            return _err(f"Large content '{content_id}' not found in the current session.")
 
         max_chars = max_tokens * 4
         content = record.content
@@ -310,7 +329,9 @@ class MemoryExpandTool(BaseTool):
         return _ok(result)
 
     @staticmethod
-    def _expand_summary(store: Any, summary_id: str, max_tokens: int) -> ToolResult:
+    def _expand_summary(
+        store: Any, summary_id: str, max_tokens: int, session_id: str
+    ) -> ToolResult:
         try:
             summary = store.get_summary_by_id(summary_id)
         except Exception as exc:
@@ -320,19 +341,23 @@ class MemoryExpandTool(BaseTool):
                 "This does not mean the ID does not exist -- the record's existence is "
                 "unverified. Retry or report the failure; do not claim the record is missing."
             )
-        if summary is None:
-            return _err(f"Summary '{summary_id}' not found.")
+        if summary is None or summary.session_id != session_id:
+            return _err(f"Summary '{summary_id}' not found in the current session.")
 
         parts: list[str] = [f"## Expanded: {summary_id} (depth={summary.depth})"]
         used_chars = 0
         max_chars = max_tokens * 4
 
         if summary.source_summary_ids:
-            children = store.get_child_summaries(summary_id)
+            children = [
+                child
+                for child in store.get_child_summaries(summary_id)
+                if child.session_id == session_id
+            ]
             if not children:
                 for sid in summary.source_summary_ids:
                     child = store.get_summary_by_id(sid)
-                    if child:
+                    if child and child.session_id == session_id:
                         children.append(child)
 
             for child in children:
@@ -344,7 +369,9 @@ class MemoryExpandTool(BaseTool):
                 used_chars += len(block)
 
         if summary.source_turn_ids:
-            source_turns = store.get_source_turns(summary_id)
+            source_turns = [
+                turn for turn in store.get_source_turns(summary_id) if turn.session_id == session_id
+            ]
             for turn in source_turns:
                 ts = turn.timestamp[:19] if turn.timestamp else "?"
                 block = f"\n[{ts}] {turn.role}: {turn.content}"
