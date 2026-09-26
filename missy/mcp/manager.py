@@ -446,9 +446,12 @@ class McpManager:
     def remove_server(self, name: str) -> None:
         with self._lock:
             client = self._clients.pop(name, None)
+        desired_servers = getattr(self, "_desired_servers", {})
+        if client is None and name not in desired_servers:
+            return
         if client:
             client.disconnect()
-        self._desired_servers.pop(name, None)
+        desired_servers.pop(name, None)
         self._live_server_fingerprints.pop(name, None)
         self._drop_server_annotations(name)
         self._save_config(remove_names={name})
