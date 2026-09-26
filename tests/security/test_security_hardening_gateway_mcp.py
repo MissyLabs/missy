@@ -324,6 +324,7 @@ class TestMcpConfigPermissions:
         """Config owned by a different uid must be silently skipped."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         mgr = McpManager(config_path=str(config))
 
@@ -378,6 +379,7 @@ class TestMcpConfigPermissions:
         """An OSError on stat must be caught and logged as a warning."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         mgr = McpManager(config_path=str(config))
 
@@ -408,6 +410,7 @@ class TestMcpConfigPermissions:
         """A warning must be emitted when the uid check fails."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         fake_stat = MagicMock()
         fake_stat.st_uid = 9999
