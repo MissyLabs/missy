@@ -81,6 +81,7 @@ class TestMemorySearchTool:
             query="kubernetes",
             scope="summaries",
             _memory_store=store,
+            _session_id="sess1",
         )
         assert result.success
         assert "Summaries" in result.output
@@ -88,13 +89,17 @@ class TestMemorySearchTool:
     def test_search_both(self, populated_store):
         store, _, _ = populated_store
         tool = MemorySearchTool()
-        result = tool.execute(query="kubernetes", scope="both", _memory_store=store)
+        result = tool.execute(
+            query="kubernetes", scope="both", _memory_store=store, _session_id="sess1"
+        )
         assert result.success
 
     def test_no_results(self, populated_store):
         store, _, _ = populated_store
         tool = MemorySearchTool()
-        result = tool.execute(query="zzznonexistent", scope="both", _memory_store=store)
+        result = tool.execute(
+            query="zzznonexistent", scope="both", _memory_store=store, _session_id="sess1"
+        )
         assert result.success
         assert "No results" in result.output
 
@@ -109,15 +114,17 @@ class TestMemorySearchTool:
         assert not result.success
         assert "not available" in result.error
 
-    def test_session_filter(self, populated_store):
+    def test_public_session_selector_is_ignored(self, populated_store):
         store, _, _ = populated_store
         tool = MemorySearchTool()
         result = tool.execute(
             query="kubernetes",
             session_id="nonexistent_session",
             _memory_store=store,
+            _session_id="sess1",
         )
-        assert "No results" in result.output
+        assert result.success
+        assert "kubernetes" in result.output.lower()
 
     def test_schema_does_not_claim_boolean_or_prefix_syntax_support(self):
         """The tool's own schema previously told the calling LLM that
@@ -148,6 +155,7 @@ class TestMemorySearchTool:
             query="kubernetes AND totally_absent_word_xyz",
             scope="messages",
             _memory_store=store,
+            _session_id="sess1",
         )
         assert result.success
         assert "No results" in result.output
@@ -157,7 +165,7 @@ class TestMemoryDescribeTool:
     def test_describe_summary(self, populated_store):
         store, sum_id, _ = populated_store
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id=sum_id, _memory_store=store)
+        result = tool.execute(item_id=sum_id, _memory_store=store, _session_id="sess1")
         assert result.success
         assert "Summary:" in result.output
         assert "Depth:" in result.output
@@ -166,26 +174,41 @@ class TestMemoryDescribeTool:
     def test_describe_large_content(self, populated_store):
         store, _, ref_id = populated_store
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id=ref_id, _memory_store=store)
+        result = tool.execute(item_id=ref_id, _memory_store=store, _session_id="sess1")
         assert result.success
         assert "Large Content:" in result.output
         assert "shell_exec" in result.output
 
+    def test_cannot_describe_another_sessions_record(self, populated_store):
+        store, sum_id, ref_id = populated_store
+        tool = MemoryDescribeTool()
+
+        summary = tool.execute(item_id=sum_id, _memory_store=store, _session_id="sess2")
+        content = tool.execute(item_id=ref_id, _memory_store=store, _session_id="sess2")
+
+        assert not summary.success
+        assert not content.success
+        assert "kubernetes" not in (summary.error or "").lower()
+
     def test_invalid_id(self, memory_store):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="bad_id", _memory_store=memory_store)
+        result = tool.execute(item_id="bad_id", _memory_store=memory_store, _session_id="sess1")
         assert not result.success
         assert "Unknown ID format" in result.error
 
     def test_missing_summary(self, memory_store):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="sum_nonexistent", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="sum_nonexistent", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
         assert "not found" in result.error
 
     def test_missing_ref(self, memory_store):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="ref_nonexistent", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="ref_nonexistent", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
         assert "not found" in result.error
 
@@ -194,26 +217,42 @@ class TestMemoryExpandTool:
     def test_expand_large_content(self, populated_store):
         store, _, ref_id = populated_store
         tool = MemoryExpandTool()
-        result = tool.execute(item_id=ref_id, max_tokens=1000, _memory_store=store)
+        result = tool.execute(
+            item_id=ref_id, max_tokens=1000, _memory_store=store, _session_id="sess1"
+        )
         assert result.success
         assert "Expanded:" in result.output
 
     def test_expand_large_content_truncated(self, populated_store):
         store, _, ref_id = populated_store
         tool = MemoryExpandTool()
-        result = tool.execute(item_id=ref_id, max_tokens=100, _memory_store=store)
+        result = tool.execute(
+            item_id=ref_id, max_tokens=100, _memory_store=store, _session_id="sess1"
+        )
         assert "TRUNCATED" in result.output
 
     def test_expand_summary(self, populated_store):
         store, sum_id, _ = populated_store
         tool = MemoryExpandTool()
-        result = tool.execute(item_id=sum_id, _memory_store=store)
+        result = tool.execute(item_id=sum_id, _memory_store=store, _session_id="sess1")
         assert result.success
         assert "Expanded:" in result.output
 
+    def test_cannot_expand_another_sessions_record(self, populated_store):
+        store, sum_id, ref_id = populated_store
+        tool = MemoryExpandTool()
+
+        summary = tool.execute(item_id=sum_id, _memory_store=store, _session_id="sess2")
+        content = tool.execute(item_id=ref_id, _memory_store=store, _session_id="sess2")
+
+        assert not summary.success
+        assert not content.success
+
     def test_expand_missing(self, memory_store):
         tool = MemoryExpandTool()
-        result = tool.execute(item_id="sum_nonexistent", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="sum_nonexistent", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
         assert "not found" in result.error
 
@@ -225,12 +264,16 @@ class TestMemoryExpandTool:
     def test_max_tokens_capped(self, populated_store):
         store, _, ref_id = populated_store
         tool = MemoryExpandTool()
-        result = tool.execute(item_id=ref_id, max_tokens=999999, _memory_store=store)
+        result = tool.execute(
+            item_id=ref_id, max_tokens=999999, _memory_store=store, _session_id="sess1"
+        )
         assert result.success
 
     def test_empty_db(self, memory_store):
         tool = MemoryExpandTool()
-        result = tool.execute(item_id="sum_anything", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="sum_anything", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
 
 
@@ -258,14 +301,18 @@ class _RaisingStore:
 class TestMemoryDescribeExceptionVsNotFound:
     def test_genuine_missing_summary_says_not_found(self, memory_store):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="sum_genuinely_absent", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="sum_genuinely_absent", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
         assert "not found" in result.error
         assert "internal error" not in result.error
 
     def test_lookup_exception_does_not_claim_not_found(self):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="sum_whatever", _memory_store=_RaisingStore())
+        result = tool.execute(
+            item_id="sum_whatever", _memory_store=_RaisingStore(), _session_id="sess1"
+        )
         assert not result.success
         assert "not found" not in result.error
         assert "internal error" in result.error
@@ -273,7 +320,9 @@ class TestMemoryDescribeExceptionVsNotFound:
 
     def test_lookup_exception_for_large_content_does_not_claim_not_found(self):
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id="ref_whatever", _memory_store=_RaisingStore())
+        result = tool.execute(
+            item_id="ref_whatever", _memory_store=_RaisingStore(), _session_id="sess1"
+        )
         assert not result.success
         assert "not found" not in result.error
         assert "internal error" in result.error
@@ -283,7 +332,7 @@ class TestMemoryDescribeExceptionVsNotFound:
         # stored content, not a paraphrase or reconstruction.
         store, sum_id, _ = populated_store
         tool = MemoryDescribeTool()
-        result = tool.execute(item_id=sum_id, _memory_store=store)
+        result = tool.execute(item_id=sum_id, _memory_store=store, _session_id="sess1")
         assert result.success
         assert "Discussion about kubernetes deployment issues" in result.output
 
@@ -291,14 +340,18 @@ class TestMemoryDescribeExceptionVsNotFound:
 class TestMemoryExpandExceptionVsNotFound:
     def test_genuine_missing_summary_says_not_found(self, memory_store):
         tool = MemoryExpandTool()
-        result = tool.execute(item_id="sum_genuinely_absent", _memory_store=memory_store)
+        result = tool.execute(
+            item_id="sum_genuinely_absent", _memory_store=memory_store, _session_id="sess1"
+        )
         assert not result.success
         assert "not found" in result.error
         assert "internal error" not in result.error
 
     def test_lookup_exception_does_not_claim_not_found(self):
         tool = MemoryExpandTool()
-        result = tool.execute(item_id="sum_whatever", _memory_store=_RaisingStore())
+        result = tool.execute(
+            item_id="sum_whatever", _memory_store=_RaisingStore(), _session_id="sess1"
+        )
         assert not result.success
         assert "not found" not in result.error
         assert "internal error" in result.error
@@ -306,7 +359,9 @@ class TestMemoryExpandExceptionVsNotFound:
 
     def test_lookup_exception_for_large_content_does_not_claim_not_found(self):
         tool = MemoryExpandTool()
-        result = tool.execute(item_id="ref_whatever", _memory_store=_RaisingStore())
+        result = tool.execute(
+            item_id="ref_whatever", _memory_store=_RaisingStore(), _session_id="sess1"
+        )
         assert not result.success
         assert "not found" not in result.error
         assert "internal error" in result.error

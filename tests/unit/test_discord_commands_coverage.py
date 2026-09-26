@@ -311,7 +311,7 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "user-alice")
+        mock_agent.run.assert_called_once_with("hi", "discord:user:user-alice:dm:unknown")
 
     @pytest.mark.asyncio
     async def test_two_different_users_get_two_different_session_ids(self):
@@ -329,7 +329,10 @@ class TestHandleAskSessionScopedPerUser:
         await _handle_ask(bob_interaction, channel)
 
         session_ids = [call.args[1] for call in mock_agent.run.call_args_list]
-        assert session_ids == ["user-alice", "user-bob"]
+        assert session_ids == [
+            "discord:user:user-alice:dm:unknown",
+            "discord:user:user-bob:dm:unknown",
+        ]
         assert session_ids[0] != session_ids[1]
 
     @pytest.mark.asyncio
@@ -344,7 +347,7 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "dm-carol")
+        mock_agent.run.assert_called_once_with("hi", "discord:user:dm-carol:dm:unknown")
 
     @pytest.mark.asyncio
     async def test_missing_author_falls_back_to_discord_literal(self):
@@ -360,7 +363,30 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "discord")
+        mock_agent.run.assert_called_once_with("hi", "discord:user:anonymous:dm:unknown")
+
+    @pytest.mark.asyncio
+    async def test_same_user_dm_and_guild_channel_have_distinct_sessions(self):
+        channel = _make_mock_channel()
+        mock_agent = MagicMock()
+        mock_agent.run.return_value = "reply"
+        channel._agent_runtime = mock_agent
+
+        dm = _make_interaction("ask", options=[{"name": "prompt", "value": "private"}])
+        dm["user"] = {"id": "user-alice"}
+        dm["channel_id"] = "dm-1"
+        guild = _make_interaction("ask", options=[{"name": "prompt", "value": "public"}])
+        guild["member"] = {"user": {"id": "user-alice"}}
+        guild["guild_id"] = "guild-1"
+        guild["channel_id"] = "channel-1"
+
+        await _handle_ask(dm, channel)
+        await _handle_ask(guild, channel)
+
+        assert [call.args[1] for call in mock_agent.run.call_args_list] == [
+            "discord:user:user-alice:dm:dm-1",
+            "discord:user:user-alice:guild:guild-1:channel:channel-1",
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -144,14 +144,15 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
     if agent is None:
         return "Agent runtime is not available. Please try again later."
 
-    # Scope the session per invoking user, matching the convention used
-    # by the regular MESSAGE_CREATE path (session keyed by Discord author
-    # ID). Previously this hardcoded session_id="discord" for every user
-    # in every guild, so every /ask interaction across the whole bot
-    # shared one conversation history -- one user's prompts and the
-    # agent's replies to them became context for every other user's
-    # /ask calls.
-    session_id = author_id or "discord"
+    # Use the same principal + location scope as MESSAGE_CREATE. A user's
+    # private DM, guild channels, and threads are independent histories.
+    from missy.channels.discord.session_scope import discord_session_id
+
+    session_id = discord_session_id(
+        author_id,
+        str(interaction.get("guild_id") or ""),
+        str(interaction.get("channel_id") or ""),
+    )
 
     try:
         loop = asyncio.get_running_loop()

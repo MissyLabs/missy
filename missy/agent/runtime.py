@@ -769,6 +769,11 @@ class AgentRuntime:
         self._cost_tracking_enabled = self._cost_tracker_module_available()
         self._cost_trackers: dict[str, Any] = {}
         self._cost_trackers_lock = threading.Lock()
+        # External calls sharing a durable session must observe and persist
+        # turns in order. Entries are reference-counted so inactive session
+        # locks do not accumulate forever on long-running shared runtimes.
+        self._session_run_locks: dict[str, list[Any]] = {}
+        self._session_run_locks_guard = threading.Lock()
         # Exact effective arguments for the latest successful still image in
         # each session. This grounds a later "same image / same seed" request
         # in trusted tool evidence rather than lossy assistant prose.
@@ -1032,6 +1037,50 @@ class AgentRuntime:
     # ------------------------------------------------------------------
 
     def run(
+        self,
+        user_input: str,
+        session_id: str | None = None,
+        _delegation_depth: int = 0,
+        *,
+        _explicit_tool_request_input: str | None = None,
+        _provider: str | None = None,
+        _capability_mode: str | None = None,
+    ) -> str:
+        """Run one externally ordered turn for *session_id*.
+
+        Independent sessions remain concurrent. Internal delegated workers
+        are already coordinated by their parent run and bypass this lock so a
+        parent waiting for children cannot deadlock itself.
+        """
+        run_kwargs = {
+            "session_id": session_id,
+            "_delegation_depth": _delegation_depth,
+            "_explicit_tool_request_input": _explicit_tool_request_input,
+            "_provider": _provider,
+            "_capability_mode": _capability_mode,
+        }
+        if session_id is None or _delegation_depth > 0:
+            return self._run_once(user_input, **run_kwargs)
+
+        key = str(session_id)
+        with self._session_run_locks_guard:
+            entry = self._session_run_locks.get(key)
+            if entry is None:
+                entry = [threading.RLock(), 0]
+                self._session_run_locks[key] = entry
+            entry[1] += 1
+        lock = entry[0]
+        lock.acquire()
+        try:
+            return self._run_once(user_input, **run_kwargs)
+        finally:
+            lock.release()
+            with self._session_run_locks_guard:
+                entry[1] -= 1
+                if entry[1] == 0 and self._session_run_locks.get(key) is entry:
+                    del self._session_run_locks[key]
+
+    def _run_once(
         self,
         user_input: str,
         session_id: str | None = None,
@@ -4062,25 +4111,11 @@ class AgentRuntime:
         # available" regardless of what was actually stored.
         if tool_call.name in _MEMORY_RETRIEVAL_TOOL_NAMES:
             tool_args = dict(tool_args)
-            tool_args.setdefault("_memory_store", self._memory_store)
-            # memory_search's own schema advertises a model-suppliable
-            # `session_id` argument to search a specific PAST session
-            # (MemorySearchTool.execute() reads
-            # `kwargs.get("session_id") or kwargs.get("_session_id")`, i.e.
-            # a model-supplied value should win over the current session).
-            # But the generic strip a few lines above already removed
-            # "session_id" from tool_args (to avoid colliding with the
-            # session_id= kwarg passed to registry.execute() below), and
-            # ToolRegistry.execute() strips it AGAIN before calling
-            # tool.execute() -- so the model's override could never
-            # reach the tool and every memory_search call was silently
-            # scoped to the current session regardless of what was
-            # requested. Recover the model's original value (if any)
-            # from the un-stripped tool_call.arguments and fold it into
-            # the internally-injected _session_id, which does survive
-            # both strip layers, preserving the same effective precedence.
-            requested_session_id = tool_call.arguments.get("session_id")
-            tool_args.setdefault("_session_id", requested_session_id or session_id)
+            # These are authorization inputs, not model arguments. Always
+            # overwrite any forged private values and never honor a
+            # model-selected session ID for cross-principal retrieval.
+            tool_args["_memory_store"] = self._memory_store
+            tool_args["_session_id"] = session_id
 
         if tool_call.name == "context_shunt":
             tool_args = dict(tool_args)

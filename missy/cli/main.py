@@ -583,9 +583,9 @@ def _discord_remember_channel_message(
 ) -> None:
     """Record one message spoken in *channel_id*, for cross-user channel context.
 
-    Missy's Discord sessions are keyed per-author (see ``session_id =
-    author_id`` in the message loop), so by default her memory of "what
-    was just discussed" for a given reply is scoped to that one user --
+    Missy's Discord sessions are keyed per principal and channel location,
+    so by default her durable memory of "what was just discussed" for a
+    given reply is scoped to that one user in that location --
     a second person commenting on a first person's earlier exchange gets
     a reply from an agent with no idea the earlier exchange happened,
     even though both messages are sitting in the same public channel
@@ -3661,7 +3661,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             # tested) for the actual logic.
             _discord_known_users: dict[str, dict[str, str]] = {}
 
-            # Discord sessions are keyed per-author (see session_id below),
+            # Discord sessions are keyed per principal and channel location,
             # so without this a reply to one user has no idea what was just
             # said to a different user in the very same, publicly-readable
             # channel (e.g. user A asks about cats, Missy answers, user B
@@ -3689,9 +3689,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         author_meta.get("global_name") or author_meta.get("username") or "someone"
                     )
                     safe_author_display = _discord_safe_context_text(author_display)
-                    session_id = author_id or "discord"
                     channel_id = msg.metadata.get("discord_channel_id", "")
                     guild_id = msg.metadata.get("discord_guild_id", "")
+                    from missy.channels.discord.session_scope import discord_session_id
+
+                    session_id = discord_session_id(author_id, guild_id, channel_id)
 
                     if author_id:
                         _discord_remember_speaker(

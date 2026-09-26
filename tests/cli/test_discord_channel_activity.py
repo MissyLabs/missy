@@ -1,8 +1,8 @@
 """Tests for the Discord cross-user channel-activity helpers in missy/cli/main.py.
 
-Discord sessions are keyed per-author (``session_id = author_id or "discord"``
-in the message loop), so by default Missy's per-turn memory of "what was just
-discussed" is scoped to the one user currently speaking -- a second user
+Discord sessions are keyed per principal and channel location, so by default
+Missy's durable memory of "what was just discussed" is scoped to the one user
+currently speaking in that location -- a second user
 commenting on a first user's earlier exchange in the *same, publicly-readable*
 channel gets a reply from an agent with no idea the earlier exchange ever
 happened. These two pure functions close that gap with a bounded,
