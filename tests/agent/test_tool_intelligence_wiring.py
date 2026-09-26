@@ -280,7 +280,7 @@ class TestCandidateRuntimeLoading:
 
         loader_cls.assert_not_called()
 
-    def test_runtime_loader_runs_once_when_enabled(self) -> None:
+    def test_runtime_loader_reconciles_on_every_tool_resolution(self) -> None:
         t_calc = MagicMock()
         t_calc.name = "calculator"
 
@@ -306,9 +306,9 @@ class TestCandidateRuntimeLoading:
             runtime._get_tools()
             runtime._get_tools()
 
-        mock_loader.load_enabled.assert_called_once_with("mock")
+        assert mock_loader.load_enabled.call_args_list == [call("mock"), call("mock")]
 
-    def test_runtime_loader_runs_once_for_each_subagent_provider(self) -> None:
+    def test_runtime_loader_reconciles_each_subagent_provider_call(self) -> None:
         tool_reg = MagicMock()
         tool_reg.list_tools.return_value = []
         tool_reg.is_enabled.return_value = True
@@ -331,4 +331,8 @@ class TestCandidateRuntimeLoading:
             runtime._get_tools(provider_name="openai")
             runtime._get_tools(provider_name="acpx")
 
-        assert mock_loader.load_enabled.call_args_list == [call("acpx"), call("openai")]
+        assert mock_loader.load_enabled.call_args_list == [
+            call("acpx"),
+            call("openai"),
+            call("acpx"),
+        ]

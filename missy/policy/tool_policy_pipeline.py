@@ -271,6 +271,14 @@ class ToolPolicyLayer:
     allow: Sequence[str] = ()
     deny: Sequence[str] = ()
     also_allow: Sequence[str] = ()
+    # Capability modes are security boundaries, not ordinary composable
+    # policy layers.  A later ``also_allow`` may widen an operator-authored
+    # layer, but it must never escape the mode selected for the request.
+    capability_ceiling: bool = False
+    # Curated capability profiles must fail closed when none of their
+    # allow-list entries exist in the current registry.  Ordinary plugin
+    # policy keeps the historical warn-and-preserve behavior.
+    fail_closed_allow: bool = False
 
     @classmethod
     def from_mapping(cls, label: str, data: Mapping[str, object]) -> ToolPolicyLayer:
@@ -309,20 +317,43 @@ class ToolPolicyDecision:
         return tuple(step.label for step in self.trace)
 
 
-def profile_layer(profile: ToolPolicyProfile, *, label: str | None = None) -> ToolPolicyLayer:
+def profile_layer(
+    profile: ToolPolicyProfile,
+    *,
+    label: str | None = None,
+    capability_ceiling: bool = False,
+    fail_closed_allow: bool = False,
+) -> ToolPolicyLayer:
     """Return the built-in profile layer for *profile*."""
-    return ToolPolicyLayer(label=label or f"profile:{profile}", allow=PROFILE_SPECS[profile])
+    return ToolPolicyLayer(
+        label=label or f"profile:{profile}",
+        allow=PROFILE_SPECS[profile],
+        capability_ceiling=capability_ceiling,
+        fail_closed_allow=fail_closed_allow,
+    )
 
 
 def layers_for_capability_mode(mode: str) -> tuple[ToolPolicyLayer, ...]:
     """Translate Missy's runtime capability mode into pipeline layers."""
     normalized = (mode or "full").strip().lower()
     if normalized == "no-tools":
-        return (ToolPolicyLayer(label="profile:no-tools", deny=("*",)),)
+        return (
+            ToolPolicyLayer(
+                label="profile:no-tools",
+                deny=("*",),
+                capability_ceiling=True,
+            ),
+        )
     if normalized not in CAPABILITY_MODE_PROFILES:
         raise ValueError(f"Unknown capability mode: {mode!r}")
     profile = CAPABILITY_MODE_PROFILES[normalized]
-    return (profile_layer(profile),)
+    return (
+        profile_layer(
+            profile,
+            capability_ceiling=normalized in {"safe-chat", "discord"},
+            fail_closed_allow=normalized in {"safe-chat", "discord"},
+        ),
+    )
 
 
 def build_configured_tool_policy_layers(
@@ -427,6 +458,7 @@ def resolve_tool_policy(
     """
     all_tools = tuple(dict.fromkeys(str(name) for name in available_tools if str(name)))
     current = all_tools
+    capability_ceiling: frozenset[str] | None = None
     trace: list[ToolPolicyTraceStep] = []
     warnings: list[str] = []
     group_map = dict(DEFAULT_TOOL_GROUPS)
@@ -446,6 +478,7 @@ def resolve_tool_policy(
                 all_tools,
                 inline_allow,
                 group_map,
+                fail_closed=layer.fail_closed_allow,
             )
             trace.append(step)
             warnings.extend(step.warnings)
@@ -465,6 +498,24 @@ def resolve_tool_policy(
             current, step = _apply_deny(layer.label, current, all_tools, deny_specs, group_map)
             trace.append(step)
             warnings.extend(step.warnings)
+
+        if layer.capability_ceiling:
+            capability_ceiling = frozenset(current)
+
+    if capability_ceiling is not None:
+        before = current
+        current = tuple(name for name in current if name in capability_ceiling)
+        if current != before:
+            trace.append(
+                ToolPolicyTraceStep(
+                    label="capability:ceiling",
+                    operation="ceiling",
+                    patterns=tuple(capability_ceiling),
+                    matched=tuple(capability_ceiling),
+                    before=before,
+                    after=current,
+                )
+            )
 
     for warning in warnings:
         logger.warning("Tool policy warning: %s", warning)
@@ -612,10 +663,16 @@ def _apply_allow(
     all_tools: tuple[str, ...],
     specs: Sequence[str],
     groups: Mapping[str, Sequence[str]],
+    *,
+    fail_closed: bool = False,
 ) -> tuple[tuple[str, ...], ToolPolicyTraceStep]:
     before = current
     matched, expanded, warnings = _match_specs(specs, all_tools, groups, warn_unknown=True)
-    after = tuple(name for name in current if name in matched) if matched else current
+    after = (
+        tuple(name for name in current if name in matched)
+        if matched
+        else (() if fail_closed else current)
+    )
     return after, ToolPolicyTraceStep(
         label=label,
         operation=operation,

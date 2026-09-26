@@ -48,6 +48,27 @@ def test_also_allow_can_restore_tools_after_a_restrictive_layer():
     assert decision.trace[-1].operation == "also_allow"
 
 
+def test_no_tools_capability_is_a_hard_ceiling() -> None:
+    layers = build_configured_tool_policy_layers(
+        capability_mode="no-tools",
+        global_policy={"also_allow": ["file_delete"]},
+    )
+
+    decision = resolve_tool_policy(["file_delete"], layers)
+
+    assert decision.tools == ()
+    assert decision.trace[-1].operation == "ceiling"
+
+
+def test_safe_chat_sparse_registry_fails_closed() -> None:
+    decision = resolve_tool_policy(
+        ["file_delete"],
+        layers_for_capability_mode("safe-chat"),
+    )
+
+    assert decision.tools == ()
+
+
 def test_unknown_plugin_only_allowlist_warns_without_hiding_core_tools():
     decision = resolve_tool_policy(
         ["calculator", "file_read"],
