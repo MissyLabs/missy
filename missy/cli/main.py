@@ -3454,7 +3454,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 _raw_cfg = _yaml.safe_load(_fh) or {}
         _voice_cfg = _raw_cfg.get("voice", {})
 
-        if _voice_cfg.get("enabled", True):
+        from missy.config.settings import _coerce_bool
+
+        if _coerce_bool(_voice_cfg.get("enabled"), True):
             import os as _os
 
             from missy.channels.voice.channel import VoiceChannel
@@ -3469,11 +3471,14 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             _os.environ["LD_LIBRARY_PATH"] = _ld
 
             voice_channel = VoiceChannel(
-                host=_voice_cfg.get("host", "0.0.0.0"),
+                host=_voice_cfg.get("host", "127.0.0.1"),
                 port=_voice_cfg.get("port", 8765),
                 stt_model=_voice_cfg.get("stt", {}).get("model", "base.en"),
                 tts_voice=_voice_cfg.get("tts", {}).get("voice", "en_US-lessac-medium"),
-                debug_transcripts=_voice_cfg.get("debug_transcripts", False),
+                debug_transcripts=_coerce_bool(_voice_cfg.get("debug_transcripts"), False),
+                tls_certfile=str(_voice_cfg.get("tls_certfile", "") or ""),
+                tls_keyfile=str(_voice_cfg.get("tls_keyfile", "") or ""),
+                allow_insecure_remote=_coerce_bool(_voice_cfg.get("allow_insecure_remote"), False),
             )
             # A dedicated capability_mode="safe-chat" runtime for edge nodes
             # configured via `missy devices policy <id> --mode safe-chat`.
@@ -3489,9 +3494,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             )
             _voice_safe_chat_agent = AgentRuntime(_voice_safe_chat_agent_cfg)
             voice_channel.start(_agent, safe_chat_agent_runtime=_voice_safe_chat_agent)
-            _vc_host = _voice_cfg.get("host", "0.0.0.0")
+            _vc_host = _voice_cfg.get("host", "127.0.0.1")
             _vc_port = _voice_cfg.get("port", 8765)
-            console.print(f"[green]Voice channel started[/] on ws://{_vc_host}:{_vc_port}")
+            _vc_scheme = "wss" if _voice_cfg.get("tls_certfile") else "ws"
+            console.print(
+                f"[green]Voice channel started[/] on {_vc_scheme}://{_vc_host}:{_vc_port}"
+            )
     except Exception as _ve:
         console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
         logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
@@ -3803,6 +3811,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 enriched_prompt,
                                 session_id,
                                 _explicit_tool_request_input=msg.content,
+                                _capability_mode=msg.metadata.get(
+                                    "discord_capability_mode", "discord"
+                                ),
                             ),
                         )
                     except ProviderError as exc:
@@ -4382,14 +4393,20 @@ def doctor(ctx: click.Context) -> None:
             raw_cfg = yaml.safe_load(config_path.read_text()) or {}
         voice_cfg = raw_cfg.get("voice", {})
         if voice_cfg:
-            voice_host = voice_cfg.get("host", "0.0.0.0")
+            voice_host = voice_cfg.get("host", "127.0.0.1")
             voice_port = voice_cfg.get("port", 8765)
             stt_engine = voice_cfg.get("stt", {}).get("engine", "none")
             tts_engine = voice_cfg.get("tts", {}).get("engine", "none")
+            has_tls = bool(voice_cfg.get("tls_certfile") and voice_cfg.get("tls_keyfile"))
+            is_loopback = voice_host in {"127.0.0.1", "::1", "localhost"}
+            insecure_remote = not is_loopback and not has_tls
+            voice_status = warn if insecure_remote else ok
+            transport = "wss" if has_tls else "ws"
             table.add_row(
                 "voice channel",
-                ok,
-                f"{voice_host}:{voice_port} stt={stt_engine} tts={tts_engine}",
+                voice_status,
+                f"{transport}://{voice_host}:{voice_port} stt={stt_engine} tts={tts_engine}"
+                + (" INSECURE REMOTE BIND" if insecure_remote else ""),
             )
         else:
             table.add_row("voice channel", Text("disabled", style="dim"), "not configured")
@@ -5541,9 +5558,15 @@ def mcp_list(ctx: click.Context) -> None:
     table.add_column("Name", style="bold")
     table.add_column("Alive", justify="center")
     table.add_column("Tools", justify="right")
+    table.add_column("Annotation status")
     for s in servers:
         alive = Text("yes", style="green") if s["alive"] else Text("no", style="red")
-        table.add_row(s["name"], alive, str(s["tools"]))
+        states = s.get("annotation_states", {})
+        cautious = sorted(name for name, state in states.items() if state != "declared")
+        annotation_status = (
+            f"cautious: {', '.join(cautious)}" if cautious else ("declared" if states else "n/a")
+        )
+        table.add_row(s["name"], alive, str(s["tools"]), annotation_status)
     console.print(table)
     mgr.shutdown()
 
@@ -5858,7 +5881,7 @@ def voice_status(ctx: click.Context) -> None:
         except Exception:
             logger.debug("voice status: failed to load voice config", exc_info=True)
 
-    host = voice_cfg.get("host", "0.0.0.0")
+    host = voice_cfg.get("host", "127.0.0.1")
     port = voice_cfg.get("port", 8765)
     stt_engine = voice_cfg.get("stt", {}).get("engine", "faster-whisper")
     stt_model = voice_cfg.get("stt", {}).get("model", "base.en")
@@ -5872,7 +5895,10 @@ def voice_status(ctx: click.Context) -> None:
     table = Table(title="Voice Channel Status", show_lines=True)
     table.add_column("Setting", style="bold")
     table.add_column("Value")
-    table.add_row("Gateway", f"{host}:{port}")
+    scheme = "wss" if voice_cfg.get("tls_certfile") else "ws"
+    table.add_row("Gateway", f"{scheme}://{host}:{port}")
+    if host not in {"127.0.0.1", "::1", "localhost"} and scheme == "ws":
+        table.add_row("Transport security", "WARNING: plaintext remote bind")
     table.add_row("STT Engine", stt_engine)
     table.add_row("STT Model", stt_model)
     table.add_row("TTS Engine", tts_engine)

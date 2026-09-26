@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import patch
 
-from missy.scheduler.jobs import ScheduledJob
+import pytest
+
+from missy.core.exceptions import PolicyViolationError
+from missy.scheduler.jobs import ScheduledJob, classify_retry_error
 
 
 class TestShouldRunNow:
@@ -49,11 +52,11 @@ class TestShouldRunNow:
 class TestShouldRetry:
     def test_retry_allowed_when_under_max(self):
         job = ScheduledJob(max_attempts=3, consecutive_failures=1)
-        assert job.should_retry("some error") is True
+        assert job.should_retry("network error") is True
 
     def test_retry_allowed_at_zero_failures(self):
         job = ScheduledJob(max_attempts=3, consecutive_failures=0)
-        assert job.should_retry("error") is True
+        assert job.should_retry(ConnectionError("offline")) is True
 
     def test_retry_denied_at_max(self):
         job = ScheduledJob(max_attempts=3, consecutive_failures=3)
@@ -65,9 +68,22 @@ class TestShouldRetry:
 
     def test_retry_with_single_attempt(self):
         job = ScheduledJob(max_attempts=1, consecutive_failures=0)
-        assert job.should_retry("error") is True
+        assert job.should_retry("provider error") is True
         job.consecutive_failures = 1
         assert job.should_retry("error") is False
+
+    def test_unlisted_error_category_is_not_retried(self):
+        job = ScheduledJob(retry_on=["network"])
+        assert job.should_retry(ValueError("bad input")) is False
+
+    def test_policy_and_validation_are_stable_categories(self):
+        assert classify_retry_error(ValueError("bad input")) == "validation"
+        denied = PolicyViolationError("denied", category="tool", detail="test")
+        assert classify_retry_error(denied) == "policy_denied"
+
+    def test_unknown_configured_category_is_rejected(self):
+        with pytest.raises(ValueError, match="Unknown scheduler retry category"):
+            ScheduledJob(retry_on=["netwrok"])
 
 
 class TestRetryFieldsRoundTrip:

@@ -72,6 +72,14 @@ class FilesystemPolicyEngine:
             PolicyViolationError: When the path is not permitted.
         """
         resolved = self._resolve(path)
+        protected = self._is_under_path(resolved, self._policy.protected_write_paths)
+        if protected:
+            self._emit_event("write", str(resolved), "deny", protected, session_id, task_id)
+            raise PolicyViolationError(
+                f"Filesystem write denied: {str(path)!r} is an operator-protected path.",
+                category="filesystem",
+                detail=f"Resolved path {str(resolved)!r} is protected by {protected!r}.",
+            )
         rule = self._is_under_path(resolved, self._policy.allowed_write_paths)
         if rule:
             self._emit_event("write", str(resolved), "allow", rule, session_id, task_id)
@@ -117,6 +125,16 @@ class FilesystemPolicyEngine:
             category="filesystem",
             detail=(f"Resolved path {str(resolved)!r} is not under any allowed_read_paths entry."),
         )
+
+    def is_write_protected(self, path: str | Path) -> bool:
+        """Return whether *path* is inside an operator-protected write path."""
+        resolved = self._resolve(path)
+        return self._is_under_path(resolved, self._policy.protected_write_paths) is not None
+
+    @property
+    def protected_write_paths(self) -> tuple[str, ...]:
+        """Resolved operator paths that shell isolation must mount read-only."""
+        return tuple(self._policy.protected_write_paths)
 
     # ------------------------------------------------------------------
     # Private helpers

@@ -313,7 +313,7 @@ class TestGetStatus:
         assert server.get_status()["running"] is True
 
     def test_status_reflects_custom_host(self) -> None:
-        server = _make_server(host="0.0.0.0")
+        server = _make_server(host="0.0.0.0", allow_insecure_remote=True)
         assert server.get_status()["host"] == "0.0.0.0"
 
     def test_status_reflects_custom_port(self) -> None:
@@ -452,7 +452,7 @@ class TestStartLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_with_0000_host_emits_bind_warning(self) -> None:
-        server = _make_server(host="0.0.0.0")
+        server = _make_server(host="0.0.0.0", allow_insecure_remote=True)
 
         with (
             patch("missy.channels.voice.server._ws_serve", side_effect=_fake_serve),
@@ -465,7 +465,7 @@ class TestStartLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_with_0000_host_bind_warning_includes_host_port(self) -> None:
-        server = _make_server(host="0.0.0.0", port=1234)
+        server = _make_server(host="0.0.0.0", port=1234, allow_insecure_remote=True)
 
         with (
             patch("missy.channels.voice.server._ws_serve", side_effect=_fake_serve),

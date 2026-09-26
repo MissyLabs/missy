@@ -9,7 +9,7 @@ import pytest
 from missy.config.settings import ShellPolicy
 from missy.core.events import event_bus
 from missy.core.exceptions import PolicyViolationError
-from missy.policy.shell import ShellPolicyEngine
+from missy.policy.shell import ShellPolicyEngine, ShellRedirectParseError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -551,9 +551,23 @@ class TestExtractRedirectTargets:
         assert writes == []
         assert reads == []
 
-    def test_malformed_quoting_returns_empty_not_raises(self):
+    def test_malformed_quoting_fails_closed(self):
         engine = make_engine(commands=["echo"])
-        # Unbalanced quote -- check_command's own tokenisation already
-        # denies this command before redirect extraction is reached; this
-        # method itself must degrade gracefully rather than raising.
-        assert engine.extract_redirect_targets("echo 'unterminated") == ([], [])
+        with pytest.raises(ShellRedirectParseError):
+            engine.extract_redirect_targets("echo 'unterminated")
+
+    def test_combined_redirect_to_path_is_a_write(self):
+        engine = make_engine(commands=["echo"])
+        writes, reads = engine.extract_redirect_targets("echo x >&/tmp/out.txt")
+        assert writes == ["/tmp/out.txt"]
+        assert reads == []
+
+    def test_malformed_redirect_operator_fails_closed(self):
+        engine = make_engine(commands=["echo"])
+        with pytest.raises(ShellRedirectParseError):
+            engine.extract_redirect_targets("echo x >>&/tmp/out.txt")
+
+    def test_missing_redirect_target_fails_closed(self):
+        engine = make_engine(commands=["echo"])
+        with pytest.raises(ShellRedirectParseError):
+            engine.extract_redirect_targets("echo x >")

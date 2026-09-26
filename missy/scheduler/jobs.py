@@ -12,6 +12,37 @@ from typing import Any
 # deliberately excluded -- it's a channel-specific mode, not appropriate
 # for an unattended scheduler run.
 VALID_CAPABILITY_MODES: tuple[str, ...] = ("full", "safe-chat", "no-tools")
+VALID_RETRY_CATEGORIES: frozenset[str] = frozenset(
+    {"network", "timeout", "rate_limit", "provider_error", "policy_denied", "validation", "unknown"}
+)
+
+
+def classify_retry_error(error: BaseException | str) -> str:
+    """Classify a scheduler failure into a stable retry policy category."""
+    from missy.core.exceptions import PolicyViolationError
+
+    if isinstance(error, PolicyViolationError):
+        return "policy_denied"
+    if isinstance(error, (ValueError, TypeError)):
+        return "validation"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, (ConnectionError, OSError)):
+        return "network"
+    cls_name = type(error).__name__.lower() if isinstance(error, BaseException) else ""
+    module = type(error).__module__.lower() if isinstance(error, BaseException) else ""
+    text = str(error).lower()
+    if "ratelimit" in cls_name or "rate limit" in text or "429" in text:
+        return "rate_limit"
+    if "timeout" in cls_name or "timed out" in text:
+        return "timeout"
+    if "provider" in cls_name or ".providers" in module or "provider error" in text:
+        return "provider_error"
+    if any(
+        marker in text for marker in ("connection reset", "connection refused", "dns", "network")
+    ):
+        return "network"
+    return "unknown"
 
 
 @dataclass
@@ -108,6 +139,13 @@ class ScheduledJob:
     total_cost_usd: float = 0.0
     last_duration_seconds: float = 0.0
 
+    def __post_init__(self) -> None:
+        normalized = [str(item).strip().lower() for item in self.retry_on]
+        unknown = sorted(set(normalized) - VALID_RETRY_CATEGORIES)
+        if unknown:
+            raise ValueError(f"Unknown scheduler retry category: {', '.join(unknown)}")
+        self.retry_on = normalized
+
     # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
@@ -146,21 +184,22 @@ class ScheduledJob:
 
         return start <= now <= end
 
-    def should_retry(self, error: str) -> bool:  # noqa: ARG002
+    def should_retry(self, error: BaseException | str) -> bool:
         """Return ``True`` if this job should be retried after *error*.
 
-        Retry is allowed when :attr:`consecutive_failures` has not yet reached
-        :attr:`max_attempts`.  The *error* string is accepted for API
-        compatibility but is not currently used to gate retry decisions —
-        all error types are retried up to the maximum.
+        Retry is allowed only while attempts remain and the structured error
+        category is explicitly listed in :attr:`retry_on`.
 
         Args:
-            error: String representation of the exception that caused the failure.
+            error: Exception (preferred) or legacy error text that caused the failure.
 
         Returns:
             ``True`` when a retry should be attempted, ``False`` otherwise.
         """
-        return not self.consecutive_failures >= self.max_attempts
+        if self.consecutive_failures >= self.max_attempts:
+            return False
+        category = classify_retry_error(error)
+        return category in {str(item).strip().lower() for item in self.retry_on}
 
     # ------------------------------------------------------------------
     # Serialisation

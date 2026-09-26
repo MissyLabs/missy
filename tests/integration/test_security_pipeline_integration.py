@@ -744,7 +744,7 @@ class TestConfigHotReload:
         from missy.config.hotreload import ConfigWatcher
 
         config_file = tmp_path / "config.yaml"
-        config_file.write_text("shell:\n  enabled: false\n")
+        config_file.write_text("shell:\n  enabled: true\n")
         # Restrict to owner-read/write only so the safety check passes
         config_file.chmod(0o600)
 
@@ -765,7 +765,7 @@ class TestConfigHotReload:
         try:
             # Modify the file to trigger a change; preserve safe permissions
             time.sleep(0.1)
-            config_file.write_text("shell:\n  enabled: true\n")
+            config_file.write_text("shell:\n  enabled: false\n")
             config_file.chmod(0o600)
             # Wait for the poll cycle + debounce window
             time.sleep(0.5)

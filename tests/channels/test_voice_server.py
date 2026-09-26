@@ -89,6 +89,7 @@ def _make_server(
     host: str = "127.0.0.1",
     debug_transcripts: bool = False,
     agent_response: str = "I am Missy.",
+    allow_insecure_remote: bool = False,
 ) -> VoiceServer:
     registry = MagicMock()
     registry.verify_token.return_value = token_valid
@@ -116,6 +117,7 @@ def _make_server(
         agent_callback=agent_callback,
         host=host,
         debug_transcripts=debug_transcripts,
+        allow_insecure_remote=allow_insecure_remote,
     )
 
 
@@ -186,7 +188,7 @@ class TestVoiceServerLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_emits_warning_for_0000_host(self) -> None:
-        server = _make_server(host="0.0.0.0")
+        server = _make_server(host="0.0.0.0", allow_insecure_remote=True)
 
         mock_ws_server = MagicMock()
         mock_ws_server.close = MagicMock()

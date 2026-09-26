@@ -33,7 +33,7 @@ class TestMcpToolNameValidation:
     def _make_manager(self):
         from pathlib import Path
 
-        from missy.mcp.annotations import AnnotationRegistry
+        from missy.mcp.annotations import AnnotationRegistry, ToolAnnotation
         from missy.mcp.manager import McpManager
 
         mgr = McpManager.__new__(McpManager)
@@ -46,6 +46,8 @@ class TestMcpToolNameValidation:
         mgr._approval_gate = None
         mgr._block_injection = True
         mgr._annotation_registry = AnnotationRegistry()
+        for name in ("server__valid_tool", "server__my-tool-name"):
+            mgr._annotation_registry.register(name, ToolAnnotation(read_only=True))
         return mgr
 
     def test_valid_tool_name_accepted(self):

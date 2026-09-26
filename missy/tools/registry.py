@@ -92,6 +92,21 @@ class ToolRegistry:
             self._tools[tool.name] = tool
         logger.debug("Registered tool %r (%s).", tool.name, type(tool).__name__)
 
+    def unregister(self, name: str, *, expected_type: type[BaseTool] | None = None) -> bool:
+        """Remove a dynamic tool while protecting unrelated registrations."""
+        with self._lock:
+            if self._retired:
+                raise RuntimeError("Cannot unregister tools on a retired registry.")
+            existing = self._tools.get(name)
+            if existing is None or (
+                expected_type is not None and not isinstance(existing, expected_type)
+            ):
+                return False
+            del self._tools[name]
+            self._disabled.discard(name)
+        logger.debug("Unregistered tool %r.", name)
+        return True
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
@@ -492,7 +507,12 @@ class ToolRegistry:
             # Some tools may pass command as a list; convert to string for policy check.
             if isinstance(command, list):
                 command = " ".join(str(c) for c in command)
-            engine.check_shell(command, session_id=session_id, task_id=task_id)
+            engine.check_shell(
+                command,
+                session_id=session_id,
+                task_id=task_id,
+                cwd=_kw.get("cwd"),
+            )
 
     def _emit_event(
         self,

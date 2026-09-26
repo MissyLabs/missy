@@ -21,8 +21,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -213,6 +215,14 @@ class ShellExecTool(BaseTool):
 
         # Route through Docker sandbox when available
         if self._sandbox is not None:
+            # FallbackSandbox executes directly on the host.  Route that
+            # case through our protected-path mount namespace as well;
+            # otherwise enabling best-effort fallback would silently remove
+            # the hard boundary that direct shell execution enforces.
+            from missy.security.sandbox import FallbackSandbox
+
+            if isinstance(self._sandbox, FallbackSandbox):
+                return self._execute_direct(command=command, cwd=cwd, timeout=timeout)
             return self._execute_sandboxed(command=command, cwd=cwd, timeout=timeout)
 
         return self._execute_direct(command=command, cwd=cwd, timeout=timeout)
@@ -248,13 +258,50 @@ class ShellExecTool(BaseTool):
             # API keys and tokens from leaking to arbitrary shell commands.
             inherited_names = _SAFE_ENV_VARS | self._allowed_env_vars
             safe_env = {k: os.environ[k] for k in inherited_names if k in os.environ}
+            argv: str | list[str] = command
+            use_shell = True
+            protected_paths: tuple[str, ...] = ()
+            try:
+                from missy.policy.engine import get_policy_engine
+
+                protected_paths = get_policy_engine().filesystem.protected_write_paths
+            except RuntimeError:
+                pass
+            if protected_paths:
+                bwrap = shutil.which("bwrap")
+                if not bwrap:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error=(
+                            "shell_exec cannot enforce operator-protected paths: "
+                            "bubblewrap is unavailable."
+                        ),
+                    )
+                read_only_mounts: set[Path] = set()
+                for raw_path in protected_paths:
+                    path = Path(raw_path).expanduser().resolve()
+                    while not path.exists() and path != path.parent:
+                        path = path.parent
+                    read_only_mounts.add(path)
+                # Mount the host tree read/write, then overlay each protected
+                # file/directory (or nearest existing parent for a not-yet-
+                # created key) read-only in the child mount namespace.
+                argv = [bwrap, "--die-with-parent", "--bind", "/", "/"]
+                for path in sorted(read_only_mounts, key=lambda item: len(item.parts)):
+                    argv.extend(["--ro-bind", str(path), str(path)])
+                if cwd:
+                    argv.extend(["--chdir", str(Path(cwd).expanduser().resolve())])
+                argv.extend(["--", "/bin/bash", "-c", command])
+                use_shell = False
+
             proc = subprocess.run(
-                command,
-                shell=True,
+                argv,
+                shell=use_shell,
                 capture_output=True,
-                cwd=cwd or None,
+                cwd=None if protected_paths else (cwd or None),
                 timeout=timeout,
-                executable="/bin/bash",
+                executable=None if protected_paths else "/bin/bash",
                 env=safe_env,
             )
             combined: bytes = proc.stdout + proc.stderr

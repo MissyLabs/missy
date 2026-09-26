@@ -54,6 +54,20 @@ class DiscordDMPolicy(StrEnum):
     DISABLED = "disabled"
 
 
+def guild_mode_to_capability(mode: str) -> str:
+    """Map guild config names to immutable runtime capability modes."""
+    mapping = {
+        "no_tools": "no-tools",
+        "safe_chat_only": "safe-chat",
+        # Full guild access is still Discord-safe: no desktop/X11 surface.
+        "full": "discord",
+    }
+    try:
+        return mapping[mode]
+    except KeyError as exc:
+        raise ValueError(f"Unknown Discord guild mode: {mode!r}") from exc
+
+
 @dataclass
 class DiscordGuildPolicy:
     """Access control policy for a single Discord guild (server).
@@ -214,6 +228,21 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
     """Construct a :class:`DiscordGuildPolicy` from a raw YAML dict."""
     from missy.config.settings import _coerce_bool
 
+    known = {
+        "enabled",
+        "require_mention",
+        "allowed_channels",
+        "allowed_roles",
+        "allowed_role_ids",
+        "allowed_users",
+        "mode",
+    }
+    unknown = set(data) - known
+    if unknown:
+        raise ValueError(
+            f"Discord guild policy has unrecognized security key(s): {', '.join(sorted(unknown))}"
+        )
+
     role_ids = [str(r).strip() for r in data.get("allowed_role_ids", []) or [] if str(r).strip()]
     role_names: list[str] = []
     for entry in data.get("allowed_roles", []) or []:
@@ -231,13 +260,16 @@ def _parse_guild_policy(data: dict[str, Any]) -> DiscordGuildPolicy:
             "allowed_role_ids (role snowflakes) instead.",
             role_names,
         )
+    mode = str(data.get("mode", "full"))
+    if mode not in {"full", "safe_chat_only", "no_tools"}:
+        raise ValueError(f"Unknown Discord guild mode: {mode!r}")
     return DiscordGuildPolicy(
         enabled=_coerce_bool(data.get("enabled"), True),
         require_mention=_coerce_bool(data.get("require_mention"), False),
         allowed_channels=list(data.get("allowed_channels", [])),
         allowed_roles=role_names,
         allowed_users=list(data.get("allowed_users", [])),
-        mode=str(data.get("mode", "full")),
+        mode=mode,
         allowed_role_ids=list(dict.fromkeys(role_ids)),
     )
 

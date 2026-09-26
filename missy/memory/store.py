@@ -191,6 +191,10 @@ class MemoryStore:
         Returns:
             Number of turns removed (0 when nothing was compacted).
         """
+        if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
+            raise TypeError("keep_recent must be an integer")
+        if keep_recent < 1:
+            raise ValueError("keep_recent must be at least 1")
         session_turns = self.get_session_turns(session_id)
         if len(session_turns) <= keep_recent:
             return 0

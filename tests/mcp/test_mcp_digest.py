@@ -64,7 +64,15 @@ class TestDigestMismatchRejected:
         # Write config with a pinned digest
         config_file = tmp_path / "mcp.json"
         config_file.write_text(
-            json.dumps([{"name": "test-server", "command": "echo", "digest": "sha256:wrong"}])
+            json.dumps(
+                [
+                    {
+                        "name": "test-server",
+                        "command": "echo",
+                        "digest": "sha256:v2:wrong",
+                    }
+                ]
+            )
         )
         # Make config owned by current user and not group-writable
         import os

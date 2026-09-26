@@ -892,8 +892,11 @@ class TestMcpManagerAllTools:
 
 class TestMcpManagerCallTool:
     def test_call_tool_routes_to_correct_server(self, tmp_path):
+        from missy.mcp.annotations import ToolAnnotation
+
         cfg = tmp_path / "mcp.json"
         mgr = McpManager(config_path=str(cfg))
+        mgr._annotation_registry.register("fs__read", ToolAnnotation(read_only=True))
         mock_c = _mock_client(name="fs")
         mock_c.call_tool.return_value = "file contents"
         mgr._clients["fs"] = mock_c

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
@@ -51,6 +52,9 @@ class ResilientMemoryStore:
         *,
         max_cached_turns_per_session: int = 200,
         max_cached_sessions: int = 500,
+        max_pending_operations: int = 1000,
+        max_replay_attempts: int = 3,
+        max_quarantined_operations: int = 100,
     ) -> None:
         if isinstance(max_failures, bool) or not isinstance(max_failures, int):
             raise TypeError("max_failures must be an integer")
@@ -63,9 +67,18 @@ class ResilientMemoryStore:
         self._max_cached_sessions = max(1, int(max_cached_sessions))
         # session_id -> list of turns, LRU-ordered by last write.
         self._cache: OrderedDict[str, list] = OrderedDict()
-        self._lock = threading.Lock()
+        # Quarantine audit callbacks run synchronously and may inspect health;
+        # allow that same thread to re-enter the status properties without
+        # deadlocking while queue state is being updated.
+        self._lock = threading.RLock()
         self._recovery_lock = threading.Lock()
         self._pending_ops: list[tuple[str, tuple]] = []
+        self._pending_attempts: dict[int, int] = {}
+        self._pending_metadata: dict[int, dict] = {}
+        self._quarantined_ops: list[dict] = []
+        self._max_pending_operations = max(1, int(max_pending_operations))
+        self._max_replay_attempts = max(1, int(max_replay_attempts))
+        self._max_quarantined_operations = max(1, int(max_quarantined_operations))
         self._healthy = True
         self._read_status: dict[str, str] = {}
 
@@ -102,7 +115,59 @@ class ResilientMemoryStore:
 
     def _queue_pending(self, operation: str, *args) -> None:
         with self._lock:
-            self._pending_ops.append((operation, args))
+            entry = (operation, args)
+            if len(self._pending_ops) >= self._max_pending_operations:
+                dropped = self._pending_ops.pop(0)
+                self._pending_attempts.pop(id(dropped), None)
+                metadata = self._pending_metadata.pop(id(dropped), {})
+                self._quarantine(dropped[0], metadata, "queue_overflow")
+            self._pending_ops.append(entry)
+            self._pending_attempts[id(entry)] = 0
+            self._pending_metadata[id(entry)] = {
+                "attempts": 0,
+                "first_failure": None,
+                "last_failure": None,
+                "category": "pending",
+            }
+
+    @staticmethod
+    def _failure_category(exc: Exception) -> str:
+        if isinstance(exc, (ValueError, TypeError, KeyError, AttributeError)):
+            return "permanent"
+        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+            return "transient"
+        # Unknown storage failures are retained: losing ordering is worse
+        # than waiting for an operator/recovery when permanence is unclear.
+        return "transient_unknown"
+
+    def _quarantine(self, operation: str, metadata: dict, category: str) -> None:
+        item = {
+            "operation": operation,
+            "attempts": int(metadata.get("attempts", 0)),
+            "first_failure": metadata.get("first_failure"),
+            "last_failure": metadata.get("last_failure"),
+            "category": category,
+        }
+        self._quarantined_ops.append(item)
+        overflow = len(self._quarantined_ops) - self._max_quarantined_operations
+        if overflow > 0:
+            del self._quarantined_ops[:overflow]
+        logger.error("ResilientMemory: quarantined %s operation (%s)", operation, category)
+        try:
+            from missy.core.events import AuditEvent, event_bus
+
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="",
+                    task_id="",
+                    event_type="memory.pending_quarantined",
+                    category="filesystem",
+                    result="error",
+                    detail={"operation": operation, "category": category},
+                )
+            )
+        except Exception:
+            logger.debug("ResilientMemory: failed to emit quarantine event", exc_info=True)
 
     def _replay_pending(self) -> bool:
         """Replay only failed mutations, in original order, exactly once per success.
@@ -122,11 +187,36 @@ class ResilientMemoryStore:
                     getattr(self._primary, operation)(*args)
                 except Exception as exc:
                     self._on_failure(exc)
+                    with self._lock:
+                        entry = self._pending_ops[0]
+                        entry_id = id(entry)
+                        metadata = self._pending_metadata.setdefault(entry_id, {})
+                        now = time.time()
+                        metadata["attempts"] = int(metadata.get("attempts", 0)) + 1
+                        metadata["first_failure"] = metadata.get("first_failure") or now
+                        metadata["last_failure"] = now
+                        category = self._failure_category(exc)
+                        metadata["category"] = category
+                        permanent_attempts = self._pending_attempts.get(entry_id, 0)
+                        if category == "permanent":
+                            permanent_attempts += 1
+                            self._pending_attempts[entry_id] = permanent_attempts
+                        if (
+                            category == "permanent"
+                            and permanent_attempts >= self._max_replay_attempts
+                        ):
+                            poisoned = self._pending_ops.pop(0)
+                            self._pending_attempts.pop(id(poisoned), None)
+                            metadata = self._pending_metadata.pop(id(poisoned), metadata)
+                            self._quarantine(operation, metadata, category)
+                            continue
                     logger.warning("ResilientMemory: pending %s replay failed", operation)
                     return False
                 with self._lock:
                     if self._pending_ops and self._pending_ops[0] == (operation, args):
-                        self._pending_ops.pop(0)
+                        completed = self._pending_ops.pop(0)
+                        self._pending_attempts.pop(id(completed), None)
+                        self._pending_metadata.pop(id(completed), None)
 
     # ------------------------------------------------------------------
     # Write operations
@@ -573,6 +663,18 @@ class ResilientMemoryStore:
         """Return whether recent read surfaces used primary/fallback/unavailable data."""
         with self._lock:
             return dict(self._read_status)
+
+    @property
+    def pending_health(self) -> dict[str, int | bool]:
+        """Bounded queue/quarantine counts for diagnostics."""
+        with self._lock:
+            return {
+                "pending": len(self._pending_ops),
+                "quarantined": len(self._quarantined_ops),
+                "capacity": self._max_pending_operations,
+                "quarantine_capacity": self._max_quarantined_operations,
+                "degraded": bool(self._pending_ops or self._quarantined_ops),
+            }
 
     def _mark_read(self, operation: str, status: str) -> None:
         with self._lock:

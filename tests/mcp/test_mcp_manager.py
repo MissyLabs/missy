@@ -19,7 +19,12 @@ def tmp_config(tmp_path):
 
 @pytest.fixture
 def manager(tmp_config):
-    return McpManager(config_path=tmp_config)
+    from missy.mcp.annotations import ToolAnnotation
+
+    mgr = McpManager(config_path=tmp_config)
+    for name in ("srv__read", "srv__tool", "srv__ping", "srv__greet"):
+        mgr._annotation_registry.register(name, ToolAnnotation(read_only=True))
+    return mgr
 
 
 class TestConnectAll:
@@ -55,7 +60,15 @@ class TestConnectAll:
         mgr = McpManager(config_path=tmp_config)
         with patch.object(mgr, "add_server", side_effect=RuntimeError("fail")):
             mgr.connect_all()
-        assert mgr.list_servers() == []
+        assert mgr.list_servers() == [
+            {
+                "name": "bad",
+                "alive": False,
+                "tools": 0,
+                "desired": True,
+                "annotation_states": {},
+            }
+        ]
 
 
 class TestAddServer:
@@ -450,16 +463,14 @@ class TestCallToolEnforcement:
         assert result == "tool result"
         client.call_tool.assert_called_once()
 
-    def test_unannotated_tool_never_requires_approval(self, manager):
-        """A tool with no registered annotation at all (get_annotation()
-        returns None) must default to no approval requirement, matching
-        AnnotationRegistry.get_or_default()'s conservative default."""
-        tools = [{"name": "read"}]
-        client = self._connect_fake_server(manager, tools)  # no annotation registered
+    def test_unannotated_tool_requires_approval(self, manager):
+        """Missing annotations fail closed instead of assuming read-only."""
+        tools = [{"name": "unannotated"}]
+        client = self._connect_fake_server(manager, tools)
 
-        result = manager.call_tool("srv__read", {})
-        assert result == "tool result"
-        client.call_tool.assert_called_once()
+        result = manager.call_tool("srv__unannotated", {})
+        assert result.startswith("[MCP DENIED]")
+        client.call_tool.assert_not_called()
 
 
 class TestListServers:

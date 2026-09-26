@@ -332,7 +332,7 @@ Voice channel configuration for edge node communication.  Requires `pip install 
 
 ```yaml
 voice:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8765
   stt:
     engine: "faster-whisper"
@@ -340,12 +340,19 @@ voice:
   tts:
     engine: "piper"
     voice: "en_US-lessac-medium"
+  # Remote binds require both TLS files, unless the explicit
+  # allow_insecure_remote escape hatch is set.
+  tls_certfile: ""
+  tls_keyfile: ""
 ```
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `host` | string | `"0.0.0.0"` | WebSocket server bind address. |
+| `host` | string | `"127.0.0.1"` | WebSocket server bind address. |
 | `port` | int | `8765` | WebSocket server port. |
+| `tls_certfile` | string | `""` | TLS certificate for secure remote (`wss://`) binds. |
+| `tls_keyfile` | string | `""` | TLS private key; must be set with `tls_certfile`. |
+| `allow_insecure_remote` | bool | `false` | Explicit escape hatch for plaintext non-loopback binds. |
 | `stt.engine` | string | `"faster-whisper"` | Speech-to-text engine. |
 | `stt.model` | string | `"base.en"` | STT model name (faster-whisper model). |
 | `tts.engine` | string | `"piper"` | Text-to-speech engine (external binary). |
@@ -466,12 +473,10 @@ network:
 filesystem:
   allowed_read_paths:
     - "~/workspace"
-    - "~/.missy"
     - "/tmp"
 
   allowed_write_paths:
     - "~/workspace"
-    - "~/.missy"
 
 # ---------------------------------------------------------------------------
 # Shell policy

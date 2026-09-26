@@ -44,6 +44,10 @@ from missy.core.exceptions import PolicyViolationError
 logger = logging.getLogger(__name__)
 
 
+class ShellRedirectParseError(ValueError):
+    """Raised when a shell redirection cannot be classified safely."""
+
+
 class ShellPolicyEngine:
     """Evaluates shell commands against a :class:`ShellPolicy`.
 
@@ -241,8 +245,10 @@ class ShellPolicyEngine:
     )
 
     # SR-1.7: redirection operators that write to / read from a filesystem
-    # path. ">&"/"<&" (fd duplication, e.g. "2>&1") are deliberately
-    # excluded -- their target is a file descriptor number, not a path.
+    # path.  ``>&`` is classified from its operand: a numeric operand (or
+    # ``-``) is fd duplication/closure, while any other operand is Bash's
+    # combined stdout/stderr file redirect.  ``<&`` only accepts an fd or
+    # ``-``.  Keeping that distinction here closes the ``>&path`` bypass.
     _REDIRECT_WRITE_OPS = frozenset({">", ">>", ">|", "&>", "&>>"})
     _REDIRECT_READ_OPS = frozenset({"<", "<>"})
 
@@ -275,32 +281,50 @@ class ShellPolicyEngine:
 
         Returns:
             A ``(write_targets, read_targets)`` tuple of path strings, in
-            the order encountered. Empty lists when the command has no
-            redirections or cannot be tokenised (malformed quoting is
-            already denied earlier in :meth:`check_command`'s own
-            tokenisation, so this treats that case as "nothing to add"
-            rather than raising here).
+            the order encountered.
+
+        Raises:
+            ShellRedirectParseError: If tokenisation fails, a redirect has
+                no operand, or a redirect form cannot be safely classified.
+                Callers must fail closed rather than executing an unchecked
+                command.
         """
         try:
             lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
             lexer.whitespace_split = True
             tokens = list(lexer)
-        except ValueError:
-            return ([], [])
+        except ValueError as exc:
+            raise ShellRedirectParseError("malformed shell quoting") from exc
 
         write_targets: list[str] = []
         read_targets: list[str] = []
-        for i in range(len(tokens) - 1):
-            tok = tokens[i]
-            nxt = tokens[i + 1]
-            if nxt.startswith("&"):
-                # Duplicates a file descriptor (e.g. "2>&1", ">&2") rather
-                # than naming a file — not a filesystem target.
-                continue
+        for i, tok in enumerate(tokens):
             if tok in self._REDIRECT_WRITE_OPS:
+                if i + 1 >= len(tokens):
+                    raise ShellRedirectParseError(f"redirect {tok!r} has no target")
+                nxt = tokens[i + 1]
                 write_targets.append(nxt)
             elif tok in self._REDIRECT_READ_OPS:
+                if i + 1 >= len(tokens):
+                    raise ShellRedirectParseError(f"redirect {tok!r} has no target")
+                nxt = tokens[i + 1]
                 read_targets.append(nxt)
+            elif tok == ">&":
+                if i + 1 >= len(tokens):
+                    raise ShellRedirectParseError("redirect '>&' has no target")
+                nxt = tokens[i + 1]
+                if nxt != "-" and not nxt.isdecimal():
+                    write_targets.append(nxt)
+            elif tok == "<&":
+                if i + 1 >= len(tokens):
+                    raise ShellRedirectParseError("redirect '<&' has no target")
+                nxt = tokens[i + 1]
+                if nxt != "-" and not nxt.isdecimal():
+                    raise ShellRedirectParseError("redirect '<&' requires a file descriptor")
+            elif ("<" in tok or ">" in tok) and all(ch in "<>&|" for ch in tok):
+                # Heredocs/here-strings and malformed combinations do not
+                # name an ordinary path that this checker can authorize.
+                raise ShellRedirectParseError(f"unsupported redirect operator {tok!r}")
 
         return (write_targets, read_targets)
 

@@ -229,6 +229,43 @@ class TestCheckShellRedirectionTargets:
         with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
             pe.check_shell("echo x>/etc/cron.d/pwn")
 
+    def test_combined_redirect_to_unallowlisted_path_denied(self):
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["echo"]))
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo x >&/etc/cron.d/pwn")
+
+    def test_relative_redirect_is_resolved_against_execution_cwd(self, tmp_path: Path):
+        allowed = tmp_path / "allowed"
+        denied = tmp_path / "denied"
+        allowed.mkdir()
+        denied.mkdir()
+        pe = PolicyEngine(
+            make_config(
+                shell_enabled=True,
+                shell_commands=["echo"],
+                read_paths=[str(denied)],
+                write_paths=[str(allowed)],
+            )
+        )
+        with pytest.raises(PolicyViolationError, match="Filesystem write denied"):
+            pe.check_shell("echo x > output.txt", cwd=denied)
+
+    def test_execution_cwd_must_be_readable(self, tmp_path: Path):
+        pe = PolicyEngine(
+            make_config(
+                shell_enabled=True,
+                shell_commands=["echo"],
+                write_paths=[str(tmp_path)],
+            )
+        )
+        with pytest.raises(PolicyViolationError, match="Filesystem read denied"):
+            pe.check_shell("echo x", cwd=tmp_path)
+
+    def test_unclassified_redirect_fails_closed(self):
+        pe = PolicyEngine(make_config(shell_enabled=True, shell_commands=["echo"]))
+        with pytest.raises(PolicyViolationError, match="redirection could not be validated"):
+            pe.check_shell("echo x >>&/tmp/out")
+
     def test_write_redirect_to_allowlisted_path_permitted(self):
         pe = PolicyEngine(
             make_config(shell_enabled=True, shell_commands=["echo"], write_paths=["/tmp"])

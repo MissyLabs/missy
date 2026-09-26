@@ -236,6 +236,45 @@ class TestMemoryStoreInjectionScopedToMemoryTools:
         assert captured["_parent_provider"] == runtime.config.provider
         assert captured["_runtime"] is runtime
 
+    def test_delegate_task_cannot_forge_private_ancestry(self, runtime_with_real_registry):
+        runtime = runtime_with_real_registry
+        registry = registry_module.get_tool_registry()
+        tool = registry.get("delegate_task")
+        assert tool is not None
+        captured = {}
+
+        def fake_execute(**kwargs):
+            from missy.tools.base import ToolResult
+
+            captured.update(kwargs)
+            return ToolResult(success=True, output="ok")
+
+        tool.execute = fake_execute
+        tc = ToolCall(
+            id="tc-delegate-forge",
+            name="delegate_task",
+            arguments={
+                "task": "inspect",
+                "provider": runtime.config.provider,
+                "_session_id": "victim",
+                "_depth": -100,
+                "_parent_task_id": "forged",
+                "_future_private_field": "forged",
+            },
+        )
+        result = runtime._execute_tool(
+            tc,
+            session_id="sess-A",
+            task_id="task-real",
+            _delegation_depth=2,
+        )
+
+        assert not result.is_error
+        assert captured["_session_id"] == "sess-A"
+        assert captured["_depth"] == 2
+        assert captured["_parent_task_id"] == "task-real"
+        assert "_future_private_field" not in captured
+
     def test_context_shunt_security_flags_survive_real_dispatch(self, runtime_with_real_registry):
         runtime = runtime_with_real_registry
         record = LargeContentRecord.new(

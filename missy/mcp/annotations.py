@@ -287,6 +287,11 @@ class AnnotationRegistry:
         with self._lock:
             self._annotations[tool_name] = annotation
 
+    def unregister(self, tool_name: str) -> None:
+        """Remove a dynamic annotation if present."""
+        with self._lock:
+            self._annotations.pop(tool_name, None)
+
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------

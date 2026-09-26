@@ -324,6 +324,7 @@ class TestMcpConfigPermissions:
         """Config owned by a different uid must be silently skipped."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         mgr = McpManager(config_path=str(config))
 
@@ -338,8 +339,17 @@ class TestMcpConfigPermissions:
         ):
             mgr.connect_all()
 
-        # No clients should be connected — the config was refused.
-        assert mgr.list_servers() == []
+        # The last trusted desired state remains visible for diagnostics, but
+        # the now-untrusted config must not result in a live connection.
+        assert mgr.list_servers() == [
+            {
+                "name": "srv",
+                "alive": False,
+                "tools": 0,
+                "desired": True,
+                "annotation_states": {},
+            }
+        ]
 
     def test_refuses_when_group_writable(self, tmp_path):
         """A group-writable config file must be silently skipped."""
@@ -369,6 +379,7 @@ class TestMcpConfigPermissions:
         """An OSError on stat must be caught and logged as a warning."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         mgr = McpManager(config_path=str(config))
 
@@ -382,14 +393,24 @@ class TestMcpConfigPermissions:
         ):
             mgr.connect_all()
 
-        # Stat failure → silently skip with a warning, no clients connected.
-        assert mgr.list_servers() == []
+        # Stat failure leaves the last trusted desired state visible, but no
+        # client is connected from the now-unreadable configuration.
+        assert mgr.list_servers() == [
+            {
+                "name": "srv",
+                "alive": False,
+                "tools": 0,
+                "desired": True,
+                "annotation_states": {},
+            }
+        ]
         assert any("cannot stat" in r.message.lower() for r in caplog.records)
 
     def test_skips_loading_on_uid_mismatch_logs_warning(self, tmp_path, caplog):
         """A warning must be emitted when the uid check fails."""
         config = tmp_path / "mcp.json"
         config.write_text('[{"name": "srv", "command": "echo hi"}]')
+        config.chmod(0o600)
 
         fake_stat = MagicMock()
         fake_stat.st_uid = 9999

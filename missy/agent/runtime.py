@@ -1042,6 +1042,7 @@ class AgentRuntime:
         *,
         _explicit_tool_request_input: str | None = None,
         _provider: str | None = None,
+        _capability_mode: str | None = None,
     ) -> str:
         """Run the agent with *user_input* and return the response string.
 
@@ -1085,6 +1086,9 @@ class AgentRuntime:
                 sub-agent delegation so concurrent children can select
                 different providers without mutating ``self.config.provider``.
                 ``None`` inherits the runtime's configured provider.
+            _capability_mode: Internal immutable per-call capability mode.
+                Used by concurrent transports such as Discord; it never
+                mutates the shared runtime configuration.
 
         Returns:
             The model's reply as a plain string.
@@ -1097,6 +1101,13 @@ class AgentRuntime:
             raise ValueError("user_input must be a non-empty string")
         if _provider is not None and (not isinstance(_provider, str) or not _provider.strip()):
             raise ValueError("_provider must be a non-empty provider name when set")
+        if _capability_mode is not None and _capability_mode not in {
+            "full",
+            "discord",
+            "safe-chat",
+            "no-tools",
+        }:
+            raise ValueError(f"Unknown per-call capability mode: {_capability_mode!r}")
         requested_provider = _provider.strip() if _provider is not None else self.config.provider
 
         # SR-4.1: reset the sleeptime worker's idle timer on every real
@@ -1260,6 +1271,7 @@ class AgentRuntime:
                 _delegation_depth=_delegation_depth,
                 priority_tools=priority_tools,
                 provider_name=requested_provider,
+                capability_mode=_capability_mode,
             )
         except ProviderError as exc:
             self._emit_event(
@@ -1352,6 +1364,22 @@ class AgentRuntime:
                 )
             final_response = _cleaned
 
+        # Shape and censor before any persistence or delivery. Raw provider
+        # text is intentionally not retained by the default memory backend.
+        if self._response_shaper is not None:
+            try:
+                persona = self._persona_for_session(sid)
+                shape_ctx = {
+                    "turn_count": len(history),
+                    "has_tool_results": bool(all_tool_names_used),
+                }
+                final_response = self._response_shaper.shape_response(
+                    final_response, persona, shape_ctx
+                )
+            except Exception:
+                logger.debug("Response shaping failed", exc_info=True)
+        final_response = censor_response(final_response)
+
         # Record turn to request tracker for pattern detection.
         self._track_request(user_input, sid, all_tool_names_used, provider.name)
 
@@ -1404,21 +1432,7 @@ class AgentRuntime:
             len(all_tool_names_used),
         )
 
-        # Apply response shaping (humanistic behavior layer)
-        if self._response_shaper is not None:
-            try:
-                persona = self._persona_for_session(sid)
-                shape_ctx = {
-                    "turn_count": len(history),
-                    "has_tool_results": bool(all_tool_names_used),
-                }
-                final_response = self._response_shaper.shape_response(
-                    final_response, persona, shape_ctx
-                )
-            except Exception:
-                logger.debug("Response shaping failed", exc_info=True)
-
-        return censor_response(final_response)
+        return final_response
 
     def run_stream(self, user_input: str, session_id: str | None = None) -> Iterator[str]:
         """Stream the response token-by-token for real-time CLI output.
@@ -1504,7 +1518,6 @@ class AgentRuntime:
         self._acquire_rate_limit()
 
         full_text = ""
-        any_chunk_yielded = False
         subscription = AgentSubscription(reasoning_mode="off")
         subscription.handle_event({"type": "message_start"})
         try:
@@ -1513,47 +1526,27 @@ class AgentRuntime:
                     {"type": "message_update", "delta": chunk, "stream_event": "text_delta"}
                 )
                 full_text = update.full_visible_text
-                if update.visible_delta:
-                    any_chunk_yielded = True
-                    yield update.visible_delta
             final_update = subscription.handle_event({"type": "message_end"})
             full_text = final_update.full_visible_text
-            if final_update.visible_delta:
-                any_chunk_yielded = True
-                yield final_update.visible_delta
         except Exception:
-            if any_chunk_yielded:
-                # Regression: falling back to _single_turn() here re-generates
-                # and yields the ENTIRE response from scratch -- if the
-                # stream failed *after* already yielding some chunks to the
-                # caller (e.g. a connection drop mid-response), the caller
-                # would receive the already-streamed partial text followed
-                # by a full duplicate/overlapping re-generation. Stop with
-                # whatever partial text was captured instead of compounding
-                # a failure with confusing duplicated output.
-                logger.warning(
-                    "Streaming failed after partial output was already "
-                    "yielded; not falling back to avoid duplicating "
-                    "already-sent content.",
-                    exc_info=True,
-                )
-            else:
-                logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
-                # Fall back to non-streaming
-                response = self._single_turn(
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    session_id=sid,
-                    task_id=str(self._session_mgr.generate_task_id()),
-                )
-                yield response.content
-                full_text = response.content
+            logger.debug("Streaming failed; falling back to non-streaming", exc_info=True)
+            response = self._single_turn(
+                provider=provider,
+                system_prompt=system_prompt,
+                messages=messages,
+                session_id=sid,
+                task_id=str(self._session_mgr.generate_task_id()),
+            )
+            full_text = response.content
 
-        # Persist turns
+        # Censor the complete stream before either persistence or delivery.
+        # Buffering avoids leaking a secret split across chunk boundaries.
+        full_text = censor_response(full_text)
         self._save_turn(sid, "user", user_input)
         self._save_turn(sid, "assistant", full_text, provider=provider.name)
         self._record_patch_outcome(full_text)
+        if full_text:
+            yield full_text
 
     # ------------------------------------------------------------------
     # Agentic loop
@@ -1571,6 +1564,7 @@ class AgentRuntime:
         _delegation_depth: int = 0,
         priority_tools: list[str] | None = None,
         provider_name: str | None = None,
+        capability_mode: str | None = None,
     ) -> tuple[str, list[str]]:
         """Execute the multi-step provider loop.
 
@@ -1605,7 +1599,10 @@ class AgentRuntime:
         Returns:
             A 2-tuple of ``(final_response_text, list_of_tool_names_used)``.
         """
-        tools = self._get_tools(provider_name=provider_name)
+        tools = self._get_tools(
+            provider_name=provider_name,
+            capability_mode=capability_mode,
+        )
         if priority_tools:
             priority_set = set(priority_tools)
             prioritised = [t for t in tools if getattr(t, "name", None) in priority_set]
@@ -3535,7 +3532,11 @@ class AgentRuntime:
     # Tools available in Discord mode — no desktop/X11/browser/atspi tools.
     _DISCORD_TOOLS = frozenset(MISSY_DISCORD_TOOLS)
 
-    def _get_tools(self, provider_name: str | None = None) -> list:
+    def _get_tools(
+        self,
+        provider_name: str | None = None,
+        capability_mode: str | None = None,
+    ) -> list:
         """Return registered tools, or an empty list when unavailable.
 
         Respects :attr:`AgentConfig.capability_mode`:
@@ -3564,8 +3565,9 @@ class AgentRuntime:
                 provider_config = get_registry().get_config(effective_provider)
                 if provider_config is not None:
                     model_id = provider_config.model or ""
+        effective_capability_mode = capability_mode or self.config.capability_mode
         layers = build_configured_tool_policy_layers(
-            capability_mode=self.config.capability_mode,
+            capability_mode=effective_capability_mode,
             provider_name=effective_provider,
             model_id=model_id,
             global_policy=self.config.tool_policy,
@@ -3643,36 +3645,69 @@ class AgentRuntime:
         SR-4.7: called at the top of every :meth:`_get_tools` so servers
         connected/reconnected/disconnected after startup (via
         ``missy mcp add``/``remove`` or :meth:`~missy.mcp.manager.McpManager.health_check`)
-        are reflected on the very next turn. ``registry.register()``
-        silently replaces any prior registration under the same name, so
-        re-syncing every call is cheap and idempotent -- it does not
-        matter that this re-wraps tools that haven't changed.
+        are reflected on the very next turn. Dynamic wrappers are reconciled
+        explicitly so stale tools disappear and one registration failure
+        cannot prevent later tools from being added.
         """
         if self._mcp_manager is None:
             return
-        try:
-            from missy.mcp.tool_wrapper import McpToolWrapper
+        from missy.mcp.annotations import ToolAnnotation
+        from missy.mcp.tool_wrapper import McpToolWrapper
 
-            for tool_dict in self._mcp_manager.all_tools():
-                name = tool_dict.get("name")
-                if not name:
+        desired = {
+            tool["name"]: tool
+            for tool in self._mcp_manager.all_tools()
+            if isinstance(tool.get("name"), str) and tool.get("name")
+        }
+        tracked = set(getattr(self, "_mcp_registered_tools", set()))
+        failed_stale: set[str] = set()
+        for stale_name in tracked - set(desired):
+            try:
+                registry.unregister(stale_name, expected_type=McpToolWrapper)
+            except Exception:
+                logger.warning("Failed to remove stale MCP tool %r", stale_name, exc_info=True)
+                # A stale wrapper must not remain offerable/dispatchable just
+                # because physical removal failed on this pass.
+                with contextlib.suppress(Exception):
+                    registry.disable(stale_name)
+                failed_stale.add(stale_name)
+
+        registered: set[str] = set()
+        for name, tool_dict in desired.items():
+            try:
+                existing = registry.get(name)
+                if existing is not None and not isinstance(existing, McpToolWrapper):
+                    logger.warning("MCP tool %r conflicts with an existing non-MCP tool", name)
                     continue
                 annotation = self._mcp_manager.get_annotation(name)
                 if annotation is None:
-                    from missy.mcp.annotations import ToolAnnotation
-
-                    annotation = ToolAnnotation()
-                registry.register(
-                    McpToolWrapper(
-                        self._mcp_manager,
-                        name,
-                        tool_dict.get("description", ""),
-                        tool_dict.get("inputSchema", {}),
-                        annotation,
-                    )
+                    annotation = ToolAnnotation.from_mcp_dict({})
+                wrapper = McpToolWrapper(
+                    self._mcp_manager,
+                    name,
+                    tool_dict.get("description", ""),
+                    tool_dict.get("inputSchema", {}),
+                    annotation,
                 )
-        except Exception:
-            logger.debug("MCP tool sync failed; continuing without MCP tools", exc_info=True)
+                if (
+                    isinstance(existing, McpToolWrapper)
+                    and existing._manager is self._mcp_manager
+                    and existing.description == wrapper.description
+                    and existing._input_schema == wrapper._input_schema
+                    and existing.permissions == wrapper.permissions
+                ):
+                    registered.add(name)
+                    continue
+                was_enabled = existing is None or registry.is_enabled(name)
+                if isinstance(existing, McpToolWrapper):
+                    registry.unregister(name, expected_type=McpToolWrapper)
+                registry.register(wrapper)
+                if not was_enabled:
+                    registry.disable(name)
+                registered.add(name)
+            except Exception:
+                logger.warning("Failed to reconcile MCP tool %r", name, exc_info=True)
+        self._mcp_registered_tools = registered | failed_stale
 
     def _apply_provider_gate(
         self, tool_names: list[str], provider_name: str | None = None
@@ -4033,16 +4068,29 @@ class AgentRuntime:
         # delegate_task calls can enforce MAX_SUB_AGENT_DEPTH). None of
         # these are model-suppliable.
         if tool_call.name == "delegate_task":
-            tool_args = dict(tool_args)
+            # Every underscore-prefixed delegate argument is runtime-private.
+            # Strip the entire namespace before injecting trusted ancestry so
+            # future private fields cannot accidentally become forgeable.
+            reserved_keys = sorted(
+                key for key in tool_args if isinstance(key, str) and key.startswith("_")
+            )
+            if reserved_keys:
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.delegate.reserved_arguments_ignored",
+                    result="deny",
+                    detail={"argument_keys": reserved_keys},
+                )
+            tool_args = {key: value for key, value in tool_args.items() if not key.startswith("_")}
             agent_execution = self._current_agent_execution()
-            tool_args.setdefault("_runtime", self)
-            tool_args.setdefault("_session_id", session_id)
-            tool_args.setdefault("_depth", _delegation_depth)
-            tool_args.setdefault("_parent_agent_id", agent_execution.get("agent_id", ""))
-            tool_args.setdefault("_parent_task_id", task_id)
-            tool_args.setdefault(
-                "_parent_provider",
-                str(agent_execution.get("requested_provider") or self.config.provider),
+            tool_args["_runtime"] = self
+            tool_args["_session_id"] = session_id
+            tool_args["_depth"] = _delegation_depth
+            tool_args["_parent_agent_id"] = agent_execution.get("agent_id", "")
+            tool_args["_parent_task_id"] = task_id
+            tool_args["_parent_provider"] = str(
+                agent_execution.get("requested_provider") or self.config.provider
             )
 
         # Rewrite heredoc-style shell commands to temp files so they pass
@@ -4584,6 +4632,8 @@ class AgentRuntime:
         try:
             from missy.memory.sqlite_store import ConversationTurn
 
+            if role == "assistant":
+                content = censor_response(content)
             turn = ConversationTurn.new(
                 session_id=session_id,
                 role=role,
@@ -5614,6 +5664,7 @@ class AgentRuntime:
                 raise
             raise ProviderError(f"Unexpected error resuming checkpoint: {exc}") from exc
 
+        final_response = censor_response(final_response)
         self._track_request(original_prompt, sid, all_tool_names_used, provider.name)
         self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
         self._record_patch_outcome(final_response)
@@ -5640,7 +5691,7 @@ class AgentRuntime:
             },
         )
 
-        return censor_response(final_response)
+        return final_response
 
     @staticmethod
     def _safe_current_account_name(provider) -> str:

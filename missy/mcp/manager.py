@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from missy.mcp.annotations import BUILTIN_ANNOTATIONS, AnnotationRegistry
-from missy.mcp.client import McpClient
+from missy.mcp.client import McpCallResult, McpClient
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,9 @@ class McpManager:
     ):
         self._config_path = Path(config_path).expanduser()
         self._clients: dict[str, McpClient] = {}
+        self._desired_servers: dict[str, dict] = {}
+        self._live_server_fingerprints: dict[str, str] = {}
+        self._annotation_states: dict[str, str] = {}
         self._lock = threading.Lock()
         self._block_injection = block_injection
         # SR-4.7: an ApprovalGate to block on for tools whose annotation
@@ -103,6 +106,7 @@ class McpManager:
         # Seed registry with known built-in tool annotations.
         for tool_name, annotation in BUILTIN_ANNOTATIONS.items():
             self._annotation_registry.register(tool_name, annotation)
+        self._refresh_desired_state()
 
     def _read_config_servers(self) -> list[dict] | None:
         """Read and validate mcp.json, returning its server entries.
@@ -118,9 +122,12 @@ class McpManager:
         never sets ``_config_path`` -- doesn't crash ``health_check()``.
         """
         config_path = getattr(self, "_config_path", None)
-        if config_path is None or not config_path.exists():
+        if config_path is None:
             logger.debug("No MCP config at %s; skipping", config_path)
             return None
+        if not config_path.exists():
+            logger.debug("No MCP config at %s; desired state is empty", config_path)
+            return []
         # Security: verify file permissions before loading
         try:
             st = config_path.stat()
@@ -143,14 +150,45 @@ class McpManager:
             logger.warning("MCP: cannot stat config %s: %s", config_path, exc)
             return None
         try:
-            return json.loads(config_path.read_text())
+            parsed = json.loads(config_path.read_text())
+            if not isinstance(parsed, list) or any(not isinstance(item, dict) for item in parsed):
+                logger.warning("MCP config must be a JSON array of server objects")
+                return None
+            return parsed
         except Exception as exc:
             logger.warning("MCP config parse error: %s", exc)
             return None
 
+    def _refresh_desired_state(self) -> list[dict] | None:
+        """Refresh operator-authored desired state without mutating the file."""
+        servers = self._read_config_servers()
+        if servers is None:
+            return None
+        desired: dict[str, dict] = {}
+        for entry in servers:
+            name = entry.get("name")
+            if isinstance(name, str) and name:
+                desired[name] = dict(entry)
+        self._desired_servers = desired
+        return list(desired.values())
+
+    @staticmethod
+    def _connection_fingerprint(entry: dict) -> str:
+        connection = {
+            key: entry.get(key)
+            for key in (
+                "command",
+                "url",
+                "bearer_token",
+                "headers",
+                "allow_insecure_auth",
+            )
+        }
+        return json.dumps(connection, sort_keys=True, separators=(",", ":"), default=str)
+
     def connect_all(self) -> None:
         """Load config and connect to all configured MCP servers."""
-        servers = self._read_config_servers()
+        servers = self._refresh_desired_state()
         if servers is None:
             return
         for entry in servers:
@@ -161,6 +199,7 @@ class McpManager:
                     command=entry.get("command"),
                     url=entry.get("url"),
                     headers=_resolve_mcp_auth_headers(entry),
+                    persist=False,
                     **_insecure_auth_kwargs(entry),
                 )
             except Exception as exc:
@@ -181,26 +220,59 @@ class McpManager:
         health_check()) are reflected on the very next turn." Called
         from :meth:`health_check` (already the periodic call site) so
         the fix takes effect through the same existing polling loop.
-        Only genuinely NEW entries are connected here -- reconciling a
-        changed command/url for an already-alive server, or
-        disconnecting a removed entry, is a separate, more invasive
-        decision intentionally left untouched by this fix.
+        Removed entries are disconnected and changed connection definitions
+        are replaced, while this reconciliation never writes mcp.json.
         """
-        servers = self._read_config_servers()
+        # Only disconnect names that were part of the prior desired state.  A
+        # live client may also be installed programmatically (or by a test /
+        # embedding application); absence from mcp.json is not evidence that
+        # such an unmanaged client was removed by the operator.
+        previously_desired = set(getattr(self, "_desired_servers", {}))
+        servers = self._refresh_desired_state()
         if servers is None:
             return
+        desired_by_name = {str(entry.get("name")): entry for entry in servers if entry.get("name")}
         with self._lock:
             known = set(self._clients.keys())
+            removed = (previously_desired - set(desired_by_name)) & known
+            removed_clients = [self._clients.pop(name) for name in removed]
+        for client in removed_clients:
+            with contextlib.suppress(Exception):
+                client.disconnect()
+        for name in removed:
+            self._drop_server_annotations(name)
+            self._live_server_fingerprints.pop(name, None)
         for entry in servers:
             name = entry.get("name", "unknown")
             if name in known:
-                continue
+                with self._lock:
+                    current = self._clients.get(name)
+                live_fingerprint = self._live_server_fingerprints.get(name)
+                desired_fingerprint = self._connection_fingerprint(entry)
+                connection_changed = (
+                    live_fingerprint != desired_fingerprint
+                    if live_fingerprint is not None
+                    else current is not None
+                    and (
+                        getattr(current, "_command", None) != entry.get("command")
+                        or getattr(current, "_url", None) != entry.get("url")
+                    )
+                )
+                if current is not None and connection_changed:
+                    with contextlib.suppress(Exception):
+                        current.disconnect()
+                    with self._lock:
+                        self._clients.pop(name, None)
+                    self._drop_server_annotations(name)
+                else:
+                    continue
             try:
                 self.add_server(
                     name,
                     command=entry.get("command"),
                     url=entry.get("url"),
                     headers=_resolve_mcp_auth_headers(entry),
+                    persist=False,
                     **_insecure_auth_kwargs(entry),
                 )
                 logger.info("MCP: connected newly-configured server %r via health_check", name)
@@ -214,6 +286,7 @@ class McpManager:
         url: str | None = None,
         headers: dict[str, str] | None = None,
         allow_insecure_auth: bool = False,
+        persist: bool = True,
     ) -> McpClient:
         """Connect to a new MCP server and persist the config.
 
@@ -240,6 +313,8 @@ class McpManager:
             headers=headers,
             **({"allow_insecure_auth": True} if allow_insecure_auth else {}),
         )
+        client._command = command
+        client._url = url
         client.connect()
 
         # Digest verification (Feature 3)
@@ -247,6 +322,14 @@ class McpManager:
         if expected_digest is not None:
             from missy.mcp.digest import compute_tool_manifest_digest, verify_digest
 
+            if not expected_digest.startswith("sha256:v2:"):
+                client.disconnect()
+                raise ValueError(
+                    f"MCP server {name!r} manifest digest mismatch: the configured "
+                    "pin uses a legacy/incomplete format. "
+                    "Review the full advertised schema and run 'missy mcp pin "
+                    f"{name}' to migrate to sha256:v2."
+                )
             actual_digest = compute_tool_manifest_digest(client.tools)
             if not verify_digest(expected_digest, actual_digest):
                 client.disconnect()
@@ -294,12 +377,33 @@ class McpManager:
         for tool_name, annotation in client.tool_annotations.items():
             namespaced = f"{name}__{tool_name}"
             self._annotation_registry.register(namespaced, annotation)
-        self._save_config()
+        annotation_states = getattr(client, "tool_annotation_states", {})
+        if isinstance(annotation_states, dict):
+            if not hasattr(self, "_annotation_states"):
+                self._annotation_states = {}
+            for tool_name, state in annotation_states.items():
+                self._annotation_states[f"{name}__{tool_name}"] = str(state)
+        if persist:
+            desired_servers = getattr(self, "_desired_servers", {})
+            existing = dict(desired_servers.get(name, {"name": name}))
+            existing.update({"name": name, "command": command, "url": url})
+            desired_servers[name] = existing
+            self._desired_servers = desired_servers
+            self._save_config()
+        if not hasattr(self, "_live_server_fingerprints"):
+            self._live_server_fingerprints = {}
+        live_entry = getattr(self, "_desired_servers", {}).get(
+            name, {"command": command, "url": url}
+        )
+        self._live_server_fingerprints[name] = self._connection_fingerprint(live_entry)
         logger.info("MCP: connected to %r (%d tools)", name, len(client.tools))
         return client
 
     def _get_server_digest(self, name: str) -> str | None:
         """Return the pinned digest for server *name* from the config file, or None."""
+        desired = getattr(self, "_desired_servers", {}).get(name)
+        if desired and desired.get("digest"):
+            return str(desired["digest"])
         if not self._config_path.exists():
             return None
         try:
@@ -332,26 +436,38 @@ class McpManager:
 
         digest = compute_tool_manifest_digest(client.tools)
 
-        # Update digest in config file
-        if self._config_path.exists():
-            try:
-                servers = json.loads(self._config_path.read_text())
-                for entry in servers:
-                    if entry.get("name") == name:
-                        entry["digest"] = digest
-                        break
-                self._config_path.write_text(json.dumps(servers, indent=2))
-            except Exception as exc:
-                logger.warning("MCP: failed to persist digest for %r: %s", name, exc)
+        entry = dict(self._desired_servers.get(name, {"name": name}))
+        entry["digest"] = digest
+        self._desired_servers[name] = entry
+        self._save_config(upsert_entries={name: entry})
 
         return digest
 
     def remove_server(self, name: str) -> None:
         with self._lock:
             client = self._clients.pop(name, None)
+        desired_servers = getattr(self, "_desired_servers", {})
+        if client is None and name not in desired_servers:
+            return
         if client:
             client.disconnect()
-            self._save_config()
+        desired_servers.pop(name, None)
+        self._live_server_fingerprints.pop(name, None)
+        self._drop_server_annotations(name)
+        self._save_config(remove_names={name})
+
+    def _drop_server_annotations(self, name: str) -> None:
+        prefix = f"{name}__"
+        names = set(getattr(self, "_annotation_states", {}))
+        names.update(
+            tool_name
+            for tool_name in self._annotation_registry.get_all_annotations()
+            if tool_name.startswith(prefix)
+        )
+        for tool_name in names:
+            if tool_name.startswith(prefix):
+                getattr(self, "_annotation_states", {}).pop(tool_name, None)
+                self._annotation_registry.unregister(tool_name)
 
     def restart_server(self, name: str) -> None:
         """Reconnect a dead MCP server, going through the same full
@@ -385,6 +501,7 @@ class McpManager:
                 command=cmd,
                 url=url,
                 headers=headers,
+                persist=False,
                 **({"allow_insecure_auth": True} if insecure else {}),
             )
 
@@ -434,6 +551,11 @@ class McpManager:
         expected_digest = self._get_server_digest(server_name)
         if expected_digest is None:
             return None
+        if not expected_digest.startswith("sha256:v2:"):
+            return (
+                f"[MCP BLOCKED] Server {server_name!r} manifest digest uses a "
+                "legacy/incomplete pin; call denied until an operator reviews and repins it."
+            )
 
         from missy.mcp.digest import compute_tool_manifest_digest, verify_digest
 
@@ -461,7 +583,7 @@ class McpManager:
         arguments: dict,
         session_id: str = "",
         task_id: str = "",
-    ) -> str:
+    ) -> McpCallResult:
         """Call an MCP tool by its namespaced name (server__tool).
 
         SR-4.7: this is the single dispatch chokepoint for every MCP tool
@@ -470,15 +592,28 @@ class McpManager:
         only at connect time.
         """
         if "__" not in namespaced_name:
-            return f"[MCP error] invalid tool name: {namespaced_name}"
+            return McpCallResult(
+                f"[MCP error] invalid tool name: {namespaced_name}",
+                is_error=True,
+                error_kind="validation",
+            )
         server_name, tool_name = namespaced_name.split("__", 1)
         # Validate tool name characters to prevent injection via crafted names.
         if not _SAFE_NAME_RE.match(tool_name):
-            return f"[MCP error] unsafe tool name: {tool_name!r}"
+            return McpCallResult(
+                f"[MCP error] unsafe tool name: {tool_name!r}",
+                is_error=True,
+                error_kind="validation",
+            )
         with self._lock:
             client = self._clients.get(server_name)
         if not client:
-            return f"[MCP error] server {server_name!r} not connected"
+            return McpCallResult(
+                f"[MCP error] server {server_name!r} not connected",
+                is_error=True,
+                error_kind="transport",
+                transport_certainty="not_sent",
+            )
 
         # Re-verify the pinned manifest digest immediately before dispatch.
         # Connect-time verification (add_server()) alone is not enough: a
@@ -490,7 +625,7 @@ class McpManager:
             self._emit_call_audit(
                 namespaced_name, session_id, task_id, "deny", "digest_mismatch_at_call_time"
             )
-            return digest_error
+            return McpCallResult(digest_error, is_error=True, error_kind="policy")
 
         # Annotation-driven approval gate: destructive/mutating MCP tools
         # must be confirmed by a human before running, same as SR-2.2's
@@ -498,15 +633,21 @@ class McpManager:
         # means absence of confirmation infrastructure, which must fail
         # closed (deny), not silently run unconfirmed.
         annotation = self.get_annotation(namespaced_name)
-        if annotation is not None and annotation.to_policy_hints()["requires_approval"]:
+        if annotation is None:
+            from missy.mcp.annotations import ToolAnnotation
+
+            annotation = ToolAnnotation.from_mcp_dict({})
+        if annotation.to_policy_hints()["requires_approval"]:
             if self._approval_gate is None:
                 self._emit_call_audit(
                     namespaced_name, session_id, task_id, "deny", "no_approval_gate"
                 )
-                return (
+                return McpCallResult(
                     f"[MCP DENIED] Tool {namespaced_name!r} requires human approval "
                     "(destructive/mutating), but no approval gate is configured for "
-                    "this session."
+                    "this session.",
+                    is_error=True,
+                    error_kind="policy",
                 )
             try:
                 self._approval_gate.request(
@@ -518,7 +659,11 @@ class McpManager:
                 self._emit_call_audit(
                     namespaced_name, session_id, task_id, "deny", f"approval_failed: {exc}"
                 )
-                return f"[MCP DENIED] Approval for {namespaced_name!r} was not granted: {exc}"
+                return McpCallResult(
+                    f"[MCP DENIED] Approval for {namespaced_name!r} was not granted: {exc}",
+                    is_error=True,
+                    error_kind="policy",
+                )
 
             # ApprovalGate.request() blocks synchronously waiting for a
             # human response (up to its configured timeout, 60s by
@@ -538,9 +683,17 @@ class McpManager:
                     "deny",
                     "digest_mismatch_after_approval_wait",
                 )
-                return digest_error
+                return McpCallResult(digest_error, is_error=True, error_kind="policy")
 
-        result = client.call_tool(tool_name, arguments)
+        try:
+            result = client.call_tool(tool_name, arguments)
+        except Exception as exc:
+            result = McpCallResult(
+                f"[MCP error] uncertain transport outcome: {exc}",
+                is_error=True,
+                error_kind="transport",
+                transport_certainty="uncertain",
+            )
         # Defense-in-depth: scan MCP tool results for prompt injection.
         try:
             from missy.security.sanitizer import InputSanitizer
@@ -557,11 +710,19 @@ class McpManager:
                     self._emit_call_audit(
                         namespaced_name, session_id, task_id, "deny", "injection_detected"
                     )
-                    return (
+                    return McpCallResult(
                         f"[MCP BLOCKED] Tool {namespaced_name!r} output contained "
-                        f"injection patterns and was blocked: {warnings}"
+                        f"injection patterns and was blocked: {warnings}",
+                        is_error=True,
+                        error_kind="policy",
                     )
-                result = f"[SECURITY WARNING: MCP tool output may contain injection] {result_text}"
+                result = McpCallResult(
+                    f"[SECURITY WARNING: MCP tool output may contain injection] {result_text}",
+                    is_error=bool(getattr(result, "is_error", False)),
+                    error_kind=getattr(result, "error_kind", None),
+                    protocol_error=getattr(result, "protocol_error", None),
+                    transport_certainty=getattr(result, "transport_certainty", "completed"),
+                )
         except Exception as exc:
             # Do not ask logging to format the traceback here.  Traceback
             # formatting can itself import modules (for example via
@@ -576,13 +737,24 @@ class McpManager:
             self._emit_call_audit(
                 namespaced_name, session_id, task_id, "deny", "injection_scan_failed"
             )
-            return (
+            return McpCallResult(
                 f"[MCP BLOCKED] Tool {namespaced_name!r} output could not be "
-                "security-scanned for prompt injection."
+                "security-scanned for prompt injection.",
+                is_error=True,
+                error_kind="policy",
             )
 
-        self._emit_call_audit(namespaced_name, session_id, task_id, "allow", "")
-        return result
+        is_error = bool(getattr(result, "is_error", False))
+        self._emit_call_audit(
+            namespaced_name,
+            session_id,
+            task_id,
+            "error" if is_error else "allow",
+            str(getattr(result, "error_kind", "") or ""),
+        )
+        if isinstance(result, McpCallResult):
+            return result
+        return McpCallResult(str(result))
 
     @staticmethod
     def _emit_call_audit(
@@ -613,10 +785,28 @@ class McpManager:
 
     def list_servers(self) -> list[dict]:
         with self._lock:
-            return [
-                {"name": n, "alive": c.is_alive(), "tools": len(c.tools)}
-                for n, c in self._clients.items()
-            ]
+            clients = dict(self._clients)
+        desired_servers = getattr(self, "_desired_servers", {})
+        annotation_states = getattr(self, "_annotation_states", {})
+        names = set(desired_servers) | set(clients)
+        result = []
+        for name in sorted(names):
+            client = clients.get(name)
+            states = {
+                tool_name.removeprefix(f"{name}__"): state
+                for tool_name, state in annotation_states.items()
+                if tool_name.startswith(f"{name}__")
+            }
+            result.append(
+                {
+                    "name": name,
+                    "alive": bool(client and client.is_alive()),
+                    "tools": len(client.tools) if client else 0,
+                    "desired": name in desired_servers,
+                    "annotation_states": states,
+                }
+            )
+        return result
 
     def get_annotation(self, tool_name: str):
         """Return the :class:`~missy.mcp.annotations.ToolAnnotation` for *tool_name*.
@@ -660,7 +850,12 @@ class McpManager:
             with contextlib.suppress(Exception):
                 c.disconnect()
 
-    def _save_config(self) -> None:
+    def _save_config(
+        self,
+        *,
+        remove_names: set[str] | None = None,
+        upsert_entries: dict[str, dict] | None = None,
+    ) -> None:
         # SR-1.11: rebuilding entries from self._clients alone drops any
         # digest pinned via `missy mcp pin` — this method is called
         # unconditionally after every successful add_server(), including on
@@ -673,22 +868,22 @@ class McpManager:
         # (``bearer_token``/``headers``/``allow_insecure_auth``): they only
         # ever live on disk (secrets stay as vault:// references), so every
         # non-connection key of an existing entry is carried forward too.
-        existing_digests: dict[str, str] = {}
-        existing_extra: dict[str, dict] = {}
+        existing_entries: dict[str, dict] = {
+            str(name): dict(entry)
+            for name, entry in getattr(self, "_desired_servers", {}).items()
+            if isinstance(entry, dict)
+        }
         if self._config_path.exists():
             try:
                 existing = json.loads(self._config_path.read_text())
+                if not isinstance(existing, list):
+                    raise ValueError("MCP config must be a JSON array")
                 for entry in existing:
-                    digest = entry.get("digest")
+                    if not isinstance(entry, dict):
+                        raise ValueError("MCP config entries must be objects")
                     entry_name = entry.get("name")
-                    if digest and entry_name:
-                        existing_digests[entry_name] = digest
-                    if entry_name and isinstance(entry, dict):
-                        existing_extra[entry_name] = {
-                            k: v
-                            for k, v in entry.items()
-                            if k not in {"name", "command", "url", "digest"}
-                        }
+                    if entry_name:
+                        existing_entries[entry_name] = dict(entry)
             except Exception:
                 logger.warning(
                     "MCP: could not read existing config at %s to preserve pinned "
@@ -696,17 +891,19 @@ class McpManager:
                     self._config_path,
                 )
 
+        for name in remove_names or set():
+            existing_entries.pop(name, None)
+        for name, entry in (upsert_entries or {}).items():
+            existing_entries[name] = dict(entry)
         with self._lock:
-            entries = [
-                {"name": name, "command": c._command, "url": c._url}
-                for name, c in self._clients.items()
-            ]
-        for entry in entries:
-            for key, value in existing_extra.get(entry["name"], {}).items():
-                entry.setdefault(key, value)
-            digest = existing_digests.get(entry["name"])
-            if digest:
-                entry["digest"] = digest
+            clients = list(self._clients.items())
+        for name, client in clients:
+            entry = existing_entries.setdefault(name, {"name": name})
+            command = getattr(client, "_command", None)
+            url = getattr(client, "_url", None)
+            entry["command"] = command if isinstance(command, str) else None
+            entry["url"] = url if isinstance(url, str) else None
+        entries = list(existing_entries.values())
         self._config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Write with restrictive permissions (owner read/write only) to
         # prevent other users from reading server commands or URLs.
@@ -723,6 +920,11 @@ class McpManager:
             os.close(fd)
             closed = True
             os.replace(tmp_path, str(self._config_path))
+            self._desired_servers = {
+                str(entry["name"]): dict(entry)
+                for entry in entries
+                if isinstance(entry.get("name"), str) and entry.get("name")
+            }
         except Exception:
             if not closed:
                 with contextlib.suppress(OSError):

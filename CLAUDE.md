@@ -361,7 +361,7 @@ vault:
 
 # Voice channel (read from raw YAML, not a dataclass)
 voice:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8765
   stt:
     engine: "faster-whisper"

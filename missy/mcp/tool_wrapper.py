@@ -76,7 +76,9 @@ class McpToolWrapper(BaseTool):
 
     def execute(self, **kwargs: Any) -> ToolResult:
         content = self._manager.call_tool(self.name, kwargs)
-        is_blocked = isinstance(content, str) and content.startswith(_BLOCKED_PREFIXES)
+        is_blocked = bool(getattr(content, "is_error", False)) or (
+            isinstance(content, str) and content.startswith(_BLOCKED_PREFIXES)
+        )
         return ToolResult(
             success=not is_blocked,
             output=content,

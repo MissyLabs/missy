@@ -121,7 +121,10 @@ class TestVoiceChannelStartSuccessPath:
             ch.start(MagicMock())
 
         assert any("started on" in r.message for r in caplog.records)
+        owner_thread = ch._thread
+        assert owner_thread is not None
         ch.stop()
+        assert not owner_thread.is_alive()
 
     def test_start_while_loop_runs_until_server_stops(self):
         """Lines 241-245: The while server._running loop keeps the event loop alive."""
