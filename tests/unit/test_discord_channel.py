@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -540,7 +540,9 @@ class TestGuildPolicy:
 
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(channel.create_thread("parent-chan", "Auto Thread"))
+            loop.run_until_complete(
+                channel.create_thread("parent-chan", "Auto Thread", guild_id="guild-1")
+            )
         finally:
             loop.close()
 
@@ -564,7 +566,9 @@ class TestGuildPolicy:
 
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(channel.create_thread("other-chan", "Auto Thread"))
+            loop.run_until_complete(
+                channel.create_thread("other-chan", "Auto Thread", guild_id="guild-1")
+            )
         finally:
             loop.close()
 
@@ -1030,3 +1034,110 @@ class TestDiscordRestThreads:
         assert result["id"] == "100000000000000001"
         call_args = mock_http_client.get.call_args
         assert "/channels/100000000000000001" in call_args[0][0]
+
+
+class TestDiscordShutdownAndThreadResolution:
+    @pytest.mark.asyncio
+    async def test_concurrent_guild_messages_keep_independent_capability_modes(self) -> None:
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            guild_policies={
+                "guild-none": DiscordGuildPolicy(mode="no_tools"),
+                "guild-safe": DiscordGuildPolicy(mode="safe_chat_only"),
+            },
+        )
+        channel = _make_channel(account)
+        await asyncio.gather(
+            channel._handle_message(
+                _make_message(author_id="user-a", guild_id="guild-none", channel_id="chan-a")
+            ),
+            channel._handle_message(
+                _make_message(author_id="user-b", guild_id="guild-safe", channel_id="chan-b")
+            ),
+        )
+        messages = [channel._queue.get_nowait(), channel._queue.get_nowait()]
+        modes = {
+            message.metadata["discord_guild_id"]: message.metadata["discord_capability_mode"]
+            for message in messages
+        }
+        assert modes == {"guild-none": "no-tools", "guild-safe": "safe-chat"}
+
+    @pytest.mark.asyncio
+    async def test_stop_wakes_blocked_areceive(self, open_dm_account) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._gateway.disconnect = AsyncMock()
+        waiting = asyncio.create_task(channel.areceive())
+        await asyncio.sleep(0)
+        await channel.stop()
+        assert await asyncio.wait_for(waiting, timeout=1) is None
+
+    @pytest.mark.asyncio
+    async def test_stop_wakes_multiple_receivers_and_restart_has_no_stale_wakeup(
+        self, open_dm_account
+    ) -> None:
+        channel = _make_channel(open_dm_account)
+        channel._gateway.disconnect = AsyncMock()
+        waiting = [asyncio.create_task(channel.areceive()) for _ in range(2)]
+        await asyncio.sleep(0)
+        await channel.stop()
+        assert await asyncio.gather(*waiting) == [None, None]
+        channel._gateway.run = AsyncMock()
+        await channel.start()
+        next_receive = asyncio.create_task(channel.areceive())
+        await asyncio.sleep(0)
+        assert not next_receive.done()
+        await channel.stop()
+        assert await next_receive is None
+
+    def test_user_created_thread_parent_is_resolved_via_rest(self) -> None:
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            guild_policies={"guild-111": DiscordGuildPolicy(allowed_channels=["parent-123"])},
+        )
+        channel = _make_channel(account)
+        channel._rest.get_channel.return_value = {
+            "id": "thread-456",
+            "parent_id": "parent-123",
+            "guild_id": "guild-111",
+            "type": 11,
+        }
+        assert channel._check_guild_policy(
+            "guild-111",
+            "thread-456",
+            "user-123",
+            "hello",
+            {},
+        )
+        assert channel._thread_parents["thread-456"] == "parent-123"
+
+    def test_cross_guild_thread_parent_is_ignored(self) -> None:
+        account = DiscordAccountConfig(
+            token_env_var="DISCORD_BOT_TOKEN",
+            account_id="bot-001",
+            guild_policies={"guild-111": DiscordGuildPolicy(allowed_channels=["parent-123"])},
+        )
+        channel = _make_channel(account)
+        channel._rest.get_channel.return_value = {
+            "id": "thread-456",
+            "parent_id": "parent-123",
+            "guild_id": "other-guild",
+            "type": 11,
+        }
+        assert not channel._check_guild_policy("guild-111", "thread-456", "user-123", "hello", {})
+
+    @pytest.mark.asyncio
+    async def test_thread_gateway_events_populate_and_invalidate_parent_cache(
+        self, open_dm_account
+    ) -> None:
+        channel = _make_channel(open_dm_account)
+        await channel._on_gateway_event(
+            {
+                "t": "THREAD_CREATE",
+                "d": {"id": "thread", "parent_id": "parent", "guild_id": "guild"},
+            }
+        )
+        assert channel._cached_thread_parent("thread", "guild") == "parent"
+        await channel._on_gateway_event({"t": "THREAD_DELETE", "d": {"id": "thread"}})
+        assert channel._cached_thread_parent("thread", "guild") == ""

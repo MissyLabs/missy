@@ -541,8 +541,8 @@ class TestLoadConfigShellUnrestricted:
 # ---------------------------------------------------------------------------
 
 
-class TestUnknownConfigKeyWarnings:
-    def test_shell_typo_key_warns(self, tmp_path: Path, caplog):
+class TestUnknownSecurityConfigKeys:
+    def test_shell_typo_key_is_rejected(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
@@ -552,14 +552,10 @@ class TestUnknownConfigKeyWarnings:
               allowd_commands: ["typo"]
             """,
         )
-        with caplog.at_level("WARNING", logger="missy.config.settings"):
-            cfg = load_config(path)
+        with pytest.raises(ConfigurationError, match="allowd_commands"):
+            load_config(path)
 
-        assert cfg.shell.enabled is True
-        assert cfg.shell.allowed_commands == ["ls"]
-        assert any("shell" in r.message and "allowd_commands" in r.message for r in caplog.records)
-
-    def test_network_unknown_key_warns(self, tmp_path: Path, caplog):
+    def test_network_unknown_key_is_rejected(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
@@ -568,15 +564,10 @@ class TestUnknownConfigKeyWarnings:
               allowed_domain: "api.example.com"
             """,
         )
-        with caplog.at_level("WARNING", logger="missy.config.settings"):
+        with pytest.raises(ConfigurationError, match="allowed_domain"):
             load_config(path)
 
-        # "allowed_domain" (singular, a plausible typo for the real
-        # "allowed_domains") must be flagged, not silently accepted as
-        # if it configured anything.
-        assert any("network" in r.message and "allowed_domain" in r.message for r in caplog.records)
-
-    def test_filesystem_unknown_key_warns(self, tmp_path: Path, caplog):
+    def test_filesystem_unknown_key_is_rejected(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
@@ -585,14 +576,10 @@ class TestUnknownConfigKeyWarnings:
               readonly_paths: ["/etc"]
             """,
         )
-        with caplog.at_level("WARNING", logger="missy.config.settings"):
+        with pytest.raises(ConfigurationError, match="readonly_paths"):
             load_config(path)
 
-        assert any(
-            "filesystem" in r.message and "readonly_paths" in r.message for r in caplog.records
-        )
-
-    def test_plugins_unknown_key_warns(self, tmp_path: Path, caplog):
+    def test_plugins_unknown_key_is_rejected(self, tmp_path: Path):
         path = _write_yaml(
             tmp_path,
             """
@@ -601,10 +588,35 @@ class TestUnknownConfigKeyWarnings:
               whitelist: ["foo"]
             """,
         )
-        with caplog.at_level("WARNING", logger="missy.config.settings"):
+        with pytest.raises(ConfigurationError, match="whitelist"):
             load_config(path)
 
-        assert any("plugins" in r.message and "whitelist" in r.message for r in caplog.records)
+    def test_voice_and_sandbox_typos_are_rejected(self, tmp_path: Path):
+        path = _write_yaml(tmp_path, "voice:\n  allow_insecure_remtoe: true\n")
+        with pytest.raises(ConfigurationError, match="allow_insecure_remtoe"):
+            load_config(path)
+
+        path = _write_yaml(tmp_path, "sandbox:\n  enabled: true\n  read_only_rooot: true\n")
+        with pytest.raises(ConfigurationError, match="read_only_rooot"):
+            load_config(path)
+
+    def test_nested_tool_policy_typo_is_rejected(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            "tools:\n  byProvider:\n    anthropic:\n      alow: [calculator]\n",
+        )
+        with pytest.raises(ConfigurationError, match="alow"):
+            load_config(path)
+
+    def test_agent_without_explicit_profile_inherits_global_profile(self, tmp_path: Path):
+        path = _write_yaml(
+            tmp_path,
+            "tools:\n  profile: minimal\nagents:\n  analyst:\n    tools:\n      deny: [file_write]\n",
+        )
+        config = load_config(path)
+        assert config.tools.profile == "minimal"
+        assert config.agents["analyst"].tools is not None
+        assert config.agents["analyst"].tools.profile is None
 
     def test_no_warning_for_recognized_keys_only(self, tmp_path: Path, caplog):
         path = _write_yaml(

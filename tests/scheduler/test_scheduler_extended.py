@@ -546,7 +546,7 @@ class TestManagerRunJobRetryScheduling:
         job = mgr.add_job("retry-me", "every 5 minutes", "t", max_attempts=3)
 
         with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
-            MockRuntime.return_value.run.side_effect = RuntimeError("error")
+            MockRuntime.return_value.run.side_effect = ConnectionError("network error")
             mgr._run_job(job.id)
 
         retry_job = mgr._scheduler.get_job(f"{job.id}_retry_1")
@@ -564,6 +564,33 @@ class TestManagerRunJobRetryScheduling:
 
         retry_job = mgr._scheduler.get_job(f"{job.id}_retry_2")
         assert retry_job is None, "No retry must be scheduled when max_attempts is exhausted"
+
+    @patch("missy.scheduler.manager.uuid")
+    def test_error_audit_records_category_and_retry_decision(
+        self, mock_uuid, mgr: SchedulerManager
+    ) -> None:
+        mock_uuid.uuid4.return_value = "sess"
+        job = mgr.add_job(
+            "validation-failure",
+            "every 5 minutes",
+            "t",
+            max_attempts=3,
+            retry_on=["network"],
+        )
+        with (
+            patch("missy.agent.runtime.AgentRuntime") as MockRuntime,
+            patch.object(mgr, "_emit_event") as emit,
+        ):
+            MockRuntime.return_value.run.side_effect = ValueError("invalid input")
+            mgr._run_job(job.id)
+
+        error_call = next(
+            call
+            for call in emit.call_args_list
+            if call.kwargs.get("event_type") == "scheduler.job.run.error"
+        )
+        assert error_call.kwargs["detail"]["error_category"] == "validation"
+        assert error_call.kwargs["detail"]["retry"] is False
 
 
 class TestPauseJobStopsInFlightRetries:
@@ -586,7 +613,7 @@ class TestPauseJobStopsInFlightRetries:
         job = mgr.add_job("flaky", "every 5 minutes", "t", max_attempts=3)
 
         with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
-            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            MockRuntime.return_value.run.side_effect = ConnectionError("network error")
             mgr._run_job(job.id)
 
         assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
@@ -606,7 +633,7 @@ class TestPauseJobStopsInFlightRetries:
         job = mgr.add_job("flaky2", "every 5 minutes", "t", max_attempts=3)
 
         with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
-            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            MockRuntime.return_value.run.side_effect = ConnectionError("network error")
             mgr._run_job(job.id)
 
         assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None
@@ -631,7 +658,7 @@ class TestPauseJobStopsInFlightRetries:
         job = mgr.add_job("flaky3", "every 5 minutes", "t", max_attempts=3)
 
         with patch("missy.agent.runtime.AgentRuntime") as MockRuntime:
-            MockRuntime.return_value.run.side_effect = RuntimeError("boom")
+            MockRuntime.return_value.run.side_effect = ConnectionError("network error")
             mgr._run_job(job.id)
 
         assert mgr._scheduler.get_job(f"{job.id}_retry_1") is not None

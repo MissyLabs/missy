@@ -19,15 +19,17 @@ Typical usage::
 
 from __future__ import annotations
 
+import shlex
 import threading
 from pathlib import Path
 
 from missy.config.settings import MissyConfig
+from missy.core.exceptions import PolicyViolationError
 
 from .filesystem import FilesystemPolicyEngine
 from .network import NetworkPolicyEngine
 from .rest_policy import RestPolicy
-from .shell import ShellPolicyEngine
+from .shell import ShellPolicyEngine, ShellRedirectParseError
 
 
 def _is_dev_null(target: str) -> bool:
@@ -175,6 +177,7 @@ class PolicyEngine:
         command: str,
         session_id: str = "",
         task_id: str = "",
+        cwd: str | Path | None = None,
     ) -> bool:
         """Evaluate a shell command execution request.
 
@@ -191,6 +194,9 @@ class PolicyEngine:
             command: The shell command string to evaluate.
             session_id: Optional calling session identifier.
             task_id: Optional calling task identifier.
+            cwd: Working directory the command will execute in. Relative
+                redirect targets are resolved against this directory, not
+                the daemon's process directory.
 
         Returns:
             ``True`` when the command — and every redirection target it
@@ -203,17 +209,78 @@ class PolicyEngine:
         """
         self.shell.check_command(command, session_id=session_id, task_id=task_id)
 
-        write_targets, read_targets = self.shell.extract_redirect_targets(command)
+        base_dir: Path | None = None
+        if cwd is not None:
+            base_dir = Path(cwd).expanduser().resolve()
+            # Entering a working directory exposes its contents to the
+            # command, so the directory itself must be readable by policy.
+            self.filesystem.check_read(base_dir, session_id=session_id, task_id=task_id)
+
+        # Redirections are handled below. Also catch direct path operands to
+        # common file-mutating programs so shell_exec cannot sidestep the
+        # protected-path boundary with ``mv``, ``rm``, ``sed -i``, etc.
+        mutating_programs = {
+            "cp",
+            "install",
+            "ln",
+            "mv",
+            "rm",
+            "rmdir",
+            "sed",
+            "tee",
+            "truncate",
+            "unlink",
+        }
+        programs = self.shell._extract_all_programs(command) or []
+        if any(Path(program).name in mutating_programs for program in programs):
+            try:
+                operands = shlex.split(command)
+            except ValueError as exc:
+                raise PolicyViolationError(
+                    "Shell command denied: arguments could not be validated.",
+                    category="shell",
+                    detail=str(exc),
+                ) from exc
+            for operand in operands:
+                if operand.startswith("-") or operand in {"&&", "||", ";", "|", "&"}:
+                    continue
+                candidate = _resolve_shell_path(operand, base_dir)
+                if self.filesystem.is_write_protected(candidate):
+                    raise PolicyViolationError(
+                        "Shell command denied: it targets an operator-protected path.",
+                        category="shell",
+                        detail=f"Protected shell path operand: {candidate}",
+                    )
+
+        try:
+            write_targets, read_targets = self.shell.extract_redirect_targets(command)
+        except ShellRedirectParseError as exc:
+            raise PolicyViolationError(
+                "Shell command denied: redirection could not be validated.",
+                category="shell",
+                detail=str(exc),
+            ) from exc
+
         for target in write_targets:
-            if _is_dev_null(target):
+            resolved = _resolve_shell_path(target, base_dir)
+            if _is_dev_null(str(resolved)):
                 continue
-            self.filesystem.check_write(target, session_id=session_id, task_id=task_id)
+            self.filesystem.check_write(resolved, session_id=session_id, task_id=task_id)
         for target in read_targets:
-            if _is_dev_null(target):
+            resolved = _resolve_shell_path(target, base_dir)
+            if _is_dev_null(str(resolved)):
                 continue
-            self.filesystem.check_read(target, session_id=session_id, task_id=task_id)
+            self.filesystem.check_read(resolved, session_id=session_id, task_id=task_id)
 
         return True
+
+
+def _resolve_shell_path(target: str, cwd: Path | None) -> Path:
+    """Resolve a shell redirect target using the execution working directory."""
+    path = Path(target).expanduser()
+    if not path.is_absolute() and cwd is not None:
+        path = cwd / path
+    return path.resolve()
 
 
 # ---------------------------------------------------------------------------

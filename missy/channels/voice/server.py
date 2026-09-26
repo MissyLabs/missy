@@ -56,6 +56,7 @@ import contextlib
 import json
 import logging
 import os
+import ssl
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -178,6 +179,8 @@ class VoiceServer:
         port: int = 8765,
         audio_chunk_size: int = 4096,
         debug_transcripts: bool = False,
+        ssl_context: ssl.SSLContext | None = None,
+        allow_insecure_remote: bool = False,
     ) -> None:
         self._registry = registry
         self._pairing_manager = pairing_manager
@@ -189,6 +192,8 @@ class VoiceServer:
         self._port = port
         self._audio_chunk_size = audio_chunk_size
         self._debug_transcripts = debug_transcripts
+        self._ssl_context = ssl_context
+        self._allow_insecure_remote = allow_insecure_remote
 
         self._running: bool = False
         self._ws_server: Any | None = None  # websockets.WebSocketServer
@@ -214,9 +219,20 @@ class VoiceServer:
             logger.debug("VoiceServer.start() called but server is already running.")
             return
 
-        if self._host == "0.0.0.0":
+        is_loopback = self._host in {"127.0.0.1", "::1", "localhost"}
+        if not is_loopback and self._ssl_context is None and not self._allow_insecure_remote:
+            raise ValueError(
+                "VoiceServer refuses a plaintext non-loopback bind; configure TLS "
+                "or explicitly set allow_insecure_remote=true."
+            )
+
+        if not is_loopback:
             logger.warning(
-                "VoiceServer: binding to 0.0.0.0 exposes the voice channel on all interfaces."
+                "VoiceServer: binding to non-loopback host %s exposes the voice channel "
+                "to remote clients (tls=%s, insecure_escape=%s).",
+                self._host,
+                self._ssl_context is not None,
+                self._allow_insecure_remote,
             )
             _emit(
                 session_id="system",
@@ -236,9 +252,11 @@ class VoiceServer:
             self._host,
             self._port,
             max_size=_MAX_WS_FRAME_BYTES,
+            ssl=self._ssl_context,
         )
         self._running = True
-        logger.info("VoiceServer: listening on ws://%s:%d", self._host, self._port)
+        scheme = "wss" if self._ssl_context is not None else "ws"
+        logger.info("VoiceServer: listening on %s://%s:%d", scheme, self._host, self._port)
 
     async def stop(self) -> None:
         """Close all connections and unload STT/TTS engines.

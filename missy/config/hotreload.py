@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import stat
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -38,9 +41,16 @@ class ConfigWatcher:
         self._last_change_time: float = 0.0
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._active_config = None
 
     def start(self) -> None:
         """Start the background file watcher."""
+        try:
+            from missy.config.settings import load_config
+
+            self._active_config = load_config(str(self._path))
+        except Exception:
+            logger.warning("ConfigWatcher: could not snapshot initial policy", exc_info=True)
         try:
             self._last_mtime = self._path.stat().st_mtime
         except OSError:
@@ -114,10 +124,177 @@ class ConfigWatcher:
             from missy.config.settings import load_config
 
             new_config = load_config(str(self._path))
+            if self._active_config is not None and _is_security_widening(
+                self._active_config, new_config
+            ):
+                digest = candidate_config_digest(new_config)
+                if not self._consume_widening_approval(digest):
+                    logger.error(
+                        "ConfigWatcher: rejected unapproved security-policy widening (%s)",
+                        digest,
+                    )
+                    _emit_reload_denial(digest)
+                    return
             self._reload_fn(new_config)
+            self._active_config = new_config
             logger.info("ConfigWatcher: reload complete")
         except Exception as exc:
             logger.error("ConfigWatcher: reload failed: %s", exc)
+
+    def _consume_widening_approval(self, digest: str) -> bool:
+        """Consume a one-time approval bound to an exact candidate digest."""
+        approval = self._path.parent / f"{self._path.name}.reload-approval"
+        fd = -1
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(approval, flags)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return False
+            if st.st_uid != os.getuid() or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                return False
+            content = os.read(fd, 4096).decode("utf-8").strip()
+            if content != digest:
+                return False
+            current = approval.stat(follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (st.st_dev, st.st_ino):
+                return False
+            approval.unlink()
+            return True
+        except (OSError, UnicodeDecodeError):
+            return False
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+
+def candidate_config_digest(config) -> str:
+    """Return the canonical digest used for one-time widening approvals."""
+    payload = asdict(config) if is_dataclass(config) else config
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _paths_widened(old_paths: list[str], new_paths: list[str]) -> bool:
+    old = [Path(path).expanduser().resolve() for path in old_paths]
+    for raw in new_paths:
+        candidate = Path(raw).expanduser().resolve()
+        if not any(candidate == prior or candidate.is_relative_to(prior) for prior in old):
+            return True
+    return False
+
+
+def _is_security_widening(old, new) -> bool:
+    """Conservatively identify access expansions while allowing narrowing."""
+    if (not old.shell.enabled and new.shell.enabled) or (
+        not old.shell.unrestricted and new.shell.unrestricted
+    ):
+        return True
+    if not set(new.shell.allowed_commands).issubset(old.shell.allowed_commands):
+        return True
+    if not set(new.shell.allowed_env_vars).issubset(old.shell.allowed_env_vars):
+        return True
+    if _paths_widened(old.filesystem.allowed_read_paths, new.filesystem.allowed_read_paths):
+        return True
+    if _paths_widened(old.filesystem.allowed_write_paths, new.filesystem.allowed_write_paths):
+        return True
+    # Removing a protected path (or replacing it with a narrower child) is a
+    # widening even when the ordinary allowlists are unchanged.
+    if _paths_widened(new.filesystem.protected_write_paths, old.filesystem.protected_write_paths):
+        return True
+    if old.network.default_deny and not new.network.default_deny:
+        return True
+    for field in (
+        "allowed_cidrs",
+        "allowed_domains",
+        "allowed_hosts",
+        "provider_allowed_hosts",
+        "tool_allowed_hosts",
+        "discord_allowed_hosts",
+        "presets",
+    ):
+        if not set(getattr(new.network, field)).issubset(getattr(old.network, field)):
+            return True
+    if new.network.rest_policies != old.network.rest_policies:
+        return True
+    if not old.plugins.enabled and new.plugins.enabled:
+        return True
+    if not set(new.plugins.allowed_plugins).issubset(old.plugins.allowed_plugins):
+        return True
+    if not set(new.providers).issubset(old.providers):
+        return True
+    if any(new.providers[name] != old.providers[name] for name in new.providers):
+        return True
+    if old.landlock_enabled and not new.landlock_enabled:
+        return True
+
+    old_sandbox = old.sandbox
+    new_sandbox = new.sandbox
+    if old_sandbox is not None and new_sandbox is None:
+        if old_sandbox.enabled:
+            return True
+    elif old_sandbox is not None and new_sandbox is not None:
+        if old_sandbox.enabled and not new_sandbox.enabled:
+            return True
+        if old_sandbox.network_disabled and not new_sandbox.network_disabled:
+            return True
+        if old_sandbox.read_only_root and not new_sandbox.read_only_root:
+            return True
+        if old_sandbox.require_isolation and not new_sandbox.require_isolation:
+            return True
+        # Bind-mount strings contain host/container/mode components and are
+        # not ordinary paths. Any newly introduced or changed mapping is a
+        # potential host-filesystem expansion; removals are narrowing.
+        if not set(new_sandbox.allowed_bind_mounts).issubset(old_sandbox.allowed_bind_mounts):
+            return True
+        if new_sandbox.tools != old_sandbox.tools:
+            return True
+
+    profile_rank = {"minimal": 0, "coding": 2, "messaging": 2, "full": 3}
+    old_tools = old.tools
+    new_tools = new.tools
+    if profile_rank.get(new_tools.profile, 3) > profile_rank.get(old_tools.profile, 3):
+        return True
+    if (
+        profile_rank.get(new_tools.profile, 3) == profile_rank.get(old_tools.profile, 3)
+        and new_tools.profile != old_tools.profile
+    ):
+        return True
+    if not set(new_tools.allow).issubset(old_tools.allow):
+        return True
+    if not set(new_tools.also_allow).issubset(old_tools.also_allow):
+        return True
+    if not set(old_tools.deny).issubset(new_tools.deny):
+        return True
+    if not set(old_tools.disabled_tools).issubset(new_tools.disabled_tools):
+        return True
+    if (
+        new_tools.by_provider != old_tools.by_provider
+        or new_tools.by_model != old_tools.by_model
+        or new_tools.groups != old_tools.groups
+    ):
+        return True
+    # Per-agent policy changes are uncommon and difficult to order safely;
+    # require an exact approval unless the mapping is unchanged.
+    return new.agents != old.agents
+
+
+def _emit_reload_denial(digest: str) -> None:
+    try:
+        from missy.core.events import AuditEvent, event_bus
+
+        event_bus.publish(
+            AuditEvent.now(
+                session_id="",
+                task_id="",
+                event_type="config.reload_widening",
+                category="security",
+                result="deny",
+                detail={"candidate_digest": digest},
+            )
+        )
+    except Exception:
+        logger.debug("ConfigWatcher: failed to audit widening denial", exc_info=True)
 
 
 def _apply_config(new_config) -> None:

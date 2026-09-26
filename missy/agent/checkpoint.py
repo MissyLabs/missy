@@ -35,10 +35,23 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from missy.core.events import AuditEvent, event_bus
+from missy.security.censor import censor_response
 
 logger = logging.getLogger(__name__)
+
+
+def _censor_checkpoint_value(value):
+    """Recursively redact strings before durable checkpoint persistence."""
+    if isinstance(value, str):
+        return censor_response(value)
+    if isinstance(value, list):
+        return [_censor_checkpoint_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _censor_checkpoint_value(item) for key, item in value.items()}
+    return value
 
 
 class CheckpointCorruptedError(Exception):
@@ -126,7 +139,18 @@ class CheckpointManager:
         self.db_path = os.path.expanduser(db_path)
         self._local = threading.local()
         # Ensure the parent directory exists before any connection is opened
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True, mode=0o700)
+        parent = os.path.dirname(self.db_path) or "."
+        os.makedirs(parent, exist_ok=True, mode=0o700)
+        resolved_parent = Path(parent).resolve()
+        unsafe_to_repermission = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+        if resolved_parent not in unsafe_to_repermission:
+            os.chmod(parent, 0o700)
+        if os.path.islink(self.db_path):
+            raise ValueError(f"Refusing symlinked checkpoint database: {self.db_path}")
+        flags = os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self.db_path, flags, 0o600)
+        os.close(fd)
+        os.chmod(self.db_path, 0o600)
         # Eagerly initialise the schema on the calling thread
         conn = self._connect()
         conn.executescript(_DDL)
@@ -151,6 +175,10 @@ class CheckpointManager:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            for suffix in ("", "-wal", "-shm"):
+                path = f"{self.db_path}{suffix}"
+                if os.path.exists(path):
+                    os.chmod(path, 0o600)
             self._local.conn = conn
         return conn
 
@@ -180,7 +208,7 @@ class CheckpointManager:
                  created_at, updated_at)
             VALUES (?, ?, ?, ?, 'RUNNING', '[]', '[]', 0, ?, ?)
             """,
-            (checkpoint_id, session_id, task_id, prompt, now, now),
+            (checkpoint_id, session_id, task_id, censor_response(prompt), now, now),
         )
         conn.commit()
         logger.debug("Checkpoint created: id=%s session=%s", checkpoint_id, session_id)
@@ -213,7 +241,7 @@ class CheckpointManager:
              WHERE id = ?
             """,
             (
-                json.dumps(loop_messages),
+                json.dumps(_censor_checkpoint_value(loop_messages)),
                 json.dumps(tool_names_used),
                 iteration,
                 now,

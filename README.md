@@ -229,8 +229,9 @@ network:
       action: "allow"
 
 filesystem:
-  allowed_read_paths: ["~/workspace", "~/.missy"]
-  allowed_write_paths: ["~/workspace", "~/.missy"]
+  # Keep mutable agent work separate from ~/.missy operator policy/secrets.
+  allowed_read_paths: ["~/workspace"]
+  allowed_write_paths: ["~/workspace"]
 
 shell:
   enabled: false
@@ -253,7 +254,7 @@ container:                       # optional Docker sandbox
   network_mode: "none"
 
 voice:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8765
   stt: { engine: "faster-whisper", model: "base.en" }
   tts: { engine: "piper", voice: "en_US-lessac-medium" }

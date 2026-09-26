@@ -319,7 +319,9 @@ def layers_for_capability_mode(mode: str) -> tuple[ToolPolicyLayer, ...]:
     normalized = (mode or "full").strip().lower()
     if normalized == "no-tools":
         return (ToolPolicyLayer(label="profile:no-tools", deny=("*",)),)
-    profile = CAPABILITY_MODE_PROFILES.get(normalized, "full")
+    if normalized not in CAPABILITY_MODE_PROFILES:
+        raise ValueError(f"Unknown capability mode: {mode!r}")
+    profile = CAPABILITY_MODE_PROFILES[normalized]
     return (profile_layer(profile),)
 
 
@@ -346,9 +348,11 @@ def build_configured_tool_policy_layers(
 
     if normalized_mode in {"no-tools", "safe-chat", "discord"}:
         layers = list(layers_for_capability_mode(normalized_mode))
-    else:
+    elif normalized_mode == "full":
         profile = _profile_from_config(agent_map.get("profile") or global_map.get("profile"))
         layers = [profile_layer(profile)]
+    else:
+        raise ValueError(f"Unknown capability mode: {capability_mode!r}")
 
     provider_payload = _merge_layer_payloads(
         _provider_payload(global_map, provider_name, model_id),

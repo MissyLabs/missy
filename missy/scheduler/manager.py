@@ -33,7 +33,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import SchedulerError
-from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob
+from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob, classify_retry_error
 from missy.scheduler.parser import parse_schedule
 
 logger = logging.getLogger(__name__)
@@ -772,6 +772,7 @@ class SchedulerManager:
             self._register_run_session(agent, job, session_id)
             result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
+            retry_category = classify_retry_error(exc)
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)
             with self._lock:
                 job.last_run = datetime.now(tz=UTC)
@@ -780,15 +781,22 @@ class SchedulerManager:
                 job.last_error = str(exc)
                 self._record_run_metrics(agent, job, session_id, run_started)
 
+            should_retry = job.should_retry(exc)
             self._emit_event(
                 event_type="scheduler.job.run.error",
                 result="error",
-                detail={"job_id": job_id, "name": job.name, "error": str(exc)},
+                detail={
+                    "job_id": job_id,
+                    "name": job.name,
+                    "error": str(exc),
+                    "error_category": retry_category,
+                    "retry": should_retry,
+                },
                 session_id=session_id,
                 task_id=task_id,
             )
 
-            if job.should_retry(str(exc)):
+            if should_retry:
                 # Calculate backoff delay using the failure index (clamped to
                 # the length of the backoff list).
                 failures = job.consecutive_failures
@@ -819,6 +827,7 @@ class SchedulerManager:
                             "job_id": job_id,
                             "name": job.name,
                             "attempt": failures,
+                            "error_category": retry_category,
                             "backoff_seconds": backoff,
                             "retry_run_date": retry_run_date.isoformat(),
                         },

@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 #: How long a guild's resolved role-ID-to-name map stays cached before
 #: being re-fetched from Discord's REST API (allowed_roles enforcement).
 _GUILD_ROLES_CACHE_TTL_SECONDS = 300.0
+_THREAD_PARENT_CACHE_TTL_SECONDS = 300.0
 _EVOLUTION_REACTION_STATE_LOCK = threading.RLock()
 _DEFAULT_EVOLUTION_REACTION_STATE_PATH = Path(
     "~/.missy/discord_evolution_reactions.json"
@@ -103,6 +104,7 @@ class DiscordChannel(BaseChannel):
         self._session_id = session_id
         self._task_id = task_id
         self._queue: asyncio.Queue[ChannelMessage] = asyncio.Queue(maxsize=queue_max)
+        self._stopped = asyncio.Event()
         self._current_channel_id: str | None = None
 
         # Pairing state: set of Discord user IDs that have initiated pairing
@@ -125,11 +127,9 @@ class DiscordChannel(BaseChannel):
         # any message inside a thread this bot created (via
         # auto_thread_threshold) is silently denied by the channel
         # allowlist forever, even though its parent channel is allowed.
-        # Populated only for threads this bot itself creates (see
-        # create_thread() below); a thread created by a Discord user
-        # directly is not covered without also handling the Gateway
-        # THREAD_CREATE event, which is a larger, separate effort.
         self._thread_parents: dict[str, str] = {}
+        self._thread_parent_guilds: dict[str, str] = {}
+        self._thread_parent_expiry: dict[str, float] = {}
 
         # Message count per channel for auto-thread creation.
         self._channel_message_counts: dict[str, int] = {}
@@ -251,6 +251,7 @@ class DiscordChannel(BaseChannel):
         if self._gateway_task is not None and not self._gateway_task.done():
             logger.warning("Discord channel start() ignored: Gateway task is already running")
             return
+        self._stopped.clear()
         self._gateway_task = asyncio.create_task(self._gateway.run())
 
         # Register global slash commands if an application ID is configured.
@@ -296,6 +297,7 @@ class DiscordChannel(BaseChannel):
 
     async def stop(self) -> None:
         """Disconnect from the Gateway and cancel the background task."""
+        self._stopped.set()
         if self._voice is not None:
             with contextlib.suppress(Exception):
                 await self._voice.stop()
@@ -338,9 +340,26 @@ class DiscordChannel(BaseChannel):
 
         Returns:
             The next message from the internal queue, or ``None`` when
-            the channel is stopped.
+            the channel is stopped. Messages queued before shutdown are
+            drained first; once the queue is empty, every receiver returns
+            ``None`` promptly. ``start()`` clears the stopped state without
+            inserting lifecycle sentinels into the message queue.
         """
-        return await self._queue.get()
+        if self._stopped.is_set() and self._queue.empty():
+            return None
+        get_task = asyncio.create_task(self._queue.get())
+        stop_task = asyncio.create_task(self._stopped.wait())
+        done, pending = await asyncio.wait(
+            {get_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if stop_task in done and get_task not in done:
+            return None
+        item = get_task.result()
+        return item
 
     def send(self, message: str) -> None:
         """Send *message* to the most recently active channel (sync stub).
@@ -569,6 +588,14 @@ class DiscordChannel(BaseChannel):
             await self._handle_reaction(data)
         elif event_name == "GUILD_CREATE":
             logger.debug("Discord: GUILD_CREATE for guild %s", data.get("id"))
+        elif event_name in {"THREAD_CREATE", "THREAD_UPDATE"}:
+            self._cache_thread_parent(
+                str(data.get("id") or ""),
+                str(data.get("parent_id") or ""),
+                str(data.get("guild_id") or ""),
+            )
+        elif event_name == "THREAD_DELETE":
+            self._drop_thread_parent(str(data.get("id") or ""))
 
     # ------------------------------------------------------------------
     # Message handling
@@ -709,6 +736,13 @@ class DiscordChannel(BaseChannel):
 
         if not allowed:
             return
+
+        guild_capability_mode = "discord"
+        if guild_id is not None:
+            from missy.channels.discord.config import guild_mode_to_capability
+
+            configured_mode = self.account_config.guild_policies[guild_id].mode
+            guild_capability_mode = guild_mode_to_capability(configured_mode)
 
         # 2a2. Per-user rate limit (DISC-CMD-008) — after authorization
         # (so it never leaks whether an unauthorized user exists) but
@@ -948,6 +982,7 @@ class DiscordChannel(BaseChannel):
                     channel_id=channel_id,
                     name=thread_name,
                     message_id=str(data.get("id", "")) or None,
+                    guild_id=str(guild_id),
                 )
                 if new_thread_id:
                     effective_thread_id = new_thread_id
@@ -1005,6 +1040,7 @@ class DiscordChannel(BaseChannel):
                 "discord_message_id": str(data.get("id", "")),
                 "discord_channel_id": channel_id,
                 "discord_guild_id": guild_id or "",
+                "discord_capability_mode": guild_capability_mode,
                 "discord_thread_id": effective_thread_id or "",
                 "discord_thread_session_id": thread_session_id,
                 "discord_author": author,
@@ -1020,6 +1056,7 @@ class DiscordChannel(BaseChannel):
             {
                 "author_id": author_id,
                 "channel_id": channel_id,
+                "capability_mode": guild_capability_mode,
                 "guild_id": guild_id or "dm",
                 "thread_id": effective_thread_id or "",
                 "thread_session_id": thread_session_id,
@@ -1553,7 +1590,21 @@ class DiscordChannel(BaseChannel):
             # IDs/names. Check the thread's known parent (if this bot
             # created the thread) in addition to the raw channel_id, so a
             # thread under an allowed channel isn't silently denied.
-            parent_channel_id = self._thread_parents.get(channel_id)
+            parent_channel_id = self._cached_thread_parent(channel_id, guild_id)
+            if (
+                not parent_channel_id
+                and channel_id not in guild_policy.allowed_channels
+                and not (channel_name and channel_name in guild_policy.allowed_channels)
+            ):
+                try:
+                    channel = self._rest.get_channel(channel_id)
+                    resolved_guild_id = str(channel.get("guild_id") or "")
+                    resolved_parent = str(channel.get("parent_id") or "")
+                    if resolved_guild_id == guild_id and resolved_parent:
+                        parent_channel_id = resolved_parent
+                        self._cache_thread_parent(channel_id, parent_channel_id, resolved_guild_id)
+                except Exception:
+                    logger.debug("Discord: failed to resolve thread parent for %s", channel_id)
             # A message always has channel_id; name may be absent from Gateway events.
             in_allowlist = (
                 channel_id in guild_policy.allowed_channels
@@ -1713,12 +1764,36 @@ class DiscordChannel(BaseChannel):
         """Associate a session ID with a Discord thread."""
         self._thread_sessions[thread_id] = session_id
 
+    def _cache_thread_parent(self, thread_id: str, parent_id: str, guild_id: str) -> None:
+        """Cache a verified Gateway/REST thread-parent relationship."""
+        if not thread_id or not parent_id or not guild_id:
+            return
+        self._thread_parents[thread_id] = parent_id
+        self._thread_parent_guilds[thread_id] = guild_id
+        self._thread_parent_expiry[thread_id] = time.monotonic() + _THREAD_PARENT_CACHE_TTL_SECONDS
+
+    def _cached_thread_parent(self, thread_id: str, guild_id: str) -> str:
+        expiry = self._thread_parent_expiry.get(thread_id, 0.0)
+        if expiry and expiry <= time.monotonic():
+            self._drop_thread_parent(thread_id)
+            return ""
+        cached_guild = self._thread_parent_guilds.get(thread_id)
+        if cached_guild:
+            return self._thread_parents.get(thread_id, "") if cached_guild == guild_id else ""
+        return ""
+
+    def _drop_thread_parent(self, thread_id: str) -> None:
+        self._thread_parents.pop(thread_id, None)
+        self._thread_parent_guilds.pop(thread_id, None)
+        self._thread_parent_expiry.pop(thread_id, None)
+
     async def create_thread(
         self,
         channel_id: str,
         name: str,
         message_id: str | None = None,
         session_id: str | None = None,
+        guild_id: str | None = None,
     ) -> str | None:
         """Create a new Discord thread and optionally bind it to a session.
 
@@ -1727,6 +1802,7 @@ class DiscordChannel(BaseChannel):
             name: Thread name.
             message_id: Optional message ID to start thread from.
             session_id: Optional session ID to bind to this thread.
+            guild_id: Guild owning the parent/thread relationship.
 
         Returns:
             The thread ID on success, or None on failure.
@@ -1741,6 +1817,8 @@ class DiscordChannel(BaseChannel):
             thread_id = str(result.get("id", ""))
             if thread_id:
                 self._thread_parents[thread_id] = channel_id
+                if guild_id:
+                    self._cache_thread_parent(thread_id, channel_id, guild_id)
             if thread_id and session_id:
                 self._thread_sessions[thread_id] = session_id
             self._emit_audit(

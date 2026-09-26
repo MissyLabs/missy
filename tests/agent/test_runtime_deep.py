@@ -3806,6 +3806,9 @@ class TestMcpToolDispatch:
             tmp_path,
             [{"name": "echo", "description": "Echo", "inputSchema": {}}],
         )
+        from missy.mcp.annotations import ToolAnnotation
+
+        rt._mcp_manager._annotation_registry.register("srv__echo", ToolAnnotation(read_only=True))
         rt._get_tools()  # syncs srv__echo into the real registry
 
         tc = ToolCall(id="tc1", name="srv__echo", arguments={"text": "hi"})

@@ -643,9 +643,11 @@ class TestMcpClientAnnotationParsing:
             c.connect()
         return c
 
-    def test_tool_without_annotations_has_no_entry(self):
+    def test_tool_without_annotations_uses_cautious_defaults(self):
         c = self._make_connected_client([{"name": "read_file", "description": "Read"}])
-        assert "read_file" not in c.tool_annotations
+        ann = c.tool_annotations["read_file"]
+        assert ann.requires_approval is True
+        assert ann.mutating is True
 
     def test_tool_with_annotations_parsed(self):
         tools = [
@@ -673,11 +675,10 @@ class TestMcpClientAnnotationParsing:
         assert ann.mutating is True
         assert ann.requires_approval is True
 
-    def test_tool_with_non_dict_annotations_ignored(self):
+    def test_tool_with_non_dict_annotations_uses_cautious_defaults(self):
         tools = [{"name": "weird", "description": "Weird", "annotations": "string"}]
         c = self._make_connected_client(tools)
-        # Non-dict annotations must not be parsed and must not raise.
-        assert "weird" not in c.tool_annotations
+        assert c.tool_annotations["weird"].requires_approval is True
 
     def test_tool_annotations_property_is_copy(self):
         tools = [{"name": "t", "description": "t", "annotations": {"readOnlyHint": True}}]

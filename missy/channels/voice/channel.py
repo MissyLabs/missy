@@ -29,9 +29,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
+import ssl
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from missy.channels.base import BaseChannel, ChannelMessage
@@ -174,6 +177,9 @@ class VoiceChannel(BaseChannel):
         audio_chunk_size: int = 4096,
         debug_transcripts: bool = False,
         bind_requires_policy: bool = True,
+        tls_certfile: str = "",
+        tls_keyfile: str = "",
+        allow_insecure_remote: bool = False,
     ) -> None:
         self._host = host
         self._port = port
@@ -183,6 +189,9 @@ class VoiceChannel(BaseChannel):
         self._audio_chunk_size = audio_chunk_size
         self._debug_transcripts = debug_transcripts
         self._bind_requires_policy = bind_requires_policy
+        self._tls_certfile = tls_certfile
+        self._tls_keyfile = tls_keyfile
+        self._allow_insecure_remote = allow_insecure_remote
 
         # Populated during start().
         self._registry: DeviceRegistry | None = None
@@ -193,6 +202,7 @@ class VoiceChannel(BaseChannel):
         # Thread / loop management.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._stop_requested = threading.Event()
 
     # ------------------------------------------------------------------
     # BaseChannel interface
@@ -251,6 +261,7 @@ class VoiceChannel(BaseChannel):
         """
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("VoiceChannel is already running.")
+        self._stop_requested.clear()
 
         # Device registry.
         registry = DeviceRegistry(registry_path=self._registry_path)
@@ -271,6 +282,16 @@ class VoiceChannel(BaseChannel):
         agent_callback = _build_agent_callback(agent_runtime, safe_chat_agent_runtime)
 
         # Construct the server.
+        ssl_context = None
+        if self._tls_certfile or self._tls_keyfile:
+            if not self._tls_certfile or not self._tls_keyfile:
+                raise ValueError("Both voice TLS certificate and key must be configured.")
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_context.load_cert_chain(
+                Path(self._tls_certfile).expanduser(),
+                Path(self._tls_keyfile).expanduser(),
+            )
+
         server = VoiceServer(
             registry=registry,
             pairing_manager=pairing_manager,
@@ -282,6 +303,8 @@ class VoiceChannel(BaseChannel):
             port=self._port,
             audio_chunk_size=self._audio_chunk_size,
             debug_transcripts=self._debug_transcripts,
+            ssl_context=ssl_context,
+            allow_insecure_remote=self._allow_insecure_remote,
         )
         self._server = server
 
@@ -305,7 +328,7 @@ class VoiceChannel(BaseChannel):
                 started_event.set()
 
                 # Keep the loop alive until stop() is called.
-                while server._running:  # noqa: SLF001
+                while server._running and not self._stop_requested.is_set():  # noqa: SLF001
                     await asyncio.sleep(0.25)
 
             try:
@@ -333,7 +356,8 @@ class VoiceChannel(BaseChannel):
                 f"VoiceChannel failed to start: {error_holder[0]}"
             ) from error_holder[0]
 
-        logger.info("VoiceChannel: started on ws://%s:%d", self._host, self._port)
+        scheme = "wss" if self._tls_certfile else "ws"
+        logger.info("VoiceChannel: started on %s://%s:%d", scheme, self._host, self._port)
 
     def stop(self) -> None:
         """Stop the WebSocket server and join the background thread.
@@ -343,6 +367,11 @@ class VoiceChannel(BaseChannel):
         server = self._server
         loop = self._loop
         thread = self._thread
+
+        # This lifecycle signal is independent of VoiceServer._running so a
+        # failed, delayed, or test-double stop implementation cannot strand
+        # the owner loop thread indefinitely.
+        self._stop_requested.set()
 
         if server is None or loop is None or thread is None:
             logger.debug("VoiceChannel.stop(): not running — no-op.")
@@ -367,6 +396,13 @@ class VoiceChannel(BaseChannel):
         thread.join(timeout=10)
         if thread.is_alive():
             logger.warning("VoiceChannel.stop(): background thread did not exit cleanly.")
+            # Force the loop out of run_until_complete as a last resort. A
+            # daemon voice thread must never survive after stop() returns and
+            # continue touching extension-module state during interpreter GC.
+            if isinstance(thread, threading.Thread):
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=2)
 
         self._thread = None
         self._server = None

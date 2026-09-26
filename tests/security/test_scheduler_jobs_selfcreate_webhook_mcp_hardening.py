@@ -1163,7 +1163,7 @@ class TestMcpManagerCallToolInjectionScan:
         """Return an McpManager whose 'srv__tool' client returns tool_result."""
         from pathlib import Path
 
-        from missy.mcp.annotations import AnnotationRegistry
+        from missy.mcp.annotations import AnnotationRegistry, ToolAnnotation
         from missy.mcp.manager import McpManager
 
         mgr = McpManager.__new__(McpManager)
@@ -1175,6 +1175,15 @@ class TestMcpManagerCallToolInjectionScan:
         mgr._approval_gate = None
         mgr._block_injection = True
         mgr._annotation_registry = AnnotationRegistry()
+        for name in (
+            "get_weather",
+            "evil_tool",
+            "bad_tool",
+            "some_tool",
+            "data_tool",
+            "query_tool",
+        ):
+            mgr._annotation_registry.register(f"srv__{name}", ToolAnnotation(read_only=True))
 
         mock_client = MagicMock()
         mock_client.call_tool.return_value = tool_result

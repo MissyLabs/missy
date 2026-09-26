@@ -99,6 +99,9 @@ class FilesystemPolicy:
 
     allowed_write_paths: list[str] = field(default_factory=list)
     allowed_read_paths: list[str] = field(default_factory=list)
+    # Runtime-populated operator/security paths that remain non-writable
+    # even when a parent directory appears in allowed_write_paths.
+    protected_write_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -168,7 +171,7 @@ class ToolPolicyConfig:
             this field existed.
     """
 
-    profile: str = "full"
+    profile: str | None = "full"
     allow: list[str] = field(default_factory=list)
     deny: list[str] = field(default_factory=list)
     also_allow: list[str] = field(default_factory=list)
@@ -182,8 +185,8 @@ class ToolPolicyConfig:
 class AgentPolicyConfig:
     """Per-agent policy surfaces loaded from ``agents.<id>``."""
 
-    tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
-    subagent_tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
+    tools: ToolPolicyConfig | None = None
+    subagent_tools: ToolPolicyConfig | None = None
 
 
 @dataclass
@@ -748,19 +751,17 @@ class MissyConfig:
 # ---------------------------------------------------------------------------
 
 
-def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None:
+def _warn_unknown_keys(
+    section: str,
+    data: dict[str, Any],
+    schema: type,
+    *,
+    strict: bool = False,
+) -> None:
     """Warn when a YAML config section has keys its dataclass doesn't define.
 
-    Config parsing has historically been silently forgiving of typos or
-    stale/renamed keys -- e.g. a real operator config once carried
-    ``shell.unrestricted: true`` for a field ``ShellPolicy`` didn't yet
-    have (that field now exists -- see ``ShellPolicy.unrestricted``), and
-    the operator had no signal that the key they'd added did nothing.
-    This never fails config loading (a stricter posture would be a
-    breaking change for anyone with genuinely-extra keys); it only logs
-    a visible warning so a typo or a config written against a different
-    Missy version doesn't silently produce a different security posture
-    than the operator believes they configured.
+    Security-sensitive callers request strict rejection; other callers keep
+    the legacy warning behavior for forward-compatible non-security fields.
 
     The known-key set is derived directly from *schema*'s own
     dataclass fields rather than a separately maintained list, so it
@@ -775,6 +776,11 @@ def _warn_unknown_keys(section: str, data: dict[str, Any], schema: type) -> None
     known = {f.name for f in dataclass_fields(schema)}
     unknown = set(data.keys()) - known
     if unknown:
+        if strict:
+            raise ConfigurationError(
+                f"Config section {section!r} has unrecognized security key(s): "
+                f"{', '.join(sorted(unknown))}."
+            )
         import logging
 
         logging.getLogger(__name__).warning(
@@ -831,7 +837,7 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 
 
 def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
-    _warn_unknown_keys("network", data, NetworkPolicy)
+    _warn_unknown_keys("network", data, NetworkPolicy, strict=True)
     presets = list(data.get("presets", []))
     allowed_hosts = list(data.get("allowed_hosts", []))
     allowed_domains = list(data.get("allowed_domains", []))
@@ -878,7 +884,12 @@ def _parse_network(data: dict[str, Any]) -> NetworkPolicy:
 
 
 def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
-    _warn_unknown_keys("filesystem", data, FilesystemPolicy)
+    unknown = set(data) - {"allowed_write_paths", "allowed_read_paths"}
+    if unknown:
+        raise ConfigurationError(
+            "Config section 'filesystem' has unrecognized security key(s): "
+            f"{', '.join(sorted(unknown))}."
+        )
     return FilesystemPolicy(
         allowed_write_paths=list(data.get("allowed_write_paths", [])),
         allowed_read_paths=list(data.get("allowed_read_paths", [])),
@@ -886,7 +897,7 @@ def _parse_filesystem(data: dict[str, Any]) -> FilesystemPolicy:
 
 
 def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
-    _warn_unknown_keys("shell", data, ShellPolicy)
+    _warn_unknown_keys("shell", data, ShellPolicy, strict=True)
     return ShellPolicy(
         enabled=_coerce_bool(data.get("enabled"), False),
         allowed_commands=list(data.get("allowed_commands", [])),
@@ -896,7 +907,7 @@ def _parse_shell(data: dict[str, Any]) -> ShellPolicy:
 
 
 def _parse_plugins(data: dict[str, Any]) -> PluginPolicy:
-    _warn_unknown_keys("plugins", data, PluginPolicy)
+    _warn_unknown_keys("plugins", data, PluginPolicy, strict=True)
     return PluginPolicy(
         enabled=_coerce_bool(data.get("enabled"), False),
         allowed_plugins=list(data.get("allowed_plugins", [])),
@@ -925,6 +936,12 @@ def _parse_policy_map(raw: Any, *, context: str) -> dict[str, dict[str, Any]]:
                 f"{context}.{key} must be a mapping, got {type(value).__name__}."
             )
         item = dict(value)
+        known = {"allow", "deny", "alsoAllow", "also_allow", "byModel", "by_model"}
+        unknown = set(item) - known
+        if unknown:
+            raise ConfigurationError(
+                f"{context}.{key} has unrecognized security key(s): {', '.join(sorted(unknown))}."
+            )
         if by_model := item.get("byModel") or item.get("by_model"):
             item["by_model"] = _parse_policy_map(by_model, context=f"{context}.{key}.byModel")
         parsed[str(key)] = item
@@ -939,18 +956,51 @@ def _parse_tool_groups(raw: Any, *, context: str) -> dict[str, list[str]]:
     return {str(name): _as_list_of_strings(values) for name, values in raw.items()}
 
 
-def _parse_tool_policy(data: Any, *, context: str = "tools") -> ToolPolicyConfig:
+def _parse_tool_policy(
+    data: Any,
+    *,
+    context: str = "tools",
+    inherit_profile: bool = False,
+) -> ToolPolicyConfig:
     if data is None:
         return ToolPolicyConfig()
     if not isinstance(data, dict):
         raise ConfigurationError(f"{context} must be a mapping, got {type(data).__name__}.")
-    profile = str(data.get("profile", "full") or "full").strip().lower()
-    if profile not in {"minimal", "coding", "messaging", "full"}:
+    known = {
+        "profile",
+        "allow",
+        "deny",
+        "alsoAllow",
+        "also_allow",
+        "byProvider",
+        "by_provider",
+        "byModel",
+        "by_model",
+        "groups",
+        "disabled_tools",
+    }
+    unknown = set(data) - known
+    if unknown:
+        raise ConfigurationError(
+            f"{context} has unrecognized security key(s): {', '.join(sorted(unknown))}."
+        )
+    profile = (
+        str(data.get("profile") or "").strip().lower()
+        if inherit_profile and "profile" not in data
+        else str(data.get("profile", "full") or "full").strip().lower()
+    )
+    resolved_profile: str | None = profile or None
+    if resolved_profile is not None and resolved_profile not in {
+        "minimal",
+        "coding",
+        "messaging",
+        "full",
+    }:
         raise ConfigurationError(
             f"{context}.profile must be one of minimal, coding, messaging, full."
         )
     return ToolPolicyConfig(
-        profile=profile,
+        profile=resolved_profile,
         allow=_as_list_of_strings(data.get("allow")),
         deny=_as_list_of_strings(data.get("deny")),
         also_allow=_as_list_of_strings(data.get("alsoAllow") or data.get("also_allow")),
@@ -1013,16 +1063,40 @@ def _parse_agents(data: Any) -> dict[str, AgentPolicyConfig]:
             raise ConfigurationError(
                 f"agents.{agent_id} must be a mapping, got {type(raw).__name__}."
             )
+        unknown = set(raw) - {"tools", "subagents"}
+        if unknown:
+            raise ConfigurationError(
+                f"agents.{agent_id} has unrecognized security key(s): {', '.join(sorted(unknown))}."
+            )
         subagents = raw.get("subagents") or {}
         if subagents and not isinstance(subagents, dict):
             raise ConfigurationError(
                 f"agents.{agent_id}.subagents must be a mapping, got {type(subagents).__name__}."
             )
+        unknown_subagent = set(subagents) - {"tools"}
+        if unknown_subagent:
+            raise ConfigurationError(
+                f"agents.{agent_id}.subagents has unrecognized security key(s): "
+                f"{', '.join(sorted(unknown_subagent))}."
+            )
         agents[str(agent_id)] = AgentPolicyConfig(
-            tools=_parse_tool_policy(raw.get("tools"), context=f"agents.{agent_id}.tools"),
-            subagent_tools=_parse_tool_policy(
-                subagents.get("tools") if isinstance(subagents, dict) else None,
-                context=f"agents.{agent_id}.subagents.tools",
+            tools=(
+                _parse_tool_policy(
+                    raw["tools"],
+                    context=f"agents.{agent_id}.tools",
+                    inherit_profile=True,
+                )
+                if "tools" in raw
+                else None
+            ),
+            subagent_tools=(
+                _parse_tool_policy(
+                    subagents["tools"],
+                    context=f"agents.{agent_id}.subagents.tools",
+                    inherit_profile=True,
+                )
+                if "tools" in subagents
+                else None
             ),
         )
     return agents
@@ -1230,9 +1304,64 @@ def _parse_proactive(data: dict[str, Any]) -> ProactiveConfig:
 
 def _parse_sandbox(data: dict[str, Any]) -> SandboxConfig:
     """Parse the ``sandbox`` section of a Missy config dict."""
-    from missy.security.sandbox import parse_sandbox_config
+    from missy.security.sandbox import SandboxConfig, parse_sandbox_config
 
+    _warn_unknown_keys("sandbox", data, SandboxConfig, strict=True)
+    sandbox_tools = data.get("tools") or {}
+    if not isinstance(sandbox_tools, dict):
+        raise ConfigurationError("sandbox.tools must be a mapping.")
+    unknown_tool_keys = set(sandbox_tools) - {"allow", "deny", "alsoAllow", "also_allow"}
+    if unknown_tool_keys:
+        raise ConfigurationError(
+            "sandbox.tools has unrecognized security key(s): "
+            f"{', '.join(sorted(unknown_tool_keys))}."
+        )
     return parse_sandbox_config(data)
+
+
+def _validate_voice_config(data: Any) -> None:
+    """Strictly validate the raw voice section consumed by the gateway CLI."""
+    if data is None:
+        return
+    if not isinstance(data, dict):
+        raise ConfigurationError("voice must be a mapping.")
+    known = {
+        "enabled",
+        "host",
+        "port",
+        "stt",
+        "tts",
+        "debug_transcripts",
+        "tls_certfile",
+        "tls_keyfile",
+        "allow_insecure_remote",
+    }
+    unknown = set(data) - known
+    if unknown:
+        raise ConfigurationError(
+            f"Config section 'voice' has unrecognized security key(s): "
+            f"{', '.join(sorted(unknown))}."
+        )
+    for nested_name, nested_keys in (("stt", {"engine", "model"}), ("tts", {"engine", "voice"})):
+        nested = data.get(nested_name) or {}
+        if not isinstance(nested, dict):
+            raise ConfigurationError(f"voice.{nested_name} must be a mapping.")
+        nested_unknown = set(nested) - nested_keys
+        if nested_unknown:
+            raise ConfigurationError(
+                f"Config section 'voice.{nested_name}' has unrecognized key(s): "
+                f"{', '.join(sorted(nested_unknown))}."
+            )
+    _coerce_bool(data.get("enabled"), True)
+    _coerce_bool(data.get("debug_transcripts"), False)
+    _coerce_bool(data.get("allow_insecure_remote"), False)
+    port = int(data.get("port", 8765))
+    if not 1 <= port <= 65535:
+        raise ConfigurationError("voice.port must be between 1 and 65535.")
+    cert = str(data.get("tls_certfile", "") or "")
+    key = str(data.get("tls_keyfile", "") or "")
+    if bool(cert) != bool(key):
+        raise ConfigurationError("voice.tls_certfile and voice.tls_keyfile must be set together.")
 
 
 def _parse_obs(data: dict[str, Any], vault_dir: str) -> ObsConfig:
@@ -1424,9 +1553,25 @@ def load_config(path: str) -> MissyConfig:
         if not 0.0 <= temperature <= 2.0:
             raise ConfigurationError("temperature must be between 0 and 2.")
 
+        _validate_voice_config(data.get("voice"))
+
+        filesystem = _parse_filesystem(data.get("filesystem") or {})
+        config_dir = config_path.expanduser().resolve().parent
+        protected_paths = {
+            str(config_path.expanduser().resolve()),
+            str(Path(vault_dir).expanduser().resolve()),
+            str((config_dir / "mcp.json").resolve()),
+            str((config_dir / "config.d").resolve()),
+            str(Path(str(data.get("audit_log_path", "~/.missy/audit.log"))).expanduser().resolve()),
+            str((config_dir / "audit.key").resolve()),
+            str((config_dir / "identity.pem").resolve()),
+            str((config_dir / f"{config_path.name}.reload-approval").resolve()),
+        }
+        filesystem.protected_write_paths = sorted(protected_paths)
+
         return MissyConfig(
             network=_parse_network(data.get("network") or {}),
-            filesystem=_parse_filesystem(data.get("filesystem") or {}),
+            filesystem=filesystem,
             shell=_parse_shell(data.get("shell") or {}),
             plugins=_parse_plugins(data.get("plugins") or {}),
             tools=_parse_tool_policy(data.get("tools"), context="tools"),
@@ -1459,7 +1604,7 @@ def load_config(path: str) -> MissyConfig:
             max_spend_usd=float(data.get("max_spend_usd", 0.0)),
             global_max_spend_usd=float(data.get("global_max_spend_usd", 0.0)),
             global_budget_period=str(data.get("global_budget_period", "total") or "total"),
-            landlock_enabled=bool(data.get("landlock_enabled", False)),
+            landlock_enabled=_coerce_bool(data.get("landlock_enabled"), False),
             config_version=int(data.get("config_version", 0)),
         )
     except ConfigurationError:

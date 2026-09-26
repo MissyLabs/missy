@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import uuid
@@ -17,6 +18,17 @@ logger = logging.getLogger(__name__)
 #: Default database location (read at construction time so tests can
 #: redirect it away from the operator's real memory).
 DEFAULT_DB_PATH = "~/.missy/memory.db"
+
+
+def _normalize_utc_timestamp(value: str) -> str:
+    """Normalize an ISO-8601 timestamp to a canonical UTC offset form."""
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now(UTC).isoformat()
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 @dataclass
@@ -270,6 +282,16 @@ class SQLiteMemoryStore:
     def __init__(self, db_path: str | None = None) -> None:
         self._path = Path(db_path or DEFAULT_DB_PATH).expanduser()
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        resolved_parent = self._path.parent.resolve()
+        unsafe_to_repermission = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+        if resolved_parent not in unsafe_to_repermission:
+            os.chmod(self._path.parent, 0o700)
+        if self._path.is_symlink():
+            raise ValueError(f"Refusing symlinked memory database: {self._path}")
+        flags = os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self._path, flags, 0o600)
+        os.close(fd)
+        os.chmod(self._path, 0o600)
         self._local = threading.local()
         self._init_db()
 
@@ -284,8 +306,18 @@ class SQLiteMemoryStore:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            self._protect_database_files()
             self._local.conn = conn
         return self._local.conn
+
+    def _protect_database_files(self) -> None:
+        """Force owner-only permissions on SQLite, WAL, and shared-memory files."""
+        for path in (self._path, Path(f"{self._path}-wal"), Path(f"{self._path}-shm")):
+            try:
+                if path.exists():
+                    os.chmod(path, 0o600)
+            except OSError:
+                logger.warning("Could not enforce private permissions on %s", path)
 
     def _init_db(self) -> None:
         """Create tables, indexes, and FTS triggers on first use."""
@@ -436,6 +468,19 @@ class SQLiteMemoryStore:
         if "account" not in existing_cost_columns:
             conn.execute("ALTER TABLE costs ADD COLUMN account TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_costs_provider ON costs(provider)")
+        # Normalize legacy offset-bearing retention timestamps transactionally
+        # so ordering and deletion use instants rather than lexical offsets.
+        for table, column in (
+            ("turns", "timestamp"),
+            ("summaries", "created_at"),
+            ("large_content", "created_at"),
+        ):
+            conn.execute(
+                f"UPDATE {table} SET {column} = "
+                f"strftime('%Y-%m-%dT%H:%M:%f+00:00', {column}) "
+                f"WHERE julianday({column}) IS NOT NULL "
+                f"AND {column} != strftime('%Y-%m-%dT%H:%M:%f+00:00', {column})"
+            )
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -458,7 +503,7 @@ class SQLiteMemoryStore:
             (
                 turn.id,
                 turn.session_id,
-                turn.timestamp,
+                _normalize_utc_timestamp(turn.timestamp),
                 turn.role,
                 turn.content,
                 turn.provider,
@@ -1224,11 +1269,13 @@ class SQLiteMemoryStore:
                 json.dumps(summary.source_turn_ids),
                 json.dumps(summary.source_summary_ids),
                 summary.parent_id,
-                summary.time_range_start,
-                summary.time_range_end,
+                _normalize_utc_timestamp(summary.time_range_start)
+                if summary.time_range_start
+                else "",
+                _normalize_utc_timestamp(summary.time_range_end) if summary.time_range_end else "",
                 summary.descendant_count,
                 json.dumps(summary.file_refs),
-                summary.created_at,
+                _normalize_utc_timestamp(summary.created_at),
             ),
         )
         conn.commit()
@@ -1375,7 +1422,7 @@ class SQLiteMemoryStore:
                 record.original_chars,
                 record.content,
                 record.summary,
-                record.created_at,
+                _normalize_utc_timestamp(record.created_at),
             ),
         )
         conn.commit()
@@ -1438,12 +1485,15 @@ class SQLiteMemoryStore:
         cutoff = (datetime.now(UTC) - timedelta(days=older_than_days)).isoformat()
         if dry_run:
             row = conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE timestamp < ? "
+                "SELECT COUNT(*) FROM turns WHERE julianday(timestamp) < julianday(?) "
                 "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1",
                 (cutoff,),
             ).fetchone()
             return int(row[0]) if row else 0
-        where = "timestamp < ? AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1"
+        where = (
+            "julianday(timestamp) < julianday(?) "
+            "AND COALESCE(json_extract(metadata, '$.pinned'), 0) != 1"
+        )
         with conn:
             affected = [
                 r["session_id"]
@@ -1456,7 +1506,7 @@ class SQLiteMemoryStore:
             # DATA-04: offloaded tool output belonging to deleted turns, and
             # turn-less large content past the cutoff, go with them.
             conn.execute(
-                "DELETE FROM large_content WHERE created_at < ? AND "
+                "DELETE FROM large_content WHERE julianday(created_at) < julianday(?) AND "
                 "(turn_id IS NULL OR turn_id NOT IN (SELECT id FROM turns))",
                 (cutoff,),
             )
@@ -1469,7 +1519,8 @@ class SQLiteMemoryStore:
         """Delete summaries older than *cutoff* whose source turns are all gone."""
         orphaned: list[str] = []
         rows = conn.execute(
-            "SELECT id, source_turn_ids, source_summary_ids FROM summaries WHERE created_at < ?",
+            "SELECT id, source_turn_ids, source_summary_ids FROM summaries "
+            "WHERE julianday(created_at) < julianday(?)",
             (cutoff,),
         ).fetchall()
         for row in rows:

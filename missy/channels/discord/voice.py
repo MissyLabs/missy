@@ -425,11 +425,12 @@ class DiscordVoiceManager:
 
                 source = self._discord.FFmpegPCMAudio(path)
                 done = asyncio.Event()
+                loop = asyncio.get_running_loop()
 
                 def _after(err: BaseException | None) -> None:
                     if err:
                         logger.exception("Voice playback error", exc_info=err)
-                    done.set()
+                    loop.call_soon_threadsafe(done.set)
 
                 vc.play(source, after=_after)
 
@@ -683,6 +684,7 @@ def _make_sink_class(voice_recv_module: Any) -> type:
             # Per-user silence timer handles.
             self._timers: dict[int, asyncio.TimerHandle] = {}
             self._lock = threading.Lock()
+            self._closed = False
 
         def wants_opus(self) -> bool:
             """We want decoded PCM, not raw Opus."""
@@ -704,14 +706,21 @@ def _make_sink_class(voice_recv_module: Any) -> type:
 
             now = time.monotonic()
             with self._lock:
+                if self._closed:
+                    return
                 self._buffers[user_id].append(pcm)
                 self._last_packet_time[user_id] = now
 
-                # Reset the silence timer for this user.
+                self._loop.call_soon_threadsafe(self._reset_silence_timer, user_id)
+
+        def _reset_silence_timer(self, user_id: int) -> None:
+            """Create/cancel asyncio timer handles only on their owner loop."""
+            with self._lock:
+                if self._closed:
+                    return
                 old_timer = self._timers.pop(user_id, None)
                 if old_timer is not None:
                     old_timer.cancel()
-
                 self._timers[user_id] = self._loop.call_later(
                     _SILENCE_TIMEOUT_S,
                     self._on_silence,
@@ -721,6 +730,11 @@ def _make_sink_class(voice_recv_module: Any) -> type:
         def _on_silence(self, user_id: int) -> None:
             """Called when a user has been silent for _SILENCE_TIMEOUT_S."""
             with self._lock:
+                # ``cleanup()`` marks the sink closed before asking the loop
+                # to cancel handles.  A timer that was already ready may run
+                # first, so enforce the shutdown boundary here as well.
+                if self._closed:
+                    return
                 chunks = self._buffers.pop(user_id, [])
                 self._last_packet_time.pop(user_id, None)
                 self._timers.pop(user_id, None)
@@ -737,6 +751,30 @@ def _make_sink_class(voice_recv_module: Any) -> type:
 
         def cleanup(self) -> None:
             """Called when the sink is removed."""
+            with self._lock:
+                self._closed = True
+            if self._loop.is_closed():
+                with self._lock:
+                    self._timers.clear()
+                    self._buffers.clear()
+                    self._last_packet_time.clear()
+                return
+            if self._loop.is_running():
+                try:
+                    self._loop.call_soon_threadsafe(self._cleanup_on_loop)
+                except RuntimeError:
+                    # The loop can close between is_running() and scheduling.
+                    # At that point handles cannot execute, so dropping our
+                    # references is safe and avoids leaking buffered audio.
+                    with self._lock:
+                        self._timers.clear()
+                        self._buffers.clear()
+                        self._last_packet_time.clear()
+            else:
+                self._cleanup_on_loop()
+
+        def _cleanup_on_loop(self) -> None:
+            """Cancel timer handles on the owning event-loop thread."""
             with self._lock:
                 for timer in self._timers.values():
                     timer.cancel()

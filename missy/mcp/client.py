@@ -17,6 +17,32 @@ from missy.mcp.annotations import ToolAnnotation
 logger = logging.getLogger(__name__)
 
 
+class McpCallResult(str):
+    """String-compatible MCP outcome with machine-readable failure state.
+
+    ``transport_certainty`` is one of ``not_sent``, ``completed``,
+    ``server_reported``, or ``uncertain``. An uncertain result means the
+    request may have reached the server; callers must never retry a mutating
+    operation automatically.
+    """
+
+    def __new__(
+        cls,
+        value: str,
+        *,
+        is_error: bool = False,
+        error_kind: str | None = None,
+        protocol_error: Any | None = None,
+        transport_certainty: str = "completed",
+    ) -> McpCallResult:
+        result = super().__new__(cls, value)
+        result.is_error = is_error
+        result.error_kind = error_kind
+        result.protocol_error = protocol_error
+        result.transport_certainty = transport_certainty
+        return result
+
+
 class _PolicyMcpHttp:
     """Minimal ``post``/``close`` adapter over :class:`PolicyHTTPClient`.
 
@@ -77,6 +103,7 @@ class McpClient:
         self._lock = threading.Lock()
         self._tools: list[dict] = []
         self._tool_annotations: dict[str, ToolAnnotation] = {}
+        self._tool_annotation_states: dict[str, str] = {}
 
     def connect(self) -> None:
         """Start the MCP server process and perform the initialize handshake."""
@@ -370,9 +397,27 @@ class McpClient:
     #: Tool names from MCP servers must match this pattern.
     _SAFE_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
+    @staticmethod
+    def _valid_annotation_payload(data: Any) -> bool:
+        if not isinstance(data, dict):
+            return False
+        for key in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+            if key in data and not isinstance(data[key], bool):
+                return False
+        return not (
+            "estimatedLatencyMs" in data
+            and (
+                isinstance(data["estimatedLatencyMs"], bool)
+                or not isinstance(data["estimatedLatencyMs"], int)
+                or data["estimatedLatencyMs"] < 0
+            )
+        )
+
     def _list_tools(self) -> list[dict]:
         resp = self._rpc("tools/list")
         raw_tools = resp.get("result", {}).get("tools", [])
+        self._tool_annotations.clear()
+        self._tool_annotation_states.clear()
         # Validate tool names at import time to prevent namespace injection
         # and reject tools with potentially dangerous names.
         validated: list[dict] = []
@@ -393,33 +438,74 @@ class McpClient:
                 )
                 continue
             validated.append(tool)
-            # Parse annotations if present in the tool manifest.
+            # Missing/invalid annotations are not evidence of safety. Every
+            # MCP tool receives the MCP spec's cautious defaults so approval
+            # and coarse permissions cannot be bypassed by omission.
+            annotation_present = "annotations" in tool
             ann_data = tool.get("annotations")
-            if isinstance(ann_data, dict):
-                try:
-                    self._tool_annotations[name] = ToolAnnotation.from_mcp_dict(ann_data)
-                    logger.debug("MCP server %r: parsed annotation for tool %r", self.name, name)
-                except Exception:
-                    logger.debug(
-                        "MCP server %r: failed to parse annotation for tool %r",
-                        self.name,
-                        name,
-                        exc_info=True,
-                    )
+            annotation_valid = self._valid_annotation_payload(ann_data)
+            if not annotation_valid:
+                ann_data = {}
+            try:
+                self._tool_annotations[name] = ToolAnnotation.from_mcp_dict(ann_data)
+                self._tool_annotation_states[name] = (
+                    "declared" if annotation_present and annotation_valid else "missing"
+                )
+                if annotation_present and not annotation_valid:
+                    self._tool_annotation_states[name] = "invalid"
+                logger.debug("MCP server %r: parsed annotation for tool %r", self.name, name)
+            except Exception:
+                self._tool_annotations[name] = ToolAnnotation.from_mcp_dict({})
+                self._tool_annotation_states[name] = "invalid"
+                logger.warning(
+                    "MCP server %r: invalid annotation for tool %r; using cautious defaults",
+                    self.name,
+                    name,
+                )
         return validated
 
-    def call_tool(self, name: str, arguments: dict) -> str:
-        """Call a tool on this MCP server and return the result as a string."""
-        resp = self._rpc("tools/call", {"name": name, "arguments": arguments})
+    def call_tool(self, name: str, arguments: dict) -> McpCallResult:
+        """Call a tool and preserve protocol and transport outcome details."""
+        try:
+            resp = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        except Exception as exc:
+            # Once _rpc() is entered, a transport failure cannot generally
+            # prove whether a mutating server processed the request. Surface
+            # that uncertainty instead of raising into a generic retry path.
+            return McpCallResult(
+                f"[MCP error] uncertain transport outcome: {exc}",
+                is_error=True,
+                error_kind="transport",
+                transport_certainty="uncertain",
+            )
         if resp.get("error"):
-            return f"[MCP error] {resp['error']}"
+            return McpCallResult(
+                f"[MCP error] {resp['error']}",
+                is_error=True,
+                error_kind="json_rpc",
+                protocol_error=resp["error"],
+                transport_certainty="server_reported",
+            )
         result = resp.get("result", {})
         content = result.get("content", [])
         parts = []
         for item in content:
             if isinstance(item, dict) and item.get("type") == "text":
                 parts.append(item.get("text", ""))
-        return "\n".join(parts) if parts else str(result)
+        text = "\n".join(parts) if parts else str(result)
+        is_error = result.get("isError") is True
+        return McpCallResult(
+            text,
+            is_error=is_error,
+            error_kind="tool" if is_error else None,
+            protocol_error=result if is_error else None,
+            transport_certainty="server_reported" if is_error else "completed",
+        )
+
+    @property
+    def tool_annotation_states(self) -> dict[str, str]:
+        """Return ``declared``/``missing``/``invalid`` state per tool."""
+        return dict(self._tool_annotation_states)
 
     @property
     def tools(self) -> list[dict]:
@@ -430,10 +516,8 @@ class McpClient:
     def tool_annotations(self) -> dict[str, ToolAnnotation]:
         """Mapping of tool name to its parsed :class:`~missy.mcp.annotations.ToolAnnotation`.
 
-        Only tools that carried an ``annotations`` key in the MCP manifest
-        will have an entry here.  Use
-        :class:`~missy.mcp.annotations.AnnotationRegistry.get_or_default` for
-        a safe fallback.
+        Every validated tool has an entry. Missing or malformed annotations
+        use cautious MCP defaults.
 
         Returns:
             A shallow copy of the internal annotations dict.

@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from missy.mcp.annotations import ToolAnnotation
 from missy.mcp.client import McpClient
 from missy.mcp.digest import compute_tool_manifest_digest
 from missy.mcp.manager import McpManager
@@ -51,7 +52,10 @@ def _make_manager(tmp_path: Path, servers: list[dict] | None = None) -> McpManag
     if servers is not None:
         cfg.write_text(json.dumps(servers))
         cfg.chmod(0o600)
-    return McpManager(config_path=str(cfg))
+    manager = McpManager(config_path=str(cfg))
+    for name in ("fetch", "write", "ping", "dump", "tool", "greet", "do_this_thing"):
+        manager._annotation_registry.register(f"srv__{name}", ToolAnnotation(read_only=True))
+    return manager
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +395,7 @@ class TestConfigLoading:
         mgr = _make_manager(tmp_path, servers=servers)
         calls = []
 
-        def fake_add(name, command=None, url=None, headers=None):
+        def fake_add(name, command=None, url=None, headers=None, **_kwargs):
             calls.append(name)
             mc = _make_mock_client(name=name)
             mgr._clients[name] = mc
@@ -424,7 +428,13 @@ class TestConfigLoading:
         mgr = McpManager(config_path=str(cfg))
         with patch("os.getuid", return_value=99999):
             mgr.connect_all()
-        assert mgr.list_servers() == []
+        assert mgr.list_servers()[0] == {
+            "name": "srv",
+            "alive": False,
+            "tools": 0,
+            "desired": True,
+            "annotation_states": {},
+        }
 
     def test_save_config_persists_after_add(self, tmp_path):
         mgr = _make_manager(tmp_path)
@@ -470,7 +480,7 @@ class TestErrorHandling:
             servers=[{"name": "bad", "command": "fail"}, {"name": "good", "command": "ok"}],
         )
 
-        def fake_add(name, command=None, url=None, headers=None):
+        def fake_add(name, command=None, url=None, headers=None, **_kwargs):
             if name == "bad":
                 raise RuntimeError("fail")
             mc = _make_mock_client(name=name)

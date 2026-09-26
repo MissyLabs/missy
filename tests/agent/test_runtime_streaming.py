@@ -39,7 +39,7 @@ class TestRunStream:
         ):
             agent = AgentRuntime(AgentConfig(provider="test"))
             chunks = list(agent.run_stream("Hello"))
-            assert len(chunks) == 3
+            assert len(chunks) == 1
             assert "".join(chunks) == "Hello!"
 
     def test_run_stream_enforces_budget_before_streaming(self, mock_registry):
@@ -81,16 +81,8 @@ class TestRunStream:
 
         provider.stream.assert_not_called()
 
-    def test_run_stream_does_not_duplicate_content_on_mid_stream_failure(self, mock_registry):
-        """Regression: the except-block fallback previously re-generated
-        and yielded the ENTIRE response via _single_turn() regardless of
-        whether some chunks had already been streamed to the caller. A
-        connection drop mid-response (after partial output was already
-        yielded) produced the already-streamed partial text followed by a
-        full duplicate/overlapping re-generation. Once any chunk has been
-        yielded, a later stream failure must not trigger the full-response
-        fallback.
-        """
+    def test_run_stream_buffers_before_delivery_and_can_safely_fallback(self, mock_registry):
+        """No partial text is delivered before whole-response censoring."""
         registry, provider = mock_registry
 
         def _stream(messages, system=""):
@@ -113,9 +105,8 @@ class TestRunStream:
             agent = AgentRuntime(AgentConfig(provider="test"))
             chunks = list(agent.run_stream("Hello"))
 
-        assert chunks == ["Hello "]
-        assert "FULL DUPLICATE RESPONSE" not in chunks
-        provider.complete.assert_not_called()
+        assert chunks == ["FULL DUPLICATE RESPONSE"]
+        provider.complete.assert_called_once()
 
     def test_run_stream_falls_back_on_error(self, mock_registry):
         registry, provider = mock_registry
@@ -166,6 +157,26 @@ class TestRunStream:
             chunks = list(agent.run_stream("Hello"))
             assert "".join(chunks) == "Visible  text"
             assert "hidden" not in "".join(chunks)
+
+    def test_run_stream_censors_before_delivery_and_persistence(self, mock_registry):
+        registry, provider = mock_registry
+        provider.stream.return_value = iter(["raw-secret"])
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError),
+            patch("missy.agent.runtime.censor_response", return_value="[REDACTED]") as censor,
+        ):
+            agent = AgentRuntime(AgentConfig(provider="test"))
+            memory = MagicMock()
+            memory.get_session_turns.return_value = []
+            agent._memory_store = memory
+            chunks = list(agent.run_stream("Hello"))
+
+        assert chunks == ["[REDACTED]"]
+        assistant_turn = memory.add_turn.call_args_list[-1].args[0]
+        assert assistant_turn.content == "[REDACTED]"
+        assert censor.call_args_list[0].args == ("raw-secret",)
+        assert censor.call_args_list[-1].args == ("[REDACTED]",)
 
 
 class TestRateLimitIntegration:
