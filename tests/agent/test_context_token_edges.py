@@ -616,12 +616,12 @@ class TestHistoryPruning:
         assert len(messages) == 4
 
     def test_single_message_exact_fit(self):
-        # available = 100 tokens; new_message = 1 token ("x" = 1 char -> 1 tok)
-        # history_budget = 99 tokens; message of 99 tokens should just fit.
+        # Serialized role/content structure and the actual system prompt also
+        # count toward the hard provider ceiling.
         b = _budget(total=100)
         cm = ContextManager(b)
-        content = _tok(99)
-        assert _approx_tokens(content) == 99
+        content = _tok(80)
+        assert _approx_tokens(content) == 80
         _, messages = cm.build_messages(
             system="S", new_message="x", history=[_msg("user", content)]
         )
@@ -821,14 +821,14 @@ class TestVeryLongSingleMessage:
         _, messages = cm.build_messages(system="S", new_message="ok", history=[_msg("user", huge)])
         assert all(m["content"] != huge for m in messages)
 
-    def test_huge_fresh_tail_message_still_included(self):
-        # Fresh tail is unconditionally protected regardless of size.
+    def test_huge_fresh_tail_message_is_pruned_for_hard_limit(self):
         b = _budget(total=200, fresh_tail_count=1)
         cm = ContextManager(b)
         huge = _tok(10_000)
         _, messages = cm.build_messages(system="S", new_message="ok", history=[_msg("user", huge)])
         contents = [m["content"] for m in messages]
-        assert huge in contents
+        assert huge not in contents
+        assert contents[-1] == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +915,7 @@ class TestSummariesPlacement:
         _, messages = cm.build_messages(
             system="S", new_message="new", history=[], summaries=summaries
         )
-        assert len(messages) == 1
-        assert messages[0]["content"] == "new"
+        assert messages == []
 
     def test_multiple_summaries_all_included_when_budget_allows(self):
         b = _budget(total=50_000)

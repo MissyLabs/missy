@@ -610,6 +610,17 @@ class TestSummaryRecords:
         depths = {s.depth for s in all_summaries}
         assert depths == {0, 1, 2}
 
+    def test_root_filter_applies_before_limit(self, store: SQLiteMemoryStore) -> None:
+        root = SummaryRecord.new("root-page", depth=1, content="current root")
+        store.add_summary(root)
+        for index in range(101):
+            leaf = SummaryRecord.new("root-page", depth=0, content=f"leaf {index}")
+            leaf.parent_id = root.id
+            store.add_summary(leaf)
+
+        roots = store.get_root_summaries("root-page", limit=100)
+        assert [summary.id for summary in roots] == [root.id]
+
     def test_summary_round_trip_preserves_source_turn_ids(self, store: SQLiteMemoryStore) -> None:
         ids = [str(uuid.uuid4()) for _ in range(3)]
         s = SummaryRecord.new("sess4", depth=0, content="summary", source_turn_ids=ids)
@@ -791,6 +802,21 @@ class TestSessionTokenCount:
         store.add_summary(big_summary)
         count_after = store.get_session_token_count("ts1")
         assert count_after > count_before
+
+    def test_token_count_does_not_double_count_summarized_turns(
+        self, store: SQLiteMemoryStore
+    ) -> None:
+        turn = _turn("active-count", content="a" * 400)
+        store.add_turn(turn)
+        leaf = SummaryRecord.new(
+            "active-count",
+            depth=0,
+            content="s" * 40,
+            source_turn_ids=[turn.id],
+        )
+        store.add_summary(leaf)
+
+        assert store.get_session_token_count("active-count") == 10
 
     def test_token_count_excludes_compacted_summaries(self, store: SQLiteMemoryStore) -> None:
         """Compacted summaries (with parent_id set) are excluded from token count."""

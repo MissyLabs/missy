@@ -94,6 +94,31 @@ def test_cleanup_refreshes_counts_and_prunes_orphans(store):
     assert store.get_summary_by_id(summary.id) is None
 
 
+def test_cleanup_prunes_condensed_parents_derived_from_expired_turns(store):
+    old = _seed(store, "s1", 1, old=True)
+    fresh = _seed(store, "s1", 1, old=False)
+    leaf = SummaryRecord.new(
+        session_id="s1",
+        depth=0,
+        content="contains expired private content",
+        source_turn_ids=[old[0].id, fresh[0].id],
+    )
+    parent = SummaryRecord.new(
+        session_id="s1",
+        depth=1,
+        content="condensed expired private content",
+        source_summary_ids=[leaf.id],
+    )
+    leaf.parent_id = parent.id
+    store.add_summary(leaf)
+    store.add_summary(parent)
+
+    assert store.cleanup(older_than_days=30, include_summaries=True) == 1
+    assert store.get_summary_by_id(leaf.id) is None
+    assert store.get_summary_by_id(parent.id) is None
+    assert store.search_summaries("expired private content", session_id="s1") == []
+
+
 def test_cleanup_keeps_summaries_by_default(store):
     old = _seed(store, "s1", 1, old=True)
     summary = SummaryRecord.new(

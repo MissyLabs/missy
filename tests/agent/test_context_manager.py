@@ -405,8 +405,8 @@ class TestFreshTailProtection:
         assert messages[0]["content"] == "msg1"
         assert messages[-1]["content"] == "new"
 
-    def test_fresh_tail_exceeds_budget_still_included(self):
-        """Even when fresh tail alone exceeds budget, it's still included."""
+    def test_fresh_tail_exceeds_budget_is_pruned(self):
+        """Fresh-tail preference cannot override the hard context ceiling."""
         budget = TokenBudget(
             total=100,
             system_reserve=50,
@@ -416,7 +416,8 @@ class TestFreshTailProtection:
             fresh_tail_count=3,
         )
         cm = ContextManager(budget=budget)
-        # available = 0 tokens, but fresh tail is protected
+        # The fresh tail is preferred, but the newest user turn wins when
+        # the combined prompt cannot fit.
         history = [
             {"role": "user", "content": "A" * 200},
             {"role": "assistant", "content": "B" * 200},
@@ -427,11 +428,88 @@ class TestFreshTailProtection:
             new_message="new",
             history=history,
         )
-        # All 3 fresh tail + new message = 4
-        assert len(messages) == 4
-        assert messages[-1]["content"] == "new"
+        assert messages == [{"role": "user", "content": "new"}]
+
+    def test_assembled_prompt_obeys_hard_total(self):
+        from missy.agent.context import _value_tokens
+
+        budget = TokenBudget(
+            total=80,
+            system_reserve=10,
+            tool_definitions_reserve=10,
+            memory_fraction=0.0,
+            learnings_fraction=0.0,
+            fresh_tail_count=16,
+        )
+        cm = ContextManager(budget)
+        system, messages = cm.build_messages(
+            system="system " * 20,
+            new_message="new " * 200,
+            history=[{"role": "user", "content": "old " * 400}],
+        )
+        assert _value_tokens(system) + _value_tokens(messages) + 10 <= budget.total
+        assert len(messages[-1]["content"]) < len("new " * 200)
 
     def test_default_fresh_tail_count(self):
         """Default fresh_tail_count is 16."""
         b = TokenBudget()
         assert b.fresh_tail_count == 16
+
+
+class TestHardProviderFit:
+    def test_tool_call_result_and_verification_prune_as_one_unit(self):
+        from missy.agent.context import _value_tokens
+
+        budget = TokenBudget(
+            total=160,
+            system_reserve=0,
+            tool_definitions_reserve=0,
+            memory_fraction=0.0,
+            learnings_fraction=0.0,
+        )
+        cm = ContextManager(budget)
+        system, messages = cm.fit_messages(
+            "system",
+            [
+                {"role": "user", "content": "old " * 500},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-1", "name": "read_file", "arguments": {"path": "/tmp/x"}}
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call-1",
+                    "name": "read_file",
+                    "content": "result " * 500,
+                },
+                {"role": "user", "content": "Verify the result."},
+            ],
+        )
+
+        assert [message["role"] for message in messages] == ["assistant", "tool", "user"]
+        assert messages[0]["tool_calls"][0]["id"] == messages[1]["tool_call_id"]
+        assert _value_tokens(system) + _value_tokens(messages) <= budget.total
+
+    def test_provider_limit_can_tighten_configured_total(self):
+        from missy.agent.context import _value_tokens
+
+        cm = ContextManager(TokenBudget(total=500, system_reserve=0, tool_definitions_reserve=0))
+        system, messages = cm.fit_messages(
+            "system " * 20,
+            [{"role": "user", "content": "message " * 200}],
+            total_limit=60,
+        )
+        assert _value_tokens(system) + _value_tokens(messages) <= 60
+
+    def test_escaped_content_stays_within_serialized_limit(self):
+        from missy.agent.context import _value_tokens
+
+        cm = ContextManager(TokenBudget(total=80, system_reserve=0, tool_definitions_reserve=0))
+        system, messages = cm.fit_messages(
+            'system "\\n" ' * 100,
+            [{"role": "user", "content": 'value "\\n" ' * 100}],
+        )
+        assert _value_tokens(system) + _value_tokens(messages) <= 80
