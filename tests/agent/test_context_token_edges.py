@@ -638,6 +638,22 @@ class TestHistoryPruning:
         assert all(m["content"] != content for m in messages)
         assert messages[-1]["content"] == "x"
 
+    def test_provider_fit_never_drops_active_request(self):
+        from missy.agent.runtime import AgentRuntime
+
+        class TinyManager:
+            def fit_messages(self, system, messages, **kwargs):
+                return system, []
+
+        runtime = AgentRuntime.__new__(AgentRuntime)
+        runtime._context_manager = TinyManager()
+        with pytest.raises(ValueError, match="complete current request"):
+            runtime._fit_provider_context(
+                object(),
+                "policy",
+                [{"role": "user", "content": "=== CURRENT REQUEST [id=x] ===\\nDo work"}],
+            )
+
     def test_oldest_pruned_before_newest(self):
         # 3 equal-cost messages; only 1 fits; newest should survive.
         b = _budget(

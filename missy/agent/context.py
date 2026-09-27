@@ -379,11 +379,13 @@ class ContextManager:
 
 def _format_summary(summary) -> str:
     """Format a SummaryRecord into a labeled context block."""
+    from missy.agent.history_framing import sanitize_summary
+
     time_info = ""
     if getattr(summary, "time_range_start", None) and getattr(summary, "time_range_end", None):
         time_info = f", covers {summary.time_range_start} to {summary.time_range_end}"
     descendants = getattr(summary, "descendant_count", 0)
-    safe_content = quarantine_untrusted_context(str(summary.content))
+    safe_content = sanitize_summary(quarantine_untrusted_context(str(summary.content)))
     return (
         f"[Conversation Summary — depth {summary.depth}"
         f", {descendants} messages{time_info}]\n"

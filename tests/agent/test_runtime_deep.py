@@ -625,7 +625,8 @@ class TestRuntimeContextManagement:
         messages = provider.complete.call_args[0][0]
         system_msgs = [m for m in messages if m.role == "system"]
         assert len(system_msgs) == 1
-        assert system_msgs[0].content.startswith("Custom sys.")
+        assert system_msgs[0].content.startswith("[HISTORY_READ_ONLY]")
+        assert "Custom sys." in system_msgs[0].content
 
     def test_context_manager_prunes_old_history(self):
         """ContextManager drops old messages when budget is exceeded."""
@@ -3570,6 +3571,10 @@ class TestResumeCheckpoint:
         sent_messages = provider.complete_with_tools.call_args[0][0]
         assert len(sent_messages) == len(saved_messages) + 1
         assert any("4" in (m.content or "") for m in sent_messages)
+        assert any(
+            "=== CURRENT REQUEST [id=checkpoint-resume] ===" in (m.content or "")
+            for m in sent_messages
+        )
         # The old checkpoint is consumed (never offered for resume again).
         assert cm.get(cid)["state"] == "COMPLETE"
 
