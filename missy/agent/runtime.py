@@ -1786,13 +1786,16 @@ class AgentRuntime:
         )
         from missy.agent.response_guards import (
             calculator_observations_are_reportable,
+            detect_code_hedging,
             detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
             detect_governed_obs_streaming_tool_request,
+            detect_hedging,
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            detect_unfinished_action,
             effective_image_generation_arguments,
             find_image_reproducibility_issue,
             find_unmet_desktop_requests,
@@ -1811,6 +1814,7 @@ class AgentRuntime:
             make_capability_denial_retry_prompt,
             make_desktop_request_retry_prompt,
             make_desktop_verification_retry_prompt,
+            make_execution_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
             make_filesystem_verification_retry_prompt,
@@ -1969,6 +1973,8 @@ class AgentRuntime:
         _general_fabrication_retries = 0
         _MAX_PROMISE_RETRIES = 1
         _promise_retries = 0
+        _execution_retries = 0
+        _continuation_retries = 0
         _MAX_IDENTITY_CONFUSION_RETRIES = 1
         _identity_confusion_retries = 0
         _MAX_CAPABILITY_DENIAL_RETRIES = 1
@@ -3365,6 +3371,28 @@ class AgentRuntime:
                             detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
 
+                # Only action requests without tool attempts are eligible for
+                # anti-hedging. A genuine refusal or request for clarification
+                # must not be transformed into unsafe execution.
+                if (
+                    _execution_retries < 1
+                    and not tool_names_used
+                    and not is_security_refusal(final_text, _tool_request_input)
+                    and (
+                        detect_hedging(final_text, _tool_request_input, tool_names_used)
+                        or detect_code_hedging(final_text, _tool_request_input, tool_names_used)
+                    )
+                ):
+                    _execution_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_execution_retry_prompt(_tool_request_input),
+                        }
+                    )
+                    continue
+
                 if detect_promise_without_action(final_text, successful_tool_names):
                     if _promise_retries < _MAX_PROMISE_RETRIES:
                         _promise_retries += 1
@@ -3394,6 +3422,27 @@ class AgentRuntime:
                             result="deny",
                             detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
+
+                # An explicit admission of remaining work with successful
+                # tools merits one continuation. Do not override the observed
+                # error path below or retry indefinitely after an admission.
+                if _continuation_retries < 1 and detect_unfinished_action(
+                    final_text, _tool_request_input, successful_tool_names, _last_round_errors
+                ):
+                    _continuation_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your response says requested work remains. If authorized and feasible, "
+                                "continue with the remaining tool calls. Otherwise report precisely "
+                                "what is incomplete and why. Current request:\n"
+                                + _tool_request_input
+                            ),
+                        }
+                    )
+                    continue
 
                 # FX-round2-F4: a request implying a vision/memory
                 # observation (see is_observation_task) answered with
@@ -5092,13 +5141,31 @@ class AgentRuntime:
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 limits.append(value)
         total_limit = min(limits) if limits else None
-        return fit_messages(
+        fitted_system, fitted_messages = fit_messages(
             manager,
             system_prompt,
             messages,
             tool_definitions=tools,
             total_limit=total_limit,
         )
+        # Context pruning is allowed to discard history, never the active
+        # request. Silently calling the provider without it is worse than
+        # refusing an impossibly small prompt budget.
+        current_requests = [
+            str(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "user"
+            and "=== CURRENT REQUEST [" in str(message.get("content", ""))
+        ]
+        if current_requests and not any(
+            current_request in str(message.get("content", ""))
+            for current_request in current_requests
+            for message in fitted_messages
+        ):
+            raise ValueError(
+                "Provider context budget cannot preserve the complete current request."
+            )
+        return fitted_system, fitted_messages
 
     def _dicts_to_messages(self, system_prompt: str, message_dicts: list[dict]) -> list[Message]:
         """Convert context-manager message dicts to provider Message objects.
@@ -5933,6 +6000,23 @@ class AgentRuntime:
             raise CheckpointCorruptedError(
                 f"Checkpoint {checkpoint_id!r} has corrupted loop_messages; marked FAILED."
             )
+
+        # Older checkpoints predate CURRENT REQUEST framing. Upgrade the
+        # original user turn in place before resuming, not the newest tool
+        # verification message, which is not the user's authorization.
+        if not any(
+            message.get("role") == "user"
+            and "=== CURRENT REQUEST [" in str(message.get("content", ""))
+            for message in loop_messages
+        ):
+            for message in loop_messages:
+                if message.get("role") == "user" and message.get("content") == checkpoint.get(
+                    "prompt"
+                ):
+                    message["content"] = "=== CURRENT REQUEST [id=checkpoint-resume] ===\n" + str(
+                        message.get("content", "")
+                    )
+                    break
 
         sid = checkpoint["session_id"]
         cost_baseline = self._capture_cost_summary(sid)

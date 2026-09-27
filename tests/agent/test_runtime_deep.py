@@ -3571,6 +3571,10 @@ class TestResumeCheckpoint:
         sent_messages = provider.complete_with_tools.call_args[0][0]
         assert len(sent_messages) == len(saved_messages) + 1
         assert any("4" in (m.content or "") for m in sent_messages)
+        assert any(
+            "=== CURRENT REQUEST [id=checkpoint-resume] ===" in (m.content or "")
+            for m in sent_messages
+        )
         # The old checkpoint is consumed (never offered for resume again).
         assert cm.get(cid)["state"] == "COMPLETE"
 
