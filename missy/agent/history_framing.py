@@ -20,7 +20,7 @@ HISTORY_POLICY = (
 )
 
 _IMPERATIVE = re.compile(
-    r"^(\s*(?:(?:[-*]|\d+[.)])\s+)*(?:\[(?!completed\])[^\]\n]{1,80}\]\s*)?)(?=(?:please\s+)?(?:run|execute|deploy|"
+    r"^(\s*(?:(?:[-*]|\d+[.)])\s+)*(?:\[(?!historical\])[^\]\n]{1,80}\]\s*)?)(?=(?:please\s+)?(?:run|execute|deploy|"
     r"restart|install|create|delete|remove|update|edit|write|open|call|send|"
     r"push|commit|check|verify|test|fix|build|start|stop|enable|disable)\b)",
     re.IGNORECASE,
@@ -29,7 +29,7 @@ _IMPERATIVE = re.compile(
 
 def sanitize_summary(text: str) -> str:
     """Present recalled commands as historical notes, not fresh action items."""
-    return "\n".join(_IMPERATIVE.sub(r"\1[completed] ", line) for line in text.split("\n"))
+    return "\n".join(_IMPERATIVE.sub(r"\1[historical] ", line) for line in text.split("\n"))
 
 
 def _metadata(value: Any, max_length: int = 100) -> str:

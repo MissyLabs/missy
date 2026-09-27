@@ -669,6 +669,11 @@ class TestDetectFabrication:
         text = "I generated the image and saved it to disk."
         assert detect_fabrication(text, ["file_read"]) is True
         assert detect_fabrication(text, ["image_generate"]) is False
+        for producer in ("vision_capture", "vision_burst", "x11_screenshot"):
+            assert (
+                detect_fabrication("I saved the screenshot to disk using the camera.", [producer])
+                is False
+            )
         # The failed tool name in an honest first sentence must not excuse
         # the unsupported success claim in the next sentence (#146).
         mixed = (

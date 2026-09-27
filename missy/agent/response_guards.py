@@ -133,7 +133,14 @@ def _has_relevant_tool_evidence(claim: str, successful_tools: list[str]) -> bool
             re.sub(r"[^a-z0-9]+", "_", str(name).casefold()).strip("_") for name in successful_tools
         }
         if "image_generate" not in normalized_tools and not normalized_tools.intersection(
-            {"screenshot", "browser_screenshot", "webcam_capture"}
+            {
+                "screenshot",
+                "browser_screenshot",
+                "webcam_capture",
+                "vision_capture",
+                "vision_burst",
+                "x11_screenshot",
+            }
         ):
             return False
     for tool_name in successful_tools:

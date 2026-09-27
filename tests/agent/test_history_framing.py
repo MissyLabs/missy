@@ -71,15 +71,15 @@ def test_condenser_replaced_current_turn_does_not_promote_old_user_request() -> 
     assert "Deploy old service" not in framed[1]["content"]
 
 
-def test_summaries_mark_commands_completed_with_no_unbounded_growth() -> None:
-    source = "Deploy prod\n- Restart service\n2. run the migration\nDeployed already\n[completed] run task"
+def test_summaries_mark_commands_historical_without_claiming_completion() -> None:
+    source = "Deploy prod\n- Restart service; this remains incomplete\n2. run the migration\nDeployed already\n[historical] run task"
     output = sanitize_summary(source)
     assert output.splitlines() == [
-        "[completed] Deploy prod",
-        "- [completed] Restart service",
-        "2. [completed] run the migration",
+        "[historical] Deploy prod",
+        "- [historical] Restart service; this remains incomplete",
+        "2. [historical] run the migration",
         "Deployed already",
-        "[completed] run task",
+        "[historical] run task",
     ]
     summary = SimpleNamespace(
         content="Deploy prod",
@@ -89,9 +89,9 @@ def test_summaries_mark_commands_completed_with_no_unbounded_growth() -> None:
         time_range_end=None,
     )
     _, messages = ContextManager().build_messages("sys", "hello", [], summaries=[summary])
-    assert "[completed] Deploy prod" in messages[0]["content"]
+    assert "[historical] Deploy prod" in messages[0]["content"]
     assert sanitize_summary("- [Conversation Summary] run old action") == (
-        "- [Conversation Summary] [completed] run old action"
+        "- [Conversation Summary] [historical] run old action"
     )
 
 
@@ -166,7 +166,7 @@ def test_optional_condenser_sanitizes_generated_summaries() -> None:
         m["content"] for m in condensed if m["content"].startswith("[Conversation Summary]")
     ]
     assert summaries
-    assert all("[completed] run old task" in s for s in summaries)
+    assert all("[historical] run old task" in s for s in summaries)
 
 
 def test_history_framing_survives_provider_budget_with_current_request() -> None:
