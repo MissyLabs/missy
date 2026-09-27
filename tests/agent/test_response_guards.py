@@ -669,6 +669,13 @@ class TestDetectFabrication:
         text = "I generated the image and saved it to disk."
         assert detect_fabrication(text, ["file_read"]) is True
         assert detect_fabrication(text, ["image_generate"]) is False
+        # The failed tool name in an honest first sentence must not excuse
+        # the unsupported success claim in the next sentence (#146).
+        mixed = (
+            "The image_generate call failed because the checkpoint was missing. "
+            "I created the requested image file successfully."
+        )
+        assert detect_fabrication(mixed, ["file_read"])
 
     def test_failed_tool_does_not_count_as_evidence(self):
         assert detect_fabrication("I uploaded the report successfully.", []) is True
