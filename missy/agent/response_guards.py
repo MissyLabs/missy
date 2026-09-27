@@ -301,6 +301,8 @@ _PURE_ADVICE_REQUEST = re.compile(
 
 def _is_non_execution_request(user_input: str) -> bool:
     """Do not let a drafting clause cancel a separate execution request."""
+    if not isinstance(user_input, str):
+        return False
     if _PURE_ADVICE_REQUEST.search(user_input):
         return True
     if re.match(
@@ -332,6 +334,8 @@ def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
     The caller also exempts a legitimate security refusal. Quoted and fenced
     material is stripped so reproducing a user's question does not trigger.
     """
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
     if (
         tools_used
         or not _ACTION_REQUEST.search(user_input)
@@ -345,6 +349,8 @@ def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
 
 def detect_code_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
     """Catch an offered shell command instead of execution of an action request."""
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
     return bool(
         not tools_used
         and _ACTION_REQUEST.search(user_input)
@@ -381,6 +387,8 @@ def detect_unfinished_action(
     Neither a bare tool call nor a prediction from a classifier proves that
     more execution is possible, so this is deliberately one narrow signal.
     """
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
     return bool(
         successful_tools
         and not last_round_errors

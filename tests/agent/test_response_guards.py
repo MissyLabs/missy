@@ -96,6 +96,14 @@ class TestExecutionGuards:
             offered_command, "Draft a script to explain how nginx works", []
         )
 
+    def test_non_string_transport_placeholder_is_not_an_action_request(self):
+        from unittest.mock import MagicMock
+
+        placeholder = MagicMock()
+        assert not detect_hedging("Shall I run that?", placeholder, [])
+        assert not detect_code_hedging("```bash\necho ok\n```", placeholder, [])
+        assert not detect_unfinished_action("I still need to check", placeholder, ["file_read"], [])
+
 
 class TestImageGenerationGuards:
     def test_exact_failed_request_requires_native_image_tool(self):
