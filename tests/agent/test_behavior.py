@@ -670,6 +670,13 @@ class TestShapeResponseRemovesRoboticPhrases:
         )
         assert "As your assistant" not in result
 
+    def test_preserves_material_personal_advice_limitation(self):
+        shaper = ResponseShaper()
+        response = (
+            "I cannot provide personal advice on whether to stop treatment. Consult a clinician."
+        )
+        assert shaper.shape_response(response, persona=None, context={}) == response
+
     def test_multiple_robotic_phrases_removed(self):
         shaper = ResponseShaper()
         raw = (

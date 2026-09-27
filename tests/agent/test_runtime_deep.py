@@ -357,9 +357,8 @@ class TestRuntimeToolCallLoop:
         tool_reg = _make_tool_registry([bad_tool])
         tool_reg.execute.side_effect = Exception("tool boom")
 
-        # SR-4.4: the tool error means the "recovered" claim is rejected
-        # and retried up to _MAX_DONE_VERIFICATION_RETRIES times before
-        # being accepted -- supply enough repeated stop responses.
+        # SR-4.4: the tool error means the unsupported "recovered" claim is
+        # rejected up to _MAX_DONE_VERIFICATION_RETRIES, then replaced.
         provider.complete_with_tools.side_effect = [
             _make_tool_call_response("bad_tool"),
             _make_stop_response("recovered"),
@@ -376,8 +375,9 @@ class TestRuntimeToolCallLoop:
             rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=7))
             result = rt.run("try bad tool")
 
-        # Error is swallowed by the loop; we get the final response
-        assert result == "recovered"
+        assert "bad_tool" in result
+        assert "remains incomplete" in result
+        assert result != "recovered"
 
     def test_provider_without_complete_with_tools_falls_back(self):
         """Provider lacking complete_with_tools falls back to single-turn complete()."""
@@ -484,6 +484,35 @@ class TestRuntimeIterationLimit:
         assert "cannot confirm" in result
         assert "I ran a tool but didn't produce any text" not in result
         assert "[Called tool:" not in result
+
+    def test_iteration_limit_rejects_claim_backed_by_unrelated_tool(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        provider.complete_with_tools.return_value = _make_tool_call_response("calculator")
+        provider.complete.return_value = _make_stop_response("I uploaded the report successfully.")
+        registry = _make_registry({"fake": provider})
+
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=1))
+            result, _tools = rt._tool_loop(
+                provider=provider,
+                system_prompt="system",
+                messages=[{"role": "user", "content": "calculate 1+1, then upload"}],
+                tools=[calc_tool],
+                session_id="s1",
+                task_id="t1",
+                user_input="calculate 1+1, then upload the report",
+                _checkpoint_manager=MagicMock(),
+                _checkpoint_id="cp-1",
+            )
+
+        provider.complete_with_tools.assert_called_once()
+        assert "cannot confirm" in result
+        assert "uploaded the report successfully" not in result
 
     def test_iteration_limit_fallback_returns_grounded_status_on_exception(self):
         """When finalization also fails, return an honest user-facing status."""
@@ -810,14 +839,16 @@ class TestDoneCriteriaEnforcement:
             rt._emit_event = lambda **kw: events.append(kw)
             result = rt.run("compute something")
 
-        # Rejected twice (the retry cap), then accepted with an audit
-        # warning on the third attempt -- never trusted on the first.
+        # Rejected twice (the retry cap), then replaced with a response
+        # grounded in the observed failure rather than trusting the claim.
         rejected = [e for e in events if e["event_type"] == "agent.done_criteria.rejected"]
         unverified = [e for e in events if e["event_type"] == "agent.done_criteria.unverified"]
         assert len(rejected) == 2
         assert len(unverified) == 1
         assert provider.complete_with_tools.call_count == 4
-        assert result == "Done! I successfully computed the result."
+        assert "division by zero" in result
+        assert "remains incomplete" in result
+        assert "successfully computed" not in result
 
     def test_successful_tool_call_never_triggers_rejection(self):
         """Happy path: a tool call that succeeds must not trigger any

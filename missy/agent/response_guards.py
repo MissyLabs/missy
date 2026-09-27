@@ -1,16 +1,15 @@
-"""General-purpose guards against fabricated or unfulfilled tool-free responses.
+"""General-purpose guards against fabricated or unfulfilled responses.
 
 Complements the narrower checks already in :mod:`missy.agent.done_criteria`
 and :class:`~missy.agent.runtime.AgentRuntime`'s own placeholder-artifact
 and observation-fabrication retries. Those catch specific shapes (an
 internal placeholder string leaking out; a vision/memory-observation
 request answered with zero tool calls). This module catches two broader,
-request-agnostic patterns in any text-only response (``tools_used`` empty
-for the whole task):
+request-agnostic patterns and relates claims to successful tool evidence:
 
 1. **Fabrication** -- the response describes having already run a
    command, checked a log, or completed an action, phrased as if it
-   happened, when no tool call backs it up.
+   happened, when no relevant successful tool call backs it up.
 2. **Promise without action** -- the response says it is *about to* do
    something ("I'll...", "Working on it...") and then simply stops,
    producing no tool call to actually do it.
@@ -23,10 +22,9 @@ never receives the thing that was promised.
 Design mirrors :mod:`missy.agent.done_criteria`'s existing
 :func:`~missy.agent.done_criteria.is_observation_task`: cheap, regex-based,
 deterministic classification rather than an LLM call, so the guard itself
-has no failure mode to fabricate around. A false positive only costs one
-extra corrective retry on a genuine zero-tool-call response -- it can
-never fire on a response that actually used a tool, since both detectors
-require ``tools_used`` to be empty.
+has no failure mode to fabricate around. A false positive costs one corrective
+retry, then resolves to an explicit incomplete response rather than accepting
+an unsupported claim.
 """
 
 from __future__ import annotations
@@ -85,24 +83,83 @@ _FABRICATION_PATTERNS: list[re.Pattern[str]] = [
 _MIN_FABRICATION_LENGTH = 20
 
 
+_TOOL_EVIDENCE_HINTS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        re.compile(r"(?:^|_)(?:shell|exec|command|terminal)(?:_|$)"),
+        re.compile(
+            r"(?i)\b(?:ran|executed|command|script|logs?|output|server|container|"
+            r"process|deployed|installed|deleted|removed|filesystem)\b|[$#>].*\n|"
+            r"\b(?:total\s+\d|drwx|container\s+id|pid\s+user)\b"
+        ),
+    ),
+    (
+        re.compile(r"(?:^|_)(?:file|read|write|list|directory|filesystem)(?:_|$)"),
+        re.compile(
+            r"(?i)\b(?:file|directory|folder|script|document|report|configuration|"
+            r"config|read|reviewed|saved|wrote|written|deleted|removed|listing)\b|[├└]──"
+        ),
+    ),
+    (
+        re.compile(r"(?:^|_)(?:image|vision|screenshot)(?:_|$)"),
+        re.compile(r"(?i)\b(?:image|picture|photo|screenshot|generated|rendered)\b"),
+    ),
+    (
+        re.compile(r"(?:^|_)(?:discord|upload|message|post)(?:_|$)"),
+        re.compile(r"(?i)\b(?:discord|uploaded|posted|sent|message|attachment)\b"),
+    ),
+    (
+        re.compile(r"(?:^|_)(?:web|http|browser|search|fetch|download)(?:_|$)"),
+        re.compile(
+            r"(?i)\b(?:web|website|page|url|searched|downloaded|fetched|source|"
+            r"dashboard|metrics|data|results?)\b"
+        ),
+    ),
+    (
+        re.compile(r"(?:^|_)(?:calculator|calculate|math)(?:_|$)"),
+        re.compile(r"(?i)\b(?:calculated|computed|arithmetic|equation|math|number)\b"),
+    ),
+)
+
+
+def _has_relevant_tool_evidence(claim: str, successful_tools: list[str]) -> bool:
+    """Return whether a successful tool is plausibly related to *claim*."""
+    claim_words = set(re.findall(r"[a-z0-9]+", claim.casefold()))
+    for tool_name in successful_tools:
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(tool_name).casefold()).strip("_")
+        for tool_pattern, claim_pattern in _TOOL_EVIDENCE_HINTS:
+            if tool_pattern.search(normalized) and claim_pattern.search(claim):
+                return True
+        meaningful_parts = [part for part in normalized.split("_") if len(part) >= 4]
+        if any(
+            word.startswith(part.rstrip("s")) for part in meaningful_parts for word in claim_words
+        ):
+            return True
+    return False
+
+
 def detect_fabrication(text: str, tools_used: list[str]) -> bool:
-    """Return ``True`` if a tool-free response reads like fabricated tool output.
+    """Return ``True`` when action claims lack relevant successful tool evidence.
 
     Args:
         text: The candidate final response text.
-        tools_used: Every tool name invoked so far this task. Any non-empty
-            list short-circuits to ``False`` -- this check only applies to
-            responses with nothing real behind them.
+        tools_used: Names of tools that completed successfully in this task.
 
     Returns:
-        ``True`` when *text* matches a fabrication pattern and no tool was
-        ever actually called this task.
+        ``True`` when any matched claim is unsupported. An unrelated tool
+        cannot validate a deployment, upload, log-inspection, or similar claim.
     """
-    if tools_used:
-        return False
     if not text or len(text) < _MIN_FABRICATION_LENGTH:
         return False
-    return any(p.search(text) for p in _FABRICATION_PATTERNS)
+    claims: list[str] = []
+    for index, pattern in enumerate(_FABRICATION_PATTERNS):
+        for match in pattern.finditer(text):
+            if index == 0:
+                sentence_end = re.search(r"[.!?\n]", text[match.end() :])
+                end = match.end() + sentence_end.start() if sentence_end is not None else len(text)
+                claims.append(text[match.start() : end])
+            else:
+                claims.append(match.group(0))
+    return any(not _has_relevant_tool_evidence(claim, tools_used) for claim in claims)
 
 
 def make_fabrication_retry_prompt(user_input: str = "") -> str:
@@ -120,8 +177,8 @@ def make_fabrication_retry_prompt(user_input: str = "") -> str:
     )
     return (
         "Your previous response described running a command, checking "
-        "something, or producing a result, but you made no tool call this "
-        "task -- none of that actually happened. Call the real tool needed "
+        "something, or producing a result, but no relevant successful tool "
+        "call supports that claim. Call the real tool needed "
         f"for this request now, or say plainly that you haven't done it yet.{anchor}"
     )
 
@@ -156,25 +213,24 @@ _MIN_PROMISE_LENGTH = 15
 
 
 def detect_promise_without_action(text: str, tools_used: list[str]) -> bool:
-    """Return ``True`` if a tool-free response promises action it never takes.
+    """Return ``True`` if a response promises action without relevant evidence.
 
     Args:
         text: The candidate final response text.
-        tools_used: Every tool name invoked so far this task. Any non-empty
-            list short-circuits to ``False``.
+        tools_used: Successful tool names. Only evidence relevant to the
+            promised action can satisfy the guard.
 
     Returns:
         ``True`` when *text* matches a promise-of-action pattern, isn't
-        covered by :data:`_PROMISE_EXEMPTIONS`, and no tool was ever
-        actually called this task.
+        covered by :data:`_PROMISE_EXEMPTIONS`, and has no relevant evidence.
     """
-    if tools_used:
-        return False
     if not text or len(text) < _MIN_PROMISE_LENGTH:
         return False
     if any(p.search(text) for p in _PROMISE_EXEMPTIONS):
         return False
-    return any(p.search(text) for p in _PROMISE_PATTERNS)
+    if not any(p.search(text) for p in _PROMISE_PATTERNS):
+        return False
+    return not _has_relevant_tool_evidence(text, tools_used)
 
 
 def make_promise_retry_prompt(user_input: str = "") -> str:
@@ -196,7 +252,7 @@ def make_promise_retry_prompt(user_input: str = "") -> str:
     )
     return (
         "Your previous response said you were about to do something but "
-        "made no tool call -- that action never happened. Call the "
+        "no relevant successful tool call shows it happened. Call the "
         "appropriate tool now to actually do it, rather than describing "
         f"an intention.{anchor}"
     )
@@ -1190,6 +1246,46 @@ _ERROR_REPORT_RE = re.compile(
     r"timed out|timeout|missing|unavailable|no gpu)\b",
     re.I,
 )
+_ERROR_DETAIL_STOPWORDS = {
+    "after",
+    "because",
+    "cannot",
+    "could",
+    "error",
+    "failed",
+    "failure",
+    "invalid",
+    "only",
+    "parameter",
+    "parameters",
+    "please",
+    "returned",
+    "seconds",
+    "should",
+    "timed",
+    "timeout",
+    "unsupported",
+    "value",
+}
+_GENERIC_TOOL_TERMS = {"call", "exec", "generate", "tool"}
+
+
+def _reported_error_matches_evidence(error: str, final_text: str) -> bool:
+    """Require the reply to identify the actual failed tool or error detail."""
+    tool_name, separator, detail = error.partition(":")
+    report = final_text.casefold()
+    tool_terms = [term for term in re.split(r"[^a-z0-9]+", tool_name.casefold()) if term]
+    if any(
+        len(term) >= 4 and term not in _GENERIC_TOOL_TERMS and term in report for term in tool_terms
+    ):
+        return True
+    evidence_text = detail if separator else error
+    evidence_terms = {
+        term
+        for term in re.findall(r"[a-z0-9_.-]+", evidence_text.casefold())
+        if len(term) >= 4 and term not in _ERROR_DETAIL_STOPWORDS
+    }
+    return bool(evidence_terms and any(term in report for term in evidence_terms))
 
 
 def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -> bool:
@@ -1210,6 +1306,7 @@ def terminal_parameter_errors_are_reported(errors: list[str], final_text: str) -
             or all(_TERMINAL_PARAMETER_ERROR_RE.search(error) for error in errors)
         )
         and _ERROR_REPORT_RE.search(final_text)
+        and all(_reported_error_matches_evidence(error, final_text) for error in errors)
     )
 
 

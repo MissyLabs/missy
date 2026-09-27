@@ -270,7 +270,6 @@ _ROBOTIC_PHRASES: list[re.Pattern[str]] = [
         r"I(?:'m| am) an AI(?: assistant)?[,.]?\s*",
         r"I don'?t have (?:feelings?|emotions?|personal opinions?)[,.]?\s*",
         r"I(?:'m| am) not capable of (?:feeling|experiencing)[^.]*\.\s*",
-        r"I cannot (?:provide|give|offer) (?:personal|actual) advice[^.]*\.\s*",
         r"(?:Please note|Note) that I(?:'m| am) an AI[^.]*\.\s*",
         r"As (?:your|an?) (?:AI |virtual |digital )?assistant[,.]?\s*",
         r"I(?:'m| am) here to (?:help|assist)(?: you)?[,.]?\s*",

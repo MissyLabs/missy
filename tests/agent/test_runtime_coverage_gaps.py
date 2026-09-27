@@ -309,8 +309,8 @@ class TestTrustScoreDropWarning:
             finish_reason="stop",
         )
         # SR-4.4: the errored tool call means the "stop" claim is rejected
-        # and retried up to _MAX_DONE_VERIFICATION_RETRIES times before
-        # being accepted -- supply enough repeated stop_resp entries.
+        # and retried up to _MAX_DONE_VERIFICATION_RETRIES before the runtime
+        # returns a grounded incomplete response.
         provider.complete_with_tools.side_effect = [
             tool_call_resp,
             stop_resp,
@@ -353,7 +353,8 @@ class TestTrustScoreDropWarning:
 
         trust.record_failure.assert_called_with("calc")
         trust.is_trusted.assert_called_with("calc")
-        assert result == "done"
+        assert "calc: failed" in result
+        assert "remains incomplete" in result
 
 
 class TestTrustScorePolicyViolation:
@@ -431,7 +432,8 @@ class TestTrustScorePolicyViolation:
 
         trust.record_violation.assert_called_with("net_tool")
         trust.record_failure.assert_not_called()
-        assert result == "done"
+        assert "net_tool: denied by policy" in result
+        assert "remains incomplete" in result
 
 
 class TestTrustScoreCoversMcpTools:

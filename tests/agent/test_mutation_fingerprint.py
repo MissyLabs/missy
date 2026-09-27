@@ -84,7 +84,7 @@ def test_repeated_error_fingerprint_injects_lastToolError():
 
     # SR-4.4: a "stop" response following an errored tool round is now
     # rejected and retried up to _MAX_DONE_VERIFICATION_RETRIES (2) times
-    # before being accepted -- allow enough iterations/responses for that.
+    # before being replaced -- allow enough iterations/responses for that.
     config = AgentConfig(max_iterations=6)
     rt = AgentRuntime(config)
 
@@ -355,4 +355,6 @@ def test_different_args_do_not_trigger_mutation_injection():
     # Both calls used different args — no repeated error fingerprint should trigger injection
     # after first round (count is 1 per fp). After second round, still 1 per fp.
     # So no lastToolError.
-    assert result_text == "All done."
+    assert "shell_exec: error2" in result_text
+    assert "remains incomplete" in result_text
+    assert result_text != "All done."
