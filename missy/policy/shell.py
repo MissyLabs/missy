@@ -252,6 +252,95 @@ class ShellPolicyEngine:
     _REDIRECT_WRITE_OPS = frozenset({">", ">>", ">|", "&>", "&>>"})
     _REDIRECT_READ_OPS = frozenset({"<", "<>"})
 
+    @staticmethod
+    def _reject_nested_shell_commands(command: str) -> None:
+        """Deny opaque shell -c scripts: quoted redirects evade outer parsing.
+
+        Filesystem policy applies even when the shell allowlist is unrestricted.
+        Static inspection of the nested program cannot account for expansions.
+        """
+        try:
+            # Retain quote marks so a literal quoted ';' cannot be mistaken
+            # for a command separator after tokenisation.
+            words: list[str] = []
+            # A quoted multiline program is too ambiguous for this static
+            # check: parse each line independently and fail closed if a quote
+            # spans a line. Actual unquoted newlines separate commands.
+            for line in command.splitlines(keepends=True):
+                lexer = shlex.shlex(line, posix=False, punctuation_chars=";&|<>")
+                lexer.whitespace_split = True
+                words.extend(lexer)
+                if line.endswith("\n"):
+                    words.append("\n")
+        except ValueError as exc:
+            raise ShellRedirectParseError("malformed shell quoting") from exc
+        shell_launchers = {"bash", "sh", "zsh", "dash"}
+        # A shell name used as *data* (echo sh, grep bash README.md) is not
+        # executable. Inspect each simple command's executable slot instead.
+        # Wrappers can execute a later argument; with no complete grammar for
+        # each wrapper, conservatively deny shell tokens within those chains.
+        boundaries = {";", "&&", "||", "|", "&", "\n"}
+        redirects = {">", ">>", ">|", "<", "<>", "&>", "&>>", ">&", "<&"}
+        wrappers = {
+            "env",
+            "sudo",
+            "doas",
+            "nice",
+            "nohup",
+            "time",
+            "watch",
+            "xargs",
+            "find",
+            "exec",
+            "command",
+            "strace",
+            "ltrace",
+            "su",
+        }
+        executable = True
+        wrapped = False
+        skip_target = False
+        for word in words:
+            if word in boundaries or (word and all(ch in ";&|\n" for ch in word)):
+                executable, wrapped, skip_target = True, False, False
+                continue
+            if skip_target:
+                skip_target = False
+                continue
+            if word in redirects or (word and all(ch in "<>&|" for ch in word)):
+                skip_target = True
+                continue
+            if (
+                executable
+                and "=" in word
+                and not word.startswith("=")
+                and word.split("=", 1)[0].isidentifier()
+            ):
+                continue  # Leading environment assignment, not a program.
+            # The quote-preserving lexer splits adjacent fragments ('ba'sh)
+            # without retaining adjacency. Refuse quoted executable tokens
+            # rather than miss a shell assembled from adjacent fragments.
+            if executable and word[:1] in {"'", '"'}:
+                raise ShellRedirectParseError(
+                    "nested shell launchers cannot be checked against filesystem policy"
+                )
+            # POSIX concatenates quoted and unquoted fragments into a single
+            # executable name ('ba'sh runs bash). The non-POSIX lexer above
+            # retains quote context to distinguish literal separators; join
+            # each word with the POSIX parser before inspecting executables.
+            joined = shlex.split(word)
+            if executable or wrapped:
+                # Wrappers such as env -S may split a quoted command string.
+                first = "".join(joined).split()
+                if first and first[0].rsplit("/", 1)[-1] in shell_launchers:
+                    raise ShellRedirectParseError(
+                        "nested shell launchers cannot be checked against filesystem policy"
+                    )
+            basename = ("".join(joined) if joined else word).rsplit("/", 1)[-1]
+            if executable:
+                wrapped = basename in wrappers
+                executable = False
+
     def extract_redirect_targets(self, command: str) -> tuple[list[str], list[str]]:
         """Return ``(write_targets, read_targets)`` for every redirection
         operator in *command*, across every sub-command of a compound chain.
@@ -289,6 +378,7 @@ class ShellPolicyEngine:
                 Callers must fail closed rather than executing an unchecked
                 command.
         """
+        self._reject_nested_shell_commands(command)
         try:
             lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
             lexer.whitespace_split = True
