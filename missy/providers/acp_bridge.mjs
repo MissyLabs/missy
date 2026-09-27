@@ -21,7 +21,8 @@
 //   AcpxProvider._extract_text_from_event() already recognises, so no parsing changes
 //   are needed on the Python side for either buffered or real-time-streaming callers):
 //     {"type": "text_delta", "delta": "..."}   -- zero or more, as text arrives
-//     {"type": "result", "ok": true, "stopReason": "..."}       -- success, final line
+//     {"type": "result", "ok": true, "stopReason": "...", "model": "..."}
+//                                                               -- success, final line
 //     {"type": "result", "ok": false, "error": "..."}           -- failure, final line
 //     (process exit code is 0 on success, non-zero on failure, mirroring the final line)
 // Every permission request is auto-denied (fail-closed), mirroring acpx's --deny-all
@@ -31,11 +32,14 @@ import { spawn } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-// Match acpx 0.19.x's built-in Claude registry range.  This accepts the
-// adapter releases upstream validates while avoiding an unbounded @latest
-// upgrade in a paid-provider path.
+// Pin the adapter exactly.  Older 0.76.x releases rejected concrete model
+// preferences such as "claude-opus-5-5" and silently made operators fall
+// back to a moving family alias.  0.81.2 resolves a concrete preference
+// against the adapter's advertised model metadata while still rejecting a
+// different generation.  An exact pin also prevents an unreviewed adapter
+// release from entering this paid-provider path on the next npx invocation.
 const AGENT_COMMAND = "npx";
-const AGENT_ARGS = ["-y", "@agentclientprotocol/claude-agent-acp@^0.76.0"];
+const AGENT_ARGS = ["-y", "@agentclientprotocol/claude-agent-acp@0.81.2"];
 
 async function readStdin() {
   const chunks = [];
@@ -64,7 +68,7 @@ async function main() {
     return;
   }
 
-  const { cwd, systemPrompt, prompt, model, timeoutMs } = request;
+  const { cwd, systemPrompt, prompt, model, timeoutMs, probe = false } = request;
   const effectiveTimeout = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : 120000;
 
   // detached: true makes this the leader of its own process group (setsid),
@@ -139,6 +143,7 @@ async function main() {
   let ok = true;
   let errorMessage = null;
   let usage = null;
+  let selectedModel = null;
 
   try {
     await withTimeout(
@@ -162,11 +167,18 @@ async function main() {
 
           await ctx.buildSession(sessionRequest).withSession(async (session) => {
             if (typeof model === "string" && model.trim()) {
-              await ctx.request(acp.methods.agent.session.setConfigOption, {
+              const configResponse = await ctx.request(acp.methods.agent.session.setConfigOption, {
                 sessionId: session.sessionId,
                 configId: "model",
                 value: model.trim(),
               });
+              selectedModel =
+                configResponse.configOptions?.find((option) => option.id === "model")?.currentValue ??
+                model.trim();
+            }
+            if (probe === true) {
+              stopReason = "probe";
+              return;
             }
             session.prompt(prompt);
             for (;;) {
@@ -196,7 +208,9 @@ async function main() {
   }
 
   if (ok) {
-    process.stdout.write(JSON.stringify({ type: "result", ok: true, stopReason, usage }) + "\n");
+    process.stdout.write(
+      JSON.stringify({ type: "result", ok: true, stopReason, usage, model: selectedModel }) + "\n",
+    );
   } else {
     process.stdout.write(JSON.stringify({ type: "result", ok: false, error: errorMessage }) + "\n");
     process.exitCode = 1;

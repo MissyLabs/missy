@@ -8,7 +8,7 @@ tool-specific validation run's headline finding, it spawns
 official ``@agentclientprotocol/sdk`` package) which talks the real
 Agent Client Protocol directly to ``@agentclientprotocol/claude-agent-acp``.
 
-Why the direct bridge remains: modern acpx (validated at 0.19.2) now
+Why the direct bridge remains: modern acpx (validated at 0.19.3) now
 exposes system-prompt, no-tools, filesystem, terminal, cancellation, and
 strict-NDJSON controls. Missy nevertheless needs only a single temporary
 turn and owns stricter process-group cleanup and audit boundaries, so the
@@ -42,8 +42,9 @@ passed via the Agent Client Protocol, so this provider implements a
 This makes all 44+ Missy tools available through this delegate across
 Discord, CLI, webhook, or any other channel.
 
-Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the Claude adapter
-range validated by acpx 0.19.x, ``@agentclientprotocol/claude-agent-acp@^0.76.0``).
+Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the exact Claude adapter
+version validated with acpx 0.19.3,
+``@agentclientprotocol/claude-agent-acp@0.81.2``).
 
 Configure in ``config.yaml``::
 
@@ -72,6 +73,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -89,6 +91,14 @@ _DEFAULT_TIMEOUT = 120
 # FX-G: hard ceiling on the configured acpx subprocess timeout, regardless
 # of what a provider config requests. See AcpxProvider.__init__.
 _MAX_TIMEOUT_SECONDS = 600
+
+# A real ACP session/model probe is substantially stronger than checking for
+# the node executable alone, but too expensive to repeat on the registry's
+# five-second availability cadence.  Cache successful probes for five minutes
+# and failures briefly enough that a refreshed login recovers promptly.
+_READINESS_PROBE_TIMEOUT_SECONDS = 20
+_READINESS_PROBE_SUCCESS_TTL_SECONDS = 300.0
+_READINESS_PROBE_FAILURE_TTL_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # Zero-native-tools / fail-closed permission enforcement (FX-A history)
@@ -382,9 +392,19 @@ _NATIVE_PARAMETER_PATTERN = re.compile(
 # prevent runaway parsing on adversarial or malformed output.
 _MAX_TOOL_CALLS_PER_RESPONSE = 20
 
-# Maximum character length for the tool instruction block.  If the full
-# schema rendering exceeds this, tools are presented in compact mode.
+# Hard character ceiling for the complete tool instruction block, including
+# protocol examples and quick-reference text.  The old implementation only
+# compared the verbose schema subsection to this value; its supposedly compact
+# fallback could still exceed 30 KiB because it retained every full tool
+# description.
 _MAX_TOOL_INSTRUCTIONS_CHARS = 12_000
+_MAX_COMPACT_TOOL_DESCRIPTION_CHARS = 160
+
+# ACPX serializes prior turns into one user-role prompt. Keep a bounded,
+# contiguous tail of that history while always preserving the complete current
+# request. The system/envelope/tool block has its own independent ceiling above.
+_MAX_FLATTENED_PROMPT_CHARS = 16_000
+_HISTORY_OMISSION_MARKER = "[Earlier conversation omitted to fit ACPX prompt budget]"
 
 # FX-A residual (task #46), now historical: complete_with_tools() used to
 # re-prompt with an explicit correction after the delegate reached for a
@@ -462,7 +482,12 @@ def _render_tool_schema_full(tool: Any) -> str:
     return "\n".join(lines)
 
 
-def _render_tool_schema_compact(tool: Any) -> str:
+def _render_tool_schema_compact(
+    tool: Any,
+    *,
+    include_description: bool = True,
+    required_only: bool = False,
+) -> str:
     """Render a single tool's schema as a compact one-liner.
 
     Used when the full rendering would exceed the instruction budget.
@@ -480,48 +505,33 @@ def _render_tool_schema_compact(tool: Any) -> str:
 
     param_parts = []
     for pname, pdef in properties.items():
+        if required_only and pname not in required:
+            continue
         ptype = pdef.get("type", "any")
         marker = "" if pname in required else "?"
         param_parts.append(f"{pname}{marker}: {ptype}")
 
     param_str = ", ".join(param_parts) if param_parts else ""
-    return f"- {tool.name}({param_str}) — {tool.description}"
+    rendered = f"- {tool.name}({param_str})"
+    description = " ".join(str(getattr(tool, "description", "") or "").split())
+    if include_description and description:
+        if len(description) > _MAX_COMPACT_TOOL_DESCRIPTION_CHARS:
+            description = description[: _MAX_COMPACT_TOOL_DESCRIPTION_CHARS - 1].rstrip() + "…"
+        rendered += f" — {description}"
+    return rendered
 
 
-def _render_tool_instructions(tools: list) -> str:
-    """Build the complete tool instruction block for prompt injection.
-
-    The block includes:
-    - A preamble explaining the tool call protocol
-    - Detailed schemas for each available tool
-    - Examples of correct tool call syntax
-    - Rules for when to use vs. not use tools
-    - The expected format for providing tool results
-
-    If the full rendering exceeds ``_MAX_TOOL_INSTRUCTIONS_CHARS``, falls
-    back to compact mode with abbreviated schemas.
-
-    Args:
-        tools: List of BaseTool instances.
-
-    Returns:
-        A string ready to inject into the system prompt.
-    """
-    if not tools:
-        return ""
-
-    # Try full rendering first
-    full_schemas = [_render_tool_schema_full(t) for t in tools]
-    full_block = "\n\n".join(full_schemas)
-
-    if len(full_block) > _MAX_TOOL_INSTRUCTIONS_CHARS:
-        # Fall back to compact mode
-        compact_schemas = [_render_tool_schema_compact(t) for t in tools]
-        tool_listing = "\n".join(compact_schemas)
-    else:
-        tool_listing = full_block
-
-    tool_names = [getattr(t, "name", "?") for t in tools]
+def _assemble_tool_instructions(
+    tools: list,
+    tool_listing: str,
+    *,
+    include_quick_reference: bool,
+) -> str:
+    """Assemble the shared tool protocol text around a rendered listing."""
+    quick_reference = ""
+    if include_quick_reference:
+        tool_names = [getattr(t, "name", "?") for t in tools]
+        quick_reference = f"\n### Tool Names Quick Reference\n\n{', '.join(tool_names)}\n"
 
     return f"""
 ## Available Tools
@@ -563,11 +573,73 @@ You can request multiple tools at once:
 ### Available Tools
 
 {tool_listing}
+{quick_reference}"""
 
-### Tool Names Quick Reference
 
-{", ".join(tool_names)}
-"""
+def _render_tool_instructions(tools: list) -> str:
+    """Build the complete tool instruction block for prompt injection.
+
+    The block includes:
+    - A preamble explaining the tool call protocol
+    - Detailed schemas for each available tool
+    - Examples of correct tool call syntax
+    - Rules for when to use vs. not use tools
+    - The expected format for providing tool results
+
+    The complete returned block is hard-capped at
+    ``_MAX_TOOL_INSTRUCTIONS_CHARS``. It progressively falls back from full
+    schemas, to bounded one-line descriptions, to signatures without
+    descriptions, and finally to required-parameter-only signatures. Every
+    tool name remains present; if even that minimum safe manifest cannot fit,
+    the call fails closed instead of silently hiding capabilities from the
+    model.
+
+    Args:
+        tools: List of BaseTool instances.
+
+    Returns:
+        A string ready to inject into the system prompt.
+    """
+    if not tools:
+        return ""
+
+    # Try full rendering first. The ceiling applies to the assembled block,
+    # not merely this schema subsection.
+    full_schemas = [_render_tool_schema_full(t) for t in tools]
+    full_block = "\n\n".join(full_schemas)
+    candidate = _assemble_tool_instructions(tools, full_block, include_quick_reference=True)
+    if len(candidate) <= _MAX_TOOL_INSTRUCTIONS_CHARS:
+        return candidate
+
+    compact_block = "\n".join(_render_tool_schema_compact(t) for t in tools)
+    candidate = _assemble_tool_instructions(tools, compact_block, include_quick_reference=False)
+    if len(candidate) <= _MAX_TOOL_INSTRUCTIONS_CHARS:
+        return candidate
+
+    signature_block = "\n".join(
+        _render_tool_schema_compact(t, include_description=False) for t in tools
+    )
+    candidate = _assemble_tool_instructions(tools, signature_block, include_quick_reference=False)
+    if len(candidate) <= _MAX_TOOL_INSTRUCTIONS_CHARS:
+        return candidate
+
+    required_signature_block = "\n".join(
+        _render_tool_schema_compact(
+            t,
+            include_description=False,
+            required_only=True,
+        )
+        for t in tools
+    )
+    candidate = _assemble_tool_instructions(
+        tools, required_signature_block, include_quick_reference=False
+    )
+    if len(candidate) > _MAX_TOOL_INSTRUCTIONS_CHARS:
+        raise ProviderError(
+            "acpx tool manifest exceeds its safe prompt ceiling even in "
+            "required-parameter-only mode"
+        )
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1075,7 @@ class AcpxProvider(BaseProvider):
     """
 
     name = "acpx"
+    availability_probe_wait_seconds = _READINESS_PROBE_TIMEOUT_SECONDS + 5
 
     def __init__(self, config: ProviderConfig) -> None:
         # The bridge is intentionally pinned to the Claude ACP adapter, so
@@ -1035,6 +1108,9 @@ class AcpxProvider(BaseProvider):
                 config.base_url,
             )
         self._sandbox_cwd: str | None = None
+        self._readiness_lock = threading.Lock()
+        self._readiness_checked_at = 0.0
+        self._readiness_result = False
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -1043,12 +1119,12 @@ class AcpxProvider(BaseProvider):
     def is_available(self) -> bool:
         """Return ``True`` when the bridge can actually be run.
 
-        Verifies ``node`` is on ``PATH`` and ``acp_bridge.mjs`` exists
-        alongside this module. Does not attempt a live ``npx`` fetch of
-        ``@agentclientprotocol/claude-agent-acp`` here (that happens lazily on
-        first real call, same as acpx's own CLI did) -- this check is
-        about whether the bridge mechanism itself is runnable, not
-        network reachability.
+        Verifies ``node`` and the bridge exist, then creates a real ACP
+        session and applies the configured model without sending a prompt.
+        This catches adapter startup failures and invalid model selectors
+        before the first user request. Results are cached locally because
+        spawning the adapter on every registry availability check would be
+        excessive.
         """
         if not shutil.which("node"):
             logger.debug("node binary not found on PATH; acp_bridge.mjs cannot run")
@@ -1060,7 +1136,65 @@ class AcpxProvider(BaseProvider):
             )
             self._emit_event("", "", "error", "acp_bridge.mjs missing")
             return False
-        return True
+
+        now = time.monotonic()
+        ttl = (
+            _READINESS_PROBE_SUCCESS_TTL_SECONDS
+            if self._readiness_result
+            else _READINESS_PROBE_FAILURE_TTL_SECONDS
+        )
+        if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
+            return self._readiness_result
+
+        with self._readiness_lock:
+            now = time.monotonic()
+            ttl = (
+                _READINESS_PROBE_SUCCESS_TTL_SECONDS
+                if self._readiness_result
+                else _READINESS_PROBE_FAILURE_TTL_SECONDS
+            )
+            if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
+                return self._readiness_result
+            result = self._probe_bridge_readiness()
+            self._readiness_result = result
+            self._readiness_checked_at = time.monotonic()
+            return result
+
+    def _probe_bridge_readiness(self) -> bool:
+        """Create an ACP session and validate the configured model, without inference."""
+        resolved_cwd = self._isolated_cwd()
+        request = json.dumps(
+            {
+                "cwd": resolved_cwd,
+                "systemPrompt": "",
+                "prompt": "",
+                "model": self._model,
+                "timeoutMs": _READINESS_PROBE_TIMEOUT_SECONDS * 1000,
+                "probe": True,
+            }
+        )
+        try:
+            completed = _run_subprocess_with_group_kill(
+                ["node", str(_ACP_BRIDGE_SCRIPT_PATH)],
+                resolved_cwd,
+                _READINESS_PROBE_TIMEOUT_SECONDS + 5,
+                input_text=request,
+            )
+        except Exception:
+            logger.warning("acpx readiness probe failed; details withheld.")
+            return False
+        if completed.returncode != 0:
+            logger.warning("acpx readiness probe was rejected; details withheld.")
+            return False
+        for line in reversed(completed.stdout.splitlines()):
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if event.get("type") == "result":
+                return event.get("ok") is True and event.get("stopReason") == "probe"
+        logger.warning("acpx readiness probe returned no terminal result.")
+        return False
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Run a one-shot completion via ``acp_bridge.mjs``.
@@ -1602,7 +1736,8 @@ class AcpxProvider(BaseProvider):
             None,
         )
 
-        parts: list[str] = []
+        prior_blocks: list[str] = []
+        current_block = ""
         for i, msg in enumerate(messages):
             prefix = {
                 "system": "[System]",
@@ -1610,10 +1745,44 @@ class AcpxProvider(BaseProvider):
                 "assistant": "[Assistant]",
             }.get(msg.role, f"[{msg.role}]")
             if i == last_non_system_idx:
-                parts.append(_CURRENT_TURN_BOUNDARY)
-                parts.append(_CURRENT_TURN_IDENTITY_REMINDER)
-            parts.append(f"{prefix}: {msg.content}")
-        return "\n".join(parts)
+                current_block = "\n".join(
+                    (
+                        _CURRENT_TURN_BOUNDARY,
+                        _CURRENT_TURN_IDENTITY_REMINDER,
+                        f"{prefix}: {msg.content}",
+                    )
+                )
+            else:
+                prior_blocks.append(f"{prefix}: {msg.content}")
+
+        full_prompt = "\n".join((*prior_blocks, current_block))
+        if len(full_prompt) <= _MAX_FLATTENED_PROMPT_CHARS:
+            return full_prompt
+
+        # Retain a contiguous tail of complete recent messages. Never clip the
+        # current request; an unusually large current request may therefore
+        # exceed the historical-context ceiling on its own.
+        selected_recent: list[str] = []
+        for block in reversed(prior_blocks):
+            candidate = "\n".join(
+                (
+                    _HISTORY_OMISSION_MARKER,
+                    block,
+                    *reversed(selected_recent),
+                    current_block,
+                )
+            )
+            if len(candidate) > _MAX_FLATTENED_PROMPT_CHARS:
+                break
+            selected_recent.append(block)
+
+        return "\n".join(
+            (
+                _HISTORY_OMISSION_MARKER,
+                *reversed(selected_recent),
+                current_block,
+            )
+        )
 
     def _parse_ndjson_output(self, stdout: str) -> str:
         """Parse NDJSON output and extract the final assistant text.
