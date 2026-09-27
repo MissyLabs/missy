@@ -1351,6 +1351,16 @@ class DiscordChannel(BaseChannel):
                 logger.error("Discord: interaction denial response failed: %s", exc)
             return
 
+        # Slash interactions do not carry MESSAGE_CREATE metadata. Bind the
+        # server-side guild mode to this invocation before dispatching /ask.
+        capability_mode = "discord"
+        if guild_id is not None:
+            from missy.channels.discord.config import guild_mode_to_capability
+
+            capability_mode = guild_mode_to_capability(
+                self.account_config.guild_policies[guild_id].mode
+            )
+
         # DISC-CMD-008: per-user rate limit, checked after authorization
         # (never leaks whether an unauthorized user exists) but before
         # dispatching to the potentially LLM-calling command handler.
@@ -1396,7 +1406,9 @@ class DiscordChannel(BaseChannel):
 
         # Run the command handler (may take a while for /ask with slow providers)
         try:
-            response_text = await handle_slash_command(data, self)
+            response_text = await handle_slash_command(
+                data, self, capability_mode=capability_mode
+            )
         except Exception as exc:
             logger.exception("Discord: slash command handler failed: %s", exc)
             response_text = f"Sorry, I encountered an error: {exc}"

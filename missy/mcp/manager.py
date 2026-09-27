@@ -182,6 +182,7 @@ class McpManager:
                 "bearer_token",
                 "headers",
                 "allow_insecure_auth",
+                "trusted_read_only_tools",
             )
         }
         return json.dumps(connection, sort_keys=True, separators=(",", ":"), default=str)
@@ -376,6 +377,18 @@ class McpManager:
         # Namespaced names follow the same server__tool convention used by all_tools().
         for tool_name, annotation in client.tool_annotations.items():
             namespaced = f"{name}__{tool_name}"
+            # A server's readOnlyHint is self-reported, not an operator
+            # authorization to bypass approval. Only an explicit per-tool
+            # override in the owner-controlled mcp.json may grant that trust.
+            trusted = getattr(self, "_desired_servers", {}).get(name, {}).get(
+                "trusted_read_only_tools", []
+            )
+            if annotation.read_only and (
+                not isinstance(trusted, list) or tool_name not in trusted
+            ):
+                from missy.mcp.annotations import ToolAnnotation
+
+                annotation = ToolAnnotation.from_mcp_dict({})
             self._annotation_registry.register(namespaced, annotation)
         annotation_states = getattr(client, "tool_annotation_states", {})
         if isinstance(annotation_states, dict):

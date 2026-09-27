@@ -3919,6 +3919,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 f"your response. You may want to try again or "
                                 f"adjust your response.",
                                 session_id,
+                                _capability_mode=msg.metadata.get(
+                                    "discord_capability_mode", "discord"
+                                ),
                             )
 
             async def _run_discord() -> None:

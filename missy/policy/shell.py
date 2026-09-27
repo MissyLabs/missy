@@ -252,6 +252,27 @@ class ShellPolicyEngine:
     _REDIRECT_WRITE_OPS = frozenset({">", ">>", ">|", "&>", "&>>"})
     _REDIRECT_READ_OPS = frozenset({"<", "<>"})
 
+    @staticmethod
+    def _reject_nested_shell_commands(command: str) -> None:
+        """Deny opaque shell -c scripts: quoted redirects evade outer parsing.
+
+        Filesystem policy applies even when the shell allowlist is unrestricted.
+        Static inspection of the nested program cannot account for expansions.
+        """
+        try:
+            words = shlex.split(command)
+        except ValueError as exc:
+            raise ShellRedirectParseError("malformed shell quoting") from exc
+        shell_launchers = {"bash", "sh", "zsh", "dash"}
+        # Do not parse shell options here. Their option grammar is subtle,
+        # options such as -o/-O consume arguments, and shells also accept
+        # clustered flags. Denying nested shell launchers entirely is the
+        # only defensible static-policy boundary.
+        if any(word.rsplit("/", 1)[-1] in shell_launchers for word in words):
+            raise ShellRedirectParseError(
+                "nested shell launchers cannot be checked against filesystem policy"
+            )
+
     def extract_redirect_targets(self, command: str) -> tuple[list[str], list[str]]:
         """Return ``(write_targets, read_targets)`` for every redirection
         operator in *command*, across every sub-command of a compound chain.
@@ -289,6 +310,7 @@ class ShellPolicyEngine:
                 Callers must fail closed rather than executing an unchecked
                 command.
         """
+        self._reject_nested_shell_commands(command)
         try:
             lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
             lexer.whitespace_split = True
