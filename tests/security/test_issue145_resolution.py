@@ -362,12 +362,41 @@ def test_shell_subprocess_cannot_overwrite_operator_protected_file(tmp_path: Pat
         "bash -O extglob -c 'echo owned > /protected'",
         "bash --noprofile -c 'echo owned > /protected'",
         "sh -c 'echo owned > /protected'",
+        "echo safe; bash -c 'echo owned > /protected'",
+        "echo safe | sh -c 'echo owned > /protected'",
+        "echo safe\nbash -c 'echo owned > /protected'",
+        "echo safe\nsh -c 'echo owned > /protected'",
+        "env VAR=1 bash -c 'echo owned > /protected'",
+        "env -S 'bash -c echo owned'",
+        "'ba'sh -c 'echo owned > /protected'",
+        "sudo -u root bash -c 'echo owned > /protected'",
+        "VAR=1 bash -c 'echo owned > /protected'",
     ],
 )
 def test_shell_nested_launchers_fail_closed(command: str) -> None:
     engine = ShellPolicyEngine(ShellPolicy(enabled=True, allowed_commands=[]))
     with pytest.raises(ShellRedirectParseError, match="nested shell launchers"):
         engine.extract_redirect_targets(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo sh",
+        "printf bash",
+        "grep bash README.md",
+        "echo dash && printf zsh",
+        "echo bash > /tmp/sh",
+        "echo ';' bash",
+        "echo '|' sh",
+        "echo ';' bash",
+    ],
+)
+def test_shell_names_as_arguments_are_not_nested_launchers(command: str) -> None:
+    engine = ShellPolicyEngine(ShellPolicy(enabled=True, allowed_commands=[]))
+    writes, reads = engine.extract_redirect_targets(command)
+    assert reads == []
+    assert writes == (["/tmp/sh"] if ">" in command else [])
 
 
 def test_shell_fallback_sandbox_keeps_operator_protected_boundary(tmp_path: Path) -> None:
