@@ -410,7 +410,7 @@ class TestSchedulerParseEdgeCases:
 class TestContextManagerZeroBudget:
     """A TokenBudget with total=0 produces an empty history list."""
 
-    def test_zero_budget_returns_only_new_message(self) -> None:
+    def test_zero_budget_returns_empty_prompt(self) -> None:
         from missy.agent.context import ContextManager, TokenBudget
 
         # fresh_tail_count=0 disables fresh-tail protection so all history is evictable.
@@ -426,13 +426,10 @@ class TestContextManagerZeroBudget:
             history=history,
         )
 
-        # With a zero budget no history turns should survive pruning.
-        # The only message must be the new user message.
-        assert messages[-1] == {"role": "user", "content": "hello"}
-        # History is completely pruned (no turns fit in zero budget).
-        assert all(m["content"] == "hello" for m in messages)
+        assert system == ""
+        assert messages == []
 
-    def test_zero_budget_no_history_returns_message(self) -> None:
+    def test_zero_budget_no_history_returns_empty_prompt(self) -> None:
         from missy.agent.context import ContextManager, TokenBudget
 
         budget = TokenBudget(total=0, system_reserve=0, tool_definitions_reserve=0)
@@ -443,8 +440,8 @@ class TestContextManagerZeroBudget:
             new_message="ping",
             history=[],
         )
-        assert len(messages) == 1
-        assert messages[0]["content"] == "ping"
+        assert system == ""
+        assert messages == []
 
     def test_negative_budget_raises_value_error(self) -> None:
         """A negative total budget must raise ValueError."""
