@@ -8,7 +8,7 @@ tool-specific validation run's headline finding, it spawns
 official ``@agentclientprotocol/sdk`` package) which talks the real
 Agent Client Protocol directly to ``@agentclientprotocol/claude-agent-acp``.
 
-Why the direct bridge remains: modern acpx (validated at 0.19.2) now
+Why the direct bridge remains: modern acpx (validated at 0.19.3) now
 exposes system-prompt, no-tools, filesystem, terminal, cancellation, and
 strict-NDJSON controls. Missy nevertheless needs only a single temporary
 turn and owns stricter process-group cleanup and audit boundaries, so the
@@ -42,8 +42,9 @@ passed via the Agent Client Protocol, so this provider implements a
 This makes all 44+ Missy tools available through this delegate across
 Discord, CLI, webhook, or any other channel.
 
-Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the Claude adapter
-range validated by acpx 0.19.x, ``@agentclientprotocol/claude-agent-acp@^0.76.0``).
+Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the exact Claude adapter
+version validated with acpx 0.19.3,
+``@agentclientprotocol/claude-agent-acp@0.81.2``).
 
 Configure in ``config.yaml``::
 
@@ -72,6 +73,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -89,6 +91,14 @@ _DEFAULT_TIMEOUT = 120
 # FX-G: hard ceiling on the configured acpx subprocess timeout, regardless
 # of what a provider config requests. See AcpxProvider.__init__.
 _MAX_TIMEOUT_SECONDS = 600
+
+# A real ACP session/model probe is substantially stronger than checking for
+# the node executable alone, but too expensive to repeat on the registry's
+# five-second availability cadence.  Cache successful probes for five minutes
+# and failures briefly enough that a refreshed login recovers promptly.
+_READINESS_PROBE_TIMEOUT_SECONDS = 20
+_READINESS_PROBE_SUCCESS_TTL_SECONDS = 300.0
+_READINESS_PROBE_FAILURE_TTL_SECONDS = 30.0
 
 # ---------------------------------------------------------------------------
 # Zero-native-tools / fail-closed permission enforcement (FX-A history)
@@ -1003,6 +1013,7 @@ class AcpxProvider(BaseProvider):
     """
 
     name = "acpx"
+    availability_probe_wait_seconds = _READINESS_PROBE_TIMEOUT_SECONDS + 5
 
     def __init__(self, config: ProviderConfig) -> None:
         # The bridge is intentionally pinned to the Claude ACP adapter, so
@@ -1035,6 +1046,9 @@ class AcpxProvider(BaseProvider):
                 config.base_url,
             )
         self._sandbox_cwd: str | None = None
+        self._readiness_lock = threading.Lock()
+        self._readiness_checked_at = 0.0
+        self._readiness_result = False
 
     # ------------------------------------------------------------------
     # BaseProvider interface
@@ -1043,12 +1057,12 @@ class AcpxProvider(BaseProvider):
     def is_available(self) -> bool:
         """Return ``True`` when the bridge can actually be run.
 
-        Verifies ``node`` is on ``PATH`` and ``acp_bridge.mjs`` exists
-        alongside this module. Does not attempt a live ``npx`` fetch of
-        ``@agentclientprotocol/claude-agent-acp`` here (that happens lazily on
-        first real call, same as acpx's own CLI did) -- this check is
-        about whether the bridge mechanism itself is runnable, not
-        network reachability.
+        Verifies ``node`` and the bridge exist, then creates a real ACP
+        session and applies the configured model without sending a prompt.
+        This catches adapter startup failures and invalid model selectors
+        before the first user request. Results are cached locally because
+        spawning the adapter on every registry availability check would be
+        excessive.
         """
         if not shutil.which("node"):
             logger.debug("node binary not found on PATH; acp_bridge.mjs cannot run")
@@ -1060,7 +1074,65 @@ class AcpxProvider(BaseProvider):
             )
             self._emit_event("", "", "error", "acp_bridge.mjs missing")
             return False
-        return True
+
+        now = time.monotonic()
+        ttl = (
+            _READINESS_PROBE_SUCCESS_TTL_SECONDS
+            if self._readiness_result
+            else _READINESS_PROBE_FAILURE_TTL_SECONDS
+        )
+        if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
+            return self._readiness_result
+
+        with self._readiness_lock:
+            now = time.monotonic()
+            ttl = (
+                _READINESS_PROBE_SUCCESS_TTL_SECONDS
+                if self._readiness_result
+                else _READINESS_PROBE_FAILURE_TTL_SECONDS
+            )
+            if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
+                return self._readiness_result
+            result = self._probe_bridge_readiness()
+            self._readiness_result = result
+            self._readiness_checked_at = time.monotonic()
+            return result
+
+    def _probe_bridge_readiness(self) -> bool:
+        """Create an ACP session and validate the configured model, without inference."""
+        resolved_cwd = self._isolated_cwd()
+        request = json.dumps(
+            {
+                "cwd": resolved_cwd,
+                "systemPrompt": "",
+                "prompt": "",
+                "model": self._model,
+                "timeoutMs": _READINESS_PROBE_TIMEOUT_SECONDS * 1000,
+                "probe": True,
+            }
+        )
+        try:
+            completed = _run_subprocess_with_group_kill(
+                ["node", str(_ACP_BRIDGE_SCRIPT_PATH)],
+                resolved_cwd,
+                _READINESS_PROBE_TIMEOUT_SECONDS + 5,
+                input_text=request,
+            )
+        except Exception:
+            logger.warning("acpx readiness probe failed; details withheld.")
+            return False
+        if completed.returncode != 0:
+            logger.warning("acpx readiness probe was rejected; details withheld.")
+            return False
+        for line in reversed(completed.stdout.splitlines()):
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if event.get("type") == "result":
+                return event.get("ok") is True and event.get("stopReason") == "probe"
+        logger.warning("acpx readiness probe returned no terminal result.")
+        return False
 
     def complete(self, messages: list[Message], **kwargs: Any) -> CompletionResponse:
         """Run a one-shot completion via ``acp_bridge.mjs``.

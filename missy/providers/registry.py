@@ -474,7 +474,13 @@ class ProviderRegistry:
 
     def _availability_for(self, name: str, provider: BaseProvider) -> bool:
         event = self._ensure_availability_probe(name, provider)
-        event.wait(self.AVAILABILITY_BULK_DEADLINE_SECONDS)
+        provider_wait = getattr(provider, "availability_probe_wait_seconds", None)
+        wait_seconds = (
+            self.AVAILABILITY_BULK_DEADLINE_SECONDS
+            if not isinstance(provider_wait, (int, float))
+            else max(self.AVAILABILITY_BULK_DEADLINE_SECONDS, provider_wait)
+        )
+        event.wait(wait_seconds)
         now = time.monotonic()
         with self._lock:
             cached = self._availability_cache.get(name)

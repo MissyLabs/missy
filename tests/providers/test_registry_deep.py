@@ -7,6 +7,7 @@ Covers ProviderRegistry, ModelRouter, and the module-level singleton with
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -37,6 +38,7 @@ def _make_provider(name: str = "fake", available: bool = True) -> MagicMock:
     """Return a mock BaseProvider with the given name and availability."""
     provider = MagicMock(spec=BaseProvider)
     provider.name = name
+    provider.availability_probe_wait_seconds = None
     provider.is_available.return_value = available
     provider.complete.return_value = CompletionResponse(
         content="reply",
@@ -230,6 +232,23 @@ class TestSetDefault:
         registry.register("anthropic", provider)
         registry.set_default("anthropic")
         assert registry.get_default_name() == "anthropic"
+
+    def test_set_default_honors_provider_specific_probe_wait(self):
+        registry = ProviderRegistry()
+        registry.AVAILABILITY_BULK_DEADLINE_SECONDS = 0.001
+        provider = _make_provider("slow-ready")
+        provider.availability_probe_wait_seconds = 0.1
+
+        def delayed_available() -> bool:
+            time.sleep(0.02)
+            return True
+
+        provider.is_available.side_effect = delayed_available
+        registry.register("slow-ready", provider)
+
+        registry.set_default("slow-ready")
+
+        assert registry.get_default_name() == "slow-ready"
 
     def test_set_default_unregistered_raises_value_error(self):
         registry = ProviderRegistry()

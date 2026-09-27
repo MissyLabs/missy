@@ -119,10 +119,14 @@ class BaseProvider(ABC):
 
     Attributes:
         name: Short identifier for this provider (e.g. ``"anthropic"``).
+        availability_probe_wait_seconds: Optional provider-specific upper
+            bound for a direct availability check. Registries use their
+            short bulk-probe deadline when this is ``None``.
     """
 
     name: str
     rate_limiter: RateLimiter | None = None
+    availability_probe_wait_seconds: float | None = None
 
     @abstractmethod
     def complete(self, messages: list[Message], **kwargs) -> CompletionResponse:

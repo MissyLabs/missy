@@ -240,20 +240,40 @@ class TestRunSubprocessWithGroupKill:
 
 
 class TestAcpxAvailability:
-    """6th tool-specific validation run: is_available() no longer shells
-    out to `acpx --version`/`acpx --help` to sniff for security-relevant
-    CLI flags -- it just checks that `node` is runnable and that
-    acp_bridge.mjs exists alongside this module. There is no live `npx`
-    fetch here (that happens lazily on first real call, same as acpx's
-    own CLI did)."""
+    """Availability includes a cached, non-inference ACP session/model probe."""
 
+    @patch.object(AcpxProvider, "_probe_bridge_readiness", return_value=True)
     @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
     @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
-    def test_available_when_node_and_bridge_present(self, mock_which, mock_path):
+    def test_available_when_node_bridge_and_probe_succeed(
+        self, mock_which, mock_path, mock_probe
+    ):
         mock_path.is_file.return_value = True
         p = AcpxProvider(_make_config())
         assert p.is_available() is True
         mock_which.assert_called_once_with("node")
+        mock_probe.assert_called_once_with()
+
+    @patch.object(AcpxProvider, "_probe_bridge_readiness", return_value=True)
+    @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
+    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
+    def test_successful_readiness_probe_is_cached(self, _mock_which, mock_path, mock_probe):
+        mock_path.is_file.return_value = True
+        p = AcpxProvider(_make_config())
+        assert p.is_available() is True
+        assert p.is_available() is True
+        mock_probe.assert_called_once_with()
+
+    @patch.object(AcpxProvider, "_probe_bridge_readiness", return_value=False)
+    @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
+    @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
+    def test_failed_readiness_probe_marks_provider_unavailable(
+        self, _mock_which, mock_path, mock_probe
+    ):
+        mock_path.is_file.return_value = True
+        p = AcpxProvider(_make_config())
+        assert p.is_available() is False
+        mock_probe.assert_called_once_with()
 
     @patch("missy.providers.acpx_provider.shutil.which", return_value=None)
     def test_unavailable_no_node_binary(self, mock_which):
@@ -280,6 +300,41 @@ class TestAcpxAvailability:
         prompt = source.index("session.prompt(prompt)")
         assert 'configId: "model"' in source
         assert model_selection < prompt
+
+    def test_bridge_pins_model_resolving_adapter(self):
+        source = _ACP_BRIDGE_SCRIPT_PATH.read_text(encoding="utf-8")
+        assert "@agentclientprotocol/claude-agent-acp@0.81.2" in source
+        assert "@agentclientprotocol/claude-agent-acp@^" not in source
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_readiness_probe_creates_session_and_applies_model_without_prompt(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {"type": "result", "ok": True, "stopReason": "probe", "model": "opus"}
+            )
+            + "\n",
+            stderr="",
+        )
+        p = AcpxProvider(_make_config(model="claude-opus-5-5"))
+        with patch.object(p, "_isolated_cwd", return_value="/tmp/acpx-probe"):
+            assert p._probe_bridge_readiness() is True
+
+        request = json.loads(mock_run.call_args.kwargs["input_text"])
+        assert request["probe"] is True
+        assert request["model"] == "claude-opus-5-5"
+        assert request["prompt"] == ""
+
+    @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
+    def test_readiness_probe_rejects_bridge_error(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=json.dumps({"type": "result", "ok": False, "error": "bad model"}) + "\n",
+            stderr="",
+        )
+        p = AcpxProvider(_make_config(model="claude-opus-5-5"))
+        with patch.object(p, "_isolated_cwd", return_value="/tmp/acpx-probe"):
+            assert p._probe_bridge_readiness() is False
 
 
 # ------------------------------------------------------------------
