@@ -39,6 +39,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from missy.agent.history_framing import HISTORY_POLICY, frame_request, sanitize_summary
 from missy.agent.subscription import AgentSubscription
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import MissyError, ProviderError
@@ -1081,6 +1082,7 @@ class AgentRuntime:
         _explicit_tool_request_input: str | None = None,
         _provider: str | None = None,
         _capability_mode: str | None = None,
+        _request_context: dict | None = None,
     ) -> str:
         """Run one externally ordered turn for *session_id*.
 
@@ -1094,6 +1096,7 @@ class AgentRuntime:
             "_explicit_tool_request_input": _explicit_tool_request_input,
             "_provider": _provider,
             "_capability_mode": _capability_mode,
+            "_request_context": _request_context,
         }
         if session_id is None or _delegation_depth > 0:
             return self._run_once(user_input, **run_kwargs)
@@ -1125,6 +1128,7 @@ class AgentRuntime:
         _explicit_tool_request_input: str | None = None,
         _provider: str | None = None,
         _capability_mode: str | None = None,
+        _request_context: dict | None = None,
     ) -> str:
         """Run the agent with *user_input* and return the response string.
 
@@ -1171,6 +1175,8 @@ class AgentRuntime:
             _capability_mode: Internal immutable per-call capability mode.
                 Used by concurrent transports such as Discord; it never
                 mutates the shared runtime configuration.
+            _request_context: Optional transport labels for this turn, not
+                authorization data or content to persist in conversation history.
 
         Returns:
             The model's reply as a plain string.
@@ -1337,6 +1343,13 @@ class AgentRuntime:
             history,
             session_id=sid,
             attention_query=attention_query,
+        )
+        system_prompt, messages = frame_request(
+            system_prompt,
+            messages,
+            request_id=task_id,
+            request_context=_request_context,
+            current_content=user_input,
         )
 
         # Register system prompt hash for drift detection
@@ -1563,6 +1576,12 @@ class AgentRuntime:
         # Single-turn streaming
         history = self._load_history(sid)
         system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
+        system_prompt, messages = frame_request(
+            system_prompt,
+            messages,
+            request_id=str(self._session_mgr.generate_task_id()),
+            current_content=user_input,
+        )
         msg_objects = self._dicts_to_messages(system_prompt, messages)
 
         # Verify system prompt integrity before this provider call --
@@ -4474,6 +4493,17 @@ class AgentRuntime:
             pipeline = create_default_pipeline(provider=None, max_tokens=max_tokens)
             result = pipeline.condense(messages, system)
             condensed = result.messages if result and result.messages else messages
+            # These are fallback summaries made from earlier user messages.
+            # Present commands as completed context, never as new work.
+            condensed = [
+                {
+                    **message,
+                    "content": sanitize_summary(str(message.get("content", ""))),
+                }
+                if str(message.get("content", "")).startswith("[Conversation Summary]")
+                else message
+                for message in condensed
+            ]
             logger.debug("F10: condensed context %d -> %d messages.", len(messages), len(condensed))
             return system, condensed
         except Exception:
@@ -4528,7 +4558,8 @@ class AgentRuntime:
                         )
                         if session_summaries:
                             summary_texts = [
-                                getattr(s, "content", str(s)) for s in session_summaries
+                                sanitize_summary(getattr(s, "content", str(s)))
+                                for s in session_summaries
                             ]
                     except Exception:
                         logger.debug("Failed to load summaries", exc_info=True)
@@ -5918,6 +5949,9 @@ class AgentRuntime:
         system_prompt, _unused_messages = self._build_context_messages(
             original_prompt, history=[], session_id=sid
         )
+        # This transcript already carries its original request marker.
+        # Resume is not a new request and must not relabel prior work.
+        system_prompt = HISTORY_POLICY + system_prompt
         if self._drift_detector is not None:
             self._drift_detector.register("system_prompt", system_prompt)
 

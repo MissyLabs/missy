@@ -625,7 +625,8 @@ class TestRuntimeContextManagement:
         messages = provider.complete.call_args[0][0]
         system_msgs = [m for m in messages if m.role == "system"]
         assert len(system_msgs) == 1
-        assert system_msgs[0].content.startswith("Custom sys.")
+        assert system_msgs[0].content.startswith("[HISTORY_READ_ONLY]")
+        assert "Custom sys." in system_msgs[0].content
 
     def test_context_manager_prunes_old_history(self):
         """ContextManager drops old messages when budget is exceeded."""
