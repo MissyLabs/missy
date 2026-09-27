@@ -15,6 +15,9 @@ from missy.config.settings import ProviderConfig
 from missy.core.exceptions import ProviderError
 from missy.providers.acpx_provider import (
     _ACP_BRIDGE_SCRIPT_PATH,
+    _HISTORY_OMISSION_MARKER,
+    _MAX_FLATTENED_PROMPT_CHARS,
+    _MAX_TOOL_INSTRUCTIONS_CHARS,
     AcpxProvider,
     _find_close_match,
     _generate_tool_call_id,
@@ -623,6 +626,21 @@ class TestBuildPrompt:
         assert "[System]: sys" in result
         assert "[User]: q" in result
 
+    def test_long_history_is_bounded_while_current_request_is_preserved(self):
+        p = AcpxProvider(_make_config())
+        messages = [
+            Message(role="user", content=f"old-turn-{index}:" + "x" * 3_000) for index in range(10)
+        ]
+        messages.append(Message(role="user", content="the current request must survive"))
+
+        result = p._build_prompt(messages)
+
+        assert len(result) <= _MAX_FLATTENED_PROMPT_CHARS
+        assert result.startswith(_HISTORY_OMISSION_MARKER)
+        assert "old-turn-0:" not in result
+        assert "old-turn-9:" in result
+        assert result.endswith("[User]: the current request must survive")
+
 
 # ------------------------------------------------------------------
 # NDJSON parsing
@@ -833,6 +851,13 @@ class TestRenderToolSchemaCompact:
         result = _render_tool_schema_compact(tool)
         assert "()" in result
 
+    def test_long_description_is_bounded_and_single_line(self):
+        tool = _make_mock_tool(description=("very long description\n" * 100))
+        result = _render_tool_schema_compact(tool)
+        assert "\n" not in result
+        assert result.endswith("…")
+        assert len(result) < 250
+
 
 class TestRenderToolInstructions:
     def test_empty_tools_returns_empty(self):
@@ -868,6 +893,26 @@ class TestRenderToolInstructions:
     def test_contains_parallel_execution_example(self):
         result = _render_tool_instructions([_make_mock_tool()])
         assert "Multiple Tool Calls" in result
+
+    def test_complete_block_is_hard_capped_without_hiding_tools(self):
+        tools = [
+            _make_mock_tool(
+                name=f"large_tool_{index}",
+                description="long description " * 500,
+                properties={
+                    "required_value": {"type": "string"},
+                    "optional_value": {"type": "integer"},
+                },
+                required=["required_value"],
+            )
+            for index in range(80)
+        ]
+
+        result = _render_tool_instructions(tools)
+
+        assert len(result) <= _MAX_TOOL_INSTRUCTIONS_CHARS
+        for tool in tools:
+            assert f"- {tool.name}(required_value: string, optional_value?: integer)" in result
 
 
 # ===========================================================================
