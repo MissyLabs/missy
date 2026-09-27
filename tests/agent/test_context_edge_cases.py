@@ -86,15 +86,13 @@ class TestTokenBudgetExhaustion:
         assert len(messages) == 2  # newest history + new message
 
     def test_budget_consumed_exactly(self):
-        # available = 100 tokens; new_message = 1 token; history budget = 99 tokens
-        # One message of exactly 99 tokens should just fit.
+        # Leave room for serialized message roles and the actual system prompt.
         budget = make_budget(total=100, fresh_tail_count=0)
         cm = ContextManager(budget)
-        ninety_nine_token_content = char_tokens(99)
-        history = [{"role": "user", "content": ninety_nine_token_content}]
+        fitting_content = char_tokens(80)
+        history = [{"role": "user", "content": fitting_content}]
         _, messages = cm.build_messages(system="S", new_message="x", history=history)
-        # The history message fits exactly; it should be present.
-        assert any(m["content"] == ninety_nine_token_content for m in messages)
+        assert any(m["content"] == fitting_content for m in messages)
 
     def test_budget_exceeded_by_one_token_evicts_history(self):
         # available = 100 tokens; new_message = 1 token; history budget = 99 tokens
@@ -399,8 +397,7 @@ class TestSingleHugeMessage:
         assert all(m["content"] != huge_content for m in messages)
         assert messages[-1]["content"] == "new"
 
-    def test_huge_message_in_fresh_tail_still_included(self):
-        # Fresh tail is protected regardless of size.
+    def test_huge_message_in_fresh_tail_is_pruned(self):
         budget = make_budget(
             total=100,
             fresh_tail_count=1,
@@ -410,7 +407,8 @@ class TestSingleHugeMessage:
         history = [{"role": "user", "content": huge_content}]  # becomes fresh tail
         _, messages = cm.build_messages(system="S", new_message="new", history=history)
         contents = [m["content"] for m in messages]
-        assert huge_content in contents
+        assert huge_content not in contents
+        assert contents[-1] == "new"
 
     def test_huge_message_followed_by_small_messages(self):
         # Huge message is oldest (evictable); small messages are newer (also evictable).
@@ -430,13 +428,13 @@ class TestSingleHugeMessage:
         # Small messages should fit in the budget
         assert small1 in contents or small2 in contents
 
-    def test_new_message_is_never_pruned(self):
-        # Even when it exceeds the budget on its own, the new message is appended.
+    def test_new_message_is_truncated_to_hard_budget(self):
         budget = make_budget(total=10)
         cm = ContextManager(budget)
         giant_new = char_tokens(10000)
         _, messages = cm.build_messages(system="S", new_message=giant_new, history=[])
-        assert messages[-1]["content"] == giant_new
+        assert messages
+        assert len(messages[-1]["content"]) < len(giant_new)
 
 
 # ---------------------------------------------------------------------------
@@ -710,10 +708,9 @@ class TestTokenCounting:
         # If a message has exactly (history_budget) tokens, it should fit.
         budget = make_budget(total=200, fresh_tail_count=0)
         cm = ContextManager(budget)
-        # available = 200 tokens; new_message "x" = 1 token; history_budget = 199 tokens
-        # A message of exactly 199 tokens = 796 chars should fit.
-        fitting_content = "a" * 796
-        assert _approx_tokens(fitting_content) == 199
+        # Serialized roles and the actual system prompt consume part of the cap.
+        fitting_content = "a" * 720
+        assert _approx_tokens(fitting_content) == 180
         history = [{"role": "user", "content": fitting_content}]
         _, messages = cm.build_messages(system="S", new_message="x", history=history)
         assert any(m["content"] == fitting_content for m in messages)

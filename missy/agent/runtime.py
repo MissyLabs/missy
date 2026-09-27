@@ -2066,16 +2066,22 @@ class AgentRuntime:
                 # call, including a fallback with a different
                 # accepts_message_dicts convention than `provider`.
                 def _make_complete_with_tools_call(target: Any) -> Any:
+                    fitted_system, fitted_messages = self._fit_provider_context(
+                        target,
+                        system_prompt,
+                        loop_messages,
+                        tools=tools,
+                    )
                     if getattr(target, "accepts_message_dicts", False) is True:
                         target_messages = self._dicts_to_native_messages(
-                            system_prompt, loop_messages
+                            fitted_system, fitted_messages
                         )
                     else:
-                        target_messages = self._dicts_to_messages(system_prompt, loop_messages)
+                        target_messages = self._dicts_to_messages(fitted_system, fitted_messages)
 
                     def _call() -> CompletionResponse:
                         self._acquire_rate_limit()
-                        return target.complete_with_tools(target_messages, tools, system_prompt)
+                        return target.complete_with_tools(target_messages, tools, fitted_system)
 
                     return _call
 
@@ -3540,7 +3546,6 @@ class AgentRuntime:
                 detail={"prompt_id": "system_prompt"},
             )
 
-        msg_objects = self._dicts_to_messages(system_prompt, messages)
         primary_name = provider.name
 
         # F05: complexity-based model-tier routing (no-op / == self.config.model
@@ -3565,6 +3570,12 @@ class AgentRuntime:
         # provider gets the explicit override; any fallback candidate uses
         # its own configured default model instead.
         def _make_complete_call(target: Any) -> Any:
+            fitted_system, fitted_messages = self._fit_provider_context(
+                target,
+                system_prompt,
+                messages,
+            )
+            msg_objects = self._dicts_to_messages(fitted_system, fitted_messages)
             complete_kwargs: dict = {
                 "session_id": session_id,
                 "task_id": task_id,
@@ -4440,11 +4451,9 @@ class AgentRuntime:
                 summary_texts: list[str] = []
                 if session_id and self._memory_store is not None:
                     try:
-                        all_summaries = self._memory_store.get_summaries(session_id, limit=100)
-                        # Only include top-level (no parent) summaries.
-                        session_summaries = [
-                            s for s in all_summaries if s.parent_id is None
-                        ] or None
+                        session_summaries = (
+                            self._memory_store.get_root_summaries(session_id, limit=100) or None
+                        )
                         if session_summaries:
                             summary_texts = [
                                 getattr(s, "content", str(s)) for s in session_summaries
@@ -4961,6 +4970,33 @@ class AgentRuntime:
     # Message format conversion
     # ------------------------------------------------------------------
 
+    def _fit_provider_context(
+        self,
+        provider: Any,
+        system_prompt: str,
+        messages: list[dict],
+        *,
+        tools: list | None = None,
+    ) -> tuple[str, list[dict]]:
+        """Apply the configured and provider-advertised prompt ceilings."""
+        manager = getattr(self, "_context_manager", None)
+        fit_messages = getattr(type(manager), "fit_messages", None) if manager is not None else None
+        if not callable(fit_messages):
+            return system_prompt, messages
+        limits = []
+        for attr in ("context_window", "max_context_tokens"):
+            value = getattr(provider, attr, None)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                limits.append(value)
+        total_limit = min(limits) if limits else None
+        return fit_messages(
+            manager,
+            system_prompt,
+            messages,
+            tool_definitions=tools,
+            total_limit=total_limit,
+        )
+
     def _dicts_to_messages(self, system_prompt: str, message_dicts: list[dict]) -> list[Message]:
         """Convert context-manager message dicts to provider Message objects.
 
@@ -5464,7 +5500,29 @@ class AgentRuntime:
         if provider is None:
             raise RuntimeError(f"Sleeptime provider {provider_name!r} is not registered")
         self._check_budget(session_id, task_id)
-        response = provider.complete(messages, session_id=session_id, task_id=task_id)
+        if not messages:
+            provider_messages = []
+        else:
+            system_prompt = ""
+            message_dicts: list[dict] = []
+            for message in messages:
+                role = getattr(message, "role", "")
+                content = getattr(message, "content", "")
+                if role == "system" and not system_prompt:
+                    system_prompt = str(content)
+                else:
+                    message_dicts.append({"role": role, "content": str(content)})
+            fitted_system, fitted_messages = self._fit_provider_context(
+                provider,
+                system_prompt,
+                message_dicts,
+            )
+            provider_messages = self._dicts_to_messages(fitted_system, fitted_messages)
+        response = provider.complete(
+            provider_messages,
+            session_id=session_id,
+            task_id=task_id,
+        )
         self._record_cost(
             response,
             session_id=session_id,

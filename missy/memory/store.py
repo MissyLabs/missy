@@ -279,6 +279,10 @@ class MemoryStore:
         """
         return []
 
+    def get_root_summaries(self, session_id: str, limit: int = 50) -> list:  # noqa: ARG002
+        """No-op root-summary stub for the JSON fallback store."""
+        return []
+
     def get_session_token_count(self, session_id: str) -> int:
         """Estimate total tokens for a session by character count / 4.
 

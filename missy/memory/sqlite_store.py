@@ -1312,6 +1312,21 @@ class SQLiteMemoryStore:
             ).fetchall()
         return [SummaryRecord.from_row(r) for r in rows]
 
+    def get_root_summaries(self, session_id: str, limit: int = 50) -> list[SummaryRecord]:
+        """Return current top-level summaries, filtering before pagination."""
+        rows = (
+            self._conn()
+            .execute(
+                """SELECT * FROM summaries
+               WHERE session_id = ? AND parent_id IS NULL
+               ORDER BY created_at
+               LIMIT ?""",
+                (session_id, limit),
+            )
+            .fetchall()
+        )
+        return [SummaryRecord.from_row(row) for row in rows]
+
     def get_summary_by_id(self, summary_id: str) -> SummaryRecord | None:
         """Return a single summary by ID, or None."""
         conn = self._conn()
@@ -1395,18 +1410,34 @@ class SQLiteMemoryStore:
         return [SummaryRecord.from_row(r) for r in rows]
 
     def get_session_token_count(self, session_id: str) -> int:
-        """Estimate total tokens for a session (turns + top-level summaries)."""
+        """Estimate active context: unsummarized turns plus root summaries."""
         conn = self._conn()
-        turn_chars = conn.execute(
-            "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM turns WHERE session_id = ?",
+        turn_rows = conn.execute(
+            "SELECT id, LENGTH(content) AS chars FROM turns WHERE session_id = ?",
             (session_id,),
-        ).fetchone()[0]
-        summary_chars = conn.execute(
-            """SELECT COALESCE(SUM(LENGTH(content)), 0) FROM summaries
-               WHERE session_id = ? AND parent_id IS NULL""",
+        ).fetchall()
+        summary_rows = conn.execute(
+            """SELECT parent_id, source_turn_ids, LENGTH(content) AS chars
+               FROM summaries WHERE session_id = ?""",
             (session_id,),
-        ).fetchone()[0]
-        return max(1, (turn_chars + summary_chars) // 4)
+        ).fetchall()
+        summarized_turn_ids: set[str] = set()
+        root_chars = 0
+        for row in summary_rows:
+            try:
+                source_ids = json.loads(row["source_turn_ids"] or "[]")
+                if isinstance(source_ids, list):
+                    summarized_turn_ids.update(
+                        source_id for source_id in source_ids if isinstance(source_id, str)
+                    )
+            except (TypeError, ValueError):
+                pass
+            if row["parent_id"] is None:
+                root_chars += int(row["chars"] or 0)
+        active_turn_chars = sum(
+            int(row["chars"] or 0) for row in turn_rows if row["id"] not in summarized_turn_ids
+        )
+        return max(1, (active_turn_chars + root_chars) // 4)
 
     # ------------------------------------------------------------------
     # Large content operations
@@ -1522,30 +1553,65 @@ class SQLiteMemoryStore:
         return removed
 
     def _delete_orphan_summaries(self, conn: sqlite3.Connection, cutoff: str) -> int:
-        """Delete summaries older than *cutoff* whose source turns are all gone."""
-        orphaned: list[str] = []
+        """Prune summaries containing expired sources and derived parents."""
         rows = conn.execute(
-            "SELECT id, source_turn_ids, source_summary_ids FROM summaries "
-            "WHERE julianday(created_at) < julianday(?)",
-            (cutoff,),
+            """SELECT id, session_id, parent_id, source_turn_ids, source_summary_ids,
+                      time_range_end, created_at
+                 FROM summaries"""
         ).fetchall()
+        summary_sessions = {row["id"]: row["session_id"] for row in rows}
+        turn_sessions = {
+            row["id"]: row["session_id"]
+            for row in conn.execute("SELECT id, session_id FROM turns").fetchall()
+        }
+        invalid: set[str] = set()
+        sources_by_summary: dict[str, list[str]] = {}
         for row in rows:
             try:
                 turn_ids = json.loads(row["source_turn_ids"] or "[]")
                 child_ids = json.loads(row["source_summary_ids"] or "[]")
-            except ValueError:
+                if (
+                    not isinstance(turn_ids, list)
+                    or not all(isinstance(source_id, str) for source_id in turn_ids)
+                    or not isinstance(child_ids, list)
+                    or not all(isinstance(source_id, str) for source_id in child_ids)
+                ):
+                    raise ValueError("summary sources must be lists")
+            except (TypeError, ValueError):
+                invalid.add(row["id"])
                 continue
-            if child_ids or not turn_ids:
-                continue  # condensed/structural summaries are kept
-            placeholders = ",".join("?" for _ in turn_ids)
-            alive = conn.execute(
-                f"SELECT COUNT(*) FROM turns WHERE id IN ({placeholders})", turn_ids
-            ).fetchone()[0]
-            if alive == 0:
-                orphaned.append(row["id"])
-        for summary_id in orphaned:
-            conn.execute("DELETE FROM summaries WHERE id = ?", (summary_id,))
-        return len(orphaned)
+            sources_by_summary[row["id"]] = child_ids
+            if any(turn_sessions.get(turn_id) != row["session_id"] for turn_id in turn_ids):
+                invalid.add(row["id"])
+            if any(summary_sessions.get(child_id) != row["session_id"] for child_id in child_ids):
+                invalid.add(row["id"])
+            if not turn_ids and not child_ids:
+                covered_until = row["time_range_end"] or row["created_at"]
+                expired = conn.execute(
+                    "SELECT julianday(?) < julianday(?)", (covered_until, cutoff)
+                ).fetchone()[0]
+                if expired is None or expired:
+                    invalid.add(row["id"])
+
+        changed = True
+        while changed:
+            changed = False
+            for summary_id, child_ids in sources_by_summary.items():
+                if summary_id not in invalid and any(child in invalid for child in child_ids):
+                    invalid.add(summary_id)
+                    changed = True
+
+        if not invalid:
+            return 0
+        placeholders = ",".join("?" for _ in invalid)
+        params = list(invalid)
+        conn.execute(
+            f"UPDATE summaries SET parent_id = NULL "
+            f"WHERE parent_id IN ({placeholders}) AND id NOT IN ({placeholders})",
+            params + params,
+        )
+        conn.execute(f"DELETE FROM summaries WHERE id IN ({placeholders})", params)
+        return len(invalid)
 
     def fts_integrity_check(self) -> dict[str, str]:
         """Run FTS5 integrity checks; returns ``{index: "ok" | error}`` (DATA-04)."""

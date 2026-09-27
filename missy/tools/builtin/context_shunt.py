@@ -239,10 +239,29 @@ class ContextShuntTool(BaseTool):
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        messages = [
-            Message(role="system", content=_WORKER_SYSTEM_PROMPT),
-            Message(role="user", content=payload),
-        ]
+        runtime = kwargs.get("_runtime")
+        if (
+            runtime is not None
+            and callable(getattr(runtime, "_fit_provider_context", None))
+            and callable(getattr(runtime, "_dicts_to_messages", None))
+        ):
+            fitted_system, fitted_messages = runtime._fit_provider_context(
+                worker,
+                _WORKER_SYSTEM_PROMPT,
+                [{"role": "user", "content": payload}],
+            )
+            messages = runtime._dicts_to_messages(fitted_system, fitted_messages)
+        else:
+            from missy.agent.context import ContextManager
+
+            fitted_system, fitted_messages = ContextManager().fit_messages(
+                _WORKER_SYSTEM_PROMPT,
+                [{"role": "user", "content": payload}],
+            )
+            messages = [Message(role="system", content=fitted_system)] + [
+                Message(role=str(message["role"]), content=str(message.get("content", "")))
+                for message in fitted_messages
+            ]
         complete_kwargs: dict[str, Any] = {
             "session_id": session_id,
             "task_id": str(kwargs.get("_task_id") or "context_shunt"),
@@ -259,7 +278,6 @@ class ContextShuntTool(BaseTool):
         elif provider_kind == "ollama":
             complete_kwargs["options"] = {"num_predict": output_tokens}
 
-        runtime = kwargs.get("_runtime")
         task_id = str(kwargs.get("_task_id") or "")
         if runtime is not None:
             try:

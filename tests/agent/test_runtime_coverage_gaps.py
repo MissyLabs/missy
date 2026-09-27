@@ -634,13 +634,13 @@ class TestBuildMessagesLearningsException:
 
 
 # ---------------------------------------------------------------------------
-# Lines 1225-1229: _build_messages — get_summaries filters parent_id=None
+# Root-summary retrieval filters before pagination.
 # ---------------------------------------------------------------------------
 
 
 class TestBuildMessagesSummariesFiltered:
     def test_top_level_summaries_are_kept(self):
-        """Lines 1225-1229: summaries with parent_id=None are included; children excluded."""
+        """The runtime consumes the store's already-filtered root page."""
         provider = _make_provider()
         rt, reg = _build_runtime(provider, max_iterations=1)
 
@@ -652,13 +652,9 @@ class TestBuildMessagesSummariesFiltered:
         top_summary.parent_id = None
         top_summary.content = "Top-level summary text"
 
-        child_summary = MagicMock()
-        child_summary.parent_id = "parent-001"
-        child_summary.content = "Child summary"
-
         mem = MagicMock()
         mem.get_learnings.return_value = []
-        mem.get_summaries.return_value = [top_summary, child_summary]
+        mem.get_root_summaries.return_value = [top_summary]
         rt._memory_store = mem
 
         system, msgs = rt._build_context_messages(
@@ -668,13 +664,13 @@ class TestBuildMessagesSummariesFiltered:
             attention_query="",
         )
 
-        # build_messages was called with only the top-level summary
+        mem.get_root_summaries.assert_called_once_with("sess-1", limit=100)
         call_kwargs = ctx_mgr.build_messages.call_args
         summaries_passed = call_kwargs.kwargs.get("summaries") or (
             call_kwargs.args[4] if len(call_kwargs.args) > 4 else None
         )
         if summaries_passed is not None:
-            assert child_summary not in summaries_passed
+            assert summaries_passed == [top_summary]
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +690,7 @@ class TestBuildMessagesPlaybookInjection:
 
         mem = MagicMock()
         mem.get_learnings.return_value = []
-        mem.get_summaries.return_value = []
+        mem.get_root_summaries.return_value = []
         rt._memory_store = mem
 
         playbook_pattern = "\n## Proven patterns:\n- Always use tool X first"
@@ -737,7 +733,7 @@ class TestBuildMessagesSynthesizedBlock:
 
         mem = MagicMock()
         mem.get_learnings.return_value = ["learned something"]
-        mem.get_summaries.return_value = []
+        mem.get_root_summaries.return_value = []
         rt._memory_store = mem
 
         synthesized = "## Synthesized Memory\nRelevant context here."
