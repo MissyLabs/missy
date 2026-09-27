@@ -94,6 +94,7 @@ from missy.tools.builtin.provider_benchmark import ProviderBenchmarkTool
 from missy.tools.builtin.rag_query import RagQueryTool
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
+from missy.tools.builtin.singing_generate import SingingGenerateTool
 from missy.tools.builtin.tts_speak import AudioListDevicesTool, AudioSetVolumeTool, TTSSpeakTool
 from missy.tools.builtin.video_edit import VideoEditTool
 from missy.tools.builtin.video_generate import VideoGenerateTool
@@ -176,6 +177,7 @@ __all__ = [
     "RagQueryTool",
     "SelfCreateTool",
     "ShellExecTool",
+    "SingingGenerateTool",
     "VideoEditTool",
     "VideoGenerateTool",
     "VideoStoryboardTool",
@@ -273,6 +275,7 @@ _ALL_TOOL_CLASSES = [
     RagQueryTool,
     SelfCreateTool,
     ShellExecTool,
+    SingingGenerateTool,
     TTSSpeakTool,
     AudioListDevicesTool,
     AudioSetVolumeTool,

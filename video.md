@@ -445,11 +445,58 @@ the *probed* durations, so the final length stays exact.
 
 ## 18. Explicitly out of scope (Part III)
 
-- Audio-only generation (`video_generate` producing a standalone soundtrack file for
-  storyboard-wide *generated* music) — needs a `SaveAudio`-terminated ComfyUI graph and a
-  different output contract; `audio_path` covers the assembled-soundtrack need today.
+- Generic Stable Audio-only generation (`video_generate` producing a standalone ambience/SFX
+  file) remains outside this tool. Part IV adds the separate `singing_generate` audio-only
+  contract for lyrical songs; its `mix_path` can be passed to storyboard `audio_path`.
 - Wan 2.2 first-last-frame conditioning (`WanFirstLastFrameToVideo`) — jointly conditions a
   scene on both endpoints for authored-feeling transitions; strictly better than plain
   last-frame chaining but needs the 14B i2v expert pair (not present on either box) and a
   per-scene *pair* planning contract. Revisit when the 14B i2v experts are downloaded.
 - Per-scene backend mixing (e.g. svd for scene 1, wan for the rest).
+
+---
+
+# Part IV — Singing Generation
+
+Implementation date: 2026-09-27. Missy's soundtrack generator remains the right tool for
+instrumental music, ambience, and sound effects. It is not a singing synthesizer, and must not
+be combined with pitched TTS to imitate one.
+
+## 19. `singing_generate`
+
+`singing_generate` is an independent ACE-Step 1.5 text-to-music tool backed by ComfyUI's native
+ACE nodes. It accepts lyrics, style/instrumentation/vocal tags, duration, BPM, key, time
+signature, language, and seed. The default 8-step turbo workflow follows ComfyUI's official
+`Text to Audio (ACE-Step 1.5)` blueprint. Both Qwen text encoders are loaded on CPU so the
+diffusion model and VAE have the RTX 3070's 8 GB VRAM available.
+
+Use `validate_only=true` before a render to check the selected ComfyUI server, accelerator,
+native node support, and every required model without queueing a job. Missing files are reported
+with their exact destination and the official Comfy-Org model repository.
+
+Required files:
+
+| File | ComfyUI directory |
+|------|-------------------|
+| `acestep_v1.5_turbo.safetensors` | `models/diffusion_models/` |
+| `qwen_0.6b_ace15.safetensors` | `models/text_encoders/` |
+| `qwen_4b_ace15.safetensors` | `models/text_encoders/` |
+| `ace_1.5_vae.safetensors` | `models/vae/` |
+
+Successful renders are copied collision-safely to `~/.missy/audio/` by default and accompanied
+by a `.manifest.json` sidecar containing the controls, seed, model filenames, and ComfyUI prompt
+ID required to reproduce or audit the result.
+
+ACE-Step's native text-to-music graph produces a complete song mix. It does **not** expose an
+isolated vocal, instrumental, or phoneme timing track. The output contract consequently returns
+`vocal_path`, `instrumental_path`, `timing_path`, and `lip_sync_audio_path` as null and
+`lip_sync_ready=false`. Consumers must not drive lip-sync from `mix_path`.
+
+## 20. Next audio/video boundary
+
+The next implementation slice is stem separation or a score-conditioned singing backend that
+can truthfully populate the vocal/instrumental/timing slots, followed by a character-aware
+`video_lipsync` tool. Lip-sync should run only on shots with a visible mouth, use the isolated
+vocal rather than the mastered mix, and execute after the song edit is locked. MuseTalk/Wav2Lip
+must pass a short cat-face identity test before either can become a backend; human-face success
+is not evidence that it will preserve a feline muzzle.
