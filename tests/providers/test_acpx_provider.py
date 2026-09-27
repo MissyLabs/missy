@@ -245,9 +245,7 @@ class TestAcpxAvailability:
     @patch.object(AcpxProvider, "_probe_bridge_readiness", return_value=True)
     @patch("missy.providers.acpx_provider._ACP_BRIDGE_SCRIPT_PATH")
     @patch("missy.providers.acpx_provider.shutil.which", return_value="/usr/bin/node")
-    def test_available_when_node_bridge_and_probe_succeed(
-        self, mock_which, mock_path, mock_probe
-    ):
+    def test_available_when_node_bridge_and_probe_succeed(self, mock_which, mock_path, mock_probe):
         mock_path.is_file.return_value = True
         p = AcpxProvider(_make_config())
         assert p.is_available() is True
