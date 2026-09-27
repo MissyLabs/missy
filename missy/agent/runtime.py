@@ -194,6 +194,21 @@ _ITERATION_LIMIT_UNRESOLVED_RESPONSE = (
     "task completed. Please ask me to continue from the saved work."
 )
 
+_UNVERIFIED_COMPLETION_RESPONSE = (
+    "I could not verify the claimed result from the successful tool evidence available. "
+    "The requested task remains incomplete; no unsupported completion claim was accepted."
+)
+
+
+def _failed_tool_response(errors: list[str]) -> str:
+    """Build a grounded terminal response from observed tool failures."""
+    observed = "\n".join(f"- {str(error)[:500]}" for error in errors)
+    return (
+        "I could not complete the requested task because the following tool call(s) failed:\n"
+        f"{observed}\nThe task remains incomplete."
+    )
+
+
 _PLACEHOLDER_RETRY_NUDGE = (
     "[System reminder]: Your previous response was not a real reply -- it was "
     "an internal placeholder artifact, not synthesized text. Produce an "
@@ -3258,8 +3273,8 @@ class AgentRuntime:
                         )
 
                 # General response guards (missy/agent/response_guards.py):
-                # a tool-free response that reads like it fabricated a
-                # completed action, or promised one it never took, is a
+                # a response that reads like it fabricated a completed
+                # action, or promised one it never took, is a
                 # likely root cause of a session "misresponding" to a
                 # later prompt -- a subsequent turn either builds on the
                 # false premise the prior turn asserted, or the user is
@@ -3269,53 +3284,68 @@ class AgentRuntime:
                 # artifact strings) and the observation-specific check
                 # below (vision/memory requests only); tried first since
                 # it covers more ground.
-                if (
-                    not tool_names_used
-                    and _general_fabrication_retries < _MAX_GENERAL_FABRICATION_RETRIES
-                    and detect_fabrication(final_text, tool_names_used)
-                ):
-                    _general_fabrication_retries += 1
-                    logger.warning(
-                        "Tool loop response looked fabricated with zero tool calls; "
-                        "retrying once with a correction."
-                    )
-                    loop_messages.append({"role": "assistant", "content": final_text})
-                    loop_messages.append(
-                        {"role": "user", "content": make_fabrication_retry_prompt(user_input)}
-                    )
+                if detect_fabrication(final_text, successful_tool_names):
+                    if _general_fabrication_retries < _MAX_GENERAL_FABRICATION_RETRIES:
+                        _general_fabrication_retries += 1
+                        logger.warning(
+                            "Tool loop response made a claim without relevant successful "
+                            "tool evidence; retrying once with a correction."
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {
+                                "role": "user",
+                                "content": make_fabrication_retry_prompt(user_input),
+                            }
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.general_fabrication_retry",
+                                result="warn",
+                                detail={"response_excerpt": final_text[:200]},
+                            )
+                        continue
+                    final_text = _UNVERIFIED_COMPLETION_RESPONSE
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
                             task_id=task_id,
-                            event_type="agent.response.general_fabrication_retry",
-                            result="warn",
-                            detail={"response_excerpt": final_text[:200]},
+                            event_type="agent.response.general_fabrication_unresolved",
+                            result="deny",
+                            detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
-                    continue
 
-                if (
-                    not tool_names_used
-                    and _promise_retries < _MAX_PROMISE_RETRIES
-                    and detect_promise_without_action(final_text, tool_names_used)
-                ):
-                    _promise_retries += 1
-                    logger.warning(
-                        "Tool loop response promised action with zero tool calls; "
-                        "retrying once with a correction."
-                    )
-                    loop_messages.append({"role": "assistant", "content": final_text})
-                    loop_messages.append(
-                        {"role": "user", "content": make_promise_retry_prompt(user_input)}
-                    )
+                if detect_promise_without_action(final_text, successful_tool_names):
+                    if _promise_retries < _MAX_PROMISE_RETRIES:
+                        _promise_retries += 1
+                        logger.warning(
+                            "Tool loop response promised future action without completing it; "
+                            "retrying once with a correction."
+                        )
+                        loop_messages.append({"role": "assistant", "content": final_text})
+                        loop_messages.append(
+                            {"role": "user", "content": make_promise_retry_prompt(user_input)}
+                        )
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.response.promise_without_action_retry",
+                                result="warn",
+                                detail={"response_excerpt": final_text[:200]},
+                            )
+                        continue
+                    final_text = _UNVERIFIED_COMPLETION_RESPONSE
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
                             task_id=task_id,
-                            event_type="agent.response.promise_without_action_retry",
-                            result="warn",
-                            detail={"response_excerpt": final_text[:200]},
+                            event_type="agent.response.promise_without_action_unresolved",
+                            result="deny",
+                            detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
-                    continue
 
                 # FX-round2-F4: a request implying a vision/memory
                 # observation (see is_observation_task) answered with
@@ -3402,11 +3432,8 @@ class AgentRuntime:
                         # calls (success or failure) naturally overwrites
                         # this list above regardless.
                         continue
-                    # Retries exhausted -- still return the model's response
-                    # (a stale/incorrect completion claim is not something
-                    # the runtime should silently rewrite), but make the
-                    # gap visible via audit rather than treating it as a
-                    # verified success.
+                    # Retries exhausted: replace unsupported model prose with
+                    # a response derived solely from observed tool failures.
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
@@ -3415,6 +3442,7 @@ class AgentRuntime:
                             result="warn",
                             detail={"unresolved_error_count": len(_last_round_errors)},
                         )
+                    final_text = _failed_tool_response(_last_round_errors)
 
                 # A response after unresolved tool errors is terminal but not
                 # complete. Preserve that distinction for recovery/auditing.
@@ -3462,6 +3490,21 @@ class AgentRuntime:
                 task_id=task_id,
             )
             fallback_text = _strip_leaked_tool_call_narration(fallback.content or "")
+            if fallback_text:
+                if _last_round_errors:
+                    fallback_text = _failed_tool_response(_last_round_errors)
+                elif detect_fabrication(
+                    fallback_text, successful_tool_names
+                ) or detect_promise_without_action(fallback_text, successful_tool_names):
+                    fallback_text = ""
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.iteration_limit_unsupported",
+                            result="deny",
+                            detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
+                        )
             if fallback_text:
                 with contextlib.suppress(Exception):
                     self._emit_event(

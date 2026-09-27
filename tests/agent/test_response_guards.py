@@ -147,6 +147,12 @@ class TestImageGenerationGuards:
             "The image generation timed out.",
         )
 
+    def test_unrelated_error_word_does_not_report_image_failure(self):
+        assert not terminal_parameter_errors_are_reported(
+            ["image_generate: unsupported backend flux-pro"],
+            "The upload succeeded. Only the title changed.",
+        )
+
 
 class TestVideoGenerationGuards:
     def test_non_string_input_is_not_a_reproducibility_request(self):
@@ -591,13 +597,23 @@ class TestDetectFabrication:
     def test_claims_referencing_unchecked_metrics(self):
         assert detect_fabrication("Based on the metrics, CPU usage is high.", []) is True
 
-    def test_no_fabrication_when_tools_were_used(self):
-        """The whole point: any real tool call anywhere this task makes
-        the check a no-op, regardless of what the text says."""
+    def test_relevant_successful_tool_supports_claim(self):
         assert (
             detect_fabrication("I checked the logs and everything looks fine.", ["shell_exec"])
             is False
         )
+
+    def test_unrelated_successful_tool_does_not_support_claim(self):
+        assert (
+            detect_fabrication(
+                "I deployed the server and the process is healthy.",
+                ["calculator"],
+            )
+            is True
+        )
+
+    def test_failed_tool_does_not_count_as_evidence(self):
+        assert detect_fabrication("I uploaded the report successfully.", []) is True
 
     def test_short_response_not_flagged(self):
         assert detect_fabrication("I checked it.", []) is False
@@ -642,8 +658,11 @@ class TestDetectPromiseWithoutAction:
     def test_leading_acknowledgment_phrase(self):
         assert detect_promise_without_action("On it! Let me pull that together.", []) is True
 
-    def test_no_promise_when_tools_were_used(self):
-        assert detect_promise_without_action("Working on it.", ["shell_exec"]) is False
+    def test_prior_tool_does_not_fulfill_future_promise(self):
+        assert (
+            detect_promise_without_action("Working on it, give me a moment.", ["shell_exec"])
+            is True
+        )
 
     def test_short_response_not_flagged(self):
         assert detect_promise_without_action("Sure!", []) is False
