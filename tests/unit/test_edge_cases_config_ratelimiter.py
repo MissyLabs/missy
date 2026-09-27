@@ -505,39 +505,36 @@ class TestMcpManagerIdempotentShutdown:
 
 
 class TestCostTrackerNegativeTokens:
-    """CostTracker handles negative token counts defensively."""
+    """CostTracker rejects invalid negative token counts."""
 
-    def test_negative_prompt_tokens_does_not_raise(self) -> None:
+    def test_negative_prompt_tokens_are_rejected(self) -> None:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4", prompt_tokens=-10, completion_tokens=5)
-        # Record is returned; cost computation should not crash.
-        assert rec is not None
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=-10, completion_tokens=5)
 
-    def test_negative_completion_tokens_does_not_raise(self) -> None:
+    def test_negative_completion_tokens_are_rejected(self) -> None:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        rec = tracker.record(model="claude-sonnet-4", prompt_tokens=100, completion_tokens=-50)
-        assert rec is not None
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=100, completion_tokens=-50)
 
-    def test_both_negative_total_tokens_does_not_raise(self) -> None:
+    def test_both_negative_token_counts_are_rejected(self) -> None:
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
-        tracker.record(model="gpt-4o", prompt_tokens=-5, completion_tokens=-5)
-        # Totals may go negative; check_budget should still function.
-        tracker.check_budget()  # unlimited budget — must not raise
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="gpt-4o", prompt_tokens=-5, completion_tokens=-5)
 
-    def test_negative_tokens_do_not_cause_budget_false_positive(self) -> None:
-        """Negative tokens should not incorrectly trigger budget exceeded."""
+    def test_negative_tokens_cannot_reduce_budget_usage(self) -> None:
+        """Invalid usage cannot be recorded to reduce accumulated spend."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker(max_spend_usd=1.0)
-        tracker.record(model="claude-sonnet-4", prompt_tokens=-1_000_000, completion_tokens=0)
-        # Total cost could be negative — budget check must not raise.
-        tracker.check_budget()
+        with pytest.raises(ValueError, match="non-negative"):
+            tracker.record(model="claude-sonnet-4", prompt_tokens=-1_000_000, completion_tokens=0)
 
     def test_zero_token_record_returns_zero_cost(self) -> None:
         from missy.agent.cost_tracker import CostTracker
@@ -547,12 +544,12 @@ class TestCostTrackerNegativeTokens:
         assert rec.cost_usd == 0.0
         assert tracker.total_cost_usd == 0.0
 
-    def test_unknown_model_uses_zero_pricing(self) -> None:
-        """An unrecognised model name falls back to zero-cost pricing."""
+    def test_unknown_model_uses_conservative_pricing(self) -> None:
+        """An unrecognised model cannot silently bypass a budget."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         rec = tracker.record(
             model="totally-unknown-model-xyz", prompt_tokens=1000, completion_tokens=500
         )
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)

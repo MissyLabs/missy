@@ -49,6 +49,22 @@ class TestRecording:
         b.record(0.0)
         assert b.total_spent() == 0.0
 
+    @pytest.mark.parametrize("bad_cost", [float("nan"), float("inf"), float("-inf")])
+    def test_nonfinite_cost_rejected(self, tmp_path: Path, bad_cost: float) -> None:
+        b = _budget(tmp_path, max_spend_usd=1.0)
+        with pytest.raises(ValueError, match="finite"):
+            b.record(bad_cost)
+
+    def test_failed_atomic_replace_propagates(self, tmp_path: Path, monkeypatch) -> None:
+        b = _budget(tmp_path, max_spend_usd=1.0)
+
+        def _fail_replace(_source, _target):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr("missy.agent.global_budget.os.replace", _fail_replace)
+        with pytest.raises(OSError, match="disk unavailable"):
+            b.record(0.25)
+
 
 class TestCeiling:
     def test_check_raises_when_exceeded(self, tmp_path: Path) -> None:
@@ -139,3 +155,11 @@ class TestResetAndSummary:
         b.reset()  # operator override recovers
         b.record(0.1)
         assert b.total_spent() == pytest.approx(0.1)
+
+    def test_nan_in_persisted_file_fails_closed(self, tmp_path: Path) -> None:
+        p = str(tmp_path / "gb.json")
+        Path(p).write_text('{"period":"total","key":"total","spent":NaN}')
+        b = GlobalBudget(max_spend_usd=1.0, path=p)
+        assert b.total_spent() == pytest.approx(1.0)
+        with pytest.raises(BudgetExceededError):
+            b.check()

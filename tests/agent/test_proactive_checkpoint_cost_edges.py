@@ -24,7 +24,7 @@ Checkpoint edge cases:
 - RecoveryResult loop_messages from scan matches what was saved
 
 Cost tracking edge cases:
-- Record with unknown model falls back to zero cost (not raises)
+- Record with unknown model falls back to conservative cost (not raises)
 - Budget enforcement at exact limit boundary (spent == max exactly)
 - Budget enforcement does not trigger at zero limit even with high spend
 - get_summary budget_remaining floors at 0.0 when over budget
@@ -78,6 +78,12 @@ def tmp_db(tmp_path):
 @pytest.fixture()
 def cm(tmp_db):
     return CheckpointManager(db_path=tmp_db)
+
+
+def _expire_all(tmp_db: str) -> None:
+    with sqlite3.connect(tmp_db) as conn:
+        conn.execute("UPDATE checkpoints SET lease_expires_at=?", (time.time() - 1,))
+        conn.commit()
 
 
 def _make_trigger(name="t1", **kwargs) -> ProactiveTrigger:
@@ -463,7 +469,7 @@ class TestCheckpointMultipleManagers:
         ids = [r["id"] for r in rows]
         assert cid in ids
 
-    def test_complete_from_one_manager_seen_by_other(self, tmp_db):
+    def test_other_manager_cannot_complete_live_owned_checkpoint(self, tmp_db):
         cm1 = CheckpointManager(db_path=tmp_db)
         cm2 = CheckpointManager(db_path=tmp_db)
 
@@ -471,7 +477,13 @@ class TestCheckpointMultipleManagers:
         cm2.complete(cid)
 
         incomplete = cm1.get_incomplete()
-        assert all(r["id"] != cid for r in incomplete)
+        assert any(r["id"] == cid for r in incomplete)
+
+        _expire_all(tmp_db)
+        assert cm2.claim(cid)
+        assert cm2.activate_claim(cid)
+        cm2.complete(cid)
+        assert all(r["id"] != cid for r in cm1.get_incomplete())
 
 
 class TestClassifyBoundaryConditions:
@@ -513,8 +525,9 @@ class TestAbandonOldEdgeCases:
         with sqlite3.connect(tmp_db) as conn:
             for cid in ids:
                 conn.execute(
-                    "UPDATE checkpoints SET created_at=? WHERE id=?",
-                    (time.time() - 1, cid),
+                    """UPDATE checkpoints
+                          SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?""",
+                    (time.time() - 1, time.time() - 1, time.time() - 1, cid),
                 )
             conn.commit()
         count = cm.abandon_old(max_age_seconds=0)
@@ -608,6 +621,7 @@ class TestScanForRecoveryMultipleSessions:
         cm_inst.create("sess-A", "task-A", "prompt A")
         cm_inst.create("sess-B", "task-B", "prompt B")
         cm_inst.create("sess-C", "task-C", "prompt C")
+        _expire_all(tmp_db)
 
         results = scan_for_recovery(db_path=tmp_db)
 
@@ -619,6 +633,7 @@ class TestScanForRecoveryMultipleSessions:
         cid = cm_inst.create("sess-Z", "task-Z", "final check")
         msgs = [{"role": "assistant", "content": "step 1"}, {"role": "user", "content": "step 2"}]
         cm_inst.update(cid, msgs, ["tool_z"], iteration=2)
+        _expire_all(tmp_db)
 
         results = scan_for_recovery(db_path=tmp_db)
         result = next(r for r in results if r.session_id == "sess-Z")
@@ -631,6 +646,7 @@ class TestScanForRecoveryMultipleSessions:
         cid_done = cm_inst.create("done-sess", "task", "p")
         cm_inst.complete(cid_done)
         cm_inst.create("active-sess", "task", "p")
+        _expire_all(tmp_db)
 
         results = scan_for_recovery(db_path=tmp_db)
         session_ids = {r.session_id for r in results}
@@ -642,6 +658,7 @@ class TestScanForRecoveryMultipleSessions:
         """An empty string prompt is stored and recovered correctly."""
         cm_inst = CheckpointManager(db_path=tmp_db)
         cm_inst.create("empty-prompt-sess", "task", "")
+        _expire_all(tmp_db)
 
         results = scan_for_recovery(db_path=tmp_db)
         result = next(r for r in results if r.session_id == "empty-prompt-sess")
@@ -654,13 +671,13 @@ class TestScanForRecoveryMultipleSessions:
 
 
 class TestCostTrackerUnknownModel:
-    """Unknown models fall back to zero cost rather than raising."""
+    """Unknown models receive conservative pricing rather than free usage."""
 
-    def test_unknown_model_produces_zero_cost_record(self):
+    def test_unknown_model_produces_conservative_cost_record(self):
         tracker = CostTracker()
         rec = tracker.record("totally-unknown-model-v99", prompt_tokens=1000, completion_tokens=500)
-        assert rec.cost_usd == 0.0
-        assert tracker.total_cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)
+        assert tracker.total_cost_usd == pytest.approx(0.0675)
 
     def test_unknown_model_accumulates_tokens_correctly(self):
         tracker = CostTracker()
@@ -819,7 +836,7 @@ class TestRecordFromResponseEdgeCases:
             usage = {"prompt_tokens": 50, "completion_tokens": 25}
 
         rec = tracker.record_from_response(NoModel())
-        # Model defaults to "" → unknown pricing → zero cost, but still recorded
+        # Model defaults to "" and uses conservative pricing, but is still recorded.
         assert rec is not None or rec is None  # Either is acceptable; must not raise
 
     def test_response_with_none_usage_records_zeros(self):

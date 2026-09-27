@@ -1690,6 +1690,8 @@ class AgentRuntime:
         user_input: str = "",
         explicit_tool_request_input: str | None = None,
         _delegation_depth: int = 0,
+        _checkpoint_manager: Any | None = None,
+        _checkpoint_id: str | None = None,
     ) -> tuple[str, list[str]]:
         """Inner agentic tool-call loop.
 
@@ -1781,19 +1783,20 @@ class AgentRuntime:
             failure_tracker = None
 
         # --- Feature #8: checkpoint manager (graceful degradation) ---
-        _cm = None
-        _checkpoint_id = None
-        try:
-            from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
+        _cm = _checkpoint_manager
+        if _cm is None:
+            try:
+                from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
 
-            _cm = _CheckpointManager()
-            _checkpoint_id = _cm.create(session_id, task_id, user_input)
-        except Exception:
-            logger.debug(
-                "CheckpointManager init failed; proceeding without checkpoints", exc_info=True
-            )
-            _cm = None
-            _checkpoint_id = None
+                _cm = _CheckpointManager()
+                _checkpoint_id = _cm.create(session_id, task_id, user_input)
+            except Exception:
+                logger.debug(
+                    "CheckpointManager init failed; proceeding without checkpoints",
+                    exc_info=True,
+                )
+                _cm = None
+                _checkpoint_id = None
 
         tool_names_used: list[str] = []
         successful_tool_names: list[str] = []
@@ -2009,6 +2012,14 @@ class AgentRuntime:
                     self.config.max_iterations + _desktop_grace_used,
                 )
 
+                # Keep the ownership lease live across provider/tool rounds.
+                # If ownership was lost, stop before another provider or tool
+                # side effect can be produced by the stale worker.
+                if _cm is not None and _checkpoint_id is not None:
+                    renew = getattr(_cm, "renew", None)
+                    if renew is not None and not renew(_checkpoint_id):
+                        raise RuntimeError("Checkpoint ownership lease was lost.")
+
                 # SR-3.4: check budget against cost already accumulated from
                 # prior calls *before* making another paid provider call.
                 # check_budget() only ever raises once total_cost_usd has
@@ -2045,6 +2056,9 @@ class AgentRuntime:
                         session_id=session_id,
                         task_id=task_id,
                     )
+                    if _cm is not None and _checkpoint_id is not None:
+                        with contextlib.suppress(Exception):
+                            _cm.complete(_checkpoint_id)
                     return fallback.content, tool_names_used
 
                 # SR-4.8: built fresh per candidate provider so message
@@ -2435,6 +2449,9 @@ class AgentRuntime:
                                     "error_excerpt": error_text[:200],
                                 },
                             )
+                        if _cm is not None and _checkpoint_id is not None:
+                            with contextlib.suppress(Exception):
+                                _cm.incomplete(_checkpoint_id)
                         return (
                             "I couldn't complete the requested action. "
                             f"{error_text[:1000]} I did not retry the approval request "
@@ -3393,10 +3410,14 @@ class AgentRuntime:
                             detail={"unresolved_error_count": len(_last_round_errors)},
                         )
 
-                # Feature #8: mark checkpoint complete on success
+                # A response after unresolved tool errors is terminal but not
+                # complete. Preserve that distinction for recovery/auditing.
                 if _cm is not None and _checkpoint_id is not None:
                     with contextlib.suppress(Exception):
-                        _cm.complete(_checkpoint_id)
+                        if _last_round_errors:
+                            _cm.incomplete(_checkpoint_id)
+                        else:
+                            _cm.complete(_checkpoint_id)
                 _progress.on_complete(f"finished after {iteration + 1} iteration(s)")
                 return _with_prompt_injection_notice(final_text), tool_names_used
 
@@ -3444,6 +3465,9 @@ class AgentRuntime:
                         result="warn",
                         detail={"tools_used": list(dict.fromkeys(tool_names_used))},
                     )
+                if _cm is not None and _checkpoint_id is not None:
+                    with contextlib.suppress(Exception):
+                        _cm.incomplete(_checkpoint_id)
                 return _with_prompt_injection_notice(fallback_text), tool_names_used
         except Exception:
             logger.warning(
@@ -3459,6 +3483,9 @@ class AgentRuntime:
                 result="warn",
                 detail={"tools_used": list(dict.fromkeys(tool_names_used))},
             )
+        if _cm is not None and _checkpoint_id is not None:
+            with contextlib.suppress(Exception):
+                _cm.incomplete(_checkpoint_id)
         return _with_prompt_injection_notice(_ITERATION_LIMIT_UNRESOLVED_RESPONSE), tool_names_used
 
     def _single_turn(
@@ -5245,6 +5272,29 @@ class AgentRuntime:
                 if tracker is None:
                     self._cost_tracking_enabled = False
                     return None
+                if session_id:
+                    try:
+                        store = self._memory_store
+                        if hasattr(store, "_primary"):
+                            store = store._primary
+                        if store is None or not hasattr(store, "get_session_costs"):
+                            raise RuntimeError("persistent cost ledger is unavailable")
+                        tracker.restore(store.get_session_costs(session_id))
+                    except Exception:
+                        if tracker.max_spend_usd > 0:
+                            logger.error(
+                                "Could not restore cost ledger for session %s; "
+                                "configured budget will fail closed.",
+                                session_id,
+                                exc_info=True,
+                            )
+                            tracker.fail_closed()
+                        else:
+                            logger.debug(
+                                "Could not restore optional cost history for session %s.",
+                                session_id,
+                                exc_info=True,
+                            )
                 self._cost_trackers[key] = tracker
                 if len(self._cost_trackers) > self._MAX_TRACKED_SESSIONS:
                     oldest_key = next(iter(self._cost_trackers))
@@ -5650,22 +5700,20 @@ class AgentRuntime:
         if checkpoint is None:
             raise ValueError(f"No checkpoint found with id {checkpoint_id!r}.")
 
-        # Atomically claim the checkpoint (RUNNING -> COMPLETE) before doing
+        # Atomically claim only an expired checkpoint lease before doing
         # any further work, closing a TOCTOU race where two concurrent
         # resume_checkpoint() calls (e.g. two `missy recover --resume <id>`
         # invocations) could both pass a plain state=='RUNNING' check and
         # both proceed to execute the resumed tool loop, duplicating every
         # subsequent tool call for the same task. claim() returns True only
-        # for the single caller whose UPDATE actually flipped the row from
-        # RUNNING; every other concurrent caller sees False and fails
-        # closed here instead.
+        # for the single caller whose UPDATE installed a RESUMING lease;
+        # every other concurrent caller sees False and fails closed here.
         if not cm.claim(checkpoint_id):
             current = cm.get(checkpoint_id)
             current_state = current["state"] if current else "unknown"
             raise ValueError(
                 f"Checkpoint {checkpoint_id!r} is not resumable "
-                f"(state={current_state!r}); only RUNNING checkpoints "
-                "can be resumed."
+                f"(state={current_state!r}); its owner lease may still be active."
             )
 
         loop_messages = checkpoint["loop_messages"]
@@ -5700,11 +5748,11 @@ class AgentRuntime:
         # narrower set, same as any fresh run would.
         tools = self._get_tools()
 
-        # This checkpoint's data has now been consumed and handed off to a
-        # new checkpoint-tracked run (created inside _tool_loop()) -- it
-        # was already atomically marked complete by cm.claim() above, so
-        # it can never be offered for resume again, including by a
-        # concurrent `missy recover --resume` invocation.
+        # Continue on the same claimed row. This makes the recovery handoff
+        # crash-safe: there is never a gap between consuming the old row and
+        # creating a successor checkpoint.
+        if not cm.activate_claim(checkpoint_id):
+            raise ValueError(f"Checkpoint {checkpoint_id!r} recovery lease was lost.")
 
         self._emit_event(
             session_id=sid,
@@ -5723,6 +5771,8 @@ class AgentRuntime:
                 session_id=sid,
                 task_id=task_id,
                 user_input=original_prompt,
+                _checkpoint_manager=cm,
+                _checkpoint_id=checkpoint_id,
             )
         except Exception as exc:
             self._emit_event(
@@ -5776,7 +5826,8 @@ class AgentRuntime:
         account inline.
         """
         try:
-            return provider.current_account_name() or ""
+            value = provider.current_account_name()
+            return value if isinstance(value, str) else ""
         except Exception:
             return ""
 
@@ -5806,36 +5857,39 @@ class AgentRuntime:
             return
         try:
             rec = tracker.record_from_response(response)
-            # F19: also feed the process-wide cross-session ceiling. No-op
-            # unless a global budget was initialized (default: disabled).
-            if rec is not None and rec.cost_usd:
-                try:
-                    from missy.agent.global_budget import get_global_budget
-
-                    get_global_budget().record(rec.cost_usd)
-                except Exception:
-                    logger.debug("Global budget record failed", exc_info=True)
-            # Persist to SQLite for historical cost queries
-            if rec is not None and session_id and self._memory_store is not None:
-                try:
-                    store = self._memory_store
-                    # Unwrap resilient store to get at SQLite store
-                    if hasattr(store, "_primary"):
-                        store = store._primary
-                    if hasattr(store, "record_cost"):
-                        store.record_cost(
-                            session_id=session_id,
-                            model=rec.model,
-                            prompt_tokens=rec.prompt_tokens,
-                            completion_tokens=rec.completion_tokens,
-                            cost_usd=rec.cost_usd,
-                            provider=provider_name,
-                            account=account_name,
-                        )
-                except Exception as exc:
-                    logger.debug("Failed to persist cost to store: %s", exc)
         except Exception as exc:
-            logger.debug("Failed to record cost: %s", exc)
+            logger.error("Failed to record provider cost: %s", exc, exc_info=True)
+            tracker.fail_closed()
+            return
+
+        # F19: feed the process-wide cross-session ceiling. A failed durable
+        # write must propagate and stop the run; swallowing it would let the
+        # next process reload an artificially low total and spend again.
+        if rec is not None and rec.cost_usd:
+            from missy.agent.global_budget import get_global_budget
+
+            get_global_budget().record(rec.cost_usd)
+
+        # Persist to SQLite for per-session restart/eviction restoration.
+        if rec is not None and session_id and self._memory_store is not None:
+            try:
+                store = self._memory_store
+                # Unwrap resilient store to get at SQLite store
+                if hasattr(store, "_primary"):
+                    store = store._primary
+                if hasattr(store, "record_cost"):
+                    store.record_cost(
+                        session_id=session_id,
+                        model=rec.model,
+                        prompt_tokens=rec.prompt_tokens,
+                        completion_tokens=rec.completion_tokens,
+                        cost_usd=rec.cost_usd,
+                        provider=provider_name,
+                        account=account_name,
+                    )
+            except Exception as exc:
+                logger.error("Failed to persist cost to store: %s", exc, exc_info=True)
+                tracker.fail_closed()
 
     def _acquire_rate_limit(self) -> None:
         """Block until the rate limiter allows the next API call."""

@@ -996,10 +996,11 @@ class TestScanForRecoveryEdgeCases:
         # checkpoint that's genuinely been inactive, not just old.
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            "UPDATE checkpoints SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?",
             (
                 time.time() - 2 * _RESTART_THRESHOLD_SECS,
                 time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 1,
                 cid,
             ),
         )
@@ -1013,12 +1014,18 @@ class TestScanForRecoveryEdgeCases:
         stale_id = cm.create("s-stale", "t-stale", "stale prompt")
         _raw_exec(
             tmp_db,
-            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
+            "UPDATE checkpoints SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?",
             (
                 time.time() - 2 * _RESTART_THRESHOLD_SECS,
                 time.time() - 2 * _RESTART_THRESHOLD_SECS,
+                time.time() - 1,
                 stale_id,
             ),
+        )
+        _raw_exec(
+            tmp_db,
+            "UPDATE checkpoints SET lease_expires_at=? WHERE id=?",
+            (time.time() - 1, fresh_id),
         )
         results = scan_for_recovery(db_path=tmp_db)
         ids = [r.checkpoint_id for r in results]
@@ -1036,6 +1043,7 @@ class TestScanForRecoveryEdgeCases:
             "UPDATE checkpoints SET created_at=? WHERE id=?",
             (time.time() - 7200, cid_mid),
         )
+        _raw_exec(tmp_db, "UPDATE checkpoints SET lease_expires_at=?", (time.time() - 1,))
         results = scan_for_recovery(db_path=tmp_db)
         valid_actions = {"resume", "restart", "abandon"}
         for r in results:
@@ -1058,6 +1066,7 @@ class TestScanForRecoveryEdgeCases:
         cid = cm.create("s", "t", "p")
         msgs = [{"role": "assistant", "content": "progress update"}]
         cm.update(cid, msgs, ["shell_exec"], iteration=4)
+        _raw_exec(tmp_db, "UPDATE checkpoints SET lease_expires_at=?", (time.time() - 1,))
         results = scan_for_recovery(db_path=tmp_db)
         assert len(results) == 1
         assert results[0].loop_messages == msgs

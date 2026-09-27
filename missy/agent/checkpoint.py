@@ -67,6 +67,7 @@ _DEFAULT_DB_PATH = "~/.missy/checkpoints.db"
 #: Age thresholds (in seconds) for checkpoint recovery classification.
 _RESUME_THRESHOLD_SECS = 3600  # 1 hour — checkpoint is "fresh"
 _RESTART_THRESHOLD_SECS = 86400  # 24 hours — checkpoint is "stale"
+_DEFAULT_LEASE_SECS = 600.0
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -82,6 +83,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     loop_messages   TEXT NOT NULL DEFAULT '[]',
     tool_names_used TEXT NOT NULL DEFAULT '[]',
     iteration       INTEGER NOT NULL DEFAULT 0,
+    owner_id         TEXT,
+    lease_expires_at REAL,
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL
 );
@@ -135,8 +138,16 @@ class CheckpointManager:
             does not exist.  Defaults to ``~/.missy/checkpoints.db``.
     """
 
-    def __init__(self, db_path: str = _DEFAULT_DB_PATH) -> None:
+    def __init__(
+        self,
+        db_path: str = _DEFAULT_DB_PATH,
+        *,
+        owner_id: str | None = None,
+        lease_seconds: float = _DEFAULT_LEASE_SECS,
+    ) -> None:
         self.db_path = os.path.expanduser(db_path)
+        self.owner_id = owner_id or str(uuid.uuid4())
+        self.lease_seconds = max(1.0, float(lease_seconds))
         self._local = threading.local()
         # Ensure the parent directory exists before any connection is opened
         parent = os.path.dirname(self.db_path) or "."
@@ -154,6 +165,11 @@ class CheckpointManager:
         # Eagerly initialise the schema on the calling thread
         conn = self._connect()
         conn.executescript(_DDL)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(checkpoints)")}
+        if "owner_id" not in columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN owner_id TEXT")
+        if "lease_expires_at" not in columns:
+            conn.execute("ALTER TABLE checkpoints ADD COLUMN lease_expires_at REAL")
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -205,10 +221,19 @@ class CheckpointManager:
             INSERT INTO checkpoints
                 (id, session_id, task_id, prompt, state,
                  loop_messages, tool_names_used, iteration,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'RUNNING', '[]', '[]', 0, ?, ?)
+                 owner_id, lease_expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'RUNNING', '[]', '[]', 0, ?, ?, ?, ?)
             """,
-            (checkpoint_id, session_id, task_id, censor_response(prompt), now, now),
+            (
+                checkpoint_id,
+                session_id,
+                task_id,
+                censor_response(prompt),
+                self.owner_id,
+                now + self.lease_seconds,
+                now,
+                now,
+            ),
         )
         conn.commit()
         logger.debug("Checkpoint created: id=%s session=%s", checkpoint_id, session_id)
@@ -220,7 +245,7 @@ class CheckpointManager:
         loop_messages: list[dict],
         tool_names_used: list[str],
         iteration: int,
-    ) -> None:
+    ) -> bool:
         """Persist the current loop state for an existing checkpoint.
 
         Args:
@@ -231,27 +256,31 @@ class CheckpointManager:
         """
         now = time.time()
         conn = self._connect()
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE checkpoints
                SET loop_messages   = ?,
                    tool_names_used = ?,
                    iteration       = ?,
-                   updated_at      = ?
-             WHERE id = ?
+                   updated_at      = ?,
+                   lease_expires_at = ?
+             WHERE id = ? AND state = 'RUNNING' AND owner_id = ?
             """,
             (
                 json.dumps(_censor_checkpoint_value(loop_messages)),
                 json.dumps(tool_names_used),
                 iteration,
                 now,
+                now + self.lease_seconds,
                 checkpoint_id,
+                self.owner_id,
             ),
         )
         conn.commit()
+        return cursor.rowcount == 1
 
     def claim(self, checkpoint_id: str) -> bool:
-        """Atomically transition a RUNNING checkpoint to COMPLETE.
+        """Atomically lease an abandoned checkpoint for recovery.
 
         Used by :meth:`~missy.agent.runtime.AgentRuntime.resume_checkpoint`
         to close a TOCTOU race: a plain read-then-later-write (check
@@ -259,27 +288,39 @@ class CheckpointManager:
         :meth:`complete`) lets two concurrent resume attempts against the
         same checkpoint id (e.g. two ``missy recover --resume <id>``
         invocations) both pass the check and both proceed to execute the
-        resumed tool loop -- duplicating every subsequent tool call
-        (duplicate shell commands, file writes, sent messages, etc.) for
-        the same task. This performs the state transition immediately, in
-        a single atomic ``UPDATE ... WHERE state = 'RUNNING'``, so only
-        the caller whose update actually changed a row wins the race;
-        every other concurrent caller gets ``False`` and must not proceed.
+        resumed tool loop -- duplicating every subsequent tool call. This
+        atomically claims only an expired RUNNING/RESUMING lease, so a live
+        task remains unavailable and only one recovery worker wins.
 
         Args:
             checkpoint_id: The checkpoint to claim.
 
         Returns:
-            ``True`` if this call performed the RUNNING -> COMPLETE
-            transition (i.e. this caller won the race), ``False`` if the
-            checkpoint was not in the ``RUNNING`` state (already resumed
-            by another caller, or never running).
+            ``True`` if this call installed the RESUMING lease, otherwise
+            ``False`` (including when a live owner still holds the lease).
         """
         conn = self._connect()
+        now = time.time()
         cursor = conn.execute(
-            "UPDATE checkpoints SET state = 'COMPLETE', updated_at = ? "
-            "WHERE id = ? AND state = 'RUNNING'",
-            (time.time(), checkpoint_id),
+            """UPDATE checkpoints
+                  SET state = 'RESUMING', owner_id = ?, lease_expires_at = ?, updated_at = ?
+                WHERE id = ?
+                  AND state IN ('RUNNING', 'RESUMING')
+                  AND COALESCE(lease_expires_at, 0) <= ?""",
+            (self.owner_id, now + self.lease_seconds, now, checkpoint_id, now),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+    def renew(self, checkpoint_id: str) -> bool:
+        """Renew this manager's active RUNNING lease before expensive work."""
+        now = time.time()
+        conn = self._connect()
+        cursor = conn.execute(
+            """UPDATE checkpoints
+                  SET lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND state = 'RUNNING' AND owner_id = ?""",
+            (now + self.lease_seconds, now, checkpoint_id, self.owner_id),
         )
         conn.commit()
         return cursor.rowcount == 1
@@ -291,6 +332,22 @@ class CheckpointManager:
             checkpoint_id: The checkpoint to finalise.
         """
         self._set_state(checkpoint_id, "COMPLETE")
+
+    def activate_claim(self, checkpoint_id: str) -> bool:
+        """Move this manager's recovery claim back to active RUNNING state."""
+        now = time.time()
+        cursor = self._connect().execute(
+            """UPDATE checkpoints
+                  SET state = 'RUNNING', lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND state = 'RESUMING' AND owner_id = ?""",
+            (now + self.lease_seconds, now, checkpoint_id, self.owner_id),
+        )
+        self._connect().commit()
+        return cursor.rowcount == 1
+
+    def incomplete(self, checkpoint_id: str) -> None:
+        """Mark a terminal checkpoint whose requested action did not complete."""
+        self._set_state(checkpoint_id, "INCOMPLETE")
 
     def fail(self, checkpoint_id: str, error: str = "") -> None:
         """Mark a checkpoint as FAILED.
@@ -305,8 +362,8 @@ class CheckpointManager:
             # Append the error to the prompt for post-mortem visibility
             conn = self._connect()
             conn.execute(
-                "UPDATE checkpoints SET prompt = prompt || ? WHERE id = ?",
-                (f"\n[ERROR] {error}", checkpoint_id),
+                "UPDATE checkpoints SET prompt = prompt || ? WHERE id = ? AND owner_id = ?",
+                (f"\n[ERROR] {error}", checkpoint_id, self.owner_id),
             )
             conn.commit()
 
@@ -330,7 +387,7 @@ class CheckpointManager:
         return self._row_to_dict(row) if row is not None else None
 
     def get_incomplete(self) -> list[dict]:
-        """Return all checkpoints with state ``RUNNING``.
+        """Return all nonterminal checkpoints, including actively leased rows.
 
         Returns:
             A list of dicts with keys matching the ``checkpoints`` table
@@ -339,8 +396,23 @@ class CheckpointManager:
         """
         conn = self._connect()
         rows = conn.execute(
-            "SELECT * FROM checkpoints WHERE state = 'RUNNING' ORDER BY created_at"
+            "SELECT * FROM checkpoints WHERE state IN ('RUNNING', 'RESUMING') ORDER BY created_at"
         ).fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
+    def get_recoverable(self) -> list[dict]:
+        """Return only nonterminal checkpoints whose owner lease expired."""
+        rows = (
+            self._connect()
+            .execute(
+                """SELECT * FROM checkpoints
+                 WHERE state IN ('RUNNING', 'RESUMING')
+                   AND COALESCE(lease_expires_at, 0) <= ?
+                 ORDER BY created_at""",
+                (time.time(),),
+            )
+            .fetchall()
+        )
         return [self._row_to_dict(row) for row in rows]
 
     def classify(self, checkpoint: dict) -> str:
@@ -366,7 +438,7 @@ class CheckpointManager:
     # ------------------------------------------------------------------
 
     def abandon_old(self, max_age_seconds: int = _RESTART_THRESHOLD_SECS) -> int:
-        """Set state=ABANDONED for RUNNING checkpoints inactive for *max_age_seconds*.
+        """Abandon expired, inactive nonterminal checkpoints.
 
         This runs on every :class:`~missy.agent.runtime.AgentRuntime`
         construction (via :func:`scan_for_recovery`), across a single
@@ -400,10 +472,11 @@ class CheckpointManager:
             UPDATE checkpoints
                SET state      = 'ABANDONED',
                    updated_at = ?
-             WHERE state = 'RUNNING'
+             WHERE state IN ('RUNNING', 'RESUMING')
                AND updated_at < ?
+               AND COALESCE(lease_expires_at, 0) <= ?
             """,
-            (time.time(), cutoff),
+            (time.time(), cutoff, time.time()),
         )
         conn.commit()
         return cursor.rowcount
@@ -434,7 +507,7 @@ class CheckpointManager:
         cursor = conn.execute(
             """
             DELETE FROM checkpoints
-             WHERE state IN ('COMPLETE', 'FAILED', 'ABANDONED')
+             WHERE state IN ('COMPLETE', 'INCOMPLETE', 'FAILED', 'ABANDONED')
                AND updated_at < ?
             """,
             (cutoff,),
@@ -449,8 +522,10 @@ class CheckpointManager:
     def _set_state(self, checkpoint_id: str, state: str) -> None:
         conn = self._connect()
         conn.execute(
-            "UPDATE checkpoints SET state = ?, updated_at = ? WHERE id = ?",
-            (state, time.time(), checkpoint_id),
+            """UPDATE checkpoints
+                  SET state = ?, updated_at = ?, lease_expires_at = NULL
+                WHERE id = ? AND owner_id = ?""",
+            (state, time.time(), checkpoint_id, self.owner_id),
         )
         conn.commit()
 
@@ -546,8 +621,8 @@ def scan_for_recovery(db_path: str = _DEFAULT_DB_PATH) -> list[RecoveryResult]:
     The function:
 
     1. Instantiates a :class:`CheckpointManager` at *db_path*.
-    2. Abandons any RUNNING checkpoints older than 24 hours.
-    3. Fetches all remaining RUNNING checkpoints.
+    2. Abandons expired checkpoints inactive for more than 24 hours.
+    3. Fetches only checkpoints with expired owner leases.
     4. Classifies each as ``"resume"``, ``"restart"``, or ``"abandon"``.
     5. Emits an ``"agent.checkpoint.recovery_scan"`` audit event for each.
     6. Returns the list of :class:`RecoveryResult` instances.
@@ -577,7 +652,7 @@ def scan_for_recovery(db_path: str = _DEFAULT_DB_PATH) -> list[RecoveryResult]:
         logger.warning("scan_for_recovery: abandon_old() failed: %s", exc)
 
     try:
-        incomplete = cm.get_incomplete()
+        incomplete = cm.get_recoverable()
     except Exception as exc:
         logger.warning("scan_for_recovery: get_incomplete() failed: %s", exc)
         return []

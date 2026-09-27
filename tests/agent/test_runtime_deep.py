@@ -73,6 +73,16 @@ def _make_provider(
     return provider
 
 
+def _expire_checkpoint_lease(manager, checkpoint_id: str) -> None:
+    """Simulate a process crash by expiring its durable checkpoint lease."""
+    conn = manager._connect()
+    conn.execute(
+        "UPDATE checkpoints SET lease_expires_at = ? WHERE id = ?",
+        (time.time() - 1, checkpoint_id),
+    )
+    conn.commit()
+
+
 def _make_tool_call_response(
     tool_name: str,
     tool_id: str = "tc-1",
@@ -377,16 +387,20 @@ class TestRuntimeToolCallLoop:
         calc_tool = _make_mock_tool("calculator")
         tool_reg = _make_tool_registry([calc_tool])
         registry = _make_registry({"fake": provider})
+        checkpoint = MagicMock()
+        checkpoint.create.return_value = "cp-fallback"
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.agent.checkpoint.CheckpointManager", return_value=checkpoint),
         ):
             rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
             result = rt.run("calculate something")
 
         assert result == "final answer"
         provider.complete.assert_called_once()
+        checkpoint.complete.assert_called_once_with("cp-fallback")
 
 
 # ---------------------------------------------------------------------------
@@ -425,10 +439,13 @@ class TestRuntimeIterationLimit:
         provider.complete.return_value = _make_stop_response("fallback after limit")
 
         registry = _make_registry({"fake": provider})
+        checkpoint = MagicMock()
+        checkpoint.create.return_value = "cp-limit"
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.agent.checkpoint.CheckpointManager", return_value=checkpoint),
         ):
             rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=3))
             result = rt.run("run forever")
@@ -443,6 +460,7 @@ class TestRuntimeIterationLimit:
         fallback_messages = provider.complete.call_args.args[0]
         assert "tool-call limit has been reached" in fallback_messages[-1].content
         assert "Do not emit tool-call syntax" in fallback_messages[-1].content
+        checkpoint.incomplete.assert_called_once_with("cp-limit")
 
     def test_iteration_limit_tool_narration_returns_grounded_status(self):
         """A narration-only finalizer must not collapse to the generic empty reply."""
@@ -1627,10 +1645,13 @@ class TestGovernedObsStreamingDispatch:
         tool_reg.execute.side_effect = None
         registry = _make_registry({"fake": provider})
         events = []
+        checkpoint = MagicMock()
+        checkpoint.create.return_value = "cp-governed"
 
         with (
             patch("missy.agent.runtime.get_registry", return_value=registry),
             patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+            patch("missy.agent.checkpoint.CheckpointManager", return_value=checkpoint),
         ):
             rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
             rt._emit_event = lambda **kw: events.append(kw)
@@ -1647,6 +1668,7 @@ class TestGovernedObsStreamingDispatch:
         ]
         assert len(terminal) == 1
         assert terminal[0]["detail"]["tool"] == "obs_start_streaming_confirmed"
+        checkpoint.incomplete.assert_called_once_with("cp-governed")
 
 
 class TestCalculatorResponseCompletenessRetry:
@@ -3505,6 +3527,7 @@ class TestResumeCheckpoint:
         ]
         cid = cm.create("sess-1", "task-1", "add 2 and 2")
         cm.update(cid, saved_messages, ["calculator"], iteration=1)
+        _expire_checkpoint_lease(cm, cid)
 
         with patch("missy.agent.runtime.get_registry", return_value=registry):
             rt = AgentRuntime(AgentConfig(provider="fake"))
@@ -3543,6 +3566,7 @@ class TestResumeCheckpoint:
         cm = CheckpointManager()
         cid = cm.create("sess-1", "task-1", "prompt")
         cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        _expire_checkpoint_lease(cm, cid)
 
         with patch("missy.agent.runtime.get_registry", return_value=registry):
             rt = AgentRuntime(AgentConfig(provider="fake"))
@@ -3571,6 +3595,7 @@ class TestResumeCheckpoint:
         cm = CheckpointManager()
         cid = cm.create("sess-1", "task-1", "prompt")
         cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        _expire_checkpoint_lease(cm, cid)
 
         events = []
         with patch("missy.agent.runtime.get_registry", return_value=registry):
@@ -3631,6 +3656,7 @@ class TestResumeCheckpoint:
             ('["just", "a", "list", "of", "strings"]', cid),
         )
         conn.commit()
+        _expire_checkpoint_lease(cm, cid)
 
         with patch("missy.agent.runtime.get_registry", return_value=registry):
             rt = AgentRuntime(AgentConfig(provider="fake"))
@@ -3656,6 +3682,7 @@ class TestResumeCheckpoint:
         cm = CheckpointManager()
         cid = cm.create("sess-1", "task-1", "prompt")
         cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        _expire_checkpoint_lease(cm, cid)
 
         with patch("missy.agent.runtime.get_registry", return_value=registry):
             rt = AgentRuntime(AgentConfig(provider="fake", capability_mode="no-tools"))
@@ -3996,6 +4023,7 @@ class TestSleeptimeWiring:
         cm = CheckpointManager()
         cid = cm.create("sess-1", "task-1", "prompt")
         cm.update(cid, [{"role": "user", "content": "prompt"}], [], iteration=0)
+        _expire_checkpoint_lease(cm, cid)
 
         with patch("missy.agent.runtime.get_registry", return_value=registry):
             rt = AgentRuntime(AgentConfig(provider="fake"))

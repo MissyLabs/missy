@@ -18,6 +18,7 @@ Example::
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from dataclasses import dataclass
 
@@ -80,18 +81,24 @@ _PRICING: list[tuple[str, float, float]] = [
     ("gemma", 0.0, 0.0),
 ]
 
+# Unknown remote model names must not silently receive free budget. These
+# deliberately conservative rates match the highest configured input/output
+# rates above; explicit local-family prefixes remain zero-cost.
+_UNKNOWN_INPUT_RATE = 0.030
+_UNKNOWN_OUTPUT_RATE = 0.075
+
 
 def _lookup_pricing(model: str) -> tuple[float, float]:
     """Return (input_cost_per_1k, output_cost_per_1k) for *model*.
 
-    Falls back to zero if no prefix matches (e.g. unknown local models).
+    Falls back to conservative paid-model pricing if no prefix matches.
     """
     model_lower = model.lower()
     for prefix, inp, out in _PRICING:
         if model_lower.startswith(prefix):
             return inp, out
-    logger.debug("No pricing entry for model %r; assuming zero cost.", model)
-    return 0.0, 0.0
+    logger.warning("No pricing entry for model %r; using conservative fallback pricing.", model)
+    return _UNKNOWN_INPUT_RATE, _UNKNOWN_OUTPUT_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +170,19 @@ class CostTracker:
         Returns:
             The :class:`UsageRecord` that was appended.
         """
+        if (
+            isinstance(prompt_tokens, bool)
+            or not isinstance(prompt_tokens, int)
+            or prompt_tokens < 0
+            or isinstance(completion_tokens, bool)
+            or not isinstance(completion_tokens, int)
+            or completion_tokens < 0
+        ):
+            raise ValueError("token counts must be non-negative integers")
         inp_rate, out_rate = _lookup_pricing(model)
         cost = (prompt_tokens / 1000.0) * inp_rate + (completion_tokens / 1000.0) * out_rate
+        if not math.isfinite(cost) or cost < 0:
+            raise ValueError("usage cost must be finite and non-negative")
 
         rec = UsageRecord(
             model=model,
@@ -184,6 +202,49 @@ class CostTracker:
                 self._records = self._records[-self._MAX_RECORDS :]
 
         return rec
+
+    def restore(self, records: list[dict]) -> None:
+        """Restore trusted persisted usage without repricing historical calls."""
+        restored: list[UsageRecord] = []
+        total_prompt = 0
+        total_completion = 0
+        total_cost = 0.0
+        for item in records:
+            model = item.get("model", "")
+            prompt = item.get("prompt_tokens", 0)
+            completion = item.get("completion_tokens", 0)
+            cost = item.get("cost_usd", 0.0)
+            if (
+                not isinstance(model, str)
+                or isinstance(prompt, bool)
+                or not isinstance(prompt, int)
+                or prompt < 0
+                or isinstance(completion, bool)
+                or not isinstance(completion, int)
+                or completion < 0
+                or isinstance(cost, bool)
+                or not isinstance(cost, (int, float))
+                or not math.isfinite(float(cost))
+                or cost < 0
+            ):
+                raise ValueError("persisted usage contains invalid values")
+            restored.append(UsageRecord(model, prompt, completion, float(cost)))
+            total_prompt += prompt
+            total_completion += completion
+            total_cost += float(cost)
+
+        with self._lock:
+            self._records = restored[-self._MAX_RECORDS :]
+            self._total_prompt = total_prompt
+            self._total_completion = total_completion
+            self._total_cost = total_cost
+
+    def fail_closed(self) -> None:
+        """Treat a configured session budget as fully spent after ledger failure."""
+        if self.max_spend_usd <= 0:
+            return
+        with self._lock:
+            self._total_cost = max(self._total_cost, self.max_spend_usd)
 
     def record_from_response(self, response) -> UsageRecord | None:
         """Extract usage from a :class:`CompletionResponse` and record it.

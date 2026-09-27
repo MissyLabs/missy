@@ -249,15 +249,15 @@ class TestCostTrackerEdgeCases:
         tracker.record(model="claude-opus-4", prompt_tokens=10_000, completion_tokens=10_000)
         tracker.check_budget()  # must not raise
 
-    def test_unknown_model_records_zero_cost(self):
-        """An unknown model prefix falls back to zero-cost pricing."""
+    def test_unknown_model_records_conservative_cost(self):
+        """An unknown model prefix cannot silently bypass a budget."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         rec = tracker.record(
             model="totally-unknown-model-xyz", prompt_tokens=1000, completion_tokens=500
         )
-        assert rec.cost_usd == 0.0
+        assert rec.cost_usd == pytest.approx(0.0675)
 
 
 # ---------------------------------------------------------------------------

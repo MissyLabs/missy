@@ -341,13 +341,13 @@ class TestCostTrackerEdgeCases:
         assert summary["total_cost_usd"] == 0.0
 
     def test_unknown_model_uses_default_pricing(self) -> None:
-        """Unknown model should use default/zero pricing."""
+        """Unknown model should use conservative default pricing."""
         from missy.agent.cost_tracker import CostTracker
 
         tracker = CostTracker()
         tracker.record(model="unknown-model-xyz", prompt_tokens=1000, completion_tokens=500)
         summary = tracker.get_summary()
-        assert "total_cost_usd" in summary
+        assert summary["total_cost_usd"] == pytest.approx(0.0675)
 
     def test_concurrent_cost_recording(self) -> None:
         """Concurrent cost recording should not lose data."""

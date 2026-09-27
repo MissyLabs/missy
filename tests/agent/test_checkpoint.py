@@ -60,6 +60,14 @@ def _execute(tmp_db: str, sql: str, params: tuple = ()) -> None:
         conn.commit()
 
 
+def _expire_leases(tmp_db: str) -> None:
+    _execute(
+        tmp_db,
+        "UPDATE checkpoints SET lease_expires_at=? WHERE state IN ('RUNNING', 'RESUMING')",
+        (time.time() - 1,),
+    )
+
+
 # ---------------------------------------------------------------------------
 # CheckpointManager: construction and schema
 # ---------------------------------------------------------------------------
@@ -82,6 +90,21 @@ class TestCheckpointManagerInit:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'",
         )
         assert rows, "checkpoints table should exist"
+
+    def test_migrates_legacy_schema_with_lease_columns(self, tmp_db):
+        with sqlite3.connect(tmp_db) as conn:
+            conn.execute(
+                """CREATE TABLE checkpoints (
+                    id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                    prompt TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'RUNNING',
+                    loop_messages TEXT NOT NULL DEFAULT '[]',
+                    tool_names_used TEXT NOT NULL DEFAULT '[]', iteration INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL
+                )"""
+            )
+        CheckpointManager(db_path=tmp_db)
+        columns = {row[1] for row in _query_all(tmp_db, "PRAGMA table_info(checkpoints)")}
+        assert {"owner_id", "lease_expires_at"}.issubset(columns)
 
     def test_wal_mode_enabled(self, tmp_db):
         CheckpointManager(db_path=tmp_db)
@@ -205,19 +228,25 @@ class TestClaim:
     """Regression: resume_checkpoint() used to read+check state=='RUNNING'
     and only mark the checkpoint COMPLETE much later, after a real window
     of work -- a TOCTOU race letting two concurrent resume attempts both
-    proceed. claim() atomically transitions RUNNING -> COMPLETE so only
-    one caller ever wins.
+    proceed. claim() atomically installs a RESUMING lease so only one
+    recovery worker wins and a live owner cannot be displaced.
     """
 
     def test_claim_running_checkpoint_returns_true(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
+        _expire_leases(tmp_db)
         assert cm.claim(cid) is True
         state = _query_one(tmp_db, "SELECT state FROM checkpoints WHERE id=?", (cid,))[0]
-        assert state == "COMPLETE"
+        assert state == "RESUMING"
 
-    def test_second_claim_of_same_checkpoint_returns_false(self, cm):
+    def test_second_claim_of_same_checkpoint_returns_false(self, cm, tmp_db):
         cid = cm.create("s", "t", "p")
+        _expire_leases(tmp_db)
         assert cm.claim(cid) is True
+        assert cm.claim(cid) is False
+
+    def test_live_checkpoint_cannot_be_claimed(self, cm):
+        cid = cm.create("s", "t", "p")
         assert cm.claim(cid) is False
 
     def test_claim_non_running_checkpoint_returns_false(self, cm):
@@ -227,6 +256,25 @@ class TestClaim:
 
     def test_claim_nonexistent_checkpoint_returns_false(self, cm):
         assert cm.claim("00000000-0000-0000-0000-000000000000") is False
+
+    def test_recovery_owner_fences_original_worker(self, cm, tmp_db):
+        cid = cm.create("s", "t", "p")
+        assert cm.update(cid, [{"role": "user", "content": "old"}], [], 1)
+        _expire_leases(tmp_db)
+        recovery = CheckpointManager(db_path=tmp_db)
+        assert recovery.claim(cid)
+        assert recovery.activate_claim(cid)
+
+        assert not cm.update(cid, [{"role": "user", "content": "stale"}], [], 2)
+        assert recovery.update(cid, [{"role": "user", "content": "recovered"}], [], 2)
+        assert recovery.get(cid)["loop_messages"][0]["content"] == "recovered"
+
+    def test_renew_extends_only_current_owners_lease(self, cm, tmp_db):
+        cid = cm.create("s", "t", "p")
+        before = cm.get(cid)["lease_expires_at"]
+        assert cm.renew(cid)
+        assert cm.get(cid)["lease_expires_at"] >= before
+        assert not CheckpointManager(db_path=tmp_db).renew(cid)
 
 
 class TestFail:
@@ -337,8 +385,8 @@ class TestAbandonOld:
         # a checkpoint that's genuinely been inactive, not just old.
         _execute(
             tmp_db,
-            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
-            (time.time() - 90000, time.time() - 90000, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?",
+            (time.time() - 90000, time.time() - 90000, time.time() - 1, cid),
         )
         count = cm.abandon_old(max_age_seconds=86400)
         assert count == 1
@@ -357,8 +405,8 @@ class TestAbandonOld:
         with sqlite3.connect(tmp_db) as conn:
             for cid in ids:
                 conn.execute(
-                    "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
-                    (time.time() - 90000, time.time() - 90000, cid),
+                    "UPDATE checkpoints SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?",
+                    (time.time() - 90000, time.time() - 90000, time.time() - 1, cid),
                 )
             conn.commit()
         count = cm.abandon_old()
@@ -480,6 +528,7 @@ class TestScanForRecovery:
     def test_returns_recovery_result_objects(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("sess-abc", "task-123", "my prompt")
+        _expire_leases(tmp_db)
         results = scan_for_recovery(db_path=tmp_db)
         assert len(results) == 1
         assert isinstance(results[0], RecoveryResult)
@@ -487,6 +536,7 @@ class TestScanForRecovery:
     def test_result_fields_populated(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("sess-abc", "task-123", "my prompt")
+        _expire_leases(tmp_db)
         results = scan_for_recovery(db_path=tmp_db)
         r = results[0]
         assert r.session_id == "sess-abc"
@@ -496,6 +546,7 @@ class TestScanForRecovery:
     def test_recent_checkpoint_classified_as_resume(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("s", "t", "p")
+        _expire_leases(tmp_db)
         results = scan_for_recovery(db_path=tmp_db)
         assert results[0].action == "resume"
 
@@ -507,8 +558,8 @@ class TestScanForRecovery:
         # checkpoint that's genuinely been inactive, not just old.
         _execute(
             tmp_db,
-            "UPDATE checkpoints SET created_at=?, updated_at=? WHERE id=?",
-            (time.time() - 2 * 86400, time.time() - 2 * 86400, cid),
+            "UPDATE checkpoints SET created_at=?, updated_at=?, lease_expires_at=? WHERE id=?",
+            (time.time() - 2 * 86400, time.time() - 2 * 86400, time.time() - 1, cid),
         )
         results = scan_for_recovery(db_path=tmp_db)
         # abandon_old should have transitioned it before get_incomplete is called
@@ -526,6 +577,7 @@ class TestScanForRecovery:
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("sess-1", "task-1", "prompt 1")
         cm.create("sess-2", "task-2", "prompt 2")
+        _expire_leases(tmp_db)
         scan_for_recovery(db_path=tmp_db)
         events = event_bus.get_events(event_type="agent.checkpoint.recovery_scan")
         assert len(events) == 2
@@ -533,6 +585,7 @@ class TestScanForRecovery:
     def test_audit_event_has_correct_category(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("sess-1", "task-1", "prompt")
+        _expire_leases(tmp_db)
         event_bus.clear()
         scan_for_recovery(db_path=tmp_db)
         events = event_bus.get_events(event_type="agent.checkpoint.recovery_scan")
@@ -541,6 +594,7 @@ class TestScanForRecovery:
     def test_audit_event_detail_contains_action(self, tmp_db):
         cm = CheckpointManager(db_path=tmp_db)
         cm.create("sess-1", "task-1", "prompt")
+        _expire_leases(tmp_db)
         event_bus.clear()
         scan_for_recovery(db_path=tmp_db)
         events = event_bus.get_events(event_type="agent.checkpoint.recovery_scan")
@@ -556,6 +610,7 @@ class TestScanForRecovery:
         cid = cm.create("s", "t", "p")
         msgs = [{"role": "user", "content": "step 1"}]
         cm.update(cid, msgs, ["tool_a"], iteration=3)
+        _expire_leases(tmp_db)
         results = scan_for_recovery(db_path=tmp_db)
         assert results[0].loop_messages == msgs
         assert results[0].iteration == 3

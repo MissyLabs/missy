@@ -25,7 +25,7 @@ def _reset_singleton():
     gb._ACTIVE = None
 
 
-def _make_runtime() -> AgentRuntime:
+def _make_runtime(**config_kwargs) -> AgentRuntime:
     from missy.providers.base import CompletionResponse
 
     provider = MagicMock()
@@ -42,7 +42,7 @@ def _make_runtime() -> AgentRuntime:
         patch("missy.agent.runtime.get_tool_registry", side_effect=RuntimeError("no tools")),
         patch("missy.agent.runtime.get_message_bus", side_effect=RuntimeError("no bus")),
     ):
-        runtime = AgentRuntime(AgentConfig(provider="fake"))
+        runtime = AgentRuntime(AgentConfig(provider="fake", **config_kwargs))
     return runtime
 
 
@@ -62,6 +62,31 @@ class TestSingleton:
 
 
 class TestRuntimeEnforcement:
+    def test_session_budget_restores_persisted_spend(self) -> None:
+        runtime = _make_runtime(max_spend_usd=0.01)
+        runtime._memory_store = MagicMock()
+        del runtime._memory_store._primary
+        runtime._memory_store.get_session_costs.return_value = [
+            {
+                "model": "gpt-5.6-sol",
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "cost_usd": 0.014,
+            }
+        ]
+        runtime._cost_trackers.clear()
+
+        with pytest.raises(BudgetExceededError):
+            runtime._get_cost_tracker("persisted-session").check_budget()
+
+    def test_session_budget_fails_closed_when_restore_unavailable(self) -> None:
+        runtime = _make_runtime(max_spend_usd=0.01)
+        runtime._memory_store = None
+        runtime._cost_trackers.clear()
+
+        with pytest.raises(BudgetExceededError):
+            runtime._get_cost_tracker("unreadable-session").check_budget()
+
     def test_check_budget_raises_on_global_breach(self, tmp_path: Path) -> None:
         p = str(tmp_path / "gb.json")
         b = init_global_budget(0.01, path=p)
@@ -103,3 +128,22 @@ class TestRuntimeEnforcement:
         with patch.object(runtime, "_get_cost_tracker", return_value=tracker):
             runtime._record_cost(MagicMock(), session_id="s1")
         assert get_global_budget().total_spent() == pytest.approx(0.25)
+
+    def test_record_cost_propagates_global_persistence_failure(self, tmp_path: Path) -> None:
+        init_global_budget(1.0, path=str(tmp_path / "gb.json"))
+        runtime = _make_runtime()
+        runtime._memory_store = None
+        rec = MagicMock(
+            cost_usd=0.25,
+            model="m",
+            prompt_tokens=1,
+            completion_tokens=1,
+        )
+        tracker = MagicMock()
+        tracker.record_from_response.return_value = rec
+        with (
+            patch.object(runtime, "_get_cost_tracker", return_value=tracker),
+            patch("missy.agent.global_budget.os.replace", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            runtime._record_cost(MagicMock(), session_id="s1")
