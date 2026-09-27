@@ -207,6 +207,18 @@ _PROMISE_PATTERNS: list[re.Pattern[str]] = [
 _PROMISE_EXEMPTIONS: list[re.Pattern[str]] = [
     re.compile(r"(?i)\bI'll\s+(?:be|keep|remember|stay|wait|let you know)\b"),
     re.compile(r"(?i)\bI will\s+(?:be|keep|remember|stay|wait|let you know)\b"),
+    # Persona and conversational-style commitments change how the assistant
+    # talks; they do not announce an external action that needs a tool call.
+    re.compile(
+        r"(?i)^\s*I(?:'ll| will)\s+(?:respond|reply|speak|talk)(?:\s+to)?\s+you\b"
+        r"[^.!?\n]{0,80}\b(?:directly|tone|style|emoji|emojis|formally|casually|"
+        r"businesslike)\b[.!?]?\s*$"
+    ),
+    re.compile(
+        r"(?i)^\s*I(?:'ll| will)\s+(?:ignore|listen\s+to)\s+"
+        r"(?:him|her|them|you)\b(?:\s+and\s+(?:treat|regard|consider)\s+you\b"
+        r"[^.!?\n]{0,60})?[.!?]?\s*$"
+    ),
 ]
 
 _MIN_PROMISE_LENGTH = 15

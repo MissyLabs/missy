@@ -683,6 +683,18 @@ class TestDetectPromiseWithoutAction:
     def test_exempt_casual_future_tense_will_variant(self):
         assert detect_promise_without_action("I will remember that for our next chat.", []) is False
 
+    def test_exempt_conversational_style_commitment(self):
+        text = "I will respond to you directly and without emojis."
+        assert detect_promise_without_action(text, []) is False
+
+    def test_exempt_interpersonal_conversational_commitment(self):
+        text = "I will ignore him and treat you as the ray of sunshine you are."
+        assert detect_promise_without_action(text, []) is False
+
+    def test_interpersonal_exemption_does_not_hide_external_action(self):
+        text = "I will ignore him and deploy the server now."
+        assert detect_promise_without_action(text, []) is True
+
 
 class TestMakePromiseRetryPrompt:
     def test_not_empty(self):

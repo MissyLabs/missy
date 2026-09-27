@@ -1439,6 +1439,30 @@ class TestGeneralFabricationRetry:
         assert provider.complete_with_tools.call_count == 1
         assert result == "4"
 
+    def test_conversational_style_commitment_is_not_replaced_by_promise_guard(self):
+        provider = _make_provider()
+        calc_tool = _make_mock_tool("calculator")
+        tool_reg = _make_tool_registry([calc_tool])
+        reply = "I will respond to you directly and without emojis."
+        provider.complete_with_tools.side_effect = [_make_stop_response(reply)]
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=6))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("When talking to me, be purely business and use no emojis.")
+
+        assert provider.complete_with_tools.call_count == 1
+        assert result == reply
+        assert not any(
+            event["event_type"].startswith("agent.response.promise_without_action")
+            for event in events
+        )
+
 
 class TestExplicitToolRequestRetry:
     """A named, explicitly requested tool cannot be skipped by a text answer."""
