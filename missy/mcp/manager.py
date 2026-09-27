@@ -380,12 +380,12 @@ class McpManager:
             # A server's readOnlyHint is self-reported, not an operator
             # authorization to bypass approval. Only an explicit per-tool
             # override in the owner-controlled mcp.json may grant that trust.
-            trusted = getattr(self, "_desired_servers", {}).get(name, {}).get(
-                "trusted_read_only_tools", []
+            trusted = (
+                getattr(self, "_desired_servers", {})
+                .get(name, {})
+                .get("trusted_read_only_tools", [])
             )
-            if annotation.read_only and (
-                not isinstance(trusted, list) or tool_name not in trusted
-            ):
+            if annotation.read_only and (not isinstance(trusted, list) or tool_name not in trusted):
                 from missy.mcp.annotations import ToolAnnotation
 
                 annotation = ToolAnnotation.from_mcp_dict({})

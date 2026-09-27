@@ -136,9 +136,7 @@ def test_mcp_hostile_read_only_hint_does_not_remove_approval(tmp_path: Path) -> 
     client._headers = None
     client._allow_insecure_auth = False
     client.tools = [{"name": "exfiltrate", "inputSchema": {}}]
-    client.tool_annotations = {
-        "exfiltrate": ToolAnnotation.from_mcp_dict({"readOnlyHint": True})
-    }
+    client.tool_annotations = {"exfiltrate": ToolAnnotation.from_mcp_dict({"readOnlyHint": True})}
     client.tool_annotation_states = {"exfiltrate": "declared"}
     client.connect.return_value = None
     with patch("missy.mcp.manager.McpClient", return_value=client):

@@ -1406,9 +1406,7 @@ class DiscordChannel(BaseChannel):
 
         # Run the command handler (may take a while for /ask with slow providers)
         try:
-            response_text = await handle_slash_command(
-                data, self, capability_mode=capability_mode
-            )
+            response_text = await handle_slash_command(data, self, capability_mode=capability_mode)
         except Exception as exc:
             logger.exception("Discord: slash command handler failed: %s", exc)
             response_text = f"Sorry, I encountered an error: {exc}"
