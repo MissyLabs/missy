@@ -2480,6 +2480,7 @@ class TestRun:
             mock_ch_cls.return_value = mock_ch
             result = runner.invoke(cli, ["--config", cfg_path, "run"])
         assert result.exit_code == 0
+        assert mock_rt_cls.call_args.kwargs["scan_checkpoints"] is True
 
     def test_run_quit_command_exits(self, runner: CliRunner):
         """Typing 'quit' should terminate the session loop."""

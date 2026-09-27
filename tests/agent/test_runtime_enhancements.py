@@ -3,7 +3,7 @@ recovery scan, max_spend_usd config flow."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -434,6 +434,23 @@ class TestCheckpointRecoveryScan:
         r1 = runtime.pending_recovery
         r2 = runtime.pending_recovery
         assert r1 is not r2  # Should be a copy
+
+    def test_runtime_does_not_scan_global_recovery_state_by_default(self):
+        cfg = AgentConfig()
+        with patch.object(AgentRuntime, "_scan_checkpoints") as scan:
+            runtime = AgentRuntime(cfg)
+
+        scan.assert_not_called()
+        assert runtime.pending_recovery == []
+
+    def test_runtime_scans_recovery_state_when_requested(self):
+        cfg = AgentConfig()
+        pending = [MagicMock()]
+        with patch.object(AgentRuntime, "_scan_checkpoints", return_value=pending) as scan:
+            runtime = AgentRuntime(cfg, scan_checkpoints=True)
+
+        scan.assert_called_once_with()
+        assert runtime.pending_recovery == pending
 
 
 # ---------------------------------------------------------------------------

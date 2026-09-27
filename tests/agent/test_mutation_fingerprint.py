@@ -128,6 +128,8 @@ def test_repeated_error_fingerprint_injects_lastToolError():
         return error_tr
 
     rt._execute_tool = mock_execute  # type: ignore[method-assign]
+    audit_events = []
+    rt._emit_event = lambda **kwargs: audit_events.append(kwargs)  # type: ignore[method-assign]
 
     # Patch make_verification_prompt to return empty string (simplify)
     with patch("missy.agent.done_criteria.make_verification_prompt", return_value="[verify]"):
@@ -147,6 +149,22 @@ def test_repeated_error_fingerprint_injects_lastToolError():
     # What we can assert is that the final text was returned without exception.
     assert isinstance(result_text, str)
     assert "shell_exec" in tools_used
+
+    # The reminder is already sticky because loop_messages is carried into
+    # every later provider call.  It must not be appended again each round.
+    final_messages = provider.complete_with_tools.call_args.args[0]
+    reminders = [
+        message
+        for message in final_messages
+        if "lastToolError" in str(getattr(message, "content", ""))
+    ]
+    assert len(reminders) == 1
+    mutation_events = [
+        event
+        for event in audit_events
+        if event.get("event_type") == "agent.tool.mutation_fingerprint"
+    ]
+    assert len(mutation_events) == 1
 
 
 def test_strategy_rotation_fires_for_non_last_tool_in_a_multi_tool_round():

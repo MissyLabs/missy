@@ -1066,7 +1066,7 @@ def run(ctx: click.Context, provider: str | None, session: str, capability_mode:
         **_agent_tool_policy_kwargs(cfg),
         **_agent_feature_kwargs(cfg),
     )
-    agent = AgentRuntime(agent_cfg)
+    agent = AgentRuntime(agent_cfg, scan_checkpoints=True)
     channel = CLIChannel()
 
     mode_label = {
