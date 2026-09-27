@@ -388,6 +388,11 @@ def _rewrite_heredoc_command(
     interpreter = m.group(1)
     body = m.group(3)
 
+    # Opaque nested shell scripts are denied by filesystem policy. Do not
+    # write their heredoc bodies to temporary files before that denial.
+    if interpreter.rsplit("/", 1)[-1] in {"bash", "sh", "zsh", "dash"}:
+        return tool_args, None
+
     # SR-2.4: verify the interpreter itself would be permitted before
     # writing anything. The rewritten command is always exactly
     # "{interpreter} {tmppath}" with no redirection, so checking the

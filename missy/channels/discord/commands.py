@@ -89,7 +89,9 @@ def _interaction_author_id(interaction: dict[str, Any]) -> str:
     return str(user.get("id", ""))
 
 
-async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> str:
+async def _handle_ask(
+    interaction: dict[str, Any], channel: DiscordChannel, *, capability_mode: str = "safe-chat"
+) -> str:
     """Handle ``/ask`` — forward prompt to the agent and return the reply."""
     import asyncio
 
@@ -156,7 +158,18 @@ async def _handle_ask(interaction: dict[str, Any], channel: DiscordChannel) -> s
 
     try:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, agent.run, prompt, session_id)
+        from functools import partial
+
+        return await loop.run_in_executor(
+            None,
+            partial(
+                agent.run,
+                prompt,
+                session_id,
+                _explicit_tool_request_input=prompt,
+                _capability_mode=capability_mode,
+            ),
+        )
     except Exception as exc:
         logger.exception("Slash /ask handler failed: %s", exc)
         return f"Sorry, I encountered an error: {exc}"
@@ -218,6 +231,8 @@ _HANDLERS = {
 async def handle_slash_command(
     interaction: dict[str, Any],
     channel: DiscordChannel,
+    *,
+    capability_mode: str = "safe-chat",
 ) -> str:
     """Route an INTERACTION_CREATE payload to the correct command handler.
 
@@ -233,4 +248,6 @@ async def handle_slash_command(
     handler = _HANDLERS.get(command_name)
     if handler is None:
         return f"Unknown command: `/{command_name}`"
+    if command_name == "ask":
+        return await _handle_ask(interaction, channel, capability_mode=capability_mode)
     return await handler(interaction, channel)

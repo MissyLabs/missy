@@ -311,7 +311,12 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "discord:user:user-alice:dm:unknown")
+        mock_agent.run.assert_called_once_with(
+            "hi",
+            "discord:user:user-alice:dm:unknown",
+            _explicit_tool_request_input="hi",
+            _capability_mode="safe-chat",
+        )
 
     @pytest.mark.asyncio
     async def test_two_different_users_get_two_different_session_ids(self):
@@ -347,7 +352,12 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "discord:user:dm-carol:dm:unknown")
+        mock_agent.run.assert_called_once_with(
+            "hi",
+            "discord:user:dm-carol:dm:unknown",
+            _explicit_tool_request_input="hi",
+            _capability_mode="safe-chat",
+        )
 
     @pytest.mark.asyncio
     async def test_missing_author_falls_back_to_discord_literal(self):
@@ -363,7 +373,12 @@ class TestHandleAskSessionScopedPerUser:
 
         await _handle_ask(interaction, channel)
 
-        mock_agent.run.assert_called_once_with("hi", "discord:user:anonymous:dm:unknown")
+        mock_agent.run.assert_called_once_with(
+            "hi",
+            "discord:user:anonymous:dm:unknown",
+            _explicit_tool_request_input="hi",
+            _capability_mode="safe-chat",
+        )
 
     @pytest.mark.asyncio
     async def test_same_user_dm_and_guild_channel_have_distinct_sessions(self):
