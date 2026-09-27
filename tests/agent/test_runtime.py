@@ -198,6 +198,22 @@ class TestAgentRuntimeRun:
         events = event_bus.get_events(event_type="agent.run.complete")
         assert len(events) >= 1
 
+    def test_complete_event_separates_run_usage_from_session_totals(self):
+        provider = _make_provider()
+        mock_registry = _make_registry({"fake": provider})
+
+        with patch("missy.agent.runtime.get_registry", return_value=mock_registry):
+            runtime = AgentRuntime(AgentConfig(provider="fake"))
+            runtime._memory_store = None
+            runtime.run("first", session_id="audit-cost-deltas")
+            runtime.run("second", session_id="audit-cost-deltas")
+
+        events = event_bus.get_events(event_type="agent.run.complete")[-2:]
+        assert [event.detail["run_call_count"] for event in events] == [1, 1]
+        assert events[1].detail["call_count"] == events[0].detail["call_count"] + 1
+        assert [event.detail["run_prompt_tokens"] for event in events] == [5, 5]
+        assert [event.detail["run_completion_tokens"] for event in events] == [3, 3]
+
     def test_run_passes_system_prompt(self):
         provider = _make_provider()
         mock_registry = _make_registry({"fake": provider})

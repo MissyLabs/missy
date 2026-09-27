@@ -759,7 +759,25 @@ class AgentRuntime:
         config: Runtime configuration.
     """
 
-    def __init__(self, config: AgentConfig, progress_reporter=None) -> None:
+    def __init__(
+        self,
+        config: AgentConfig,
+        progress_reporter=None,
+        *,
+        scan_checkpoints: bool = False,
+    ) -> None:
+        """Create an agent runtime.
+
+        Args:
+            config: Runtime configuration.
+            progress_reporter: Optional progress callback implementation.
+            scan_checkpoints: Discover interrupted work for an interactive
+                recovery prompt.  This is deliberately opt-in: most runtime
+                owners never consume :attr:`pending_recovery`, and scanning
+                the process-global database from every constructor repeatedly
+                audited the same stale checkpoints and let tests touch live
+                recovery state.
+        """
         self.config = config
         self._session_mgr = SessionManager()
         # Circuit breaker per runtime instance (keyed to provider name)
@@ -804,8 +822,11 @@ class AgentRuntime:
         self._candidate_runtime_load_lock = threading.Lock()
         # Input sanitizer for tool output injection detection
         self._sanitizer = self._make_sanitizer()
-        # Scan for incomplete checkpoints from previous runs
-        self._pending_recovery: list = self._scan_checkpoints()
+        # Recovery discovery belongs to callers that actually present or act
+        # on the result (currently the interactive CLI).  Gateway, API,
+        # scheduler, and short-lived test runtimes must not repeatedly scan
+        # the same process-global database as a constructor side effect.
+        self._pending_recovery: list = self._scan_checkpoints() if scan_checkpoints else []
         # Progress reporter (Feature 5)
         if progress_reporter is None:
             from missy.agent.progress import NullReporter
@@ -1184,6 +1205,10 @@ class AgentRuntime:
 
         session = self._resolve_session(session_id)
         sid = str(session.id)
+        # Cost totals persist for the whole session to enforce its budget.
+        # Capture them before this turn so the completion audit can also
+        # report unambiguous per-run deltas.
+        cost_baseline = self._capture_cost_summary(sid)
         task_id = str(self._session_mgr.generate_task_id())
         agent_execution = self._current_agent_execution()
         if _delegation_depth == 0:
@@ -1456,11 +1481,7 @@ class AgentRuntime:
         # Trigger compaction if context is getting large.
         self._maybe_compact(sid, provider)
 
-        cost_detail = {}
-        _session_tracker = self._peek_cost_tracker(sid)
-        if _session_tracker is not None:
-            with contextlib.suppress(Exception):
-                cost_detail = _session_tracker.get_summary()
+        cost_detail = self._cost_audit_detail(sid, cost_baseline)
 
         self._emit_event(
             session_id=sid,
@@ -1904,6 +1925,10 @@ class AgentRuntime:
         _mutation_fp_counts: dict[str, int] = {}
         # Maps fingerprint → last error text (cleared when same fp succeeds).
         _mutation_fp_errors: dict[str, str] = {}
+        # The injected message remains in loop_messages, so each repeated
+        # fingerprint only needs to add it once.  Without this set the same
+        # reminder and audit event were duplicated on every later iteration.
+        _reported_mutation_error_fps: set[str] = set()
 
         # SR-4.4: done-criteria verification. Deterministic, tool-observed
         # evidence (not a model self-report) that the round of tool calls
@@ -2512,8 +2537,12 @@ class AgentRuntime:
                     # explicitly so the model can change strategy.
                     _repeated_errors: list[str] = []
                     for _fp, _err in _mutation_fp_errors.items():
-                        if _mutation_fp_counts.get(_fp, 0) >= 2:
+                        if (
+                            _mutation_fp_counts.get(_fp, 0) >= 2
+                            and _fp not in _reported_mutation_error_fps
+                        ):
                             _repeated_errors.append(_err)
+                            _reported_mutation_error_fps.add(_fp)
                     if _repeated_errors:
                         _last_err_msg = (
                             "lastToolError: The following tool call(s) have been attempted "
@@ -5395,6 +5424,54 @@ class AgentRuntime:
         with self._cost_trackers_lock:
             return self._cost_trackers.get(key)
 
+    def _capture_cost_summary(self, session_id: str) -> dict[str, Any]:
+        """Return a cumulative-cost baseline for one run.
+
+        Creating the tracker here is intentional: the first budget check
+        would create it moments later anyway, and this ensures persisted
+        session usage is restored before the baseline is captured.
+        """
+        tracker = self._get_cost_tracker(session_id)
+        if tracker is None:
+            return {}
+        try:
+            return tracker.get_summary()
+        except Exception:
+            logger.debug("Could not capture cost baseline for session %s", session_id)
+            return {}
+
+    def _cost_audit_detail(
+        self,
+        session_id: str,
+        baseline: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return cumulative session totals plus per-run usage deltas."""
+        tracker = self._peek_cost_tracker(session_id)
+        if tracker is None:
+            return {}
+        try:
+            summary = tracker.get_summary()
+        except Exception:
+            logger.debug("Could not read cost summary for session %s", session_id)
+            return {}
+
+        mappings = {
+            "total_cost_usd": "run_cost_usd",
+            "total_prompt_tokens": "run_prompt_tokens",
+            "total_completion_tokens": "run_completion_tokens",
+            "total_tokens": "run_tokens",
+            "call_count": "run_call_count",
+        }
+        run_detail: dict[str, int | float] = {}
+        for total_key, run_key in mappings.items():
+            current = summary.get(total_key, 0)
+            previous = baseline.get(total_key, 0)
+            if not isinstance(current, (int, float)) or not isinstance(previous, (int, float)):
+                continue
+            delta = max(0, current - previous)
+            run_detail[run_key] = round(delta, 6) if total_key == "total_cost_usd" else int(delta)
+        return {**summary, **run_detail}
+
     @staticmethod
     def _make_rate_limiter() -> Any:
         """Return the optional runtime-level rate limiter (none by default).
@@ -5827,6 +5904,7 @@ class AgentRuntime:
             )
 
         sid = checkpoint["session_id"]
+        cost_baseline = self._capture_cost_summary(sid)
         original_prompt = checkpoint["prompt"]
         task_id = str(self._session_mgr.generate_task_id())
 
@@ -5895,11 +5973,7 @@ class AgentRuntime:
             self._record_learnings(all_tool_names_used, final_response, original_prompt)
         self._maybe_compact(sid, provider)
 
-        cost_detail = {}
-        _session_tracker = self._peek_cost_tracker(sid)
-        if _session_tracker is not None:
-            with contextlib.suppress(Exception):
-                cost_detail = _session_tracker.get_summary()
+        cost_detail = self._cost_audit_detail(sid, cost_baseline)
 
         self._emit_event(
             session_id=sid,
