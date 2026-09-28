@@ -15,12 +15,16 @@ from missy.tools.registry import ToolRegistry
 
 class Client:
     category = "tool"
+    response_limit = 1024 * 1024
 
     def __init__(self):
         self.calls = []
 
-    def get(self, url, **kwargs):
-        self.calls.append((url, kwargs))
+    def get_limited(self, url, max_bytes, **kwargs):
+        assert max_bytes == self.response_limit
+        assert kwargs.get("follow_redirects") is False
+        assert kwargs.get("headers", {}).get("Authorization") == "Bearer fixture-token"
+        self.calls.append((url, max_bytes, kwargs))
         return self
 
     status_code = 200
@@ -70,6 +74,9 @@ def _setup(tmp_path):
     assert tool.registration_ready
     assert tool.execute(action="list").success
     assert len(client.calls) == 1
+    assert client.calls[0][1] == client.response_limit
+    assert client.calls[0][2]["follow_redirects"] is False
+    assert client.calls[0][2]["headers"]["Authorization"] == "Bearer fixture-token"
     return config, tool, client, registry
 
 

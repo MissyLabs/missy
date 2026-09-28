@@ -8,7 +8,7 @@ we wish the future deployed service would provide.
 
 from __future__ import annotations
 
-import json
+import json as json_module
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,26 +33,37 @@ class InMemoryTransport:
     """A closed, deterministic substitute for PolicyHTTPClient in tests only."""
 
     category = "tool"
+    response_limit = 1024 * 1024
 
     def __init__(self, api: FoundryAPI):
         self.api = api
         self.calls: list[tuple[str, str]] = []
+        self.limited_calls: list[tuple[str, int, dict, bool]] = []
 
-    def _forward(self, method, url, *, headers, json=None, follow_redirects):
+    def _forward(self, method, url, max_bytes, *, headers, json=None, follow_redirects):
+        # Keep the transport contract under test: callers must request a
+        # bounded response and must not delegate redirects to the HTTP layer.
+        assert max_bytes == self.response_limit
         assert follow_redirects is False
+        assert headers.get("Authorization") == "Bearer " + TOKEN
+        assert headers.get("Accept") == "application/json"
+        self.limited_calls.append((method, max_bytes, dict(headers), follow_redirects))
         parsed = urlsplit(url)
         assert parsed.scheme == "https" and parsed.netloc == "foundry.invalid"
         assert not parsed.query and not parsed.fragment
         self.calls.append((method, parsed.path))
         response = self.api.handle(method, parsed.path, headers, json)
+        assert len(json_module.dumps(response.body).encode("utf-8")) <= max_bytes
         return WireResponse(response.status, response.body)
 
-    def get(self, url, *, headers, follow_redirects):
-        return self._forward("GET", url, headers=headers, follow_redirects=follow_redirects)
-
-    def post(self, url, *, headers, json, follow_redirects):
+    def get_limited(self, url, max_bytes, *, headers, follow_redirects):
         return self._forward(
-            "POST", url, headers=headers, json=json, follow_redirects=follow_redirects
+            "GET", url, max_bytes, headers=headers, follow_redirects=follow_redirects
+        )
+
+    def post_limited(self, url, max_bytes, *, headers, json, follow_redirects):
+        return self._forward(
+            "POST", url, max_bytes, headers=headers, json=json, follow_redirects=follow_redirects
         )
 
 
@@ -94,7 +105,11 @@ def _workload(snapshot_id: str) -> dict:
             "evaluator_version": "fixture-v1",
             "validators": [{"id": "oracle", "version": "1", "required": True, "parameters": {}}],
         },
-        "artifacts": {"required_kinds": ["result"]},
+        "artifacts": {
+            "required_kinds": ["result"],
+            "output_prefix": "results/offline",
+            "retention_class": "fixture",
+        },
     }
 
 
@@ -168,6 +183,13 @@ def test_real_missy_client_reaches_native_core_for_scoped_list_snapshot_and_stat
         ("POST", f"/api/projects/{PROJECT}/snapshots"),
         ("GET", f"/api/projects/{PROJECT}/snapshots/{snapshot['id']}"),
     ]
+    assert len(wire.limited_calls) == 3
+    assert all(
+        limit == wire.response_limit
+        and headers["Authorization"] == "Bearer " + TOKEN
+        and redirects is False
+        for _method, limit, headers, redirects in wire.limited_calls
+    )
     assert service.dispatcher is None
     assert service.allow_demo_dispatch is False
 
@@ -228,7 +250,9 @@ def test_bundled_missy_catalog_repository_id_is_the_native_wire_identity(tmp_pat
     catalog = Path(__file__).resolve().parents[2] / (
         "missy/repoeval/workloads/missy/tool-call-correctness/workload.json"
     )
-    repository_id = json.loads(catalog.read_text(encoding="utf-8"))["repository"]["repository_id"]
+    repository_id = json_module.loads(catalog.read_text(encoding="utf-8"))["repository"][
+        "repository_id"
+    ]
     assert repository_id == REPO == RepoevalFoundryTool._repository_id(repository_id)
     client, wire, _ = _wired(tmp_path)
     assert client.execute(action="list").output["repositories"] == [repository_id]

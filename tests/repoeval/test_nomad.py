@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from missy.repoeval.nomad import JobPlanError, JobRequest, plan_job
@@ -26,18 +28,46 @@ def req(**kw):
 def test_plan_is_finite_isolated_and_digest_pinned():
     plan = plan_job(req(), POOLS)
     job = plan.job
-    task = job["TaskGroups"][0]["Tasks"][0]
+    group = job["TaskGroups"][0]
+    task = group["Tasks"][0]
     assert job["Type"] == "batch" and job["NodePool"] == "staging"
     assert job["Meta"]["repository_commit_sha"] == "a" * 40
     assert job["Meta"]["snapshot_id"] == "snapshot-123"
-    assert task["config"]["image"] == IMAGE and task["config"]["readonly_rootfs"] is True
-    assert task["config"]["network_mode"] == "none" and task["config"]["cap_drop"] == ["ALL"]
-    assert "command" not in task and "args" not in task and "mount" not in task
+    assert task["Name"] == "worker" and task["Driver"] == "docker"
+    assert task["Config"]["image"] == IMAGE and task["Config"]["readonly_rootfs"] is True
+    assert task["Config"]["network_mode"] == "none" and task["Config"]["cap_drop"] == ["ALL"]
+    assert "command" not in task["Config"] and "args" not in task["Config"]
+    assert "mount" not in task["Config"]
     assert (
         job["TaskGroups"][0]["Count"] == 1
         and job["TaskGroups"][0]["RestartPolicy"]["Attempts"] == 0
     )
-    assert task["env"]["FOUNDRY_TIMEOUT_SECONDS"] == "60"
+    assert group["MaxRunDuration"] == 60_000_000_000
+    assert group["ReschedulePolicy"]["Attempts"] == 0
+    assert group["ReschedulePolicy"]["Unlimited"] is False
+    assert task["Env"]["FOUNDRY_TIMEOUT_SECONDS"] == "60"
+    assert task["KillTimeout"] == 5_000_000_000
+    assert task["Resources"] == {"CPU": 1000, "MemoryMB": 1024}
+    assert group["EphemeralDisk"]["SizeMB"] == 512
+    assert "ReschedulePolicy" not in job
+    assert "Update" not in job
+    json.dumps(job)
+
+
+@pytest.mark.parametrize("seconds", [1, 60, 86400])
+def test_deadline_is_enforced_in_group_in_nomad_nanoseconds(seconds):
+    job = plan_job(req(timeout_seconds=seconds), POOLS).job
+    group = job["TaskGroups"][0]
+    assert group["MaxRunDuration"] == seconds * 1_000_000_000
+    assert group["Tasks"][0]["Env"]["FOUNDRY_TIMEOUT_SECONDS"] == str(seconds)
+
+
+def test_resource_values_use_nomad_wire_keys_without_task_disk():
+    plan = plan_job(req(cpu_mhz=2100, memory_mb=2048, disk_mb=768), POOLS)
+    group = plan.job["TaskGroups"][0]
+    assert group["Tasks"][0]["Resources"] == {"CPU": 2100, "MemoryMB": 2048}
+    assert group["EphemeralDisk"]["SizeMB"] == 768
+    assert "resources" not in group["Tasks"][0]
 
 
 def test_budget_from_all_eligible_pools_is_advisory_not_spill_or_shrink():
@@ -54,7 +84,7 @@ def test_budget_from_all_eligible_pools_is_advisory_not_spill_or_shrink():
         plan.capacity_budget.available_disk_mb,
     ) == (5000, 9216, 10512)
     assert (
-        plan.envelope.cpu_mhz == plan.job["TaskGroups"][0]["Tasks"][0]["resources"]["cpu"] == 1000
+        plan.envelope.cpu_mhz == plan.job["TaskGroups"][0]["Tasks"][0]["Resources"]["CPU"] == 1000
     )
     assert plan.envelope.memory_mb == 1024 and plan.envelope.disk_mb == 512
 

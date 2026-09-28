@@ -1,7 +1,6 @@
 {
   "schema_version": "1.0",
   "run_id": "run-example0001",
-  "idempotency_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "benchmark_id": "benchmark-example0001",
   "project_id": "example",
   "workload_id": "repository-orientation",

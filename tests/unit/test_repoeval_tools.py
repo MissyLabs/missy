@@ -47,11 +47,13 @@ class FakeClient:
         self.calls = []
         self.responses = []
 
-    def get(self, url, **kwargs):
+    def get_limited(self, url, max_bytes, **kwargs):
+        assert max_bytes == 1024 * 1024
         self.calls.append(("GET", url, kwargs))
         return self.responses.pop(0)
 
-    def post(self, url, **kwargs):
+    def post_limited(self, url, max_bytes, **kwargs):
+        assert max_bytes == 1024 * 1024
         self.calls.append(("POST", url, kwargs))
         return self.responses.pop(0)
 
@@ -618,7 +620,7 @@ def test_token_echo_and_transport_errors_are_never_returned(caplog):
     def fail(*args, **kwargs):
         raise RuntimeError(f"Authorization: Bearer {TEST_TOKEN}")
 
-    client.get = fail
+    client.get_limited = fail
     result = instance.execute(action="list")
     assert not result.success and TEST_TOKEN not in str(result)
     assert TEST_TOKEN not in caplog.text
@@ -757,5 +759,65 @@ def test_network_policy_denial_never_reaches_transport(monkeypatch):
     try:
         assert not instance.execute(action="list").success
         assert checks == [("foundry.example", "tool")]
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("failure", ["oversize", "compressed", "redirect"])
+def test_foundry_tool_refuses_unbounded_or_redirected_response_offline(
+    monkeypatch, caplog, failure
+):
+    import missy.gateway.client as gateway
+
+    class Policy:
+        def check_network_resolved(self, host, session, task, *, category):
+            return True, "192.0.2.1"
+
+    monkeypatch.setattr(gateway, "get_policy_engine", lambda: Policy())
+    stream = None
+    calls = []
+    if failure == "oversize":
+
+        class Endless(httpx.SyncByteStream):
+            def __init__(self):
+                self.read = 0
+                self.closed = False
+
+            def __iter__(self):
+                while True:
+                    self.read += 4096
+                    yield b"x" * 4096
+
+            def close(self):
+                self.closed = True
+
+        stream = Endless()
+
+    def handle(request):
+        calls.append(request)
+        if failure == "oversize":
+            return httpx.Response(200, stream=stream)
+        if failure == "compressed":
+            return httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=b"x")
+        return httpx.Response(302, headers={"Location": "https://attacker.example/private"})
+
+    client = PolicyHTTPClient(category="tool")
+    client._sync_client = httpx.Client(transport=httpx.MockTransport(handle))
+    instance = RepoevalFoundryTool(
+        base_url="https://foundry.example/api",
+        project_id="alpha",
+        allowed_hosts=["foundry.example"],
+        http_client=client,
+        api_available=True,
+        token_file=TOKEN_PATH,
+    )
+    try:
+        result = instance.execute(action="list")
+        assert not result.success
+        assert len(calls) == 1
+        assert calls[0].headers["Authorization"] == f"Bearer {TEST_TOKEN}"
+        assert TEST_TOKEN not in str(result) + caplog.text
+        if stream is not None:
+            assert stream.read <= 1024 * 1024 + 4096 and stream.closed
     finally:
         client.close()

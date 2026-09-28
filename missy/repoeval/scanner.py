@@ -1,6 +1,6 @@
 """Deterministic, bounded inventory of a clean local Git checkout.
 
-Only fixed Git identity and status queries are run. Repository content,
+Only fixed, read-only Git identity and index queries are run. Repository content,
 including build files, hooks, CI and instructions, is never executed.
 """
 
@@ -37,6 +37,8 @@ def _git(root: Path, *args: str) -> bytes:
                 "core.fsmonitor=false",
                 "-c",
                 "core.hooksPath=/dev/null",
+                "-c",
+                "core.attributesFile=/dev/null",
                 "-C",
                 str(root),
                 *args,
@@ -47,6 +49,9 @@ def _git(root: Path, *args: str) -> bytes:
                 "PATH": os.defpath,
                 "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_SYSTEM": os.devnull,
+                "GIT_ATTR_NOSYSTEM": "1",
+                "GIT_NO_REPLACE_OBJECTS": "1",
                 "GIT_OPTIONAL_LOCKS": "0",
                 "LC_ALL": "C",
             },
@@ -78,9 +83,20 @@ def _git(root: Path, *args: str) -> bytes:
                     proc.kill()
                 proc.wait()
                 raise
-            return bytes(output).strip() if args[0] != "ls-tree" else bytes(output)
+            return bytes(output) if args[0] in ("ls-tree", "ls-files") else bytes(output).strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise ScanRefused("cannot verify local Git checkout") from exc
+
+
+def _reject_config_includes(root: Path) -> None:
+    # Git has no switch to disable local config includes for every command.
+    # Inspect local keys without following includes, then refuse configurations
+    # that would load further checkout-controlled configuration.
+    keys = _git(root, "config", "--local", "--no-includes", "--name-only", "-z", "--list")
+    for key in keys.split(b"\0"):
+        key = key.lower()
+        if key == b"include.path" or (key.startswith(b"includeif.") and key.endswith(b".path")):
+            raise ScanRefused("checkout Git config includes are not supported")
 
 
 def _read_files(root: Path) -> tuple[list[tuple[str, bytes]], int]:
@@ -88,6 +104,10 @@ def _read_files(root: Path) -> tuple[list[tuple[str, bytes]], int]:
     # Enumerate committed paths, not the working tree. This excludes ignored
     # files and prevents a clean-but-ignored payload becoming scan input.
     raw = _git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+    # `git status` can run checkout-supplied clean filters and fsmonitors. Compare
+    # the raw index against the tree instead; file bytes are verified below.
+    index = _git(root, "ls-files", "--stage", "-z")
+    expected_index = set()
     entries = raw.split(b"\0")
     paths = []
     object_ids = {}
@@ -101,6 +121,7 @@ def _read_files(root: Path) -> tuple[list[tuple[str, bytes]], int]:
         if len(parts) != 3:
             raise ScanRefused("cannot enumerate committed file tree")
         mode, kind, oid = parts
+        expected_index.add(mode + b" " + oid + b" 0\t" + name)
         if mode == b"160000":
             raise ScanRefused("submodule checkouts are not supported")
         if mode == b"120000":
@@ -122,6 +143,14 @@ def _read_files(root: Path) -> tuple[list[tuple[str, bytes]], int]:
                 raise ScanRefused("invalid committed path")
             paths.append(rel)
             object_ids[rel] = oid.decode("ascii")
+        else:
+            raise ScanRefused("unsupported committed file type")
+    if set(index.split(b"\0")) - {b""} != expected_index or len(index.split(b"\0")) - 1 != len(
+        expected_index
+    ):
+        raise ScanRefused("checkout is dirty (index differs from HEAD)")
+    if _git(root, "ls-files", "--others", "--exclude-standard", "-z"):
+        raise ScanRefused("checkout is dirty or contains untracked files")
     if len(paths) > MAX_FILES:
         raise ScanRefused("checkout exceeds scanner input limits")
     try:
@@ -253,16 +282,16 @@ def scan_repository(path: str | os.PathLike[str], commit_sha: str) -> dict[str, 
     if root.is_symlink() or not root.is_dir():
         raise ScanRefused("checkout path must be an existing non-symlink directory")
     root = root.resolve(strict=True)
+    _reject_config_includes(root)
     head = _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii")
     if head != commit_sha:
         raise ScanRefused("checkout HEAD does not match requested commit SHA")
-    if _git(root, "status", "--porcelain", "--untracked-files=all"):
-        raise ScanRefused("checkout is dirty or contains untracked files")
-
     files, total = _read_files(root)
-    if _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii") != head or _git(
-        root, "status", "--porcelain", "--untracked-files=all"
-    ):
+    if _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii") != head:
+        raise ScanRefused("checkout changed during scan")
+    # Revalidate both the index and bytes without allowing a Git conversion or
+    # filter to execute. A changed checkout must not yield a mixed inventory.
+    if _read_files(root)[0] != files:
         raise ScanRefused("checkout changed during scan")
     contents = dict(files)
     evidence = [

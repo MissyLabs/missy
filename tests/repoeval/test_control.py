@@ -1,6 +1,7 @@
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from unittest.mock import patch
 
 from missy.repoeval.contracts import definition_hash, sha256_json
 from missy.repoeval.control import FoundryError, FoundryService, MemoryStore, Principal
@@ -75,9 +76,12 @@ class ControlTests(unittest.TestCase):
                 "memory_mb": 512,
                 "disk_mb": 1024,
                 "repetitions": 3,
+                "warmups": 2,
+                "max_attempts": 2,
                 "parallelism": 2,
                 "timeout_seconds": 300,
                 "network_policies": ("none",),
+                "provider_count": 2,
             },
             store=self.store,
             dispatcher=self.dispatcher,
@@ -143,6 +147,95 @@ class ControlTests(unittest.TestCase):
                 Principal("viewer", "project", frozenset({"read"})), plan["id"], "repeat-this-key"
             )
 
+    def test_full_packaged_schema_is_required(self):
+        changes = (
+            lambda w: w["execution"].update(warmups=10**12),
+            lambda w: w["execution"].update(max_attempts=10**12),
+            lambda w: w["execution"].update(warmups=True),
+            lambda w: w["sandbox"].update(unrecognized=1),
+            lambda w: w["providers"][0].pop("settings"),
+            lambda w: w["validation"]["validators"][0].update(extra="unreviewed"),
+            lambda w: w["task"].update(**{"class": "unknown"}),
+            lambda w: w["artifacts"].update(required_kinds=["result", "result"]),
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                candidate = workload()
+                change(candidate)
+                with self.assertRaises(FoundryError) as refusal:
+                    self.service.benchmark_plan(self.user, candidate)
+                self.assertEqual(refusal.exception.category, "invalid_input")
+        self.assertEqual(self.dispatcher.calls, 0)
+
+    def test_missing_schema_dependency_denies_planning_and_new_dispatch(self):
+        plan = self.service.benchmark_plan(self.user, workload())
+        import builtins
+
+        original_import = builtins.__import__
+
+        def missing(name, *args, **kwargs):
+            if name == "jsonschema" or name.startswith("jsonschema."):
+                raise ImportError("missing optional dependency")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=missing):
+            with self.assertRaisesRegex(FoundryError, "schema validation is unavailable"):
+                self.service.benchmark_plan(self.user, workload())
+            with self.assertRaisesRegex(FoundryError, "schema validation is unavailable"):
+                self.service.benchmark_start(self.user, plan["id"], "schema-missing-key")
+        self.assertEqual(self.dispatcher.calls, 0)
+
+    def test_project_ceiling_for_each_multiplier(self):
+        for field in ("warmups", "repetitions", "parallelism", "timeout_seconds", "max_attempts"):
+            with self.subTest(field=field):
+                candidate = workload()
+                candidate["execution"][field] = self.service.limits[field] + 1
+                with self.assertRaises(FoundryError) as refusal:
+                    self.service.benchmark_plan(self.user, candidate)
+                self.assertEqual(refusal.exception.category, "quota")
+        for field in ("warmups", "max_attempts"):
+            with self.subTest(missing_ceiling=field):
+                limits = self.service.limits.copy()
+                limits.pop(field)
+                self.service.limits = limits
+                candidate = workload()
+                candidate["execution"][field] = 1 if field == "warmups" else 2
+                with self.assertRaisesRegex(FoundryError, "ceiling"):
+                    self.service.benchmark_plan(self.user, candidate)
+                self.service.limits[field] = 2
+
+    def test_revalidate_current_approvals_and_limits_at_start_but_allow_replay(self):
+        revocations = (
+            lambda s: s.repositories.update(project=frozenset()),
+            lambda s: s.verified_snapshots.clear(),
+            lambda s: setattr(s, "approved_images", frozenset()),
+            lambda s: s.approved_models.clear(),
+            lambda s: setattr(s, "approved_prompts", frozenset()),
+            lambda s: s.approved_fixtures.clear(),
+            lambda s: s.approved_validators.clear(),
+            lambda s: s.limits.update(cpu_mhz=100),
+            lambda s: s.limits.update(warmups=-1),
+            lambda s: s.limits.update(max_attempts=0),
+            lambda s: s.limits.update(network_policies=()),
+        )
+        for revoke in revocations:
+            with self.subTest(revoke=revoke):
+                # Restore the operator policy before each independent revocation.
+                self.setUp()
+                candidate = workload()
+                candidate["execution"].update(warmups=1, max_attempts=2)
+                plan = self.service.benchmark_plan(self.user, candidate)
+                first = self.service.benchmark_start(self.user, plan["id"], "already-started-key")
+                revoke(self.service)
+                with self.assertRaises(FoundryError):
+                    self.service.benchmark_start(self.user, plan["id"], "new-start-key-123")
+                self.assertEqual(self.dispatcher.calls, 1)
+                self.assertEqual(
+                    first,
+                    self.service.benchmark_start(self.user, plan["id"], "already-started-key"),
+                )
+                self.assertEqual(self.dispatcher.calls, 1)
+
     def test_dispatch_error_not_reported_as_success(self):
         class Broken(FakeDispatcher):
             def submit(self, plan, run_id):
@@ -184,6 +277,12 @@ class ControlTests(unittest.TestCase):
             store=self.store,
             dispatcher=self.dispatcher,
             allow_demo_dispatch=True,
+            verified_snapshots=self.service.verified_snapshots,
+            approved_images=set(self.service.approved_images),
+            approved_models=self.service.approved_models,
+            approved_prompts=set(self.service.approved_prompts),
+            approved_fixtures=self.service.approved_fixtures,
+            approved_validators=self.service.approved_validators,
         )
         gate = Barrier(16)
 

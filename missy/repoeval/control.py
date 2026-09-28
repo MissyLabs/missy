@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.resources
 import json
 import re
 import threading
@@ -176,7 +177,30 @@ class FoundryService:
 
     def benchmark_plan(self, principal: Principal, workload: dict[str, Any]) -> dict[str, Any]:
         self._require(principal, "read")
+        return self._validated_plan(principal, workload)
+
+    def _validated_plan(
+        self, principal: Principal, workload: dict[str, Any], *, persist: bool = True
+    ) -> dict[str, Any]:
+        """Validate against the packaged contract and current operator policy."""
         workload = copy.deepcopy(workload)
+        try:
+            from jsonschema import Draft202012Validator
+            from jsonschema.exceptions import SchemaError
+        except ImportError as exc:
+            raise FoundryError("unavailable", "Workload schema validation is unavailable") from exc
+        try:
+            schema = json.loads(
+                importlib.resources.files("missy.repoeval")
+                .joinpath("schemas/workload.schema.json")
+                .read_text(encoding="utf-8")
+            )
+            Draft202012Validator.check_schema(schema)
+        except (OSError, ValueError, SchemaError) as exc:
+            raise FoundryError("unavailable", "Packaged workload schema is unavailable") from exc
+        error = next(Draft202012Validator(schema).iter_errors(workload), None)
+        if error is not None:
+            raise FoundryError("invalid_input", "Workload does not satisfy the packaged schema")
         if workload.get("schema_version") != "1.0":
             raise FoundryError("invalid_input", "Unsupported workload version")
         repo = workload.get("repository", {})
@@ -215,12 +239,15 @@ class FoundryService:
         if sandbox.get("network_policy") not in self.limits.get("network_policies", ("none",)):
             raise FoundryError("policy", "Network policy not approved")
         execution = workload.get("execution", {})
-        for field in ("repetitions", "parallelism", "timeout_seconds"):
+        for field in ("warmups", "repetitions", "parallelism", "timeout_seconds", "max_attempts"):
             amount = execution.get(field)
-            if type(amount) is not int or amount < 1 or amount > self.limits[field]:
+            minimum = 0 if field == "warmups" else 1
+            # Unspecified retry/warmup ceilings grant no extra execution.
+            ceiling = self.limits.get(field, minimum)
+            if type(amount) is not int or amount < minimum or amount > ceiling:
                 raise FoundryError("quota", "Execution envelope outside project ceiling")
         targets = workload.get("providers", [])
-        if not 1 <= len(targets) <= self.limits.get("provider_count", 8):
+        if not 1 <= len(targets) <= self.limits.get("provider_count", 1):
             raise FoundryError("invalid_input", "Provider targets missing or excessive")
         if any(
             not isinstance(t, dict)
@@ -307,6 +334,8 @@ class FoundryService:
             "comparability_key": comparison,
             "state": "planned",
         }
+        if not persist:
+            return plan
         old = self.store.put_once(plan_id, plan)
         if old != plan:
             raise FoundryError("conflict", "Plan ID collision")
@@ -326,15 +355,6 @@ class FoundryService:
             != "plan-" + digest([principal.project_id, sha256_json(plan["workload"])])[:24]
         ):
             raise FoundryError("evidence", "Stored plan identity does not match immutable workload")
-        if (
-            not self.allow_demo_dispatch
-            or self.dispatcher is None
-            or not isinstance(self.store, MemoryStore)
-        ):
-            raise FoundryError(
-                "unavailable",
-                "Live dispatch disabled; only explicitly opted-in single-process demos are supported",
-            )
         # Hold the store-wide lock across check, reservation, submission and
         # terminal update. A second service sharing the store cannot submit twice.
         with self.store.submission_lock:
@@ -349,6 +369,19 @@ class FoundryService:
             if previous["plan_id"] != plan_id:
                 raise FoundryError("conflict", "Idempotency key already used for another plan")
             return self._owned(principal, previous["run_id"])
+        if (
+            not self.allow_demo_dispatch
+            or self.dispatcher is None
+            or not isinstance(self.store, MemoryStore)
+        ):
+            raise FoundryError(
+                "unavailable",
+                "Live dispatch disabled; only explicitly opted-in single-process demos are supported",
+            )
+        # A plan is a proposal, not a permanent grant. Re-check every current
+        # registry/approval/limit immediately before reserving and dispatching.
+        if self._validated_plan(principal, plan["workload"], persist=False) != plan:
+            raise FoundryError("evidence", "Stored plan conflicts with current reviewed workload")
         run_id = "run-" + digest([principal.project_id, plan_id, idempotency_key])[:24]
         # A real production dispatcher must implement a transactionally reconciled
         # outbox. A submit failure leaves a failed record rather than a fake job.

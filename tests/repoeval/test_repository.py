@@ -122,3 +122,72 @@ def test_git_stdout_is_bounded_before_parsing(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner, "MAX_GIT_OUTPUT_BYTES", 32)
     with pytest.raises(ScanRefused, match="output limit"):
         scan_repository(root, sha)
+
+
+def test_checkout_clean_filter_never_executes(tmp_path):
+    root, _, _ = _repo(tmp_path)
+    (root / ".gitattributes").write_text("src/app.py filter=hostile\n")
+    subprocess.run(["git", "-C", str(root), "add", ".gitattributes"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "attributes"], check=True)
+    sha = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    marker = tmp_path / "filter-executed"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "config",
+            "filter.hostile.clean",
+            f"touch {marker}; cat",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "filter.hostile.required", "true"],
+        check=True,
+    )
+    # Identical bytes with a new stat tuple cause status to call the clean
+    # filter. The scanner must neither call status nor transform worktree data.
+    path = root / "src" / "app.py"
+    original = path.read_bytes()
+    path.write_bytes(original)
+    assert scan_repository(root, sha)["repository"]["commit_sha"] == sha
+    assert not marker.exists()
+
+
+def test_replace_ref_cannot_swap_tree_of_approved_commit(tmp_path):
+    root, base, _ = _repo(tmp_path)
+    (root / "src" / "app.py").write_text("print('second commit')\n")
+    subprocess.run(["git", "-C", str(root), "add", "src/app.py"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "second"], check=True)
+    approved = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    # Keep the base index/worktree, but make HEAD point to the approved SHA.
+    # With replacements enabled, rev-parse reports the approved SHA while
+    # ls-tree reads the base tree and would incorrectly accept this checkout.
+    subprocess.run(["git", "-C", str(root), "reset", "--hard", base], check=True)
+    subprocess.run(["git", "-C", str(root), "replace", approved, base], check=True)
+    subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", approved], check=True)
+    with pytest.raises(ScanRefused, match="dirty|committed file content"):
+        scan_repository(root, approved)
+
+
+def test_refuses_local_git_config_includes(tmp_path):
+    root, sha, _ = _repo(tmp_path)
+    include = tmp_path / "included-git-config"
+    include.write_text("[core]\n\tfsmonitor = false\n")
+    subprocess.run(
+        ["git", "-C", str(root), "config", "--local", "include.path", str(include)],
+        check=True,
+    )
+    with pytest.raises(ScanRefused, match="config includes"):
+        scan_repository(root, sha)

@@ -41,6 +41,7 @@ _SECRET_TEXT = re.compile(
 )
 _SAFE_SETTING_KEYS = frozenset({"token_budget", "max_tokens"})
 _FAIL = "Foundry request refused or unavailable; no execution is confirmed"
+_RESPONSE_LIMIT = 1024 * 1024
 
 
 def _open_token_file(path: str) -> int:
@@ -246,7 +247,9 @@ class RepoevalFoundryTool(BaseTool):
             self._valid = True
             if api_available is True and _token_file_valid(token_file):
                 if self._client is None:
-                    self._client = PolicyHTTPClient(category="tool", max_response_bytes=1024 * 1024)
+                    self._client = PolicyHTTPClient(
+                        category="tool", max_response_bytes=_RESPONSE_LIMIT
+                    )
                 self._available = getattr(self._client, "category", None) == "tool"
         except (TypeError, ValueError, AttributeError):
             pass
@@ -376,9 +379,11 @@ class RepoevalFoundryTool(BaseTool):
             token = _read_token(self._token_file)
             headers["Authorization"] = f"Bearer {token}"
             response = (
-                client.get(url, headers=headers, follow_redirects=False)
+                client.get_limited(url, _RESPONSE_LIMIT, headers=headers, follow_redirects=False)
                 if method == "GET"
-                else client.post(url, headers=headers, json=body, follow_redirects=False)
+                else client.post_limited(
+                    url, _RESPONSE_LIMIT, headers=headers, json=body, follow_redirects=False
+                )
             )
             expected_status = 202 if action in ("snapshot", "start", "cancel") else 200
             if response.status_code != expected_status:

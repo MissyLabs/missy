@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import posixpath
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -318,6 +319,85 @@ class PolicyHTTPClient:
             encoding=encoding,
             truncated=truncated,
         )
+
+    def get_limited(self, url: str, max_bytes: int, **kwargs: Any) -> httpx.Response:
+        """Read an entire GET response within a strict body and elapsed-time budget.
+
+        Unlike ``get`` or ``get_capped``, an oversized or compressed body is
+        refused, never returned as a partial success.  Compressed responses are
+        deliberately unsupported: accepting only identity prevents a small
+        wire response from inflating past the application memory limit.
+        """
+        return self._request_limited("GET", url, max_bytes, kwargs)
+
+    def post_limited(self, url: str, max_bytes: int, **kwargs: Any) -> httpx.Response:
+        """POST counterpart of :meth:`get_limited`."""
+        return self._request_limited("POST", url, max_bytes, kwargs)
+
+    def _request_limited(
+        self, method: str, url: str, max_bytes: int, kwargs: dict[str, Any]
+    ) -> httpx.Response:
+        if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 1:
+            raise ValueError("A positive response limit is required")
+        if self.timeout is None:
+            raise ValueError("A finite response deadline is required")
+        # The cap cannot silently override the gateway-wide limit.
+        limit = min(max_bytes, self.max_response_bytes)
+        deadline = time.monotonic() + self.timeout
+        self._check_url(url, method)
+        if time.monotonic() >= deadline:
+            raise httpx.TimeoutException("Response deadline exceeded")
+        safe = self._sanitize_kwargs(kwargs)
+        # A caller may not re-enable automatic redirects or compression.
+        headers = httpx.Headers(safe.get("headers"))
+        headers["Accept-Encoding"] = "identity"
+        safe["headers"] = headers
+        safe["follow_redirects"] = False
+        safe["timeout"] = min(deadline - time.monotonic(), self.timeout)
+        if safe["timeout"] <= 0:
+            raise httpx.TimeoutException("Response deadline exceeded")
+        parts: list[bytes] = []
+        size = 0
+        with self._get_sync_client().stream(method, url, **safe) as response:
+            if time.monotonic() >= deadline:
+                raise httpx.TimeoutException("Response deadline exceeded")
+            if response.headers.get("content-encoding", "identity").lower().strip() != "identity":
+                raise ValueError("Compressed response refused")
+            length = response.headers.get("content-length")
+            if length is not None:
+                try:
+                    declared_length = int(length)
+                except ValueError as exc:
+                    raise ValueError("Invalid response length") from exc
+                if declared_length < 0 or declared_length > limit:
+                    raise ValueError("Response size limit exceeded")
+            # httpcore reads with the timeout from request.extensions on each
+            # socket read. Shrink that timeout as the monotonic budget expires,
+            # rather than allowing a peer to reset it with each tiny chunk.
+            response.request.extensions["timeout"]["read"] = deadline - time.monotonic()
+            if response.request.extensions["timeout"]["read"] <= 0:
+                raise httpx.TimeoutException("Response deadline exceeded")
+            # MockTransport may return an already-buffered response; actual
+            # network transports always provide an unconsumed stream here.
+            chunks = (response.content,) if response.is_stream_consumed else response.iter_raw()
+            for chunk in chunks:
+                if time.monotonic() >= deadline:
+                    raise httpx.TimeoutException("Response deadline exceeded")
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError("Response size limit exceeded")
+                parts.append(chunk)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise httpx.TimeoutException("Response deadline exceeded")
+                response.request.extensions["timeout"]["read"] = remaining
+            if time.monotonic() >= deadline:
+                raise httpx.TimeoutException("Response deadline exceeded")
+            result = httpx.Response(
+                response.status_code, headers=response.headers, content=b"".join(parts)
+            )
+        self._emit_request_event(method, url, result.status_code)
+        return result
 
     # ------------------------------------------------------------------
     # Context manager support

@@ -31,6 +31,16 @@ not point it at an active working tree. It runs bounded Git reads only. Its
 dispatcher. The demo's temporary snapshot/image allowlist is synthetic and
 must never be treated as an operator-approved production inventory.
 
+`missy.repoeval.nomad.plan_job()` produces an unsubmitted Nomad JSON job
+object with capitalized API fields (`TaskGroups`, `Tasks`, `Resources.CPU`,
+`Resources.MemoryMB`, and group `EphemeralDisk.SizeMB`). The bounded
+`timeout_seconds` becomes the task group's `MaxRunDuration` in nanoseconds,
+which is the Nomad-enforced deadline. `FOUNDRY_TIMEOUT_SECONDS` is merely a
+worker hint and is **not** an enforcement mechanism. The plan has zero restart
+and reschedule attempts; capacity snapshots and pool choice are advisory until
+a separately authorized scheduler validates them. No live Nomad registration
+or allocation is performed here.
+
 ## Missy client boundary and gaps
 
 Missy's existing `missy.tools.builtin.repoeval_tools.RepoevalFoundryTool` is

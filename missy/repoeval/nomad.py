@@ -80,10 +80,13 @@ def plan_job(request: JobRequest, pools) -> JobPlan:
     budget = capacity_budget(snapshots)
     pool = select_pool(envelope, snapshots)
     job_id = f"foundry-{request.run_id}"
+    # Use the Nomad API's JSON job shape, not HCL/lowercase task aliases.
+    # MaxRunDuration is enforced by Nomad at the task-group level; the env
+    # value is only information for the worker and cannot enforce a deadline.
     task = {
-        "name": "worker",
-        "driver": "docker",
-        "config": {
+        "Name": "worker",
+        "Driver": "docker",
+        "Config": {
             "image": request.image_digest,
             "readonly_rootfs": True,
             "network_mode": "none",
@@ -91,14 +94,10 @@ def plan_job(request: JobRequest, pools) -> JobPlan:
             "privileged": False,
             "force_pull": True,
         },
-        "resources": {
-            "cpu": envelope.cpu_mhz,
-            "memory": envelope.memory_mb,
-            "disk": envelope.disk_mb,
-        },
-        "kill_timeout": "5s",
-        "kill_signal": "SIGTERM",
-        "env": {"FOUNDRY_TIMEOUT_SECONDS": str(request.timeout_seconds)},
+        "Resources": {"CPU": envelope.cpu_mhz, "MemoryMB": envelope.memory_mb},
+        "KillTimeout": 5 * 1_000_000_000,
+        "KillSignal": "SIGTERM",
+        "Env": {"FOUNDRY_TIMEOUT_SECONDS": str(request.timeout_seconds)},
     }
     job = {
         "ID": job_id,
@@ -112,7 +111,18 @@ def plan_job(request: JobRequest, pools) -> JobPlan:
             {
                 "Name": "worker",
                 "Count": 1,
-                "RestartPolicy": {"Attempts": 0, "Mode": "fail"},
+                "RestartPolicy": {
+                    "Attempts": 0,
+                    "Interval": 60 * 1_000_000_000,
+                    "Delay": 5 * 1_000_000_000,
+                    "Mode": "fail",
+                },
+                "ReschedulePolicy": {
+                    "Attempts": 0,
+                    "Interval": 3600 * 1_000_000_000,
+                    "Unlimited": False,
+                },
+                "MaxRunDuration": request.timeout_seconds * 1_000_000_000,
                 "EphemeralDisk": {"SizeMB": envelope.disk_mb, "Sticky": False, "Migrate": False},
                 "Tasks": [task],
             }
@@ -123,7 +133,5 @@ def plan_job(request: JobRequest, pools) -> JobPlan:
             "repository_commit_sha": request.repository_commit_sha,
             "snapshot_id": request.snapshot_id,
         },
-        "ReschedulePolicy": {"Attempts": 0},
-        "Update": {"MaxParallel": 1, "Canary": 0, "AutoRevert": False},
     }
     return JobPlan(job_id, pool.name, namespace, dc, envelope, job, budget)
