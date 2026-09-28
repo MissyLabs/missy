@@ -3816,6 +3816,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 _capability_mode=msg.metadata.get(
                                     "discord_capability_mode", "discord"
                                 ),
+                                _request_context={
+                                    "author": safe_author_display,
+                                    "author_id": author_id,
+                                    "channel": channel_id,
+                                },
                             ),
                         )
                     except ProviderError as exc:
@@ -3919,6 +3924,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 f"your response. You may want to try again or "
                                 f"adjust your response.",
                                 session_id,
+                                _capability_mode=msg.metadata.get(
+                                    "discord_capability_mode", "discord"
+                                ),
                             )
 
             async def _run_discord() -> None:

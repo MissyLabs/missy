@@ -7,13 +7,16 @@ from __future__ import annotations
 import pytest
 
 from missy.agent.response_guards import (
+    detect_code_hedging,
     detect_explicit_tool_requests,
     detect_fabrication,
     detect_false_capability_denial,
     detect_governed_obs_streaming_tool_request,
+    detect_hedging,
     detect_identity_confusion,
     detect_promise_without_action,
     detect_security_refusal_without_alternative,
+    detect_unfinished_action,
     effective_image_generation_arguments,
     find_image_reproducibility_issue,
     find_unmet_desktop_requests,
@@ -33,6 +36,7 @@ from missy.agent.response_guards import (
     make_capability_denial_retry_prompt,
     make_desktop_request_retry_prompt,
     make_desktop_verification_retry_prompt,
+    make_execution_retry_prompt,
     make_explicit_tool_request_retry_prompt,
     make_fabrication_retry_prompt,
     make_filesystem_verification_retry_prompt,
@@ -50,6 +54,55 @@ from missy.agent.response_guards import (
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
 )
+
+
+class TestExecutionGuards:
+    def test_permission_deferral_requires_action_request_without_tools(self):
+        assert detect_hedging("Shall I run the check?", "Check the server now", [])
+        assert not detect_hedging("Shall I run the check?", "Check the server now", ["shell_exec"])
+        assert not detect_hedging("Shall I run the check?", "Explain how to check the server", [])
+        assert not detect_hedging("Here is the explanation.", "Check the server now", [])
+
+    def test_quotes_and_code_are_not_hedging_claims(self):
+        assert not detect_hedging(
+            "> Shall I run the check?\nNo, that's unnecessary.", "Check server", []
+        )
+        assert not detect_hedging("They wrote `shall I run the check?`", "Check server", [])
+
+    def test_code_hedging_exempts_explicit_script_request(self):
+        shell = "Run this instead:\n```bash\nsystemctl status nginx\n```"
+        assert detect_code_hedging(shell, "Check nginx", [])
+        assert not detect_code_hedging(shell, "Write a shell command to check nginx", [])
+        assert not detect_code_hedging(shell, "Check nginx", ["shell_exec"])
+        assert "Current request:\nCheck nginx" in make_execution_retry_prompt("Check nginx")
+
+    def test_unfinished_only_on_successful_action_without_last_round_error(self):
+        text = "Checked the log. I still need to fix the failing service."
+        assert detect_unfinished_action(text, "Fix the service", ["shell_exec"], [])
+        assert not detect_unfinished_action(text, "Fix the service", ["shell_exec"], ["error"])
+        assert not detect_unfinished_action(text, "Fix the service", [], [])
+        assert not detect_unfinished_action(
+            text, "Explain how to fix the service", ["shell_exec"], []
+        )
+        assert not detect_unfinished_action(
+            "Done. The service is fixed.", "Fix the service", ["shell_exec"], []
+        )
+
+    def test_mixed_drafting_and_execution_intent_keeps_execution(self):
+        offered_command = "```bash\nsystemctl restart nginx\n```"
+        assert detect_code_hedging(offered_command, "Draft a script and deploy it", [])
+        assert detect_code_hedging(offered_command, "Create a report but do not edit files", [])
+        assert not detect_code_hedging(
+            offered_command, "Draft a script to explain how nginx works", []
+        )
+
+    def test_non_string_transport_placeholder_is_not_an_action_request(self):
+        from unittest.mock import MagicMock
+
+        placeholder = MagicMock()
+        assert not detect_hedging("Shall I run that?", placeholder, [])
+        assert not detect_code_hedging("```bash\necho ok\n```", placeholder, [])
+        assert not detect_unfinished_action("I still need to check", placeholder, ["file_read"], [])
 
 
 class TestImageGenerationGuards:
@@ -611,6 +664,23 @@ class TestDetectFabrication:
             )
             is True
         )
+
+    def test_unrelated_file_read_cannot_back_failed_image_generation_claim(self):
+        text = "I generated the image and saved it to disk."
+        assert detect_fabrication(text, ["file_read"]) is True
+        assert detect_fabrication(text, ["image_generate"]) is False
+        for producer in ("vision_capture", "vision_burst", "x11_screenshot"):
+            assert (
+                detect_fabrication("I saved the screenshot to disk using the camera.", [producer])
+                is False
+            )
+        # The failed tool name in an honest first sentence must not excuse
+        # the unsupported success claim in the next sentence (#146).
+        mixed = (
+            "The image_generate call failed because the checkpoint was missing. "
+            "I created the requested image file successfully."
+        )
+        assert detect_fabrication(mixed, ["file_read"])
 
     def test_failed_tool_does_not_count_as_evidence(self):
         assert detect_fabrication("I uploaded the report successfully.", []) is True

@@ -39,6 +39,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from missy.agent.history_framing import HISTORY_POLICY, frame_request, sanitize_summary
 from missy.agent.subscription import AgentSubscription
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import MissyError, ProviderError
@@ -386,6 +387,11 @@ def _rewrite_heredoc_command(
 
     interpreter = m.group(1)
     body = m.group(3)
+
+    # Opaque nested shell scripts are denied by filesystem policy. Do not
+    # write their heredoc bodies to temporary files before that denial.
+    if interpreter.rsplit("/", 1)[-1] in {"bash", "sh", "zsh", "dash"}:
+        return tool_args, None
 
     # SR-2.4: verify the interpreter itself would be permitted before
     # writing anything. The rewritten command is always exactly
@@ -1081,6 +1087,7 @@ class AgentRuntime:
         _explicit_tool_request_input: str | None = None,
         _provider: str | None = None,
         _capability_mode: str | None = None,
+        _request_context: dict | None = None,
     ) -> str:
         """Run one externally ordered turn for *session_id*.
 
@@ -1094,6 +1101,7 @@ class AgentRuntime:
             "_explicit_tool_request_input": _explicit_tool_request_input,
             "_provider": _provider,
             "_capability_mode": _capability_mode,
+            "_request_context": _request_context,
         }
         if session_id is None or _delegation_depth > 0:
             return self._run_once(user_input, **run_kwargs)
@@ -1125,6 +1133,7 @@ class AgentRuntime:
         _explicit_tool_request_input: str | None = None,
         _provider: str | None = None,
         _capability_mode: str | None = None,
+        _request_context: dict | None = None,
     ) -> str:
         """Run the agent with *user_input* and return the response string.
 
@@ -1171,6 +1180,8 @@ class AgentRuntime:
             _capability_mode: Internal immutable per-call capability mode.
                 Used by concurrent transports such as Discord; it never
                 mutates the shared runtime configuration.
+            _request_context: Optional transport labels for this turn, not
+                authorization data or content to persist in conversation history.
 
         Returns:
             The model's reply as a plain string.
@@ -1337,6 +1348,13 @@ class AgentRuntime:
             history,
             session_id=sid,
             attention_query=attention_query,
+        )
+        system_prompt, messages = frame_request(
+            system_prompt,
+            messages,
+            request_id=task_id,
+            request_context=_request_context,
+            current_content=user_input,
         )
 
         # Register system prompt hash for drift detection
@@ -1563,6 +1581,12 @@ class AgentRuntime:
         # Single-turn streaming
         history = self._load_history(sid)
         system_prompt, messages = self._build_context_messages(user_input, history, session_id=sid)
+        system_prompt, messages = frame_request(
+            system_prompt,
+            messages,
+            request_id=str(self._session_mgr.generate_task_id()),
+            current_content=user_input,
+        )
         msg_objects = self._dicts_to_messages(system_prompt, messages)
 
         # Verify system prompt integrity before this provider call --
@@ -1767,13 +1791,16 @@ class AgentRuntime:
         )
         from missy.agent.response_guards import (
             calculator_observations_are_reportable,
+            detect_code_hedging,
             detect_explicit_tool_requests,
             detect_fabrication,
             detect_false_capability_denial,
             detect_governed_obs_streaming_tool_request,
+            detect_hedging,
             detect_identity_confusion,
             detect_promise_without_action,
             detect_security_refusal_without_alternative,
+            detect_unfinished_action,
             effective_image_generation_arguments,
             find_image_reproducibility_issue,
             find_unmet_desktop_requests,
@@ -1792,6 +1819,7 @@ class AgentRuntime:
             make_capability_denial_retry_prompt,
             make_desktop_request_retry_prompt,
             make_desktop_verification_retry_prompt,
+            make_execution_retry_prompt,
             make_explicit_tool_request_retry_prompt,
             make_fabrication_retry_prompt,
             make_filesystem_verification_retry_prompt,
@@ -1950,6 +1978,8 @@ class AgentRuntime:
         _general_fabrication_retries = 0
         _MAX_PROMISE_RETRIES = 1
         _promise_retries = 0
+        _execution_retries = 0
+        _continuation_retries = 0
         _MAX_IDENTITY_CONFUSION_RETRIES = 1
         _identity_confusion_retries = 0
         _MAX_CAPABILITY_DENIAL_RETRIES = 1
@@ -3346,6 +3376,28 @@ class AgentRuntime:
                             detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
 
+                # Only action requests without tool attempts are eligible for
+                # anti-hedging. A genuine refusal or request for clarification
+                # must not be transformed into unsafe execution.
+                if (
+                    _execution_retries < 1
+                    and not tool_names_used
+                    and not is_security_refusal(final_text, _tool_request_input)
+                    and (
+                        detect_hedging(final_text, _tool_request_input, tool_names_used)
+                        or detect_code_hedging(final_text, _tool_request_input, tool_names_used)
+                    )
+                ):
+                    _execution_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": make_execution_retry_prompt(_tool_request_input),
+                        }
+                    )
+                    continue
+
                 if detect_promise_without_action(final_text, successful_tool_names):
                     if _promise_retries < _MAX_PROMISE_RETRIES:
                         _promise_retries += 1
@@ -3375,6 +3427,27 @@ class AgentRuntime:
                             result="deny",
                             detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
+
+                # An explicit admission of remaining work with successful
+                # tools merits one continuation. Do not override the observed
+                # error path below or retry indefinitely after an admission.
+                if _continuation_retries < 1 and detect_unfinished_action(
+                    final_text, _tool_request_input, successful_tool_names, _last_round_errors
+                ):
+                    _continuation_retries += 1
+                    loop_messages.append({"role": "assistant", "content": final_text})
+                    loop_messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your response says requested work remains. If authorized and feasible, "
+                                "continue with the remaining tool calls. Otherwise report precisely "
+                                "what is incomplete and why. Current request:\n"
+                                + _tool_request_input
+                            ),
+                        }
+                    )
+                    continue
 
                 # FX-round2-F4: a request implying a vision/memory
                 # observation (see is_observation_task) answered with
@@ -4474,6 +4547,17 @@ class AgentRuntime:
             pipeline = create_default_pipeline(provider=None, max_tokens=max_tokens)
             result = pipeline.condense(messages, system)
             condensed = result.messages if result and result.messages else messages
+            # These are fallback summaries made from earlier user messages.
+            # Present commands as completed context, never as new work.
+            condensed = [
+                {
+                    **message,
+                    "content": sanitize_summary(str(message.get("content", ""))),
+                }
+                if str(message.get("content", "")).startswith("[Conversation Summary]")
+                else message
+                for message in condensed
+            ]
             logger.debug("F10: condensed context %d -> %d messages.", len(messages), len(condensed))
             return system, condensed
         except Exception:
@@ -4528,7 +4612,8 @@ class AgentRuntime:
                         )
                         if session_summaries:
                             summary_texts = [
-                                getattr(s, "content", str(s)) for s in session_summaries
+                                sanitize_summary(getattr(s, "content", str(s)))
+                                for s in session_summaries
                             ]
                     except Exception:
                         logger.debug("Failed to load summaries", exc_info=True)
@@ -5061,13 +5146,31 @@ class AgentRuntime:
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 limits.append(value)
         total_limit = min(limits) if limits else None
-        return fit_messages(
+        fitted_system, fitted_messages = fit_messages(
             manager,
             system_prompt,
             messages,
             tool_definitions=tools,
             total_limit=total_limit,
         )
+        # Context pruning is allowed to discard history, never the active
+        # request. Silently calling the provider without it is worse than
+        # refusing an impossibly small prompt budget.
+        current_requests = [
+            str(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "user"
+            and "=== CURRENT REQUEST [" in str(message.get("content", ""))
+        ]
+        if current_requests and not any(
+            current_request in str(message.get("content", ""))
+            for current_request in current_requests
+            for message in fitted_messages
+        ):
+            raise ValueError(
+                "Provider context budget cannot preserve the complete current request."
+            )
+        return fitted_system, fitted_messages
 
     def _dicts_to_messages(self, system_prompt: str, message_dicts: list[dict]) -> list[Message]:
         """Convert context-manager message dicts to provider Message objects.
@@ -5903,6 +6006,23 @@ class AgentRuntime:
                 f"Checkpoint {checkpoint_id!r} has corrupted loop_messages; marked FAILED."
             )
 
+        # Older checkpoints predate CURRENT REQUEST framing. Upgrade the
+        # original user turn in place before resuming, not the newest tool
+        # verification message, which is not the user's authorization.
+        if not any(
+            message.get("role") == "user"
+            and "=== CURRENT REQUEST [" in str(message.get("content", ""))
+            for message in loop_messages
+        ):
+            for message in loop_messages:
+                if message.get("role") == "user" and message.get("content") == checkpoint.get(
+                    "prompt"
+                ):
+                    message["content"] = "=== CURRENT REQUEST [id=checkpoint-resume] ===\n" + str(
+                        message.get("content", "")
+                    )
+                    break
+
         sid = checkpoint["session_id"]
         cost_baseline = self._capture_cost_summary(sid)
         original_prompt = checkpoint["prompt"]
@@ -5918,6 +6038,9 @@ class AgentRuntime:
         system_prompt, _unused_messages = self._build_context_messages(
             original_prompt, history=[], session_id=sid
         )
+        # This transcript already carries its original request marker.
+        # Resume is not a new request and must not relabel prior work.
+        system_prompt = HISTORY_POLICY + system_prompt
         if self._drift_detector is not None:
             self._drift_detector.register("system_prompt", system_prompt)
 

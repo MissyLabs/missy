@@ -324,13 +324,10 @@ class TestRewriteHeredocCommandPatterns:
         command = "bash - <<'SCRIPT'\necho hi\nSCRIPT"
         args = {"command": command}
         result, tmppath = _rewrite_heredoc_command(args)
-        new_cmd = result["command"]
-        assert new_cmd.startswith("bash ")
-        assert "<<" not in new_cmd
-        assert tmppath.endswith(".sh")
-        content = Path(tmppath).read_text()
-        assert "echo hi" in content
-        os.unlink(tmppath)
+        # Shell launchers with opaque scripts are policy-denied; their body
+        # must not be written to a temporary file before that denial.
+        assert result == args
+        assert tmppath is None
 
     def test_ruby_heredoc(self):
         command = "ruby - <<'RUBY'\nputs 'world'\nRUBY"

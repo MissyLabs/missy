@@ -124,6 +124,25 @@ _TOOL_EVIDENCE_HINTS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
 def _has_relevant_tool_evidence(claim: str, successful_tools: list[str]) -> bool:
     """Return whether a successful tool is plausibly related to *claim*."""
     claim_words = set(re.findall(r"[a-z0-9]+", claim.casefold()))
+    # A readback/attachment tool cannot prove that a separate image producer
+    # succeeded merely because the final prose says "image".
+    if claim_words & {"image", "photo", "picture", "screenshot"} and re.search(
+        r"(?i)\b(?:generated|created|saved|posted|uploaded|rendered)\b", claim
+    ):
+        normalized_tools = {
+            re.sub(r"[^a-z0-9]+", "_", str(name).casefold()).strip("_") for name in successful_tools
+        }
+        if "image_generate" not in normalized_tools and not normalized_tools.intersection(
+            {
+                "screenshot",
+                "browser_screenshot",
+                "webcam_capture",
+                "vision_capture",
+                "vision_burst",
+                "x11_screenshot",
+            }
+        ):
+            return False
     for tool_name in successful_tools:
         normalized = re.sub(r"[^a-z0-9]+", "_", str(tool_name).casefold()).strip("_")
         for tool_pattern, claim_pattern in _TOOL_EVIDENCE_HINTS:
@@ -255,6 +274,134 @@ def make_promise_retry_prompt(user_input: str = "") -> str:
         "no relevant successful tool call shows it happened. Call the "
         "appropriate tool now to actually do it, rather than describing "
         f"an intention.{anchor}"
+    )
+
+
+# Only enforce execution-style responses when the human actually requested
+# an action. Advice, hypothetical commands, explanations, and requests for a
+# draft script are not authorization to execute anything.
+_ACTION_REQUEST = re.compile(
+    r"(?i)\b(?:please\s+)?(?:run|execute|check|inspect|look up|fetch|search|"
+    r"download|upload|install|deploy|restart|start|stop|update|change|edit|"
+    r"modify|fix|test|verify|create|delete|remove|send|post|save|"
+    r"take (?:a |the )?(?:photo|screenshot))\b"
+)
+_NON_EXECUTION_REQUEST = re.compile(
+    r"(?i)\b(?:how (?:would|can|do|should)|what (?:would|does)|"
+    r"explain|describe|hypothetical|example|sample|draft|write (?:me )?"
+    r"(?:a |the )?(?:script|command|instructions)|don't (?:run|execute)|"
+    r"do not (?:run|execute)|without (?:running|executing))\b"
+)
+_DEFERRED_EXECUTION = re.compile(
+    r"(?i)\b(?:shall I|should I|would you like me to|want me to|"
+    r"if you(?:'d| would)? (?:like|want)(?: me to)?|"
+    r"let me know (?:if|when) (?:you(?:'d| would)? (?:like|want)|"
+    r"I (?:should|can|may))|"
+    r"(?:once|when) you (?:confirm|approve|give (?:me )?the go[- ]ahead)|"
+    r"I(?:'ll| will) wait for (?:your )?(?:approval|confirmation|go[- ]ahead))\b"
+)
+_PURE_ADVICE_REQUEST = re.compile(
+    r"(?is)^\s*(?:please\s+)?(?:how (?:would|can|do|should)|what (?:would|does)|"
+    r"explain|describe|give me (?:a |an )?(?:hypothetical|example|sample))\b"
+)
+
+
+def _is_non_execution_request(user_input: str) -> bool:
+    """Do not let a drafting clause cancel a separate execution request."""
+    if not isinstance(user_input, str):
+        return False
+    if _PURE_ADVICE_REQUEST.search(user_input):
+        return True
+    if re.match(
+        r"(?i)^\s*(?:please\s+)?(?:draft|write)\s+(?:me\s+)?(?:a\s+|the\s+)?"
+        r"(?:shell\s+|bash\s+)?(?:script|command|instructions)\b",
+        user_input,
+    ) and not re.search(
+        r"(?i)\b(?:and|then|also)\s+(?:please\s+)?"
+        r"(?:run|execute|deploy|install|create|save|send|post|start|restart)\b",
+        user_input,
+    ):
+        return True
+    remainder = re.sub(
+        r"(?i)\b(?:draft|write)\s+(?:me\s+)?(?:a\s+|the\s+)?(?:shell\s+|bash\s+)?(?:script|command|instructions)\b",
+        " ",
+        user_input,
+    )
+    return bool(_NON_EXECUTION_REQUEST.search(user_input)) and not bool(
+        _ACTION_REQUEST.search(remainder)
+    )
+
+
+_SHELL_FENCE = re.compile(r"```(?:bash|shell|sh|zsh|console)\s*\n", re.I)
+
+
+def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
+    """Catch permission-seeking instead of execution, without policing advice.
+
+    The caller also exempts a legitimate security refusal. Quoted and fenced
+    material is stripped so reproducing a user's question does not trigger.
+    """
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
+    if (
+        tools_used
+        or not _ACTION_REQUEST.search(user_input)
+        or _is_non_execution_request(user_input)
+    ):
+        return False
+    prose = re.sub(r"```.*?```|`[^`]+`", "", text, flags=re.S)
+    prose = re.sub(r"^[ \t]*>[^\n]*$", "", prose, flags=re.M)
+    return bool(_DEFERRED_EXECUTION.search(prose))
+
+
+def detect_code_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
+    """Catch an offered shell command instead of execution of an action request."""
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
+    return bool(
+        not tools_used
+        and _ACTION_REQUEST.search(user_input)
+        and not _is_non_execution_request(user_input)
+        and _SHELL_FENCE.search(text)
+    )
+
+
+def make_execution_retry_prompt(user_input: str) -> str:
+    """One bounded correction, retaining the human's request and safety rules."""
+    return (
+        "You deferred an action the human requested or showed a command instead of "
+        "executing it. If the request is authorized, call the appropriate tool now; "
+        "do not ask for redundant permission or claim the action happened. If it is "
+        "unsafe, needs missing information, or cannot be performed, explain that "
+        "truthfully instead. Current request:\n" + user_input
+    )
+
+
+_UNFINISHED_ACTION = re.compile(
+    r"(?i)\b(?:still (?:need|have) to|haven't (?:yet )?(?:done|run|checked|"
+    r"created|saved|deployed|installed)|not (?:yet )?(?:done|complete|finished)|"
+    r"next (?:I'll|I will|we need to)|remaining (?:step|task)s? (?:are|is))\b"
+)
+
+
+def detect_unfinished_action(
+    text: str, user_input: str, successful_tools: list[str], last_round_errors: list[str]
+) -> bool:
+    """Request continuation for an admitted unfinished action after success.
+
+    Never use this on a failed last round: the existing truthful-completion
+    guard owns errors and may legitimately report an exhausted failure.
+    Neither a bare tool call nor a prediction from a classifier proves that
+    more execution is possible, so this is deliberately one narrow signal.
+    """
+    if not isinstance(user_input, str) or not isinstance(text, str):
+        return False
+    return bool(
+        successful_tools
+        and not last_round_errors
+        and _ACTION_REQUEST.search(user_input)
+        and not _NON_EXECUTION_REQUEST.search(user_input)
+        and _UNFINISHED_ACTION.search(text)
     )
 
 

@@ -226,7 +226,8 @@ class TestAgentRuntimeRun:
         messages: list[Message] = call_args[0][0]
         system_messages = [m for m in messages if m.role == "system"]
         assert len(system_messages) == 1
-        assert system_messages[0].content.startswith("Custom prompt.")
+        assert system_messages[0].content.startswith("[HISTORY_READ_ONLY]")
+        assert "Custom prompt." in system_messages[0].content
 
     def test_run_includes_user_input_in_messages(self):
         provider = _make_provider()
@@ -240,7 +241,8 @@ class TestAgentRuntimeRun:
         messages: list[Message] = call_args[0][0]
         user_messages = [m for m in messages if m.role == "user"]
         assert len(user_messages) == 1
-        assert user_messages[0].content == "user question here"
+        assert user_messages[0].content.startswith("=== CURRENT REQUEST [")
+        assert user_messages[0].content.endswith("\nuser question here")
 
     def test_run_forwards_temperature(self):
         provider = _make_provider()

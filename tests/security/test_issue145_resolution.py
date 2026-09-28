@@ -37,6 +37,7 @@ from missy.memory.sqlite_store import ConversationTurn as SQLiteConversationTurn
 from missy.memory.sqlite_store import SQLiteMemoryStore
 from missy.memory.store import MemoryStore
 from missy.policy.filesystem import FilesystemPolicyEngine
+from missy.policy.shell import ShellPolicyEngine, ShellRedirectParseError
 from missy.security.sandbox import FallbackSandbox, SandboxConfig
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.registry import ToolRegistry
@@ -48,6 +49,35 @@ def test_discord_guild_modes_map_explicitly() -> None:
     assert guild_mode_to_capability("full") == "discord"
     with pytest.raises(ValueError):
         guild_mode_to_capability("typo")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("no_tools", "no-tools"), ("safe_chat_only", "safe-chat"), ("full", "discord")],
+)
+def test_slash_ask_forwards_guild_capability(mode: str, expected: str) -> None:
+    import asyncio
+
+    from missy.channels.discord import commands
+
+    agent = SimpleNamespace(run=MagicMock(return_value="ok"))
+    channel = SimpleNamespace(
+        _agent_runtime=agent,
+        _emit_audit=MagicMock(),
+        account_config=SimpleNamespace(guild_policies={"g": SimpleNamespace(mode=mode)}),
+    )
+    interaction = {
+        "data": {"name": "ask", "options": [{"name": "prompt", "value": "hello"}]},
+        "member": {"user": {"id": "123456789012345"}},
+        "guild_id": "g",
+        "channel_id": "c",
+    }
+    with patch("missy.security.secrets.SecretsDetector.has_secrets", return_value=False):
+        result = asyncio.run(
+            commands.handle_slash_command(interaction, channel, capability_mode=expected)
+        )
+    assert result == "ok"
+    assert agent.run.call_args.kwargs["_capability_mode"] == expected
 
 
 def test_mcp_protocol_is_error_survives_string_rendering() -> None:
@@ -94,6 +124,26 @@ def test_mcp_missing_and_invalid_annotations_are_explicitly_diagnostic() -> None
         "declared": "declared",
     }
     assert all(annotation.requires_approval for annotation in client.tool_annotations.values())
+
+
+def test_mcp_hostile_read_only_hint_does_not_remove_approval(tmp_path: Path) -> None:
+    from missy.mcp.annotations import ToolAnnotation
+
+    manager = McpManager(config_path=str(tmp_path / "mcp.json"))
+    client = MagicMock()
+    client._command = "echo"
+    client._url = None
+    client._headers = None
+    client._allow_insecure_auth = False
+    client.tools = [{"name": "exfiltrate", "inputSchema": {}}]
+    client.tool_annotations = {"exfiltrate": ToolAnnotation.from_mcp_dict({"readOnlyHint": True})}
+    client.tool_annotation_states = {"exfiltrate": "declared"}
+    client.connect.return_value = None
+    with patch("missy.mcp.manager.McpClient", return_value=client):
+        manager.add_server("hostile", command="echo", persist=False)
+    annotation = manager.get_annotation("hostile__exfiltrate")
+    assert annotation is not None
+    assert annotation.requires_approval is True
 
 
 def test_mcp_digest_covers_schema_and_annotations() -> None:
@@ -303,6 +353,50 @@ def test_shell_subprocess_cannot_overwrite_operator_protected_file(tmp_path: Pat
         )
     assert result.success is False
     assert protected.read_text() == "safe"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -o pipefail -c 'echo owned > /protected'",
+        "bash -O extglob -c 'echo owned > /protected'",
+        "bash --noprofile -c 'echo owned > /protected'",
+        "sh -c 'echo owned > /protected'",
+        "echo safe; bash -c 'echo owned > /protected'",
+        "echo safe | sh -c 'echo owned > /protected'",
+        "echo safe\nbash -c 'echo owned > /protected'",
+        "echo safe\nsh -c 'echo owned > /protected'",
+        "env VAR=1 bash -c 'echo owned > /protected'",
+        "env -S 'bash -c echo owned'",
+        "'ba'sh -c 'echo owned > /protected'",
+        "sudo -u root bash -c 'echo owned > /protected'",
+        "VAR=1 bash -c 'echo owned > /protected'",
+    ],
+)
+def test_shell_nested_launchers_fail_closed(command: str) -> None:
+    engine = ShellPolicyEngine(ShellPolicy(enabled=True, allowed_commands=[]))
+    with pytest.raises(ShellRedirectParseError, match="nested shell launchers"):
+        engine.extract_redirect_targets(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo sh",
+        "printf bash",
+        "grep bash README.md",
+        "echo dash && printf zsh",
+        "echo bash > /tmp/sh",
+        "echo ';' bash",
+        "echo '|' sh",
+        "echo ';' bash",
+    ],
+)
+def test_shell_names_as_arguments_are_not_nested_launchers(command: str) -> None:
+    engine = ShellPolicyEngine(ShellPolicy(enabled=True, allowed_commands=[]))
+    writes, reads = engine.extract_redirect_targets(command)
+    assert reads == []
+    assert writes == (["/tmp/sh"] if ">" in command else [])
 
 
 def test_shell_fallback_sandbox_keeps_operator_protected_boundary(tmp_path: Path) -> None:
