@@ -249,8 +249,12 @@ class DurableFoundryService:
         states = {child["state"] for child in children}
         if row["verified"]:
             state = "verified"
-        elif row["cancel_requested"] and states <= {"cancelled", "reservation_incomplete"}:
-            state = "cancelled"
+        elif row["cancel_requested"] and states <= {
+            "cancelled",
+            "failed",
+            "reservation_incomplete",
+        }:
+            state = "failed" if "failed" in states else "cancelled"
         elif "conflict" in states:
             state = "conflict"
         elif row["cancel_requested"]:
@@ -295,12 +299,77 @@ class DurableFoundryService:
         plan = self._plan(principal, row["plan_id"])
         self._recheck(principal, plan)
         self._reserve_children(principal, row, plan)
-        for child in self._children(row):
-            if self._run(principal, run_id)["cancel_requested"]:
-                return self.run_status(principal, run_id)
+        parallelism = plan["workload"]["execution"]["parallelism"]
+        for _ in self._children(row):
             self._recheck(principal, plan)
+            # Claim one slot and the outbox's irreversible-attempt marker in
+            # the SAME SQLite transaction. A separate count followed by
+            # dispatcher.dispatch() permits concurrent callers to overrun the
+            # reviewed limit, even if each caller individually obeys it.
+            with self.dispatcher.store.transaction() as db:
+                parent = db.execute(
+                    "SELECT verified,cancel_requested FROM coordinator_runs WHERE project_id=? AND run_id=?",
+                    (principal.project_id, run_id),
+                ).fetchone()
+                if parent["verified"] or parent["cancel_requested"]:
+                    break
+                children = self._children(row)
+                records = [
+                    db.execute(
+                        "SELECT * FROM dispatch_outbox WHERE project_id=? AND run_id=?",
+                        (principal.project_id, c["run_id"]),
+                    ).fetchone()
+                    for c in children
+                ]
+                # A conflict may conceal an active scheduler job. Never lend
+                # its slot to a different child without operator resolution.
+                if any(record is not None and record["state"] == "conflict" for record in records):
+                    break
+                occupied = sum(
+                    record is not None
+                    and record["state"] not in {"reserved", "cancelled", "collecting", "failed"}
+                    for record in records
+                )
+                if occupied >= parallelism:
+                    break
+                candidate = next(
+                    (
+                        r
+                        for r in records
+                        if r is not None and r["state"] == "reserved" and not r["cancel_requested"]
+                    ),
+                    None,
+                )
+                if candidate is None:
+                    break
+                job = json.loads(candidate["job_json"])
+                if hashlib.sha256(_json(job).encode()).hexdigest() != candidate["job_hash"]:
+                    raise FoundryError("evidence", "Stored job integrity mismatch")
+                if (
+                    self.dispatcher.authorize(principal.project_id, candidate["run_id"], job)
+                    is not True
+                ):
+                    raise FoundryError("evidence", "Exact job authorization revoked")
+                DurableDispatcher._update(db, candidate, "dispatching")
             try:
-                self.dispatcher.dispatch(principal.project_id, child["run_id"])
+                try:
+                    self.dispatcher.scheduler.submit(candidate["namespace"], job)
+                except Exception:
+                    self.dispatcher._uncertain(
+                        principal.project_id, candidate["run_id"], "dispatching"
+                    )
+                    status = self.dispatcher.status(principal.project_id, candidate["run_id"])
+                    if status["cancel_requested"] and status["state"] not in {
+                        "cancelled",
+                        "conflict",
+                    }:
+                        self.dispatcher._reconcile_after_submit(
+                            principal.project_id, candidate["run_id"]
+                        )
+                else:
+                    self.dispatcher._reconcile_after_submit(
+                        principal.project_id, candidate["run_id"]
+                    )
             except (DispatchError, DispatchConflict) as exc:
                 raise FoundryError("evidence", "Dispatch needs reconciliation") from exc
         return self.run_status(principal, run_id)

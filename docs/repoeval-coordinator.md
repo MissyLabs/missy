@@ -37,6 +37,16 @@ a separate trusted operator calls `dispatch_pending(principal,run_id)`. That
 call rechecks the stored plan before **every** external effect; an expired or
 revoked plan blocks outstanding submissions. Outbox markers are committed
 before scheduler calls; a lost acknowledgement does not trigger replay.
+`dispatch_pending()` claims at most the reviewed `execution.parallelism`
+slots across the parent's children, even when called concurrently or after a
+restart. `dispatching`, `uncertain`, `submitted`, `running`, and cancellation
+with an unresolved stop occupy slots; an outbox conflict blocks further
+dispatch until resolved. Only a reconciled `collecting`, terminal `failed`,
+or `cancelled` child releases capacity. Repeated explicit dispatch calls advance
+reserved children after `reconcile_run()` records scheduler completion; neither
+reconciliation nor a status read silently dispatches new work. Scheduler
+completion is not worker verification. A cancelled parent with terminal failed
+children remains terminal `failed`, not indefinitely `cancel_pending`.
 
 `reconcile_run()` reads exact scheduler observations through the injected
 adapter. `run_status()` reads durable local state but does not initiate

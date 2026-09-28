@@ -45,7 +45,7 @@ class Scheduler:
             self.jobs[(namespace, job_id)] = (job, "stopped")
 
 
-def make_system(tmp_path, *, repetitions=2, providers=2):
+def make_system(tmp_path, *, repetitions=2, providers=2, parallelism=1):
     now = [1000.0]
     allow = [True]
 
@@ -73,7 +73,7 @@ def make_system(tmp_path, *, repetitions=2, providers=2):
             "memory_mb": 2048,
             "disk_mb": 4096,
             "repetitions": repetitions,
-            "parallelism": 1,
+            "parallelism": parallelism,
             "timeout_seconds": 300,
             "network_policies": ("none",),
             "provider_count": providers,
@@ -152,7 +152,7 @@ def make_system(tmp_path, *, repetitions=2, providers=2):
         "execution": {
             "warmups": 0,
             "repetitions": repetitions,
-            "parallelism": 1,
+            "parallelism": parallelism,
             "timeout_seconds": 120,
             "max_attempts": 1,
         },
@@ -188,10 +188,104 @@ def test_reserve_restart_race_and_no_implicit_submit(tmp_path):
     assert restarted.run_status(principal, runs[0]["id"])["state"] == "reserved"
     restarted.dispatch_pending(principal, runs[0]["id"])
     restarted.dispatch_pending(principal, runs[0]["id"])
-    assert scheduler.submissions == 4
+    assert scheduler.submissions == 1
     assert restarted.run_status(principal, runs[0]["id"])["state"] != "verified"
     with pytest.raises(FoundryError):
         restarted.run_status(Principal("outsider", "other", frozenset({"read"})), runs[0]["id"])
+
+
+@pytest.mark.parametrize("parallelism", [1, 2])
+def test_slots_advance_only_after_reconciled_completion(tmp_path, parallelism):
+    construct, scheduler, _, _, principal, spec = make_system(tmp_path, parallelism=parallelism)
+    service = construct()
+    plan = service.benchmark_plan(principal, spec)
+    run = service.benchmark_start(principal, plan["id"], f"parallelism-{parallelism}")
+    run_id = run["id"]
+    for completed in range(4):
+        status = construct().dispatch_pending(principal, run_id)
+        assert scheduler.submissions == min(4, completed + parallelism)
+        assert (
+            sum(
+                c["state"] in {"running", "submitted", "dispatching", "uncertain"}
+                for c in status["children"]
+            )
+            <= parallelism
+        )
+        child = status["children"][completed]
+        assert child["state"] == "running"
+        job, _ = scheduler.jobs[("staging", child["job_id"])]
+        scheduler.jobs[("staging", child["job_id"])] = (job, "complete")
+        # Scheduler completion alone is not a verified benchmark result.
+        assert (
+            construct().reconcile_run(principal, run_id)["children"][completed]["state"]
+            == "collecting"
+        )
+        assert construct().run_status(principal, run_id)["state"] != "verified"
+    final = construct().dispatch_pending(principal, run_id)
+    assert scheduler.submissions == 4
+    assert final["state"] == "collecting"
+
+
+@pytest.mark.parametrize("parallelism", [1, 2])
+def test_concurrent_dispatch_never_exceeds_slots(tmp_path, parallelism):
+    construct, scheduler, _, _, principal, spec = make_system(tmp_path, parallelism=parallelism)
+    service = construct()
+    run = service.benchmark_start(
+        principal, service.benchmark_plan(principal, spec)["id"], "parallel-race"
+    )
+    barrier = threading.Barrier(8)
+
+    def dispatch(_):
+        barrier.wait()
+        return construct().dispatch_pending(principal, run["id"])
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(dispatch, range(8)))
+    assert scheduler.submissions == parallelism
+    assert construct().run_status(principal, run["id"])["state"] == "running"
+
+
+def test_uncertain_child_holds_slot_until_reconciliation(tmp_path):
+    construct, scheduler, _, _, principal, spec = make_system(tmp_path)
+    service = construct()
+    run = service.benchmark_start(
+        principal, service.benchmark_plan(principal, spec)["id"], "uncertain-slots"
+    )
+    scheduler.fail_after_submit = True
+    first = run["children"][0]
+    original_lookup = scheduler.lookup
+    scheduler.lookup = lambda *_: None
+    construct().dispatch_pending(principal, run["id"])
+    assert construct().run_status(principal, run["id"])["children"][0]["state"] == "uncertain"
+    scheduler.fail_after_submit = False
+    construct().dispatch_pending(principal, run["id"])
+    assert scheduler.submissions == 1
+    scheduler.lookup = original_lookup
+    construct().reconcile_run(principal, run["id"])
+    construct().dispatch_pending(principal, run["id"])
+    assert scheduler.submissions == 1
+    job, _ = scheduler.jobs[("staging", first["job_id"])]
+    scheduler.jobs[("staging", first["job_id"])] = (job, "complete")
+    construct().reconcile_run(principal, run["id"])
+    construct().dispatch_pending(principal, run["id"])
+    assert scheduler.submissions == 2
+
+
+def test_failed_child_cancel_restart_is_terminal(tmp_path):
+    construct, scheduler, _, _, principal, spec = make_system(tmp_path)
+    service = construct()
+    run = service.benchmark_start(
+        principal, service.benchmark_plan(principal, spec)["id"], "failed-cancel"
+    )
+    service.dispatch_pending(principal, run["id"])
+    child = run["children"][0]
+    job, _ = scheduler.jobs[("staging", child["job_id"])]
+    scheduler.jobs[("staging", child["job_id"])] = (job, "failed")
+    assert service.reconcile_run(principal, run["id"])["state"] == "failed"
+    assert service.run_cancel(principal, run["id"])["state"] == "failed"
+    assert construct().run_status(principal, run["id"])["state"] == "failed"
+    assert construct().reconcile_run(principal, run["id"])["state"] == "failed"
+    assert scheduler.submissions == 1
 
 
 def test_uncertain_submit_never_replays_across_restart(tmp_path):
