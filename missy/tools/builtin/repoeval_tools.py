@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import ipaddress
 import json
 import os
@@ -53,6 +54,15 @@ _REASONS = frozenset(COMPARABILITY_PATHS) | {
     "claimed_key_mismatch",
     "missing_or_invalid_comparability_key",
 }
+
+
+def _identity_digest(value: Any) -> str:
+    """Coordinator identity encoding, independent of the untrusted reply."""
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode()
+    ).hexdigest()
 
 
 def _open_token_file(path: str) -> int:
@@ -358,6 +368,73 @@ class RepoevalFoundryTool(BaseTool):
             )
         )
 
+    def _reserved_start_ack(self, result: dict[str, Any], plan_id: str, key: str) -> bool:
+        """Recognize only this plan/key's complete, inert coordinator reservation.
+
+        HTTP 202 is not evidence that the scheduler saw a job. The expected
+        parent and child identities are computed independently of the reply.
+        """
+        plan = self._plans[plan_id]
+        execution = plan["workload"].get("execution")
+        providers = plan["workload"].get("providers")
+        if not isinstance(execution, dict) or not isinstance(providers, list):
+            return False
+        repetitions = execution.get("repetitions")
+        if (
+            type(repetitions) is not int
+            or not 1 <= repetitions <= 32
+            or not 1 <= len(providers) <= 8
+        ):
+            return False
+        expected_run = "run-" + _identity_digest([self._project, plan_id, key])[:24]
+        children = result.get("children")
+        required = result.get("required_artifacts")
+        artifact_policy = plan["workload"].get("artifacts")
+        if (
+            set(result)
+            != {"id", "project_id", "plan_id", "state", "job_id", "children", "required_artifacts"}
+            or result["id"] != expected_run
+            or result["plan_id"] != plan_id
+            or result["state"] != "reserved"
+            or result["job_id"] is not None
+            or not isinstance(children, list)
+            or len(children) != len(providers) * repetitions
+            or len(children) > 256
+            or not isinstance(required, list)
+            or len(required) > 32
+            or any(not isinstance(kind, str) or not _KIND.fullmatch(kind) for kind in required)
+            or len(set(required)) != len(required)
+            or (
+                isinstance(artifact_policy, dict)
+                and required != artifact_policy.get("required_kinds")
+            )
+        ):
+            return False
+        expected = {(i, r) for i in range(len(providers)) for r in range(repetitions)}
+        observed = set()
+        for child in children:
+            if not isinstance(child, dict) or set(child) != {
+                "run_id",
+                "provider_index",
+                "repetition",
+                "state",
+                "job_id",
+            }:
+                return False
+            i, r = child["provider_index"], child["repetition"]
+            if (
+                type(i) is not int
+                or type(r) is not int
+                or (i, r) not in expected
+                or (i, r) in observed
+                or child["run_id"] != "run-" + _identity_digest([expected_run, i, r])[:24]
+                or child["state"] != "reserved"
+                or child["job_id"] != f"foundry-{child['run_id']}"
+            ):
+                return False
+            observed.add((i, r))
+        return observed == expected
+
     def _read_contract(self, action: str, result: dict[str, Any], args: dict[str, Any]) -> bool:
         """Validate bounded read identities. Never infer server evidence from a 200."""
         try:
@@ -612,9 +689,16 @@ class RepoevalFoundryTool(BaseTool):
                     action == "start"
                     and (
                         result.get("plan_id") != kwargs["plan_id"]
-                        or result.get("state") != "submitted"
-                        or not isinstance(result.get("job_id"), str)
-                        or not result["job_id"]
+                        or not (
+                            self._reserved_start_ack(
+                                result, kwargs["plan_id"], kwargs["idempotency_key"]
+                            )
+                            if result.get("state") == "reserved"
+                            else result.get("state") == "submitted"
+                            and isinstance(result.get("job_id"), str)
+                            and bool(_ID.fullmatch(result["job_id"]))
+                            and result["job_id"] not in (".", "..")
+                        )
                     )
                 )
                 or (

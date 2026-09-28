@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 
 import httpx
@@ -10,6 +11,7 @@ import pytest
 from missy.gateway.client import PolicyHTTPClient
 from missy.tools.builtin.repoeval_tools import (
     RepoevalFoundryTool,
+    _identity_digest,
     _no_secrets,
     _safe,
     _token_file_valid,
@@ -446,6 +448,133 @@ def test_start_requires_explicit_approval_and_reuses_idempotency_key():
     assert started.success and started.output["acknowledged"]
     assert started.output["execution_complete"] is False
     assert client.calls[-1][2]["headers"]["Idempotency-Key"] == "benchmark-0001"
+
+
+def reserved_ack(project="alpha", plan_id="plan-a", key="benchmark-0001"):
+    run = "run-" + _identity_digest([project, plan_id, key])[:24]
+    return {
+        "id": run,
+        "plan_id": plan_id,
+        "state": "reserved",
+        "job_id": None,
+        "required_artifacts": ["response", "validator-report"],
+        "children": [
+            {
+                "run_id": "run-" + _identity_digest([run, 0, 0])[:24],
+                "provider_index": 0,
+                "repetition": 0,
+                "state": "reserved",
+                "job_id": "foundry-run-" + _identity_digest([run, 0, 0])[:24],
+            }
+        ],
+    }
+
+
+def test_reserved_start_ack_is_inert_and_same_key_replay_is_same_identity():
+    instance, client = tool()
+    plan(instance, client)
+    ack = reserved_ack()
+    for _ in range(2):
+        client.responses.append(response(copy.deepcopy(ack), status=202))
+        started = instance.execute(
+            action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        )
+        assert started.success and started.output == {
+            "acknowledged": True,
+            "execution_complete": False,
+            "resource": {"project_id": "alpha", **ack},
+        }
+    assert [call[2]["headers"]["Idempotency-Key"] for call in client.calls[-2:]] == [
+        "benchmark-0001",
+        "benchmark-0001",
+    ]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"state": "submitted", "job_id": None},
+        {"state": "verified", "job_id": None},
+        {"state": "running", "job_id": None},
+        {"state": "reserved", "job_id": "fake-job"},
+        {"state": "reserved", "id": "run-attacker"},
+        {"state": "reserved", "plan_id": "plan-b"},
+        {"project_id": "beta"},
+        {"children": []},
+        {"children": "not-children"},
+        {
+            "children": [
+                {
+                    "run_id": "run-other",
+                    "provider_index": 0,
+                    "repetition": 0,
+                    "state": "reserved",
+                    "job_id": "foundry-run-other",
+                }
+            ]
+        },
+        {
+            "children": [
+                {
+                    "run_id": "run-other",
+                    "provider_index": 0,
+                    "repetition": 0,
+                    "state": "submitted",
+                    "job_id": "job-a",
+                }
+            ]
+        },
+        {
+            "children": [
+                {
+                    "run_id": "run-other",
+                    "provider_index": 0,
+                    "repetition": 0,
+                    "state": "reserved",
+                    "job_id": None,
+                }
+            ]
+        },
+        {
+            "children": [
+                {
+                    "run_id": "run-other",
+                    "provider_index": True,
+                    "repetition": 0,
+                    "state": "reserved",
+                    "job_id": None,
+                }
+            ]
+        },
+        {"required_artifacts": ["https://evil.example"]},
+        {"required_artifacts": ["response", "response"]},
+        {"execution_complete": True},
+    ],
+)
+def test_reserved_start_refuses_false_or_malformed_ack(change):
+    instance, client = tool()
+    plan(instance, client)
+    ack = reserved_ack()
+    ack.update(change)
+    client.responses.append(response(ack, status=202))
+    denied = instance.execute(
+        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+    )
+    assert not denied.success and denied.output is None
+
+
+def test_reserved_start_rejects_cross_project_and_other_key_replay():
+    instance, client = tool()
+    plan(instance, client)
+    for remote_project, remote_ack, request_key in (
+        ("beta", reserved_ack(), "benchmark-0001"),
+        ("alpha", reserved_ack(project="beta"), "benchmark-0001"),
+        ("alpha", reserved_ack(), "benchmark-0002"),
+    ):
+        client.responses.append(response(remote_ack, status=202, project=remote_project))
+        assert not instance.execute(
+            action="start", plan_id="plan-a", idempotency_key=request_key, self_approve=True
+        ).success
 
 
 def test_unknown_actions_arguments_and_capabilities_cannot_make_requests():

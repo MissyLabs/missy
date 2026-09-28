@@ -94,7 +94,7 @@ Action arguments (all other arguments refused):
 | `list` | none | Read project repository IDs before any scoped scan or plan. |
 | `plan` | `workload` | Pinned commit/image, registered repository, and bounded execution; response must contain required server staging placement/policy evidence. |
 | `snapshot` | `repository_id`, `commit_sha`, `self_approve: true`, `idempotency_key` | Bounded project-registered snapshot **request** at immutable SHA; acknowledgement is not a completed scan or verified snapshot. |
-| `start` | `plan_id`, `self_approve: true`, `idempotency_key` | Requires a previously observed server-reviewed staging plan. A compatible response is only submission acknowledgement, not completion. |
+| `start` | `plan_id`, `self_approve: true`, `idempotency_key` | Requires a previously observed server-reviewed staging plan. A verified `reserved` response acknowledges only durable reservation, not scheduler submission or completion; a valid legacy `submitted` response acknowledges submission, not completion. |
 | `status` | `resource_type: run|snapshot`, `resource_id` | Status without assuming a submitted request succeeded. |
 | `compare` | `run_ids` (2..16 unique) | Fixed POST `/compare`; verified run manifests, `project_id`, stable `comparison_id`, exact run IDs, bounded pairwise comparability and reasons. |
 | `artifacts` | `run_id` | Fixed GET `/runs/{run_id}/artifacts`; verified run and trusted independently cleared, digest-checked bytes before bounded metadata only. No raw bytes or URI. |
@@ -107,9 +107,17 @@ egress, budget, audit, or platform policy. Mutation responses require explicit
 acknowledgement, matching project identity and resource evidence. Snapshot
 responses saying `requested` are not proof of execution. Start fails closed
 without the required reviewed plan. No live backend success is established by
-this client. If a request errors or a response lacks identity,
-the outcome remains **unknown** and the same request must not be retried under
-a new idempotency key; read status first. API response bodies and exceptions
+this client. If a request errors or a response lacks identity, the outcome
+remains **unknown** and the same request must not be retried under a new
+idempotency key; read status first. The client reports uncertain mutation
+rather than inventing execution. The
+coordinator's HTTP 202 `reserved` start must carry the exact project and plan,
+idempotency-key-derived parent ID, null parent job ID, and a bounded complete
+set of uniquely indexed reserved children with derived IDs and preassigned
+exact job IDs. Reserved children have not been submitted to the scheduler.
+This evidence does not claim dispatch. Legacy `submitted` with a nonempty valid
+job ID remains accepted, but neither form marks `execution_complete` true.
+API response bodies and exceptions
 are not echoed as error text. Metadata output is bounded and sensitive keys
 and credential-looking strings and URIs are redacted. Exact credential echoes
 anywhere in a response are refused, even under innocuous keys. Returned URIs are
