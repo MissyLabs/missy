@@ -197,9 +197,12 @@ def test_root_and_api_routes_both_match_foundry_contract():
 def test_project_route_identity_rejects_traversal_or_repository_path(project_id):
     client = FakeClient()
     instance = RepoevalFoundryTool(
-        base_url="https://foundry.example/api", project_id=project_id,
-        allowed_hosts=["foundry.example"], http_client=client,
-        api_available=True, token_file=TOKEN_PATH,
+        base_url="https://foundry.example/api",
+        project_id=project_id,
+        allowed_hosts=["foundry.example"],
+        http_client=client,
+        api_available=True,
+        token_file=TOKEN_PATH,
     )
     assert not instance.registration_ready
     assert not instance.execute(action="list").success
@@ -280,8 +283,13 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
     }
     client.responses.append(
         response(
-            {"id": "snap-1", "repository_id": "MissyLabs/missy", "commit_sha": SHA,
-             "state": "requested"}, status=202
+            {
+                "id": "snap-1",
+                "repository_id": "MissyLabs/missy",
+                "commit_sha": SHA,
+                "state": "requested",
+            },
+            status=202,
         )
     )
     assert instance.execute(**request).success
@@ -292,7 +300,9 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
     client.responses.append(response({"id": "plan-a", "state": "planned", "workload": candidate}))
     assert "lacks reviewed" in instance.execute(action="plan", workload=candidate).error
     assert client.calls[-1][1] == "https://foundry.example/api/projects/alpha/benchmark/plan"
-    assert client.calls[-1][2]["json"]["workload"]["repository"]["repository_id"] == "MissyLabs/missy"
+    assert (
+        client.calls[-1][2]["json"]["workload"]["repository"]["repository_id"] == "MissyLabs/missy"
+    )
     count = len(client.calls)
     for action, args in (
         ("status", {"resource_type": "snapshot", "resource_id": "MissyLabs/missy"}),
@@ -300,8 +310,14 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
         ("status", {"resource_type": "snapshot", "resource_id": "%2e%2e"}),
         ("cancel", {"run_id": "MissyLabs/missy", "idempotency_key": "cancel-test-01"}),
         ("cancel", {"run_id": "..", "idempotency_key": "cancel-test-01"}),
-        ("start", {"plan_id": "MissyLabs/missy", "self_approve": True,
-                   "idempotency_key": "start-test-01"}),
+        (
+            "start",
+            {
+                "plan_id": "MissyLabs/missy",
+                "self_approve": True,
+                "idempotency_key": "start-test-01",
+            },
+        ),
     ):
         assert not instance.execute(action=action, **args).success
     assert len(client.calls) == count
@@ -309,16 +325,28 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
 
 @pytest.mark.parametrize(
     "malicious",
-    ["../repo", "owner/../repo", "owner//repo", "owner/repo/extra", "owner/%2e%2e",
-     "owner%2frepo", "https://host/owner/repo", "owner\\repo", "owner/repo?x=y"],
+    [
+        "../repo",
+        "owner/../repo",
+        "owner//repo",
+        "owner/repo/extra",
+        "owner/%2e%2e",
+        "owner%2frepo",
+        "https://host/owner/repo",
+        "owner\\repo",
+        "owner/repo?x=y",
+    ],
 )
 def test_invalid_repository_ids_fail_before_snapshot_or_plan_request(malicious):
     instance, client = tool()
     list_repos(instance, client)
     count = len(client.calls)
     assert not instance.execute(
-        action="snapshot", repository_id=malicious, commit_sha=SHA,
-        self_approve=True, idempotency_key="invalid-repo-01",
+        action="snapshot",
+        repository_id=malicious,
+        commit_sha=SHA,
+        self_approve=True,
+        idempotency_key="invalid-repo-01",
     ).success
     candidate = workload()
     candidate["repository"]["repository_id"] = malicious
