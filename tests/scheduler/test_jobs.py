@@ -81,6 +81,13 @@ class TestScheduledJobToDict:
             "last_cost_usd",
             "total_cost_usd",
             "last_duration_seconds",
+            "execution_target",
+            "nomad_request",
+            "nomad_overlap_policy",
+            "last_nomad_job_id",
+            "last_nomad_evaluation_id",
+            "nomad_queued_runs",
+            "nomad_runs",
         }
         assert expected_keys == set(d.keys())
 

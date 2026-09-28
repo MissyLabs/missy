@@ -217,6 +217,27 @@ Because the job runs through the standard `AgentRuntime`, it is subject to
 all the same subsystem initialisation and policy enforcement as an interactive
 `missy ask` command.
 
+### Scheduled Nomad batch jobs
+
+The `nomad_schedule` tool creates scheduler records with
+`execution_target: nomad` and a validated structured batch request. Each
+firing performs fresh discovery, placement, validation, and exact planning,
+then records distinct schedule, plan, Nomad job, evaluation, submission, and
+completion metadata in `nomad_runs` (the newest 100 records are retained).
+It does not run the stored text through `AgentRuntime` or turn it into shell
+input.
+
+Overlap behavior is explicit:
+
+- `skip` records that an active prior run prevented a submission.
+- `queue` records a durable queued-run count for a later firing.
+- `replace` verifies ownership and cancels the prior run before submitting.
+- `allow` permits a new run, still bounded by global Nomad concurrency.
+
+Pausing the Missy schedule prevents future submissions and leaves already
+submitted Nomad jobs unchanged. See [Nomad Workload Orchestration](nomad.md)
+for configuration, ownership, and result semantics.
+
 ---
 
 ## Policy Enforcement for Scheduled Jobs

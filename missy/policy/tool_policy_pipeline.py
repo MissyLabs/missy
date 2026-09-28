@@ -31,6 +31,8 @@ MISSY_SAFE_CHAT_TOOLS: tuple[str, ...] = (
     "x11_window_list",
     "atspi_get_tree",
     "atspi_get_text",
+    "nomad_discover",
+    "nomad_recommend_placement",
 )
 
 # FX-round2-F3 (2026-07, superseded below): a prior pass deliberately
@@ -157,6 +159,21 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     "rag_query",
     "graph_query",
     "delegate_task",
+    # Nomad workload orchestration is exposed to the owner-controlled Discord
+    # surface, but every mutation still requires configured scope, exact-plan
+    # optimistic concurrency, and dual local/remote ownership proof.
+    "nomad_discover",
+    "nomad_recommend_placement",
+    "nomad_plan_job",
+    "nomad_submit_job",
+    "nomad_job_status",
+    "nomad_job_result",
+    "nomad_job_action",
+    "nomad_plan_scale",
+    "nomad_offload_task",
+    "nomad_benchmark",
+    "nomad_reconcile",
+    "nomad_schedule",
     # Desktop/GUI/OBS/VTube control (see the FX-round2-F3 note above):
     # this specific bot's desktop_*/x11_*/atspi_* tools were purpose-built
     # for exactly this Discord-driven use case, gated by their own
@@ -224,6 +241,7 @@ DEFAULT_TOOL_GROUPS: dict[str, tuple[str, ...]] = {
     "video": ("video_generate", "video_edit"),
     "memory": ("memory_search", "memory_describe", "memory_expand"),
     "incus": tuple(name for name in MISSY_DISCORD_TOOLS if name.startswith("incus_")),
+    "nomad": tuple(name for name in MISSY_DISCORD_TOOLS if name.startswith("nomad_")),
     "vision": tuple(name for name in MISSY_DISCORD_TOOLS if name.startswith("vision_")),
     "desktop": (
         "browser_get_content",

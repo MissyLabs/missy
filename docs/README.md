@@ -17,7 +17,8 @@
 | Guide | Description |
 |---|---|
 | [Architecture](architecture.md) | System design, data flow, module dependencies |
-| [Nomad Agent Stories](nomad-agent-stories.md) | Proposed goals and acceptance criteria for Nomad workload orchestration |
+| [Nomad](nomad.md) | Secure configuration and operation of Nomad workloads, offloads, schedules, and benchmarks |
+| [Nomad Agent Stories](nomad-agent-stories.md) | Goals and acceptance criteria for Nomad workload orchestration |
 | [Security](security.md) | Security policy, hardening guide, vulnerability reporting |
 | [Threat Model](threat-model.md) | Attack vectors and mitigations |
 | [Memory & Persistence](memory-and-persistence.md) | Conversation memory, learnings, graph memory, vector search |

@@ -1,8 +1,8 @@
 # Nomad Agent Stories
 
-This document defines the intended outcomes for adding Nomad support to Missy.
-It is a product contract for review before implementation, not a promise that
-the capabilities described below already exist.
+This document defines the intended outcomes for Missy's Nomad support. It is
+the product and acceptance contract for the implementation described in
+[Nomad Workload Orchestration](nomad.md).
 
 ## Product Goal
 
@@ -367,10 +367,10 @@ Each stage should include unit tests with a fake Nomad API, policy-denial tests,
 and integration tests against an isolated namespace before live workload use.
 Destructive lifecycle tests must use disposable jobs created by the test run.
 
-## Decisions to Confirm Before Implementation
+## Operator Decisions Required Before Live Mutation
 
-1. Which ACL policy will the completed Missy identity use: `coadmin` or the
-   narrower `agent` workload policy?
+1. The completed bundle uses the owner-selected `coadmin` ACL policy. This is
+   a technical ceiling only and does not widen Missy's application policy.
 2. Which namespaces, node pools, and datacenters are owner-authorized defaults,
    and which must always be stated by the user?
 3. Which container registries and image-signing or image-approval rules are
