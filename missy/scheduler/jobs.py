@@ -12,6 +12,8 @@ from typing import Any
 # deliberately excluded -- it's a channel-specific mode, not appropriate
 # for an unattended scheduler run.
 VALID_CAPABILITY_MODES: tuple[str, ...] = ("full", "safe-chat", "no-tools")
+VALID_EXECUTION_TARGETS: tuple[str, ...] = ("agent", "nomad")
+VALID_NOMAD_OVERLAP_POLICIES: tuple[str, ...] = ("skip", "queue", "allow", "replace")
 VALID_RETRY_CATEGORIES: frozenset[str] = frozenset(
     {"network", "timeout", "rate_limit", "provider_error", "policy_denied", "validation", "unknown"}
 )
@@ -122,6 +124,18 @@ class ScheduledJob:
     capability_mode: str = "safe-chat"
 
     # ------------------------------------------------------------------
+    # Execution target. Legacy jobs run an AgentRuntime; Nomad schedules
+    # submit a freshly discovered/planned batch job on each firing.
+    # ------------------------------------------------------------------
+    execution_target: str = "agent"
+    nomad_request: dict[str, Any] | None = None
+    nomad_overlap_policy: str = "skip"
+    last_nomad_job_id: str = ""
+    last_nomad_evaluation_id: str = ""
+    nomad_queued_runs: int = 0
+    nomad_runs: list[dict[str, Any]] = field(default_factory=list)
+
+    # ------------------------------------------------------------------
     # Cross-process merge stamp (SCHED-01). Bumped on every *configuration*
     # change (add/pause/resume/edit) -- never on a run -- so that when two
     # processes (the gateway and a `missy schedule ...` CLI invocation) both
@@ -145,6 +159,12 @@ class ScheduledJob:
         if unknown:
             raise ValueError(f"Unknown scheduler retry category: {', '.join(unknown)}")
         self.retry_on = normalized
+        if self.execution_target not in VALID_EXECUTION_TARGETS:
+            raise ValueError(f"Unknown scheduler execution target: {self.execution_target}")
+        if self.nomad_overlap_policy not in VALID_NOMAD_OVERLAP_POLICIES:
+            raise ValueError(f"Unknown Nomad overlap policy: {self.nomad_overlap_policy}")
+        if self.execution_target == "nomad" and not isinstance(self.nomad_request, dict):
+            raise ValueError("Nomad scheduled jobs require a structured nomad_request.")
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -239,6 +259,13 @@ class ScheduledJob:
             "timezone": self.timezone,
             # Capability mode
             "capability_mode": self.capability_mode,
+            "execution_target": self.execution_target,
+            "nomad_request": self.nomad_request,
+            "nomad_overlap_policy": self.nomad_overlap_policy,
+            "last_nomad_job_id": self.last_nomad_job_id,
+            "last_nomad_evaluation_id": self.last_nomad_evaluation_id,
+            "nomad_queued_runs": self.nomad_queued_runs,
+            "nomad_runs": self.nomad_runs[-100:],
             # Merge stamp + run traceability
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "last_session_id": self.last_session_id,
@@ -316,6 +343,28 @@ class ScheduledJob:
                 cm
                 if (cm := str(data.get("capability_mode", "safe-chat"))) in VALID_CAPABILITY_MODES
                 else "safe-chat"
+            ),
+            execution_target=(
+                target
+                if (target := str(data.get("execution_target", "agent"))) in VALID_EXECUTION_TARGETS
+                else "agent"
+            ),
+            nomad_request=(
+                dict(data["nomad_request"]) if isinstance(data.get("nomad_request"), dict) else None
+            ),
+            nomad_overlap_policy=(
+                overlap
+                if (overlap := str(data.get("nomad_overlap_policy", "skip")))
+                in VALID_NOMAD_OVERLAP_POLICIES
+                else "skip"
+            ),
+            last_nomad_job_id=str(data.get("last_nomad_job_id", "") or ""),
+            last_nomad_evaluation_id=str(data.get("last_nomad_evaluation_id", "") or ""),
+            nomad_queued_runs=max(0, int(data.get("nomad_queued_runs", 0) or 0)),
+            nomad_runs=(
+                [dict(item) for item in data.get("nomad_runs", [])[-100:] if isinstance(item, dict)]
+                if isinstance(data.get("nomad_runs"), list)
+                else []
             ),
             updated_at=_parse_dt(data.get("updated_at")),
             last_session_id=str(data.get("last_session_id", "") or ""),

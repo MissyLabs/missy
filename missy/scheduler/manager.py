@@ -18,6 +18,7 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import logging
 import os
@@ -33,7 +34,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from missy.core.events import AuditEvent, event_bus
 from missy.core.exceptions import SchedulerError
-from missy.scheduler.jobs import VALID_CAPABILITY_MODES, ScheduledJob, classify_retry_error
+from missy.scheduler.jobs import (
+    VALID_CAPABILITY_MODES,
+    VALID_EXECUTION_TARGETS,
+    VALID_NOMAD_OVERLAP_POLICIES,
+    ScheduledJob,
+    classify_retry_error,
+)
 from missy.scheduler.parser import parse_schedule
 
 logger = logging.getLogger(__name__)
@@ -134,6 +141,9 @@ class SchedulerManager:
         "active_hours",
         "timezone",
         "capability_mode",
+        "execution_target",
+        "nomad_request",
+        "nomad_overlap_policy",
         "updated_at",
     )
 
@@ -149,6 +159,10 @@ class SchedulerManager:
         "last_cost_usd",
         "total_cost_usd",
         "last_duration_seconds",
+        "last_nomad_job_id",
+        "last_nomad_evaluation_id",
+        "nomad_queued_runs",
+        "nomad_runs",
     )
 
     def __init__(
@@ -161,11 +175,13 @@ class SchedulerManager:
         misfire_grace_seconds: int = 300,
         reconcile_interval_seconds: int = 30,
         default_feature_kwargs: dict[str, Any] | None = None,
+        nomad_config: Any | None = None,
     ) -> None:
         self.jobs_file = Path(jobs_file).expanduser()
         self._default_max_spend_usd = default_max_spend_usd
         self._default_tool_policy_kwargs = default_tool_policy_kwargs or {}
         self._default_feature_kwargs = default_feature_kwargs or {}
+        self._nomad_config = nomad_config
         self._max_jobs = max_jobs
         self._default_active_hours = default_active_hours or ""
         self._reconcile_interval_seconds = max(0, int(reconcile_interval_seconds))
@@ -334,6 +350,9 @@ class SchedulerManager:
         active_hours: str = "",
         timezone: str = "",
         capability_mode: str = "safe-chat",
+        execution_target: str = "agent",
+        nomad_request: dict[str, Any] | None = None,
+        nomad_overlap_policy: str = "skip",
     ) -> ScheduledJob:
         """Create a new job, persist it, and register it with APScheduler.
 
@@ -395,6 +414,20 @@ class SchedulerManager:
             raise ValueError(
                 f"capability_mode must be one of {VALID_CAPABILITY_MODES}, got {capability_mode!r}."
             )
+        if execution_target not in VALID_EXECUTION_TARGETS:
+            raise ValueError(
+                f"execution_target must be one of {VALID_EXECUTION_TARGETS}, got {execution_target!r}."
+            )
+        if nomad_overlap_policy not in VALID_NOMAD_OVERLAP_POLICIES:
+            raise ValueError(
+                "nomad_overlap_policy must be one of "
+                f"{VALID_NOMAD_OVERLAP_POLICIES}, got {nomad_overlap_policy!r}."
+            )
+        if execution_target == "nomad":
+            if not isinstance(nomad_request, dict):
+                raise ValueError("Nomad scheduled jobs require a structured nomad_request.")
+            if str(nomad_request.get("job_type", "batch")).lower() != "batch":
+                raise ValueError("Scheduled Nomad offload currently requires job_type='batch'.")
 
         # Validate task length to prevent excessive token usage / cost.
         _MAX_TASK_LENGTH = 50_000
@@ -428,6 +461,9 @@ class SchedulerManager:
             active_hours=active_hours,
             timezone=timezone,
             capability_mode=capability_mode,
+            execution_target=execution_target,
+            nomad_request=copy.deepcopy(nomad_request),
+            nomad_overlap_policy=nomad_overlap_policy,
             updated_at=datetime.now(tz=UTC),
         )
         with self._lock:
@@ -451,6 +487,8 @@ class SchedulerManager:
                 "schedule": schedule,
                 "provider": provider,
                 "capability_mode": capability_mode,
+                "execution_target": execution_target,
+                "nomad_overlap_policy": nomad_overlap_policy,
             },
         )
         return job
@@ -668,6 +706,142 @@ class SchedulerManager:
     # Internal execution
     # ------------------------------------------------------------------
 
+    def _run_nomad_job(self, job: ScheduledJob) -> str:
+        """Plan and submit one fresh batch execution for a Nomad schedule."""
+        if self._nomad_config is None or not getattr(self._nomad_config, "enabled", False):
+            raise RuntimeError("Scheduled Nomad execution is disabled or not configured.")
+        from missy.nomad.manager import NomadManager
+
+        manager = NomadManager(self._nomad_config)
+        request = copy.deepcopy(job.nomad_request or {})
+        request["job_type"] = "batch"
+        namespace = str(request.get("namespace") or self._nomad_config.default_namespace)
+        fired_at = datetime.now(tz=UTC).isoformat()
+        run_number = job.run_count + 1
+
+        if job.last_nomad_job_id and job.nomad_overlap_policy != "allow":
+            previous_active = False
+            try:
+                previous = manager.status(namespace, job.last_nomad_job_id)
+                statuses = {
+                    str(item.get("client_status") or "").lower()
+                    for item in previous.get("allocations") or []
+                }
+                previous_active = not statuses or not statuses.issubset(
+                    {"complete", "failed", "lost"}
+                )
+                previous_state = manager._state_from_status(previous)
+                for recorded in reversed(job.nomad_runs):
+                    if recorded.get("nomad_job_id") == job.last_nomad_job_id:
+                        recorded["state"] = previous_state
+                        if previous_state in {"completed_unverified", "failed"}:
+                            recorded.setdefault("completed_at", datetime.now(tz=UTC).isoformat())
+                        break
+            except Exception:
+                # Reconciliation/status failure is not evidence that prior work
+                # is gone. Skip fails closed; replace propagates the inability
+                # to prove ownership/current state rather than duplicating work.
+                previous_active = True
+            if previous_active and job.nomad_overlap_policy == "skip":
+                job.nomad_runs.append(
+                    {
+                        "scheduled_at": fired_at,
+                        "scheduled_run_number": run_number,
+                        "state": "skipped_overlap",
+                        "previous_nomad_job_id": job.last_nomad_job_id,
+                    }
+                )
+                job.nomad_runs = job.nomad_runs[-100:]
+                return json.dumps(
+                    {
+                        "state": "skipped_overlap",
+                        "previous_nomad_job_id": job.last_nomad_job_id,
+                        "overlap_policy": "skip",
+                    },
+                    sort_keys=True,
+                )
+            if previous_active and job.nomad_overlap_policy == "queue":
+                job.nomad_queued_runs += 1
+                job.nomad_runs.append(
+                    {
+                        "scheduled_at": fired_at,
+                        "scheduled_run_number": run_number,
+                        "state": "queued_overlap",
+                        "previous_nomad_job_id": job.last_nomad_job_id,
+                    }
+                )
+                job.nomad_runs = job.nomad_runs[-100:]
+                return json.dumps(
+                    {
+                        "state": "queued_overlap",
+                        "previous_nomad_job_id": job.last_nomad_job_id,
+                        "queued_runs": job.nomad_queued_runs,
+                        "overlap_policy": "queue",
+                    },
+                    sort_keys=True,
+                )
+            if previous_active and job.nomad_overlap_policy == "replace":
+                manager.action(namespace, job.last_nomad_job_id, "cancel")
+
+        execution_record = None
+        if job.nomad_overlap_policy == "queue" and job.nomad_queued_runs > 0:
+            execution_record = next(
+                (run for run in job.nomad_runs if run.get("state") == "queued_overlap"),
+                None,
+            )
+            if execution_record is not None:
+                # This firing drains the oldest queued run and itself joins
+                # the tail, preserving FIFO semantics without overlapping.
+                job.nomad_runs.append(
+                    {
+                        "scheduled_at": fired_at,
+                        "scheduled_run_number": run_number,
+                        "state": "queued_overlap",
+                    }
+                )
+                job.nomad_queued_runs += 1
+                run_number = int(execution_record["scheduled_run_number"])
+        request["job_id"] = f"missy-scheduled-{job.id[:8]}-{run_number}-{uuid.uuid4().hex[:6]}"
+        request["idempotency_key"] = f"schedule:{job.id}:run:{run_number}"
+        plan = manager.plan(request)
+        submitted = manager.submit(str(plan["plan_id"]))
+        job.last_nomad_job_id = str(submitted["job_id"])
+        job.last_nomad_evaluation_id = str(submitted["evaluation_id"])
+        queued_execution = job.nomad_queued_runs > 0
+        if queued_execution:
+            job.nomad_queued_runs -= 1
+        submitted_record = {
+            "scheduled_at": fired_at,
+            "submitted_at": datetime.now(tz=UTC).isoformat(),
+            "scheduled_run_number": run_number,
+            "nomad_job_id": submitted["job_id"],
+            "evaluation_id": submitted["evaluation_id"],
+            "plan_id": submitted["plan_id"],
+            "state": submitted["state"],
+            "queued_execution": queued_execution,
+        }
+        if execution_record is not None:
+            original_scheduled_at = execution_record.get("scheduled_at")
+            execution_record.clear()
+            execution_record.update(submitted_record)
+            execution_record["scheduled_at"] = original_scheduled_at
+        else:
+            job.nomad_runs.append(submitted_record)
+        job.nomad_runs = job.nomad_runs[-100:]
+        return json.dumps(
+            {
+                "state": submitted["state"],
+                "schedule_id": job.id,
+                "scheduled_run_number": run_number,
+                "nomad_job_id": submitted["job_id"],
+                "evaluation_id": submitted["evaluation_id"],
+                "plan_id": submitted["plan_id"],
+                "overlap_policy": job.nomad_overlap_policy,
+                "queued_execution": queued_execution,
+            },
+            sort_keys=True,
+        )
+
     def _run_job(self, job_id: str) -> None:
         """Execute a scheduled job by running it through the agent runtime.
 
@@ -734,43 +908,46 @@ class SchedulerManager:
 
         agent = None
         try:
-            # Import lazily to avoid circular imports at module load time.
-            from missy.agent.runtime import AgentConfig, AgentRuntime
+            if job.execution_target == "nomad":
+                result_text = self._run_nomad_job(job)
+            else:
+                # Import lazily to avoid circular imports at module load time.
+                from missy.agent.runtime import AgentConfig, AgentRuntime
 
-            # Sanitize the task prompt to detect prompt injection from tampered
-            # jobs files (defense-in-depth with the file permission checks).
-            try:
-                from missy.security.sanitizer import InputSanitizer
+                # Sanitize the task prompt to detect prompt injection from tampered
+                # jobs files (defense-in-depth with the file permission checks).
+                try:
+                    from missy.security.sanitizer import InputSanitizer
 
-                sanitizer = InputSanitizer()
-                warnings = sanitizer.check_for_injection(job.task)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Scheduled job {job.name!r} was not run because its prompt "
-                    "could not be security-scanned."
-                ) from exc
-            if warnings:
-                logger.warning(
-                    "Blocking scheduled job %r with injection patterns: %s",
-                    job.name,
-                    warnings,
-                )
-                raise ValueError(
-                    f"Scheduled job {job.name!r} was not run because its stored "
-                    "prompt contains prompt-injection-like instructions."
-                )
+                    sanitizer = InputSanitizer()
+                    warnings = sanitizer.check_for_injection(job.task)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Scheduled job {job.name!r} was not run because its prompt "
+                        "could not be security-scanned."
+                    ) from exc
+                if warnings:
+                    logger.warning(
+                        "Blocking scheduled job %r with injection patterns: %s",
+                        job.name,
+                        warnings,
+                    )
+                    raise ValueError(
+                        f"Scheduled job {job.name!r} was not run because its stored "
+                        "prompt contains prompt-injection-like instructions."
+                    )
 
-            agent = AgentRuntime(
-                AgentConfig(
-                    provider=job.provider,
-                    capability_mode=job.capability_mode,
-                    max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
-                    **(getattr(self, "_default_tool_policy_kwargs", None) or {}),
-                    **(getattr(self, "_default_feature_kwargs", None) or {}),
+                agent = AgentRuntime(
+                    AgentConfig(
+                        provider=job.provider,
+                        capability_mode=job.capability_mode,
+                        max_spend_usd=getattr(self, "_default_max_spend_usd", 0.0),
+                        **(getattr(self, "_default_tool_policy_kwargs", None) or {}),
+                        **(getattr(self, "_default_feature_kwargs", None) or {}),
+                    )
                 )
-            )
-            self._register_run_session(agent, job, session_id)
-            result_text = agent.run(job.task, session_id=session_id)
+                self._register_run_session(agent, job, session_id)
+                result_text = agent.run(job.task, session_id=session_id)
         except Exception as exc:
             retry_category = classify_retry_error(exc)
             logger.exception("Error executing scheduled job %r (id=%s).", job.name, job_id)

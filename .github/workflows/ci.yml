@@ -33,7 +33,7 @@ jobs:
   # ---------------------------------------------------------------------
   # Test suite, sharded 4 ways per Python version to cut pipeline wall
   # time. Shards are balanced by collected-test-count (not just directory
-  # count) across the 20 top-level tests/ subdirectories -- every
+  # count) across the 21 top-level tests/ subdirectories -- every
   # subdirectory is assigned to exactly one shard below, so between the 4
   # shards the full `tests/` tree is covered with no gaps and no overlap
   # (verified against `pytest --collect-only` counts; rebalance the
@@ -65,7 +65,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh tests/nomad"
     steps:
       - uses: actions/checkout@v4
 
@@ -114,7 +114,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh tests/nomad"
     steps:
       - uses: actions/checkout@v4
 
@@ -163,7 +163,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh tests/nomad"
     steps:
       - uses: actions/checkout@v4
 
@@ -222,7 +222,7 @@ jobs:
           - id: 3
             dirs: "tests/unit tests/tools tests/providers tests/gateway tests/api tests/plugins tests/retrieval"
           - id: 4
-            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh"
+            dirs: "tests/security tests/channels tests/policy tests/mcp tests/skills tests/mesh tests/nomad"
     steps:
       - uses: actions/checkout@v4
 

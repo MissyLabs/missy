@@ -358,6 +358,51 @@ class SchedulingPolicy:
 
 
 @dataclass
+class NomadConfig:
+    """Policy and connection settings for Missy's Nomad integration.
+
+    The integration is disabled by default.  Credentials are file-backed and
+    deliberately live outside ``config.yaml`` so neither the ACL token nor the
+    client private key is serialized with ordinary application configuration.
+    Empty authorization lists deny mutating operations; read-only discovery is
+    still bounded by the ACL attached to the configured Nomad identity.
+    """
+
+    enabled: bool = False
+    address: str = "https://nomad.example.com"
+    bundle_dir: str = "~/.missy/nomad"
+    state_dir: str = "~/.missy/nomad-state"
+    binary: str = "nomad"
+    identity_cn: str = "missy"
+    owner: str = "missy-bot"
+    allowed_namespaces: list[str] = field(default_factory=list)
+    allowed_node_pools: list[str] = field(default_factory=list)
+    allowed_datacenters: list[str] = field(default_factory=list)
+    default_namespace: str = ""
+    default_node_pool: str = ""
+    default_datacenter: str = ""
+    approved_registries: list[str] = field(default_factory=list)
+    allowed_job_commands: list[str] = field(default_factory=list)
+    approved_artifact_prefixes: list[str] = field(default_factory=list)
+    approved_secret_reference_prefixes: list[str] = field(default_factory=list)
+    workload_templates: dict[str, dict[str, Any]] = field(default_factory=dict)
+    protected_node_names: list[str] = field(default_factory=lambda: ["Gato"])
+    require_image_digest: bool = True
+    max_cpu_mhz: int = 8_000
+    max_memory_mb: int = 16_384
+    max_disk_mb: int = 20_480
+    max_group_count: int = 8
+    max_parallel_jobs: int = 4
+    max_retry_attempts: int = 2
+    max_benchmark_runs: int = 32
+    max_benchmark_parallelism: int = 4
+    max_wall_time_seconds: int = 86_400
+    plan_ttl_seconds: int = 900
+    request_timeout_seconds: int = 60
+    allow_purge: bool = False
+
+
+@dataclass
 class HeartbeatConfig:
     """Heartbeat system configuration."""
 
@@ -706,6 +751,7 @@ class MissyConfig:
     default_provider: str = ""
     discord: DiscordConfig | None = None
     scheduling: SchedulingPolicy = field(default_factory=SchedulingPolicy)
+    nomad: NomadConfig = field(default_factory=NomadConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     vault: VaultConfig = field(default_factory=VaultConfig)
@@ -1235,6 +1281,153 @@ def _parse_scheduling(data: dict[str, Any]) -> SchedulingPolicy:
     )
 
 
+def _parse_nomad(data: Any) -> NomadConfig:
+    if data is None:
+        return NomadConfig()
+    if not isinstance(data, dict):
+        raise ConfigurationError(f"nomad must be a mapping, got {type(data).__name__}.")
+
+    known = {field.name for field in dataclass_fields(NomadConfig)}
+    unknown = set(data) - known
+    if unknown:
+        raise ConfigurationError(
+            f"nomad has unrecognized security key(s): {', '.join(sorted(unknown))}."
+        )
+
+    def positive_int(name: str, default: int) -> int:
+        value = int(data.get(name, default))
+        if value <= 0:
+            raise ConfigurationError(f"nomad.{name} must be greater than zero.")
+        return value
+
+    address = str(data.get("address", NomadConfig.address)).strip().rstrip("/")
+    from urllib.parse import urlparse
+
+    parsed = urlparse(address)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ConfigurationError(
+            "nomad.address must be an https URL with a hostname and no embedded credentials."
+        )
+
+    binary = str(data.get("binary", "nomad")).strip()
+    if not binary or any(char in binary for char in "\r\n\x00"):
+        raise ConfigurationError("nomad.binary must be a non-empty executable path.")
+
+    templates = data.get("workload_templates") or {}
+    if not isinstance(templates, dict):
+        raise ConfigurationError("nomad.workload_templates must be a mapping.")
+    clean_templates: dict[str, dict[str, Any]] = {}
+    for name, template in templates.items():
+        if not isinstance(name, str) or not name or len(name) > 63:
+            raise ConfigurationError("nomad.workload_templates names must be 1-63 characters.")
+        if not isinstance(template, dict):
+            raise ConfigurationError(f"nomad.workload_templates.{name} must be a mapping.")
+        unknown_template = set(template) - {
+            "description",
+            "request",
+            "allowed_parameters",
+            "required_parameters",
+        }
+        if unknown_template:
+            raise ConfigurationError(
+                f"nomad.workload_templates.{name} has unrecognized key(s): "
+                + ", ".join(sorted(unknown_template))
+                + "."
+            )
+        if not isinstance(template.get("request"), dict):
+            raise ConfigurationError(f"nomad.workload_templates.{name}.request must be a mapping.")
+        allowed = _as_list_of_strings(template.get("allowed_parameters"))
+        required = _as_list_of_strings(template.get("required_parameters"))
+        if not set(required).issubset(allowed):
+            raise ConfigurationError(
+                f"nomad.workload_templates.{name}.required_parameters must be allowed."
+            )
+        clean_templates[name] = {
+            "description": str(template.get("description", "")).strip(),
+            "request": dict(template["request"]),
+            "allowed_parameters": allowed,
+            "required_parameters": required,
+        }
+
+    cfg = NomadConfig(
+        enabled=_coerce_bool(data.get("enabled"), False),
+        address=address,
+        bundle_dir=str(data.get("bundle_dir", "~/.missy/nomad")),
+        state_dir=str(data.get("state_dir", "~/.missy/nomad-state")),
+        binary=binary,
+        identity_cn=str(data.get("identity_cn", "missy")).strip(),
+        owner=str(data.get("owner", "missy-bot")).strip(),
+        allowed_namespaces=_as_list_of_strings(data.get("allowed_namespaces")),
+        allowed_node_pools=_as_list_of_strings(data.get("allowed_node_pools")),
+        allowed_datacenters=_as_list_of_strings(data.get("allowed_datacenters")),
+        default_namespace=str(data.get("default_namespace", "")).strip(),
+        default_node_pool=str(data.get("default_node_pool", "")).strip(),
+        default_datacenter=str(data.get("default_datacenter", "")).strip(),
+        approved_registries=_as_list_of_strings(data.get("approved_registries")),
+        allowed_job_commands=_as_list_of_strings(data.get("allowed_job_commands")),
+        approved_artifact_prefixes=_as_list_of_strings(data.get("approved_artifact_prefixes")),
+        approved_secret_reference_prefixes=_as_list_of_strings(
+            data.get("approved_secret_reference_prefixes")
+        ),
+        workload_templates=clean_templates,
+        protected_node_names=(
+            _as_list_of_strings(data.get("protected_node_names"))
+            if "protected_node_names" in data
+            else ["Gato"]
+        ),
+        require_image_digest=_coerce_bool(data.get("require_image_digest"), True),
+        max_cpu_mhz=positive_int("max_cpu_mhz", 8_000),
+        max_memory_mb=positive_int("max_memory_mb", 16_384),
+        max_disk_mb=positive_int("max_disk_mb", 20_480),
+        max_group_count=positive_int("max_group_count", 8),
+        max_parallel_jobs=positive_int("max_parallel_jobs", 4),
+        max_retry_attempts=positive_int("max_retry_attempts", 2),
+        max_benchmark_runs=positive_int("max_benchmark_runs", 32),
+        max_benchmark_parallelism=positive_int("max_benchmark_parallelism", 4),
+        max_wall_time_seconds=positive_int("max_wall_time_seconds", 86_400),
+        plan_ttl_seconds=positive_int("plan_ttl_seconds", 900),
+        request_timeout_seconds=positive_int("request_timeout_seconds", 60),
+        allow_purge=_coerce_bool(data.get("allow_purge"), False),
+    )
+    if not cfg.identity_cn or not cfg.owner:
+        raise ConfigurationError("nomad.identity_cn and nomad.owner must not be empty.")
+    for default_name, allowed_name in (
+        ("default_namespace", "allowed_namespaces"),
+        ("default_node_pool", "allowed_node_pools"),
+        ("default_datacenter", "allowed_datacenters"),
+    ):
+        default_value = getattr(cfg, default_name)
+        allowed_values = getattr(cfg, allowed_name)
+        if default_value and default_value not in allowed_values:
+            raise ConfigurationError(f"nomad.{default_name} must appear in nomad.{allowed_name}.")
+    if cfg.max_benchmark_parallelism > cfg.max_parallel_jobs:
+        raise ConfigurationError(
+            "nomad.max_benchmark_parallelism must not exceed nomad.max_parallel_jobs."
+        )
+    bundle_path = Path(cfg.bundle_dir).expanduser().resolve()
+    state_path = Path(cfg.state_dir).expanduser().resolve()
+    if state_path == bundle_path or bundle_path in state_path.parents:
+        raise ConfigurationError(
+            "nomad.state_dir must not be the credential bundle or one of its children."
+        )
+    for prefix in cfg.approved_artifact_prefixes:
+        if not prefix or any(char in prefix for char in "\x00\r\n"):
+            raise ConfigurationError(
+                "nomad.approved_artifact_prefixes entries must be non-empty single-line strings."
+            )
+    for prefix in cfg.approved_secret_reference_prefixes:
+        if not prefix.startswith("nomad-var://") or any(char in prefix for char in "\x00\r\n{}"):
+            raise ConfigurationError(
+                "nomad.approved_secret_reference_prefixes entries must use nomad-var://."
+            )
+    for command in cfg.allowed_job_commands:
+        if not command.startswith("/") or any(char in command for char in "\x00\r\n"):
+            raise ConfigurationError(
+                "nomad.allowed_job_commands entries must be absolute executable paths."
+            )
+    return cfg
+
+
 def _parse_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
     return HeartbeatConfig(
         enabled=_coerce_bool(data.get("enabled"), False),
@@ -1556,6 +1749,7 @@ def load_config(path: str) -> MissyConfig:
         _validate_voice_config(data.get("voice"))
 
         filesystem = _parse_filesystem(data.get("filesystem") or {})
+        nomad = _parse_nomad(data.get("nomad"))
         config_dir = config_path.expanduser().resolve().parent
         protected_paths = {
             str(config_path.expanduser().resolve()),
@@ -1566,6 +1760,7 @@ def load_config(path: str) -> MissyConfig:
             str((config_dir / "audit.key").resolve()),
             str((config_dir / "identity.pem").resolve()),
             str((config_dir / f"{config_path.name}.reload-approval").resolve()),
+            str(Path(nomad.bundle_dir).expanduser().resolve()),
         }
         filesystem.protected_write_paths = sorted(protected_paths)
 
@@ -1583,6 +1778,7 @@ def load_config(path: str) -> MissyConfig:
             default_provider=str(data.get("default_provider", "") or ""),
             discord=discord_cfg,
             scheduling=_parse_scheduling(data.get("scheduling") or {}),
+            nomad=nomad,
             heartbeat=_parse_heartbeat(data.get("heartbeat") or {}),
             observability=_parse_observability(data.get("observability") or {}),
             vault=_parse_vault(data.get("vault") or {}),
@@ -1647,6 +1843,7 @@ def get_default_config() -> MissyConfig:
         audit_log_path=str(Path.home() / ".missy" / "audit.log"),
         discord=None,
         scheduling=SchedulingPolicy(),
+        nomad=NomadConfig(),
         heartbeat=HeartbeatConfig(),
         observability=ObservabilityConfig(),
         vault=VaultConfig(),

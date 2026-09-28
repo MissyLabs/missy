@@ -21,18 +21,19 @@ parsed into a `MissyConfig` dataclass hierarchy.
 5. [plugins](#plugins)
 6. [tools](#tools)
 7. [scheduling](#scheduling)
-8. [providers](#providers)
-9. [discord](#discord)
-10. [heartbeat](#heartbeat)
-11. [observability](#observability)
-12. [vault](#vault)
-13. [voice](#voice)
-14. [container](#container)
-15. [vision](#vision)
-16. [workspace_path](#workspace_path)
-17. [audit_log_path](#audit_log_path)
-18. [max_spend_usd](#max_spend_usd)
-19. [Full Annotated Example](#full-annotated-example)
+8. [nomad](#nomad)
+9. [providers](#providers)
+10. [discord](#discord)
+11. [heartbeat](#heartbeat)
+12. [observability](#observability)
+13. [vault](#vault)
+14. [voice](#voice)
+15. [container](#container)
+16. [vision](#vision)
+17. [workspace_path](#workspace_path)
+18. [audit_log_path](#audit_log_path)
+19. [max_spend_usd](#max_spend_usd)
+20. [Full Annotated Example](#full-annotated-example)
 
 ---
 
@@ -210,6 +211,47 @@ Controls the job scheduler subsystem.
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch for scheduled job execution.  When `false`, no new jobs may be added or run. |
 | `max_jobs` | int | `0` | Maximum number of concurrent scheduled jobs.  `0` means unlimited. |
+
+---
+
+## `nomad`
+
+Controls secure Nomad workload orchestration. It is disabled by default and
+requires a file-backed TLS/ACL bundle plus explicit owner-authorized scope.
+Secrets must not appear in YAML.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. |
+| `address` | string | `https://nomad.example.com` | HTTPS Nomad endpoint; embedded credentials are rejected. |
+| `bundle_dir` | string | `~/.missy/nomad` | Private directory containing CA, client certificate/key, and token files. |
+| `state_dir` | string | `~/.missy/nomad-state` | Private atomic operation journal. |
+| `binary` | string | `nomad` | Fixed Nomad CLI executable. |
+| `identity_cn` | string | `missy` | Required client-certificate common name. |
+| `owner` | string | `missy-bot` | Ownership label applied to managed jobs. |
+| `allowed_namespaces` | list | `[]` | Owner-authorized mutation scope; empty denies mutation. |
+| `allowed_node_pools` | list | `[]` | Owner-authorized pools; empty denies mutation. |
+| `allowed_datacenters` | list | `[]` | Owner-authorized datacenters; empty denies mutation. |
+| `default_namespace`, `default_node_pool`, `default_datacenter` | string | `""` | Optional defaults, each of which must also be allowlisted. |
+| `approved_registries` | list | `[]` | Permitted container registries. |
+| `allowed_job_commands` | list | `[]` | Explicit container commands permitted in reviewed job requests; empty permits only image entrypoints. |
+| `approved_artifact_prefixes` | list | `[]` | Permitted durable input/output identifier prefixes. |
+| `approved_secret_reference_prefixes` | list | `[]` | Permitted `nomad-var://` runtime secret paths. |
+| `workload_templates` | mapping | `{}` | Operator-reviewed batch definitions eligible for offload and benchmarks. |
+| `protected_node_names` | list | `["Gato"]` | Nodes avoided when another eligible node fits. |
+| `require_image_digest` | bool | `true` | Require `@sha256:` image pins. |
+| `max_cpu_mhz`, `max_memory_mb`, `max_disk_mb`, `max_group_count` | int | bounded | Per-job resource and allocation-count ceilings. |
+| `max_parallel_jobs` | int | `4` | Global tracked batch concurrency ceiling. |
+| `max_retry_attempts` | int | `2` | Maximum explicit batch retry attempts. |
+| `max_benchmark_runs` | int | `32` | Warm-up plus measured run ceiling. |
+| `max_benchmark_parallelism` | int | `4` | Benchmark fan-out ceiling; cannot exceed `max_parallel_jobs`. |
+| `max_wall_time_seconds` | int | `86400` | Batch wall-time ceiling. |
+| `plan_ttl_seconds` | int | `900` | Exact-plan validity window. |
+| `request_timeout_seconds` | int | `60` | CLI request timeout. |
+| `allow_purge` | bool | `false` | First of two required opt-ins for deleting owned job history. |
+
+See [Nomad Workload Orchestration](nomad.md) for credential modes, workload
+template format, policy prerequisites, tool workflows, and result protocol.
 
 ---
 

@@ -88,6 +88,21 @@ plugins:
   enabled: false
   allowed_plugins: []
 
+# Nomad stays disabled until credentials, scope, registries, artifact storage,
+# and operator-approved workload templates are configured.
+nomad:
+  enabled: false
+  bundle_dir: "~/.missy/nomad"
+  state_dir: "~/.missy/nomad-state"
+  allowed_namespaces: []
+  allowed_node_pools: []
+  allowed_datacenters: []
+  approved_registries: []
+  allowed_job_commands: []
+  approved_artifact_prefixes: []
+  approved_secret_reference_prefixes: []
+  workload_templates: {}
+
 # Tool visibility policy. Execution is still governed by network/filesystem/shell policy.
 tools:
   profile: full
@@ -3299,6 +3314,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 max_jobs=getattr(cfg.scheduling, "max_jobs", 0),
                 default_active_hours=getattr(cfg.scheduling, "active_hours", ""),
                 misfire_grace_seconds=getattr(cfg.scheduling, "misfire_grace_seconds", 300),
+                nomad_config=getattr(cfg, "nomad", None),
             )
             scheduler_manager.start()
             _agent._scheduler = scheduler_manager  # noqa: SLF001
