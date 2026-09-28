@@ -35,6 +35,16 @@ grammar `[A-Za-z0-9._~+/-]+=*`, optionally ending in one LF.
 Never copy the token into YAML, logs, or raw tool arguments. Load it per request
 and protect its parent directories.
 
+Hot reload revokes the existing client if `enabled` or `api_available` becomes
+false or if `base_url`, `project_id`, `token_file`, or `allowed_hosts` changes.
+Revocation also blocks callers holding a reference to the old tool, even if it
+remains in the registry. An unchanged configuration keeps the current client
+working. Reload does not grant a new endpoint or credential automatically:
+after revocation, enabling a different Foundry identity requires a process
+restart. Other tools are unaffected. In-flight requests complete before the
+revocation takes effect; calls after the reload completes cannot use the old
+client.
+
 Before enabling, an operator must independently validate an authenticated
 Foundry HTTP service, its explicit project-bound response contract, route
 mapping, and policy evidence. The endpoint accepts only an exact root or `/api`

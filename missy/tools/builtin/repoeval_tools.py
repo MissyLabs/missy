@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import threading
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -197,6 +198,13 @@ class RepoevalFoundryTool(BaseTool):
         token_file: str = "",
     ) -> None:
         self.permissions = ToolPermissions(network=True)
+        self._auth_lock = threading.RLock()
+        self._identity = (
+            base_url,
+            project_id,
+            token_file,
+            tuple(allowed_hosts) if isinstance(allowed_hosts, list) else None,
+        )
         self._valid = False
         self._available = False
         self._token_file = token_file
@@ -247,6 +255,34 @@ class RepoevalFoundryTool(BaseTool):
         """Configuration and file metadata only, not a server/auth health claim."""
         return self._valid and self._available
 
+    def matches_config(self, config: Any) -> bool:
+        """Only the original operator authorization may keep this client alive."""
+        return (
+            getattr(config, "enabled", False) is True
+            and getattr(config, "api_available", False) is True
+            and self._identity
+            == (
+                getattr(config, "base_url", None),
+                getattr(config, "project_id", None),
+                getattr(config, "token_file", None),
+                tuple(config.allowed_hosts)
+                if isinstance(getattr(config, "allowed_hosts", None), list)
+                else None,
+            )
+        )
+
+    def revoke(self) -> None:
+        """Permanently retire this instance, including direct references to it.
+
+        Serializing with execute ensures reload cannot complete while a stale
+        authenticated request is still being initiated by this instance.
+        """
+        with self._auth_lock:
+            self._available = False
+            self._repos.clear()
+            self._plans.clear()
+            self._listed = False
+
     def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
         del kwargs
         if not self._valid:
@@ -292,6 +328,12 @@ class RepoevalFoundryTool(BaseTool):
         )
 
     def execute(self, *, action: str, **kwargs: Any) -> ToolResult:
+        with self._auth_lock:
+            if not self._available:
+                return ToolResult(False, None, "Foundry HTTP API unavailable; no run was submitted")
+            return self._execute_active(action=action, **kwargs)
+
+    def _execute_active(self, *, action: str, **kwargs: Any) -> ToolResult:
         if not isinstance(action, str) or action not in _ACTIONS:
             return ToolResult(False, None, "Unsupported Foundry action")
         if action == "capabilities":

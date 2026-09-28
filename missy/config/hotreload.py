@@ -325,6 +325,22 @@ def _apply_config(new_config) -> None:
     PolicyEngine(new_config)
     ProviderRegistry.from_config(new_config)
 
+    # Built-ins are registered only at startup. A stale Foundry instance must
+    # never retain its project/endpoint/credential authority after a reload,
+    # even when a caller kept a direct reference outside the tool registry.
+    # Do not change the registry or the behavior of unrelated tools here.
+    from missy.tools.builtin.repoeval_tools import RepoevalFoundryTool
+    from missy.tools.registry import get_tool_registry
+
+    try:
+        foundry = get_tool_registry().get("repoeval_foundry")
+    except RuntimeError:  # No registry during early initialization.
+        foundry = None
+    if isinstance(foundry, RepoevalFoundryTool) and not foundry.matches_config(
+        new_config.repoeval_foundry
+    ):
+        foundry.revoke()
+
     try:
         from missy.providers.registry import get_registry as _get_registry
 
