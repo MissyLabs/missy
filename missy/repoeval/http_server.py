@@ -25,7 +25,6 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _RESOURCE_ID = r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}"
 _TOKEN = re.compile(r"[\x21-\x7e]{1,256}\Z")
-_CONTENT_LENGTH = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 _IDEMPOTENCY = re.compile(r"[\x21-\x7e]{1,128}\Z")
 _PATHS = (
     ("GET", r""),
@@ -40,6 +39,20 @@ _PATHS = (
     ("POST", r"/compare"),
     ("POST", r"/report"),
 )
+
+
+def _parse_content_length(value: str) -> int | None:
+    """Parse canonical bounded decimal framing, without converting attacker-sized input."""
+    # Any valid value fits in this many decimal digits. Reject longer strings
+    # before scanning them or calling int(), including strings of many 9s.
+    if not value or len(value) > len(str(MAX_REQUEST_BYTES)):
+        return None
+    if not value.isascii() or not value.isdigit():
+        return None
+    if len(value) > 1 and value[0] == "0":
+        return None
+    size = int(value)
+    return size if size <= MAX_REQUEST_BYTES else None
 
 
 @dataclass(frozen=True)
@@ -278,10 +291,10 @@ class _FoundryRequestHandler(BaseHTTPRequestHandler):
             self._send(_error(411, "invalid_request", "Content-Length is required"))
             return
         length = lengths[0] if lengths else "0"
-        if not _CONTENT_LENGTH.fullmatch(length) or int(length) > MAX_REQUEST_BYTES:
+        size = _parse_content_length(length)
+        if size is None:
             self._send(_error(413, "invalid_request", "Invalid or oversized Content-Length"))
             return
-        size = int(length)
         if method == "GET" and size:
             self._send(_error(400, "invalid_request", "GET body is not supported"))
             return

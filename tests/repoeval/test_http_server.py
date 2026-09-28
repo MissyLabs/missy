@@ -155,6 +155,7 @@ def test_reject_framing_and_bad_json_before_service():
             "Content-Length: 01\r\n",
             "Content-Length: 1\r\n",
             f"Content-Length: {MAX_REQUEST_BYTES + 1}\r\n",
+            "Content-Length: " + "1" * 100 + "\r\n",
             "X-Long: " + "x" * 17000 + "\r\n",
             "X-Padding: benign\r\n Authorization: Bearer anything\r\n",
             "Header without colon\r\n",
