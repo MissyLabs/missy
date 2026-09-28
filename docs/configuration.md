@@ -20,20 +20,21 @@ parsed into a `MissyConfig` dataclass hierarchy.
 4. [shell](#shell)
 5. [plugins](#plugins)
 6. [tools](#tools)
-7. [scheduling](#scheduling)
-8. [nomad](#nomad)
-9. [providers](#providers)
-10. [discord](#discord)
-11. [heartbeat](#heartbeat)
-12. [observability](#observability)
-13. [vault](#vault)
-14. [voice](#voice)
-15. [container](#container)
-16. [vision](#vision)
-17. [workspace_path](#workspace_path)
-18. [audit_log_path](#audit_log_path)
-19. [max_spend_usd](#max_spend_usd)
-20. [Full Annotated Example](#full-annotated-example)
+7. [repoeval_foundry](#repoeval_foundry)
+8. [scheduling](#scheduling)
+9. [nomad](#nomad)
+10. [providers](#providers)
+11. [discord](#discord)
+12. [heartbeat](#heartbeat)
+13. [observability](#observability)
+14. [vault](#vault)
+15. [voice](#voice)
+16. [container](#container)
+17. [vision](#vision)
+18. [workspace_path](#workspace_path)
+19. [audit_log_path](#audit_log_path)
+20. [max_spend_usd](#max_spend_usd)
+21. [Full Annotated Example](#full-annotated-example)
 
 ---
 
@@ -199,6 +200,63 @@ tool_intelligence:
     min_composite: 0.55
   candidate_runtime:
     enabled: true
+```
+
+---
+
+## `repoeval_foundry`
+
+Optional project-pinned RepoEval Foundry HTTP tool. **Disabled by default.**
+`api_available` is an explicit operator assertion that a compatible authenticated
+API is available; it is not a health check and does not establish that a service
+exists. No real API availability or deployment is claimed here.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Explicit operator opt-in. |
+| `api_available` | bool | `false` | Explicit acknowledgement that a real compatible API is deployed; not an automatic health check. |
+| `base_url` | string | empty | Exact operator-provided API base URL; never supplied by Missy. No embedded credentials, query, fragment, or redirects. Plain HTTP is allowed only on loopback. |
+| `project_id` | string | empty | Required project ID, pinned in every tool request. |
+| `allowed_hosts` | list of strings | `[]` | Exact hostname allowlist for the endpoint, not a global network-policy grant. |
+| `token_file` | string | empty | Normalized absolute path to the bearer-token file. Required when both switches are `true`; the token itself never belongs in YAML or tool arguments. |
+
+`enabled` and `api_available` accept actual YAML booleans only. The endpoint
+must be an exact root or `/api` URL (optionally with the trailing slash), use a
+valid nonzero port, and have a syntactically valid hostname. Plain HTTP is
+loopback-only. The project ID is limited to letters, digits, `.`, `_`, and `-`.
+The token path must be absolute and normalized: no `~`, `.`, `..`, repeated
+slashes, whitespace/control characters, or backslashes. Config parsing checks syntax only;
+the registration security helper separately verifies that the token path is
+safe and usable.
+
+That helper requires a current-UID regular file, mode `0600`, one hard link,
+no symlink at the file or any path component, and a size from 1 through 4096 bytes.
+Registration checks metadata without reading bytes. At request time the file is
+reopened securely and revalidated; contents must match the ASCII bearer-token
+grammar `[A-Za-z0-9._~+/-]+=*`, optionally followed by one LF. The token is loaded per
+request and is never put in YAML or a raw tool argument. Keep the credential
+separate from configuration and restrict access to its parent directories.
+
+Network policy must independently allow the exact endpoint through
+`network.tool_allowed_hosts` (including its port where specified); the
+Foundry-specific `allowed_hosts` does not grant network access. Requests use
+the `tool` policy category and the policy-aware HTTP client, which accepts
+Authorization headers and does not follow redirects by default. Do not relax
+global policy to enable this integration. Supported routes are `list`, `plan`,
+`snapshot`, `start`, `status`, and `cancel`. `capabilities`, `compare`,
+`artifacts`, and `report` fail closed without wire evidence. Configuration does
+not create or deploy an API, prove availability, or authorize production work.
+
+```yaml
+# Defaults only. Enabling requires an operator-reviewed service, protected token,
+# and an independent network.tool_allowed_hosts grant for the exact endpoint.
+repoeval_foundry:
+  enabled: false
+  api_available: false
+  base_url: ""
+  project_id: ""
+  allowed_hosts: []
+  token_file: ""
 ```
 
 ---

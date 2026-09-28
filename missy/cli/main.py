@@ -248,6 +248,7 @@ def _load_subsystems(config_path: str) -> Any:
         register_builtin_tools(
             tool_registry,
             shell_allowed_env_vars=cfg.shell.allowed_env_vars,
+            repoeval_foundry_config=cfg.repoeval_foundry,
         )
         # ToolRegistry.disable()/is_enabled() were fully built and
         # tested (execute() refuses a disabled tool outright, and
@@ -745,7 +746,23 @@ def _ensure_tool_registry():
         from missy.tools.builtin import register_builtin_tools
 
         registry = init_tool_registry()
-        register_builtin_tools(registry)
+        # Standalone tool commands do not pass through the normal startup path.
+        # Never infer a Foundry endpoint or opt in without a real config file.
+        current_context = click.get_current_context(silent=True)
+        config_path = (
+            (current_context.find_root().obj or {}).get("config_path") if current_context else None
+        )
+        if config_path and Path(config_path).expanduser().is_file():
+            from missy.config.settings import load_config
+
+            cfg = load_config(str(Path(config_path).expanduser()))
+            register_builtin_tools(
+                registry,
+                shell_allowed_env_vars=cfg.shell.allowed_env_vars,
+                repoeval_foundry_config=cfg.repoeval_foundry,
+            )
+        else:
+            register_builtin_tools(registry)
         return registry
 
 

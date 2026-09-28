@@ -40,10 +40,12 @@ Example YAML layout::
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -146,6 +148,18 @@ class PluginPolicy:
 
     enabled: bool = False
     allowed_plugins: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RepoevalFoundryConfig:
+    """Explicit, project-pinned authenticated Foundry HTTP integration."""
+
+    enabled: bool = False
+    api_available: bool = False
+    base_url: str = ""
+    project_id: str = ""
+    allowed_hosts: list[str] = field(default_factory=list)
+    token_file: str = ""
 
 
 @dataclass
@@ -785,6 +799,7 @@ class MissyConfig:
     landlock_enabled: bool = False
     config_version: int = 0  # schema version stamp (0 = pre-migration)
     tools: ToolPolicyConfig = field(default_factory=ToolPolicyConfig)
+    repoeval_foundry: RepoevalFoundryConfig = field(default_factory=RepoevalFoundryConfig)
     agents: dict[str, AgentPolicyConfig] = field(default_factory=dict)
     tool_intelligence: ToolIntelligenceConfig = field(default_factory=ToolIntelligenceConfig)
     obs: ObsConfig = field(default_factory=ObsConfig)
@@ -1644,6 +1659,91 @@ def _parse_features(data: dict[str, Any]) -> FeaturesConfig:
     )
 
 
+def _parse_repoeval_foundry(data: Any) -> RepoevalFoundryConfig:
+    """Fail closed on malformed Foundry opt-in and endpoint/credential scope."""
+    if data is None:
+        return RepoevalFoundryConfig()
+    if not isinstance(data, dict):
+        raise ConfigurationError("repoeval_foundry must be a mapping.")
+    _warn_unknown_keys("repoeval_foundry", data, RepoevalFoundryConfig, strict=True)
+    enabled = data.get("enabled", False)
+    api_available = data.get("api_available", False)
+    if type(enabled) is not bool or type(api_available) is not bool:
+        raise ConfigurationError("repoeval_foundry enabled and api_available must be booleans.")
+    base_url = data.get("base_url", "")
+    project_id = data.get("project_id", "")
+    hosts = data.get("allowed_hosts", [])
+    token_file = data.get("token_file", "")
+    if not all(isinstance(value, str) for value in (base_url, project_id, token_file)):
+        raise ConfigurationError(
+            "repoeval_foundry.base_url, project_id, and token_file must be strings."
+        )
+    if not isinstance(hosts, list) or any(not isinstance(h, str) for h in hosts):
+        raise ConfigurationError("repoeval_foundry.allowed_hosts must be a list of hostnames.")
+    if token_file and (
+        not token_file.startswith("/")
+        or token_file.startswith("//")
+        or len(token_file) > 4096
+        or token_file.endswith("/")
+        or any(ord(char) < 33 or ord(char) == 127 for char in token_file)
+        or "~" in token_file
+        or "\\" in token_file
+        or any(part in (".", "..") for part in token_file.split("/"))
+        or "//" in token_file
+    ):
+        raise ConfigurationError("repoeval_foundry.token_file must be a normalized absolute path.")
+    if enabled and api_available:
+        if not token_file:
+            raise ConfigurationError(
+                "repoeval_foundry.token_file is required when enabled and api_available are true."
+            )
+        if any(ord(char) < 33 or ord(char) > 126 or char == "\\" for char in base_url):
+            raise ConfigurationError("Invalid repoeval_foundry.base_url.")
+        try:
+            parsed = urlsplit(base_url)
+            host = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError as exc:
+            raise ConfigurationError("Invalid repoeval_foundry.base_url.") from exc
+        if host:
+            hostname_ok = host in ("localhost", "127.0.0.1", "::1") or bool(
+                re.fullmatch(
+                    r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",
+                    host,
+                )
+            )
+        else:
+            hostname_ok = False
+        if (
+            parsed.scheme not in ("http", "https")
+            or not hostname_ok
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or (parsed.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))
+            or parsed.path not in ("", "/", "/api", "/api/")
+            or parsed.netloc.endswith(":")
+            or (port is not None and not 1 <= port <= 65535)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", project_id)
+            or not hosts
+            or host not in {item.lower() for item in hosts}
+        ):
+            raise ConfigurationError(
+                "repoeval_foundry requires a project ID, approved endpoint, and matching allowed_hosts."
+            )
+        # Accessing the parsed port above also rejects malformed numeric port syntax.
+        del port
+    return RepoevalFoundryConfig(
+        enabled=enabled,
+        api_available=api_available,
+        base_url=base_url,
+        project_id=project_id,
+        allowed_hosts=list(hosts),
+        token_file=token_file,
+    )
+
+
 def _parse_retention(data: dict[str, Any]) -> RetentionConfig:
     _warn_unknown_keys("retention", data, RetentionConfig)
     d = RetentionConfig()
@@ -1770,6 +1870,7 @@ def load_config(path: str) -> MissyConfig:
             shell=_parse_shell(data.get("shell") or {}),
             plugins=_parse_plugins(data.get("plugins") or {}),
             tools=_parse_tool_policy(data.get("tools"), context="tools"),
+            repoeval_foundry=_parse_repoeval_foundry(data.get("repoeval_foundry")),
             agents=_parse_agents(data.get("agents")),
             tool_intelligence=_parse_tool_intelligence(data.get("tool_intelligence")),
             providers=_parse_providers(data.get("providers") or {}, vault_dir=vault_dir),
