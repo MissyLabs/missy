@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:repoeval-foundry:schema:run-manifest:v1",
+  "title": "RepoEval Foundry run manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "benchmark_id",
+    "project_id",
+    "workload_id",
+    "workload_version",
+    "definition_sha256",
+    "comparability_rules_version",
+    "comparability_key",
+    "repository",
+    "provider",
+    "sandbox",
+    "repetition",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^run-[a-zA-Z0-9_-]{8,128}$", "readOnly": true},
+    "benchmark_id": {"type": "string", "pattern": "^benchmark-[a-zA-Z0-9_-]{8,128}$", "readOnly": true},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "workload_id": {"type": "string", "minLength": 1, "maxLength": 128, "readOnly": true},
+    "workload_version": {"type": "string", "minLength": 1, "maxLength": 128, "readOnly": true},
+    "definition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "comparability_rules_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "comparability_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "idempotency_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "readOnly": true},
+    "provider_independent_settings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tool_schemas_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "validators": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "required"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "version": {"type": "string", "minLength": 1, "maxLength": 128},
+          "required": {"type": "boolean"},
+          "parameters_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "commit_sha", "snapshot_id"],
+      "properties": {
+        "repository_id": {"type": "string", "minLength": 1, "maxLength": 255, "readOnly": true},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$", "readOnly": true},
+        "snapshot_id": {"type": "string", "minLength": 1, "maxLength": 255, "readOnly": true}
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_key", "requested_model", "settings_sha256"],
+      "properties": {
+        "registry_key": {"type": "string", "minLength": 1, "maxLength": 64},
+        "requested_model": {"type": "string", "minLength": 1, "maxLength": 255},
+        "settings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_digest", "network_policy", "cpu_mhz", "memory_mb", "disk_mb", "timeout_seconds"],
+      "properties": {
+        "image_digest": {"type": "string", "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"},
+        "network_policy": {"type": "string", "minLength": 1, "maxLength": 128},
+        "cpu_mhz": {"type": "integer", "minimum": 100},
+        "memory_mb": {"type": "integer", "minimum": 128},
+        "disk_mb": {"type": "integer", "minimum": 256},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "repetition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "number", "attempt"],
+      "properties": {
+        "kind": {"enum": ["warmup", "measured"]},
+        "number": {"type": "integer", "minimum": 1},
+        "attempt": {"type": "integer", "minimum": 1}
+      }
+    },
+    "nomad": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {"type": "string", "maxLength": 128},
+        "node_pool": {"type": "string", "maxLength": 128},
+        "datacenter": {"type": "string", "maxLength": 128},
+        "job_id": {"type": "string", "maxLength": 255},
+        "evaluation_id": {"type": "string", "maxLength": 255},
+        "allocation_id": {"type": "string", "maxLength": 255}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

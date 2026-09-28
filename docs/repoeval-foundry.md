@@ -55,7 +55,13 @@ or `/api` prefix; the client appends the project-scoped resource route.
 PR1 `FoundryAPI.handle()` wraps responses as
 `{"ok": true, "data": ...}`. `list_repositories()` returns a bare `list[str]`,
 not repository objects and not a project-tagged document. The client accepts
-only unique, validated repository IDs and labels its scope as coming from the
+only unique, validated repository IDs (a single legacy segment or exactly
+`owner/repo`, each segment bounded to 128 ASCII characters beginning with an
+alphanumeric and otherwise containing only alphanumerics, `.`, `_`, `-`). Dot
+segments, escapes, URLs and extra slashes are refused without normalization.
+This repository-only grammar does not extend to plan, run, snapshot, project or
+other resource IDs. Repository IDs travel in JSON bodies, not URL path
+segments. The client labels its scope as coming from the
 fixed authenticated `/projects/{configured_project}/repositories` route: PR1
 checks the principal's project against that route. This is **not** an
 independent per-item project assertion. A future HTTP adapter must preserve

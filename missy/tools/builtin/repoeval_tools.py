@@ -232,6 +232,7 @@ class RepoevalFoundryTool(BaseTool):
                 or not isinstance(allowed_hosts, list)
                 or not isinstance(project_id, str)
                 or not _ID.fullmatch(project_id)
+                or project_id in (".", "..")
                 or host not in {h.lower() for h in allowed_hosts if isinstance(h, str)}
                 or (url.scheme == "http" and host not in ("localhost", "127.0.0.1", "::1"))
                 or any(p in (".", "..") for p in url.path.split("/"))
@@ -293,8 +294,24 @@ class RepoevalFoundryTool(BaseTool):
 
     @staticmethod
     def _id(value: Any) -> str:
-        if not isinstance(value, str) or not _ID.fullmatch(value):
+        if not isinstance(value, str) or not _ID.fullmatch(value) or value in (".", ".."):
             raise ValueError("Invalid resource ID")
+        return value
+
+    @staticmethod
+    def _repository_id(value: Any) -> str:
+        """A repository is a legacy single ID or exactly two owner/repo segments.
+
+        Never normalize or decode a remote identity: percent escapes, extra
+        separators and dot segments are not repository names.
+        """
+        if not isinstance(value, str):
+            raise ValueError("Invalid repository ID")
+        parts = value.split("/")
+        if not 1 <= len(parts) <= 2 or any(
+            not _ID.fullmatch(part) or part in (".", "..") for part in parts
+        ):
+            raise ValueError("Invalid repository ID")
         return value
 
     @staticmethod
@@ -382,7 +399,7 @@ class RepoevalFoundryTool(BaseTool):
                 repos = result
                 if not isinstance(repos, list) or len(repos) > 1000:
                     return ToolResult(False, None, "Foundry repository scope not verified")
-                ids = [self._id(repo) for repo in repos]
+                ids = [self._repository_id(repo) for repo in repos]
                 if len(set(ids)) != len(ids):
                     return ToolResult(False, None, "Foundry repository scope not verified")
                 self._repos, self._listed = set(ids), True
@@ -500,7 +517,7 @@ class RepoevalFoundryTool(BaseTool):
             if (
                 not self._listed
                 or not isinstance(repo, dict)
-                or repo.get("repository_id") not in self._repos
+                or self._repository_id(repo.get("repository_id")) not in self._repos
                 or not isinstance(repo.get("commit_sha"), str)
                 or not _SHA.fullmatch(repo["commit_sha"])
                 or not isinstance(repo.get("snapshot_id"), str)
@@ -525,7 +542,7 @@ class RepoevalFoundryTool(BaseTool):
                 raise ValueError("Workload must be bounded and pinned")
             return "POST", "/benchmark/plan", {"workload": workload}, headers
         if action == "snapshot":
-            repo = self._id(args["repository_id"])
+            repo = self._repository_id(args["repository_id"])
             if not self._listed or repo not in self._repos or args["self_approve"] is not True:
                 raise ValueError(
                     "Registered repository and explicit bounded self approval required"
@@ -547,16 +564,21 @@ class RepoevalFoundryTool(BaseTool):
             if args["resource_type"] not in ("run", "snapshot"):
                 raise ValueError("Unsupported resource type")
             path = "runs" if args["resource_type"] == "run" else "snapshots"
-            return "GET", f"/{path}/{quote(self._id(args['resource_id']))}", None, headers
+            return "GET", f"/{path}/{quote(self._id(args['resource_id']), safe='')}", None, headers
         if action in ("compare", "report"):
             if action == "compare" and len(args["run_ids"]) < 2:
                 raise ValueError("Comparison requires two runs")
             return "POST", f"/{action}", {"run_ids": self._run_ids(args["run_ids"])}, headers
         if action == "artifacts":
-            return "GET", f"/runs/{quote(self._id(args['run_id']))}/artifacts", None, headers
+            return (
+                "GET",
+                f"/runs/{quote(self._id(args['run_id']), safe='')}/artifacts",
+                None,
+                headers,
+            )
         if action == "cancel":
             headers["Idempotency-Key"] = self._key(args["idempotency_key"])
-            return "POST", f"/runs/{quote(self._id(args['run_id']))}/cancel", {}, headers
+            return "POST", f"/runs/{quote(self._id(args['run_id']), safe='')}/cancel", {}, headers
         raise ValueError("Unsupported Foundry action")
 
     def get_schema(self) -> dict[str, Any]:

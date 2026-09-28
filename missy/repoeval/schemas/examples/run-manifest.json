@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "run_id": "run-example0001",
+  "idempotency_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "benchmark_id": "benchmark-example0001",
+  "project_id": "example",
+  "workload_id": "repository-orientation",
+  "workload_version": "1.0.0",
+  "definition_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "comparability_rules_version": "1.0",
+  "comparability_key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "provider_independent_settings_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "tool_schemas_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "evaluator_version": "orientation-v1",
+  "validators": [{"id": "orientation-facts", "version": "1.0.0", "required": true, "parameters_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}],
+  "idempotency_key_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "repository": {
+    "repository_id": "github:example/project",
+    "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+    "snapshot_id": "snapshot-example-001"
+  },
+  "provider": {
+    "registry_key": "provider-a",
+    "requested_model": "model-a",
+    "settings_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "sandbox": {
+    "image_digest": "registry.example.invalid/repoeval/runner@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "network_policy": "forge-provider-artifacts-v1",
+    "cpu_mhz": 2000,
+    "memory_mb": 4096,
+    "disk_mb": 8192,
+    "timeout_seconds": 1800
+  },
+  "repetition": {"kind": "measured", "number": 1, "attempt": 1},
+  "created_at": "2026-09-28T18:00:00Z"
+}

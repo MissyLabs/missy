@@ -1,0 +1,12 @@
+{
+  "version": "1",
+  "target_file": "repair.py",
+  "required_patch": {
+    "preserve_signature": "percent_of(value: float, percentage: float) -> float",
+    "return_expression": "value * percentage / 100"
+  },
+  "forbidden_constructs": ["import", "open(", "exec(", "eval(", "subprocess", "socket", "os.system"],
+  "tests": "test_cases.json",
+  "comparison": "numeric exact or absolute tolerance <= 1e-12",
+  "source_review": "Tiny isolated teaching fixture, based on percentage arithmetic; not copied from upstream Missy implementation."
+}

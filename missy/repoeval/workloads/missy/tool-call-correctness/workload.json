@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "id": "missy.tool-call-correctness.v1",
+  "version": "1.0.0",
+  "description": "Offline structured tool-call selection and argument correctness scored against a reviewed Missy calculator fixture.",
+  "repository": {
+    "repository_id": "MissyLabs/missy",
+    "commit_sha": "cd378928b8609cf48f83cc75393a18086bb2c7a1",
+    "snapshot_id": "missy-cd378928b8609cf48f83cc75393a18086bb2c7a1"
+  },
+  "task": {
+    "class": "tool-call",
+    "prompt_uri": "workloads/missy/tool-call-correctness/prompt.md",
+    "prompt_sha256": "45424664443fac6f528db21a38892b2d4710bd211937c48dfa52e552e4e51e2d",
+    "fixture_digests": {
+      "calculator-tool.json": "2ba9ebe208832b4f60085e9031407e489cf367e979bc76b4ae1807e713ba81cb",
+      "case.json": "ea6264c06da5df26809483a7e55284d6a85e2a4601100ad911c71679f0235aa8",
+      "oracle.json": "0e16761c58fcb9850ab2fe4a6d1e1180a810707c3e47df90ceb5ca34f06c5f44"
+    },
+    "tool_schema_uris": ["workloads/missy/tool-call-correctness/fixtures/calculator-tool.json"]
+  },
+  "providers": [],
+  "sandbox": {
+    "image_digest": "registry.invalid/repoeval/missy-offline@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "cpu_mhz": 500,
+    "memory_mb": 512,
+    "disk_mb": 1024,
+    "network_policy": "offline"
+  },
+  "execution": {"warmups": 0, "repetitions": 1, "parallelism": 1, "timeout_seconds": 120, "max_attempts": 1, "seed": 1002},
+  "validation": {
+    "evaluator_version": "missy-oracle/1",
+    "validators": [{"id": "missy.exact-tool-call", "version": "1", "required": true, "parameters": {"oracle": "fixtures/oracle.json"}}]
+  },
+  "artifacts": {"output_prefix": "missy/tool-call-correctness", "retention_class": "benchmark-short", "required_kinds": ["response", "validator-report"]}
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "id": "missy.repository-orientation.v1",
+  "version": "1.0.0",
+  "description": "Offline orientation against the reviewed Missy source snapshot at cd378928b8609cf48f83cc75393a18086bb2c7a1.",
+  "repository": {
+    "repository_id": "MissyLabs/missy",
+    "commit_sha": "cd378928b8609cf48f83cc75393a18086bb2c7a1",
+    "snapshot_id": "missy-cd378928b8609cf48f83cc75393a18086bb2c7a1"
+  },
+  "task": {
+    "class": "repository-orientation",
+    "prompt_uri": "workloads/missy/repository-orientation/prompt.md",
+    "prompt_sha256": "cecb753b8a380015a914e1c6595c987d7a09f52eb83a4ed88d275e9dcebbf043",
+    "fixture_digests": {
+      "orientation-facts.json": "bb06507b8fc88a6c1328176627db26c1f41392828849b99ec33a07cf1edb290d"
+    }
+  },
+  "providers": [],
+  "sandbox": {
+    "image_digest": "registry.invalid/repoeval/missy-offline@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "cpu_mhz": 500,
+    "memory_mb": 512,
+    "disk_mb": 1024,
+    "network_policy": "offline"
+  },
+  "execution": {
+    "warmups": 0,
+    "repetitions": 1,
+    "parallelism": 1,
+    "timeout_seconds": 120,
+    "max_attempts": 1,
+    "seed": 1001
+  },
+  "validation": {
+    "evaluator_version": "missy-oracle/1",
+    "validators": [
+      {
+        "id": "missy.orientation-facts",
+        "version": "1",
+        "required": true,
+        "parameters": {"oracle": "fixtures/orientation-facts.json"}
+      }
+    ]
+  },
+  "artifacts": {
+    "output_prefix": "missy/repository-orientation",
+    "retention_class": "benchmark-short",
+    "required_kinds": ["response", "validator-report"]
+  }
+}

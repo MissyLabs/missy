@@ -1,0 +1,5 @@
+{
+  "input": "What is 18% of 250? Use the available tool and return the calculation.",
+  "expected_call": {"name": "calculator", "arguments": {"expression": "250 * 18 / 100"}},
+  "expected_numeric_result": 45
+}
