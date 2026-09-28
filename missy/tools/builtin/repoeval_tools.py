@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from missy.gateway.client import PolicyHTTPClient
+from missy.repoeval.contracts import COMPARABILITY_PATHS
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -42,6 +43,16 @@ _SECRET_TEXT = re.compile(
 _SAFE_SETTING_KEYS = frozenset({"token_budget", "max_tokens"})
 _FAIL = "Foundry request refused or unavailable; no execution is confirmed"
 _RESPONSE_LIMIT = 1024 * 1024
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_ARTIFACT_ID = re.compile(r"artifact-[A-Za-z0-9_-]{8,128}\Z")
+_KIND = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
+_REASONS = frozenset(COMPARABILITY_PATHS) | {
+    "comparability_key_invalid",
+    "comparability_key_mismatch",
+    "comparability_rules_version_mismatch",
+    "claimed_key_mismatch",
+    "missing_or_invalid_comparability_key",
+}
 
 
 def _open_token_file(path: str) -> int:
@@ -184,7 +195,7 @@ def _no_secrets(value: Any, depth: int = 0) -> bool:
 
 class RepoevalFoundryTool(BaseTool):
     name = "repoeval_foundry"
-    description = "Authenticated project-scoped Foundry list/status, bounded staging plan/snapshot/start/cancel. Other actions fail closed until their wire contracts exist."
+    description = "Authenticated project-scoped Foundry list/status, staging plan/snapshot/start/cancel, verified comparison/artifact metadata/draft reports."
     permissions = ToolPermissions(network=True)
     writes_state = True
 
@@ -347,6 +358,159 @@ class RepoevalFoundryTool(BaseTool):
             )
         )
 
+    def _read_contract(self, action: str, result: dict[str, Any], args: dict[str, Any]) -> bool:
+        """Validate bounded read identities. Never infer server evidence from a 200."""
+        try:
+            if action == "artifacts":
+                rows = result["artifacts"]
+                if (
+                    set(result) != {"project_id", "run_id", "artifacts"}
+                    or result.get("run_id") != args["run_id"]
+                    or not isinstance(rows, list)
+                    or len(rows) > 100
+                ):
+                    return False
+                seen = set()
+                for row in rows:
+                    if not isinstance(row, dict):
+                        return False
+                    if (
+                        set(row)
+                        != {"artifact_id", "run_id", "kind", "sha256", "size_bytes", "media_type"}
+                        or not isinstance(row["artifact_id"], str)
+                        or not _ARTIFACT_ID.fullmatch(row["artifact_id"])
+                        or row["artifact_id"] in seen
+                        or row["run_id"] != args["run_id"]
+                        or not isinstance(row["kind"], str)
+                        or not _KIND.fullmatch(row["kind"])
+                        or not isinstance(row["sha256"], str)
+                        or not _DIGEST.fullmatch(row["sha256"])
+                        or type(row["size_bytes"]) is not int
+                        or not 0 <= row["size_bytes"] <= 64_000_000
+                        or not isinstance(row["media_type"], str)
+                        or not 1 <= len(row["media_type"]) <= 255
+                        or _SECRET_TEXT.search(row["media_type"])
+                        or _URI.search(row["media_type"])
+                    ):
+                        return False
+                    seen.add(row["artifact_id"])
+                return True
+            ids = args["run_ids"]
+            if result.get("run_ids") != ids:
+                return False
+            if action == "compare":
+                if (
+                    set(result) != {"project_id", "comparison_id", "run_ids", "comparable", "pairs"}
+                    or not isinstance(result.get("comparison_id"), str)
+                    or not re.fullmatch(r"comparison-[0-9a-f]{24}", result["comparison_id"])
+                ):
+                    return False
+                pairs = result.get("pairs")
+                if not isinstance(pairs, list) or len(pairs) != len(ids) * (len(ids) - 1) // 2:
+                    return False
+                expected = {
+                    frozenset((a, b)) for index, a in enumerate(ids) for b in ids[index + 1 :]
+                }
+                found = set()
+                for row in pairs:
+                    if not isinstance(row, dict):
+                        return False
+                    if set(row) != {
+                        "left_run_id",
+                        "right_run_id",
+                        "comparable",
+                        "key",
+                        "reasons",
+                    }:
+                        return False
+                    pair = frozenset((row["left_run_id"], row["right_run_id"]))
+                    if pair not in expected or pair in found or type(row["comparable"]) is not bool:
+                        return False
+                    found.add(pair)
+                    if (
+                        not isinstance(row["reasons"], list)
+                        or len(row["reasons"]) > 32
+                        or any(not isinstance(x, str) or x not in _REASONS for x in row["reasons"])
+                    ):
+                        return False
+                    if row["comparable"]:
+                        if (
+                            row["reasons"]
+                            or not isinstance(row["key"], str)
+                            or not _DIGEST.fullmatch(row["key"])
+                        ):
+                            return False
+                    elif row["key"] is not None or not row["reasons"]:
+                        return False
+                return found == expected and result.get("comparable") is all(
+                    p["comparable"] for p in pairs
+                )
+            if (
+                set(result)
+                != {
+                    "project_id",
+                    "report_id",
+                    "status",
+                    "published",
+                    "run_ids",
+                    "schema_version",
+                    "groups",
+                    "incomparable",
+                }
+                or not isinstance(result.get("report_id"), str)
+                or not re.fullmatch(r"report-[0-9a-f]{24}", result["report_id"])
+                or result.get("status") != "draft"
+                or result.get("published") is not False
+                or result.get("schema_version") != "1.0"
+            ):
+                return False
+            groups, excluded = result.get("groups"), result.get("incomparable")
+            if (
+                not isinstance(groups, list)
+                or not isinstance(excluded, list)
+                or len(groups) + len(excluded) > len(ids)
+            ):
+                return False
+            seen = set()
+            for group in groups:
+                if not isinstance(group, dict):
+                    return False
+                if set(group) != {"comparability_key", "run_ids"}:
+                    return False
+                if not isinstance(group["comparability_key"], str) or not _DIGEST.fullmatch(
+                    group["comparability_key"]
+                ):
+                    return False
+                if not isinstance(group["run_ids"], list) or not group["run_ids"]:
+                    return False
+                for run in group["run_ids"]:
+                    if run not in ids or run in seen:
+                        return False
+                    seen.add(run)
+            for row in excluded:
+                if not isinstance(row, dict):
+                    return False
+                if (
+                    set(row) != {"run_id", "reason"}
+                    or row["run_id"] not in ids
+                    or row["run_id"] in seen
+                ):
+                    return False
+                if (
+                    not isinstance(row["reason"], list)
+                    or not row["reason"]
+                    or len(row["reason"]) > 32
+                    or any(
+                        not isinstance(reason, str) or reason not in _REASONS
+                        for reason in row["reason"]
+                    )
+                ):
+                    return False
+                seen.add(row["run_id"])
+            return seen == set(ids)
+        except (KeyError, TypeError, ValueError):
+            return False
+
     def execute(self, *, action: str, **kwargs: Any) -> ToolResult:
         with self._auth_lock:
             if not self._available:
@@ -358,10 +522,6 @@ class RepoevalFoundryTool(BaseTool):
             return ToolResult(False, None, "Unsupported Foundry action")
         if action == "capabilities":
             return ToolResult(False, None, "Foundry capabilities route unavailable")
-        if action in ("compare", "artifacts", "report"):
-            return ToolResult(
-                False, None, "Foundry project-bound response contract unavailable for this action"
-            )
         if not self._valid or not self._available:
             return ToolResult(False, None, "Foundry HTTP API unavailable; no run was submitted")
         try:
@@ -418,6 +578,12 @@ class RepoevalFoundryTool(BaseTool):
                 )
             if not isinstance(result, dict) or result.get("project_id") != self._project:
                 return ToolResult(False, None, "Foundry response project scope mismatch")
+            if action in ("compare", "artifacts", "report") and not self._read_contract(
+                action, result, kwargs
+            ):
+                return ToolResult(
+                    False, None, "Foundry verified project-bound read contract missing"
+                )
             if action == "plan":
                 plan_id = self._id(result.get("id"))
                 if not self._approved(result) or result.get("workload") != kwargs["workload"]:
@@ -429,8 +595,6 @@ class RepoevalFoundryTool(BaseTool):
                     )
                 self._plans[plan_id] = copy.deepcopy(result)
             if action == "status" and result.get("id") != kwargs["resource_id"]:
-                return ToolResult(False, None, "Foundry resource identity mismatch")
-            if action == "artifacts" and result.get("resource_id") != kwargs["run_id"]:
                 return ToolResult(False, None, "Foundry resource identity mismatch")
             if action in ("snapshot", "start", "cancel") and (
                 response.status_code != 202

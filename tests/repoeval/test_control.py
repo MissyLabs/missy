@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from missy.repoeval.contracts import definition_hash, sha256_json
 from missy.repoeval.control import FoundryError, FoundryService, MemoryStore, Principal
+from missy.repoeval.placement import PoolCapacity, ResourceEnvelope
+from missy.repoeval.planning import CapacitySnapshot, PlanningAuthority, ProjectPolicySnapshot
 
 HEX = "a" * 64
 
@@ -68,6 +70,32 @@ class ControlTests(unittest.TestCase):
     def setUp(self):
         self.dispatcher = FakeDispatcher()
         self.store = MemoryStore()
+        self.now = 1000.0
+        self.capacity = CapacitySnapshot(
+            "capacity-1",
+            self.now,
+            (
+                PoolCapacity("staging", 3000, 4096, 8192),
+                PoolCapacity("production", 5000, 8192, 16384),
+            ),
+        )
+        self.project_policy = ProjectPolicySnapshot(
+            "project",
+            "policy-1",
+            self.now,
+            frozenset({"MissyLabs/missy"}),
+            frozenset({"registry.example/worker@sha256:" + HEX}),
+            {"one": frozenset({"registered-model"})},
+            ResourceEnvelope(500, 512, 1024),
+            10_000_000,
+            frozenset({"none"}),
+            "audit-sink-1",
+        )
+        authority = PlanningAuthority(
+            lambda: self.capacity,
+            lambda project: self.project_policy,
+            clock=lambda: self.now,
+        )
         self.service = FoundryService(
             repositories={"project": {"MissyLabs/missy"}},
             providers={"one"},
@@ -86,6 +114,7 @@ class ControlTests(unittest.TestCase):
             store=self.store,
             dispatcher=self.dispatcher,
             allow_demo_dispatch=True,
+            planning_authority=authority,
             verified_snapshots={
                 "snapshot-fixed": {
                     "id": "snapshot-fixed",
@@ -346,6 +375,15 @@ class ControlTests(unittest.TestCase):
     def test_provider_selection_affects_plan_not_canonical_definition(self):
         self.service.providers = frozenset({"one", "two"})
         self.service.approved_models["two"] = frozenset({"registered-model"})
+        from dataclasses import replace
+
+        self.project_policy = replace(
+            self.project_policy,
+            provider_models={
+                **self.project_policy.provider_models,
+                "two": frozenset({"registered-model"}),
+            },
+        )
         alternate = workload()
         alternate["providers"][0]["registry_key"] = "two"
         left = self.service.benchmark_plan(self.user, workload())

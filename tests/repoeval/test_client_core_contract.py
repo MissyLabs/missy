@@ -15,8 +15,11 @@ from urllib.parse import urlsplit
 import pytest
 
 from missy.repoeval.api import FoundryAPI
+from missy.repoeval.artifacts import make_manifest
 from missy.repoeval.contracts import sha256_json
 from missy.repoeval.control import FoundryService, Principal
+from missy.repoeval.placement import PoolCapacity, ResourceEnvelope
+from missy.repoeval.planning import CapacitySnapshot, PlanningAuthority, ProjectPolicySnapshot
 from missy.tools.builtin.repoeval_tools import RepoevalFoundryTool
 
 PROJECT = "fixture-project"
@@ -113,7 +116,7 @@ def _workload(snapshot_id: str) -> dict:
     }
 
 
-def _wired(tmp_path):
+def _wired(tmp_path, *, planning=False, artifact_reader=None, artifact_clearance=None):
     token_path = tmp_path / "fixture.token"
     token_path.write_text(TOKEN, encoding="ascii")
     token_path.chmod(0o600)
@@ -135,6 +138,30 @@ def _wired(tmp_path):
         approved_prompts={PROMPT},
         approved_fixtures={"oracle": FIXTURE},
         approved_validators={"fixture-v1": {("oracle", "1", sha256_json({}))}},
+        planning_authority=(
+            PlanningAuthority(
+                lambda: CapacitySnapshot(
+                    "fixture-capacity", 1000.0, (PoolCapacity("staging", 3000, 4096, 8192),)
+                ),
+                lambda project: ProjectPolicySnapshot(
+                    PROJECT,
+                    "fixture-policy",
+                    1000.0,
+                    frozenset({REPO}),
+                    frozenset({IMAGE}),
+                    {"offline-fake": frozenset({MODEL})},
+                    ResourceEnvelope(500, 512, 1024),
+                    10_000_000,
+                    frozenset({"offline"}),
+                    "fixture-audit",
+                ),
+                clock=lambda: 1000.0,
+            )
+            if planning
+            else None
+        ),
+        artifact_reader=artifact_reader,
+        artifact_clearance=artifact_clearance,
         # No dispatcher. No production snapshot evidence or executable image.
     )
     api = FoundryAPI(
@@ -152,6 +179,133 @@ def _wired(tmp_path):
     )
     assert client.registration_ready
     return client, wire, service
+
+
+def _verified_test_run(service, run_id, *, project=PROJECT, content=None):
+    snapshot_id = "reviewed-fixture-snapshot"
+    service.verified_snapshots[snapshot_id] = {
+        "id": snapshot_id,
+        "project_id": PROJECT,
+        "repository_id": REPO,
+        "commit_sha": COMMIT,
+        "state": "verified",
+    }
+    plan = service.benchmark_plan(
+        Principal("fixture-user", PROJECT, frozenset({"read"})), _workload(snapshot_id)
+    )
+    w = plan["workload"]
+    manifest = {
+        "run_id": run_id,
+        "project_id": project,
+        "comparability_rules_version": "1.0",
+        "repository": w["repository"],
+        "task": w["task"],
+        "workload_id": w["id"],
+        "workload_version": w["version"],
+        "definition_sha256": plan["definition_sha256"],
+        "sandbox": {**w["sandbox"], "timeout_seconds": w["execution"]["timeout_seconds"]},
+        "evaluator_version": w["validation"]["evaluator_version"],
+        "validators": [
+            {"id": "oracle", "version": "1", "required": True, "parameters_sha256": sha256_json({})}
+        ],
+        "provider_independent_settings_sha256": sha256_json({}),
+        "tool_schemas_sha256": sha256_json([]),
+        "comparability_key": plan["comparability_key"],
+    }
+    record = {
+        "id": run_id,
+        "project_id": project,
+        "plan_id": plan["id"],
+        "state": "verified",
+        "manifest": manifest,
+        "manifest_sha256": sha256_json(manifest),
+    }
+    if content is not None:
+        import hashlib
+
+        record["artifacts"] = [
+            make_manifest(
+                artifact_id="artifact-offline001",
+                run_id=run_id,
+                kind="result",
+                uri="objects/owned-by-server-not-returned",
+                sha256=hashlib.sha256(content).hexdigest(),
+                size_bytes=len(content),
+                media_type="text/plain",
+                producer={"component": "fixture", "version": "1"},
+                classification="internal",
+                retention_class="fixture",
+                scan_state="clean",
+                redaction_state="complete",
+            )
+        ]
+    service.store.put_once(run_id, record)
+    return record
+
+
+def test_verified_project_scoped_comparison_draft_and_digest_checked_artifacts(tmp_path):
+    payload = b"cleared result"
+    reads = []
+
+    def read(project, run, artifact):
+        reads.append((project, run, artifact))
+        return payload
+
+    client, wire, service = _wired(
+        tmp_path,
+        planning=True,
+        artifact_reader=read,
+        artifact_clearance=lambda project, run, manifest, data: (
+            project == PROJECT and run == manifest["run_id"] and data == payload
+        ),
+    )
+    first, second = "run-offline0001", "run-offline0002"
+    _verified_test_run(service, first, content=payload)
+    _verified_test_run(service, second)
+    comparison = client.execute(action="compare", run_ids=[first, second])
+    assert comparison.success and comparison.output["project_id"] == PROJECT
+    assert comparison.output["pairs"][0]["comparable"] is True
+    assert comparison.output["comparison_id"].startswith("comparison-")
+    artifact_result = client.execute(action="artifacts", run_id=first)
+    assert artifact_result.success
+    assert reads == [(PROJECT, first, "artifact-offline001")]
+    assert set(artifact_result.output["artifacts"][0]) == {
+        "artifact_id",
+        "run_id",
+        "kind",
+        "sha256",
+        "size_bytes",
+        "media_type",
+    }
+    report = client.execute(action="report", run_ids=[first, second])
+    assert report.success and report.output["status"] == "draft"
+    assert report.output["published"] is False
+    assert report.output["groups"][0]["run_ids"] == [first, second]
+    assert wire.calls[-3:] == [
+        ("POST", f"/api/projects/{PROJECT}/compare"),
+        ("GET", f"/api/projects/{PROJECT}/runs/{first}/artifacts"),
+        ("POST", f"/api/projects/{PROJECT}/report"),
+    ]
+
+
+def test_cross_project_and_tampered_artifacts_refused_at_service_wire(tmp_path):
+    payload = b"good"
+    client, wire, service = _wired(
+        tmp_path,
+        planning=True,
+        artifact_reader=lambda *parts: b"tampered",
+        artifact_clearance=lambda *parts: True,
+    )
+    first, foreign = "run-offline0003", "run-foreign0004"
+    _verified_test_run(service, first, content=payload)
+    _verified_test_run(service, foreign, project="foreign")
+    assert not client.execute(action="compare", run_ids=[first, foreign]).success
+    assert not client.execute(action="report", run_ids=[foreign]).success
+    assert not client.execute(action="artifacts", run_id=first).success
+    same_project = service.store.get(first)
+    same_project["manifest"]["task"]["prompt_sha256"] = "f" * 64
+    service.store.update(first, same_project)
+    assert not client.execute(action="report", run_ids=[first]).success
 
 
 def test_real_missy_client_reaches_native_core_for_scoped_list_snapshot_and_status(tmp_path):
@@ -209,8 +363,8 @@ def test_core_plan_round_trip_still_cannot_authorize_client_start(tmp_path):
     planned = client.execute(action="plan", workload=workload)
     assert (
         not planned.success
-    )  # Core has no staging placement or seven explicit policy attestations.
-    assert "staging placement" in planned.error
+    )  # No trusted staging capacity/policy provider was injected into this core.
+    assert planned.error
     assert client._plans == {}
     calls_before = len(wire.calls)
     refused = client.execute(

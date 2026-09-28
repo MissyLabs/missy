@@ -8,11 +8,14 @@ import importlib.resources
 import json
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .artifacts import ArtifactError, safe_to_expose, validate_manifest, verify_object_bytes
 from .contracts import comparability_key, definition_hash, sha256_json
 from .contracts import compare_runs as compare_manifest_runs
+from .planning import PlanningAuthority, PlanningError
 from .report import build_comparison_report
 
 SHA = re.compile(r"^[0-9a-f]{40,64}$")
@@ -104,6 +107,9 @@ class FoundryService:
         approved_fixtures: dict[str, str] | None = None,
         approved_validators: dict[str, set[tuple[str, str, str]]] | None = None,
         allow_demo_dispatch: bool = False,
+        planning_authority: PlanningAuthority | None = None,
+        artifact_reader: Callable[[str, str, str], bytes] | None = None,
+        artifact_clearance: Callable[[str, str, dict[str, Any], bytes], bool] | None = None,
     ) -> None:
         self.repositories = {k: frozenset(v) for k, v in repositories.items()}
         self.providers = frozenset(providers)
@@ -119,6 +125,11 @@ class FoundryService:
         self.approved_fixtures = dict(approved_fixtures or {})
         self.approved_validators = {k: frozenset(v) for k, v in (approved_validators or {}).items()}
         self.allow_demo_dispatch = allow_demo_dispatch
+        self.planning_authority = planning_authority
+        # Injected trusted readers. Never trust a worker URI or clearance flag as
+        # an instruction to fetch bytes or as proof that redaction occurred.
+        self.artifact_reader = artifact_reader
+        self.artifact_clearance = artifact_clearance
 
     @staticmethod
     def _require(principal: Principal, permission: str) -> None:
@@ -167,20 +178,74 @@ class FoundryService:
         self._require(principal, "read")
         return self._owned(principal, snapshot_id)
 
-    def artifacts(self, principal: Principal, resource_id: str) -> list[dict[str, Any]]:
+    def artifacts(self, principal: Principal, resource_id: str) -> dict[str, Any]:
         self._require(principal, "read")
         record = self._owned(principal, resource_id)
-        artifacts = record.get("artifacts", [])
-        if not isinstance(artifacts, list):
-            raise FoundryError("invalid_state", "Artifact manifest is malformed")
-        return artifacts
+        if record.get("id") != resource_id:
+            raise FoundryError("evidence", "Stored run identity does not match requested resource")
+        self._verified_manifest(principal, record)
+        artifacts = record.get("artifacts")
+        if not isinstance(artifacts, list) or len(artifacts) > 100:
+            raise FoundryError("evidence", "Verified artifact catalog is unavailable")
+        if self.artifact_reader is None or self.artifact_clearance is None:
+            raise FoundryError("unavailable", "Trusted artifact verification is unavailable")
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in artifacts:
+            try:
+                manifest = validate_manifest(item, run_id=resource_id)
+                artifact_id = manifest["artifact_id"]
+                if artifact_id in seen or not safe_to_expose(manifest):
+                    raise ArtifactError("uncleared or duplicate artifact")
+                seen.add(artifact_id)
+                data = self.artifact_reader(principal.project_id, resource_id, artifact_id)
+                verify_object_bytes(manifest, data)
+                if (
+                    self.artifact_clearance(principal.project_id, resource_id, manifest, data)
+                    is not True
+                ):
+                    raise ArtifactError("independent clearance unavailable")
+            except (ArtifactError, KeyError, TypeError, ValueError, OSError) as exc:
+                raise FoundryError(
+                    "evidence", "Artifact bytes or clearance cannot be verified"
+                ) from exc
+            # Only fixed bounded fields; never return object bytes, URI, producer
+            # text, worker output, or unconstrained manifest content.
+            result.append(
+                {
+                    "artifact_id": artifact_id,
+                    "run_id": resource_id,
+                    "kind": manifest["kind"],
+                    "sha256": manifest["sha256"],
+                    "size_bytes": manifest["size_bytes"],
+                    "media_type": manifest["media_type"],
+                }
+            )
+        return {"project_id": principal.project_id, "run_id": resource_id, "artifacts": result}
 
     def benchmark_plan(self, principal: Principal, workload: dict[str, Any]) -> dict[str, Any]:
         self._require(principal, "read")
         return self._validated_plan(principal, workload)
 
+    @staticmethod
+    def _plan_identity(project_id: str, workload: dict[str, Any], attestation: dict) -> str:
+        return "plan-" + digest([project_id, sha256_json(workload), attestation])[:24]
+
+    def _planning_attestation(self, project_id: str, workload: dict[str, Any]) -> dict:
+        if self.planning_authority is None:
+            raise FoundryError("unavailable", "Trusted planning authority is not configured")
+        try:
+            return self.planning_authority.attest(project_id, workload)
+        except PlanningError as exc:
+            raise FoundryError(exc.category, str(exc)) from exc
+
     def _validated_plan(
-        self, principal: Principal, workload: dict[str, Any], *, persist: bool = True
+        self,
+        principal: Principal,
+        workload: dict[str, Any],
+        *,
+        persist: bool = True,
+        prior_attestation: dict | None = None,
     ) -> dict[str, Any]:
         """Validate against the packaged contract and current operator policy."""
         workload = copy.deepcopy(workload)
@@ -303,7 +368,17 @@ class FoundryService:
         definition = definition_hash(workload)
         # Canonical definition excludes providers, but plan identity must retain
         # exact provider selection so a plan ID cannot alias a different target.
-        plan_id = "plan-" + digest([principal.project_id, sha256_json(workload)])[:24]
+        if prior_attestation is not None:
+            if self.planning_authority is None:
+                raise FoundryError("unavailable", "Trusted planning authority is not configured")
+            try:
+                self.planning_authority.recheck(principal.project_id, workload, prior_attestation)
+            except PlanningError as exc:
+                raise FoundryError(exc.category, str(exc)) from exc
+            attestation = prior_attestation
+        else:
+            attestation = self._planning_attestation(principal.project_id, workload)
+        plan_id = self._plan_identity(principal.project_id, workload, attestation)
         comparison_manifest = {
             "comparability_rules_version": "1.0",
             "repository": repo,
@@ -333,6 +408,10 @@ class FoundryService:
             "definition_sha256": definition,
             "comparability_key": comparison,
             "state": "planned",
+            "attestation": attestation,
+            "placement": attestation["placement"],
+            "policy_checks": attestation["policy_checks"],
+            "expires_at": attestation["expires_at"],
         }
         if not persist:
             return plan
@@ -352,7 +431,10 @@ class FoundryService:
             plan.get("id") != plan_id
             or plan.get("definition_sha256") != definition_hash(plan.get("workload", {}))
             or plan_id
-            != "plan-" + digest([principal.project_id, sha256_json(plan["workload"])])[:24]
+            != self._plan_identity(principal.project_id, plan["workload"], plan.get("attestation"))
+            or plan.get("placement") != plan.get("attestation", {}).get("placement")
+            or plan.get("policy_checks") != plan.get("attestation", {}).get("policy_checks")
+            or plan.get("expires_at") != plan.get("attestation", {}).get("expires_at")
         ):
             raise FoundryError("evidence", "Stored plan identity does not match immutable workload")
         # Hold the store-wide lock across check, reservation, submission and
@@ -380,7 +462,15 @@ class FoundryService:
             )
         # A plan is a proposal, not a permanent grant. Re-check every current
         # registry/approval/limit immediately before reserving and dispatching.
-        if self._validated_plan(principal, plan["workload"], persist=False) != plan:
+        if (
+            self._validated_plan(
+                principal,
+                plan["workload"],
+                persist=False,
+                prior_attestation=plan.get("attestation"),
+            )
+            != plan
+        ):
             raise FoundryError("evidence", "Stored plan conflicts with current reviewed workload")
         run_id = "run-" + digest([principal.project_id, plan_id, idempotency_key])[:24]
         # A real production dispatcher must implement a transactionally reconciled
@@ -425,10 +515,16 @@ class FoundryService:
         if (
             not isinstance(run_ids, list)
             or not 2 <= len(run_ids) <= 32
+            or any(
+                not isinstance(run_id, str) or not re.fullmatch(r"run-[A-Za-z0-9_-]{1,128}", run_id)
+                for run_id in run_ids
+            )
             or len(set(run_ids)) != len(run_ids)
         ):
             raise FoundryError("invalid_input", "Two to 32 unique run IDs are required")
         records = [self._owned(principal, run_id) for run_id in run_ids]
+        if any(record.get("id") != run_id for run_id, record in zip(run_ids, records, strict=True)):
+            raise FoundryError("evidence", "Stored run identity does not match requested resource")
         manifests = []
         for record in records:
             manifests.append(self._verified_manifest(principal, record))
@@ -445,7 +541,16 @@ class FoundryService:
                         "reasons": list(result.reasons),
                     }
                 )
-        return {"comparable": all(row["comparable"] for row in pairwise), "pairs": pairwise}
+        return {
+            "project_id": principal.project_id,
+            "comparison_id": "comparison-"
+            + digest(
+                [principal.project_id, sorted((m["run_id"], sha256_json(m)) for m in manifests)]
+            )[:24],
+            "run_ids": run_ids,
+            "comparable": all(row["comparable"] for row in pairwise),
+            "pairs": pairwise,
+        }
 
     def report_draft(self, principal: Principal, run_ids: list[str]) -> dict[str, Any]:
         """Build a report from authorized records, preserving incomparable partitions."""
@@ -453,12 +558,36 @@ class FoundryService:
         if (
             not isinstance(run_ids, list)
             or not 1 <= len(run_ids) <= 32
+            or any(
+                not isinstance(run_id, str) or not re.fullmatch(r"run-[A-Za-z0-9_-]{1,128}", run_id)
+                for run_id in run_ids
+            )
             or len(set(run_ids)) != len(run_ids)
         ):
             raise FoundryError("invalid_input", "One to 32 unique run IDs are required")
         records = [self._owned(principal, run_id) for run_id in run_ids]
+        if any(record.get("id") != run_id for run_id, record in zip(run_ids, records, strict=True)):
+            raise FoundryError("evidence", "Stored run identity does not match requested resource")
         manifests = [self._verified_manifest(principal, record) for record in records]
-        return build_comparison_report(manifests)
+        # Partition using verified manifests; expose only identities and
+        # comparability, never raw worker output or unbounded report content.
+        draft = build_comparison_report(manifests)
+        return {
+            "project_id": principal.project_id,
+            "report_id": "report-"
+            + digest(
+                [principal.project_id, sorted((m["run_id"], sha256_json(m)) for m in manifests)]
+            )[:24],
+            "status": "draft",
+            "published": False,
+            "run_ids": run_ids,
+            "schema_version": draft["schema_version"],
+            "groups": [
+                {"comparability_key": group["comparability_key"], "run_ids": group["run_ids"]}
+                for group in draft["groups"]
+            ],
+            "incomparable": draft["incomparable"],
+        }
 
     def _verified_manifest(self, principal: Principal, record: dict[str, Any]) -> dict[str, Any]:
         manifest = record.get("manifest")
@@ -466,14 +595,23 @@ class FoundryService:
             raise FoundryError(
                 "unavailable", "Only verified runs with persisted manifests can be compared"
             )
-        plan = self._owned(principal, record["plan_id"])
-        workload = plan["workload"]
+        try:
+            if not isinstance(record.get("manifest_sha256"), str) or record[
+                "manifest_sha256"
+            ] != sha256_json(manifest):
+                raise FoundryError("evidence", "Stored manifest digest conflicts with verified run")
+            plan = self._owned(principal, record["plan_id"])
+            workload = plan["workload"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FoundryError(
+                "evidence", "Persisted run manifest conflicts with reviewed plan"
+            ) from exc
         if (
             manifest.get("run_id") != record["id"]
             or manifest.get("project_id") != principal.project_id
             or plan.get("definition_sha256") != definition_hash(workload)
             or plan.get("id")
-            != "plan-" + digest([principal.project_id, sha256_json(workload)])[:24]
+            != self._plan_identity(principal.project_id, workload, plan.get("attestation"))
             or manifest.get("workload_id") != workload.get("id")
             or manifest.get("workload_version") != workload.get("version")
             or manifest.get("definition_sha256") != plan["definition_sha256"]

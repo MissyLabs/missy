@@ -41,13 +41,29 @@ class Service:
         return {"id": snap}
 
     def compare_runs(self, p, ids):
-        return {"run_ids": ids, "comparable": True}
+        self.calls.append(("compare", p.project_id, ids))
+        return {
+            "project_id": p.project_id,
+            "comparison_id": "comparison-" + "a" * 24,
+            "run_ids": ids,
+            "comparable": True,
+            "pairs": [],
+        }
 
     def artifacts(self, p, resource):
-        return []
+        self.calls.append(("artifacts", p.project_id, resource))
+        return {"project_id": p.project_id, "run_id": resource, "artifacts": []}
 
     def report_draft(self, p, ids):
-        return {"run_ids": ids}
+        self.calls.append(("report", p.project_id, ids))
+        return {
+            "project_id": p.project_id,
+            "report_id": "report-" + "b" * 24,
+            "status": "draft",
+            "published": False,
+            "run_ids": ids,
+            "groups": [],
+        }
 
 
 class APITests(unittest.TestCase):
@@ -66,6 +82,41 @@ class APITests(unittest.TestCase):
     def test_project_scope(self):
         r = self.api.handle("GET", "/v1/projects/other/repositories", self.headers, {})
         self.assertEqual(r.status, 403)
+
+    def test_comparison_artifact_and_draft_report_scoped_wires(self):
+        ids = ["run-alpha0001", "run-beta00002"]
+        for method, path, body, action in (
+            ("POST", "/api/projects/p1/compare", {"run_ids": ids}, "compare"),
+            ("GET", "/api/projects/p1/runs/run-alpha0001/artifacts", {}, "artifacts"),
+            ("POST", "/api/projects/p1/report", {"run_ids": ids}, "report"),
+        ):
+            with self.subTest(action=action):
+                r = self.api.handle(method, path, self.headers, body)
+                self.assertEqual(r.status, 200)
+                self.assertEqual(r.body["data"]["project_id"], "p1")
+                self.assertIn(action, [c[0] for c in self.service.calls])
+                count = len(self.service.calls)
+                foreign = self.api.handle(
+                    method, path.replace("/p1/", "/other/"), self.headers, body
+                )
+                self.assertEqual(foreign.status, 403)
+                self.assertEqual(len(self.service.calls), count)
+        self.assertFalse(
+            self.api.handle("POST", "/api/projects/p1/report", self.headers, {"run_ids": ids}).body[
+                "data"
+            ]["published"]
+        )
+
+    def test_read_routes_refuse_invalid_ids_before_dispatch(self):
+        for method, path, body in (
+            ("POST", "/api/projects/p1/compare", {"run_ids": ["run-a", "run-a"]}),
+            ("POST", "/api/projects/p1/report", {"run_ids": ["../foreign"]}),
+            ("POST", "/api/projects/p1/report", {"run_ids": ["run-a"], "publish": True}),
+            ("GET", "/api/projects/p1/runs/%2Fforeign/artifacts", {}),
+        ):
+            before = len(self.service.calls)
+            self.assertEqual(self.api.handle(method, path, self.headers, body).status, 400)
+            self.assertEqual(len(self.service.calls), before)
 
     def test_idempotency_required_then_forwarded(self):
         r = self.api.handle(

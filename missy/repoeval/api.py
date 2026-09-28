@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,8 @@ class FoundryAPI:
             project, tail = parts[1], parts[2:]
             if project != _get(principal, "project_id"):
                 raise APIError(403, "forbidden", "Project is outside caller scope")
+            if body is not None and not isinstance(body, Mapping):
+                raise APIError(400, "invalid_request", "Request must be an object")
             data = dict(body or {})
             permissions = _get(principal, "permissions", ())
             if not isinstance(permissions, (set, frozenset, list, tuple)):
@@ -61,6 +64,22 @@ class FoundryAPI:
             op = self._route(method, tail)
             if op is None:
                 raise APIError(404, "not_found", "Unknown API route")
+            if op in ("compare", "report"):
+                ids = data.get("run_ids")
+                minimum = 2 if op == "compare" else 1
+                if (
+                    set(data) != {"run_ids"}
+                    or not isinstance(ids, list)
+                    or not minimum <= len(ids) <= 16
+                    or any(
+                        not isinstance(r, str) or not re.fullmatch(r"run-[A-Za-z0-9_-]{1,128}", r)
+                        for r in ids
+                    )
+                    or len(set(ids)) != len(ids)
+                ):
+                    raise APIError(400, "invalid_request", "Valid unique run IDs are required")
+            if op == "artifacts" and not re.fullmatch(r"run-[A-Za-z0-9_-]{1,128}", tail[1]):
+                raise APIError(400, "invalid_request", "Valid run ID required")
             if op in ("snapshot_start", "benchmark_start", "cancel"):
                 permission = {
                     "snapshot_start": "snapshot:start",

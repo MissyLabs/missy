@@ -13,6 +13,7 @@ import argparse
 import copy
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from .contracts import sha256_json
 from .control import FoundryService, Principal
 from .evaluation import evaluate_tool_call
 from .mcp import FoundryMCP, MCPError
+from .placement import PoolCapacity, ResourceEnvelope
+from .planning import CapacitySnapshot, PlanningAuthority, ProjectPolicySnapshot
 from .provider import AdapterRequest, AdapterResponse, ProviderBroker, ProviderRequest, ProviderSpec
 from .scanner import ScanRefused, scan_repository
 
@@ -129,6 +132,30 @@ def run_offline_demo(
     fixture_workload["sandbox"]["image_digest"] = OFFLINE_IMAGE
     principal = Principal("offline-operator", PROJECT, frozenset({"read", "execute"}))
     validator = fixture_workload["validation"]["validators"][0]
+    observed_at = time.time()
+    # Explicit synthetic fixture facts, never a live placement attestation.
+    planning_authority = PlanningAuthority(
+        lambda: CapacitySnapshot(
+            "synthetic-offline-capacity-v1",
+            observed_at,
+            (PoolCapacity("staging", 4000, 8192, 16384),),
+        ),
+        lambda project: ProjectPolicySnapshot(
+            PROJECT,
+            "synthetic-offline-policy-v1",
+            observed_at,
+            frozenset({"local/offline-fixture"}),
+            frozenset({OFFLINE_IMAGE}),
+            {PROVIDER: frozenset({MODEL})},
+            ResourceEnvelope(500, 512, 1024),
+            10_000_000,
+            frozenset({"offline"}),
+            "synthetic-audit-fixture",
+        ),
+        # Fixed fixture clock keeps the API and MCP plans identical; not a
+        # production clock, and this service cannot dispatch by construction.
+        clock=lambda: observed_at,
+    )
     service = FoundryService(
         repositories={PROJECT: {"local/offline-fixture"}},
         providers={PROVIDER},
@@ -161,6 +188,7 @@ def run_offline_demo(
         },
         dispatcher=None,
         allow_demo_dispatch=False,
+        planning_authority=planning_authority,
     )
     # Fixture authentication exercises API refusal without impersonating a
     # production identity provider. This header is not a real credential.

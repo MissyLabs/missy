@@ -471,10 +471,16 @@ def test_status_compare_cancel_artifacts_and_report_are_fixed_routes_only():
     assert not instance.execute(action="compare", run_ids=["run-a", "run-b"]).success
     assert not instance.execute(action="artifacts", run_id="run-a").success
     assert not instance.execute(action="report", run_ids=["run-a"]).success
+    # Read requests consume one mocked response each; cancellation still uses
+    # its own acknowledgement rather than a stale unrelated response.
+    client.responses.append(response({"id": "run-a", "state": "cancelled"}, status=202))
     cancelled = instance.execute(action="cancel", run_id="run-a", idempotency_key="cancel-0001")
     assert cancelled.success and cancelled.output["execution_complete"] is False
     assert [call[1].rsplit("/projects/alpha", 1)[-1] for call in client.calls] == [
         "/runs/run-a",
+        "/compare",
+        "/runs/run-a/artifacts",
+        "/report",
         "/runs/run-a/cancel",
     ]
 
@@ -499,16 +505,130 @@ def test_failed_list_refresh_revokes_cached_repository_scope():
     assert len(client.calls) == 2
 
 
-def test_pr1_unscoped_compare_report_artifacts_are_explicitly_unavailable():
+def test_scoped_compare_report_artifacts_are_exposed_only_on_valid_bounded_wires():
     instance, client = tool()
-    for action, arguments in (
-        ("compare", {"run_ids": ["run-a", "run-b"]}),
-        ("report", {"run_ids": ["run-a"]}),
-        ("artifacts", {"run_id": "run-a"}),
-    ):
-        result = instance.execute(action=action, **arguments)
-        assert not result.success and "unavailable" in result.error
-    assert not client.calls
+    ids = ["run-alpha0001", "run-beta00002"]
+    pair = {
+        "left_run_id": ids[0],
+        "right_run_id": ids[1],
+        "comparable": True,
+        "key": "a" * 64,
+        "reasons": [],
+    }
+    client.responses.append(
+        response(
+            {
+                "comparison_id": "comparison-" + "a" * 24,
+                "run_ids": ids,
+                "comparable": True,
+                "pairs": [pair],
+            }
+        )
+    )
+    assert instance.execute(action="compare", run_ids=ids).success
+    assert client.calls[-1][1].endswith("/projects/alpha/compare")
+    client.responses.append(
+        response(
+            {
+                "run_id": ids[0],
+                "artifacts": [
+                    {
+                        "artifact_id": "artifact-result0001",
+                        "run_id": ids[0],
+                        "kind": "result",
+                        "sha256": "f" * 64,
+                        "size_bytes": 8,
+                        "media_type": "text/plain",
+                    }
+                ],
+            }
+        )
+    )
+    result = instance.execute(action="artifacts", run_id=ids[0])
+    assert result.success and result.output["artifacts"][0]["sha256"] == "f" * 64
+    assert client.calls[-1][1].endswith(f"/projects/alpha/runs/{ids[0]}/artifacts")
+    client.responses.append(
+        response(
+            {
+                "report_id": "report-" + "b" * 24,
+                "status": "draft",
+                "published": False,
+                "schema_version": "1.0",
+                "run_ids": ids,
+                "groups": [{"comparability_key": "a" * 64, "run_ids": ids}],
+                "incomparable": [],
+            }
+        )
+    )
+    assert instance.execute(action="report", run_ids=ids).output["published"] is False
+    assert client.calls[-1][1].endswith("/projects/alpha/report")
+
+
+def test_read_wires_refuse_cross_project_claims_and_uncleared_artifact_metadata():
+    instance, client = tool()
+    ids = ["run-alpha0001", "run-beta00002"]
+    client.responses.append(
+        response(
+            {
+                "run_ids": ids,
+                "comparison_id": "comparison-" + "a" * 24,
+                "comparable": True,
+                "pairs": [],
+            },
+            project="foreign",
+        )
+    )
+    assert not instance.execute(action="compare", run_ids=ids).success
+    client.responses.append(response({"run_id": ids[0], "artifacts": []}, project="foreign"))
+    assert not instance.execute(action="artifacts", run_id=ids[0]).success
+    client.responses.append(
+        response(
+            {
+                "report_id": "report-" + "a" * 24,
+                "status": "draft",
+                "published": False,
+                "schema_version": "1.0",
+                "run_ids": ids,
+                "groups": [],
+                "incomparable": [],
+            },
+            project="foreign",
+        )
+    )
+    assert not instance.execute(action="report", run_ids=ids).success
+    client.responses.append(
+        response(
+            {
+                "run_id": ids[0],
+                "artifacts": [
+                    {
+                        "artifact_id": "artifact-result0001",
+                        "run_id": ids[0],
+                        "kind": "result",
+                        "sha256": "f" * 64,
+                        "size_bytes": 8,
+                        "media_type": "text/plain",
+                        "uri": "https://secrets.invalid/download",
+                    }
+                ],
+            }
+        )
+    )
+    assert not instance.execute(action="artifacts", run_id=ids[0]).success
+    client.responses.append(
+        response(
+            {
+                "report_id": "report-" + "b" * 24,
+                "status": "published",
+                "published": True,
+                "schema_version": "1.0",
+                "run_ids": ids,
+                "groups": [],
+                "incomparable": [],
+            }
+        )
+    )
+    assert not instance.execute(action="report", run_ids=ids).success
 
 
 @pytest.mark.parametrize("action", ["snapshot", "start", "cancel"])

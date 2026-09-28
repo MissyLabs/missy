@@ -2,10 +2,9 @@
 
 `repoeval_foundry` is a deliberately gated project-scoped tool. It is **not**
 a Nomad, shell, repository-write, deployment, credential, or arbitrary HTTP
-tool. Existing Foundry code contains a framework-neutral `FoundryAPI.handle()`
-route table and an MCP-style facade, **not a running authenticated HTTP server**.
-There is no verified endpoint, no discovered capabilities route, and no
-confirmed live scan or benchmark. The integration defaults to unavailable.
+tool. Foundry has a framework-neutral route facade and an opt-in HTTP listener;
+neither a live endpoint nor a completed scan or benchmark has been established
+by these tests. The integration defaults to unavailable.
 Configuration supports an opt-in authenticated bridge using a protected token
 file. `api_available` is only an operator assertion, not a health check; this
 document does not claim a real API is deployed or reachable. Registration
@@ -52,7 +51,7 @@ base (optionally with trailing `/`), a valid hostname, and a valid nonzero port.
 The adapter must expose `/projects/{id}` or
 `/api/projects/{id}`, never `/api/v1/projects/{id}`. Configure only the origin
 or `/api` prefix; the client appends the project-scoped resource route.
-PR1 `FoundryAPI.handle()` wraps responses as
+`FoundryAPI.handle()` wraps responses as
 `{"ok": true, "data": ...}`. `list_repositories()` returns a bare `list[str]`,
 not repository objects and not a project-tagged document. The client accepts
 only unique, validated repository IDs (a single legacy segment or exactly
@@ -68,11 +67,11 @@ independent per-item project assertion. A future HTTP adapter must preserve
 that authentication and route check before enabling the tool. PR1 snapshot,
 plan, run status and cancellation records contain `project_id`, which the
 client requires to equal its configured project; missing or mismatched scope
-is refused. PR1 benchmark plans do return the matched workload, but **do not**
-return staging placement or seven explicit policy checks. A PR1 plan response
-therefore fails, cannot be saved as approved, and cannot authorize start. This is
-deliberate: the client cannot infer execution approval from an optimistic HTTP
-200, a returned plan ID, repository content, or the caller's own assertion.
+is refused. Plans require a trusted staging capacity and policy attestation
+provider; without it, planning fails closed. A plan without matched workload,
+staging placement and seven explicit policy checks cannot authorize start.
+The client cannot infer execution approval from HTTP 200, a plan ID,
+repository content, or the caller's own assertion.
 
 When a compatible service exists, configure exactly one project identity and
 one endpoint whose hostname appears literally in Foundry `allowed_hosts`; HTTP
@@ -97,8 +96,9 @@ Action arguments (all other arguments refused):
 | `snapshot` | `repository_id`, `commit_sha`, `self_approve: true`, `idempotency_key` | Bounded project-registered snapshot **request** at immutable SHA; acknowledgement is not a completed scan or verified snapshot. |
 | `start` | `plan_id`, `self_approve: true`, `idempotency_key` | Requires a previously observed server-reviewed staging plan. A compatible response is only submission acknowledgement, not completion. |
 | `status` | `resource_type: run|snapshot`, `resource_id` | Status without assuming a submitted request succeeded. |
-| `compare` / `report` | `run_ids` | Fail closed without wire evidence establishing project scope. No HTTP request is sent. |
-| `artifacts` | `run_id` | Fail closed without wire evidence establishing project scope. No HTTP request is sent. |
+| `compare` | `run_ids` (2..16 unique) | Fixed POST `/compare`; verified run manifests, `project_id`, stable `comparison_id`, exact run IDs, bounded pairwise comparability and reasons. |
+| `artifacts` | `run_id` | Fixed GET `/runs/{run_id}/artifacts`; verified run and trusted independently cleared, digest-checked bytes before bounded metadata only. No raw bytes or URI. |
+| `report` | `run_ids` (1..16 unique) | Fixed POST `/report`; verified run manifests, stable `report_id`, `project_id`, exact run IDs, bounded comparability groups, `status: draft`, `published: false`. Never publishes. |
 | `cancel` | `run_id`, `idempotency_key` | Project-scoped cancellation; not deletion. |
 
 Self-approval applies only to bounded project scans and benchmarks and does
@@ -114,3 +114,14 @@ are not echoed as error text. Metadata output is bounded and sensitive keys
 and credential-looking strings and URIs are redacted. Exact credential echoes
 anywhere in a response are refused, even under innocuous keys. Returned URIs are
 never fetched. No test contacts a live endpoint.
+
+Read-only result contracts reject missing/mismatched `project_id`, unrelated
+resource IDs, duplicate/foreign runs, artifact URI or object data, unbounded
+fields and publication claims. Run manifest checks require verified state,
+persisted canonical SHA-256 digest, exact project/run/plan/workload identity,
+and a recomputed comparability key. Artifact metadata alone is not clearance:
+the trusted service must fetch bytes through a project/run/artifact-keyed
+reader, verify length and digest against the manifest, then obtain independent
+clearance for those exact bytes. Without these injected capabilities, artifact
+reads fail closed even for an empty artifact list. Reports are draft summaries,
+not raw worker output or publication authority.

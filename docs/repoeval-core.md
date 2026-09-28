@@ -17,7 +17,8 @@ provider, submit a job, or modify Missy's agent runtime.
 | `provider` | Adapter protocol, explicit registry and authorization, request limits, redacted failures. No real provider adapter or configured credential resolver. Calling a supplied adapter can make a provider call, so this module is not an offline-only execution API. |
 | `evaluation`, `report` | Deterministic local fixture evaluation and comparison draft, not independent run attestation. |
 | `artifacts`, `storage`, `schema.sql` | Artifact manifests, byte/digest/clearance checks, retention semantics, PostgreSQL schema/adapter boundary; no configured database, object store, scanner or migration. |
-| `api`, `mcp` | Framework-neutral route and tool facades over an **injected** service/principal; no HTTP listener, authentication provider, MCP transport or Missy tool registration. |
+| `api`, `mcp` | Framework-neutral route and tool facades over an **injected** service/principal; no automatically started transport or Missy tool registration. |
+| `http_server` | Explicitly constructed, single-project stdlib loopback HTTP adapter over `FoundryAPI.handle`. Requires caller-supplied credentials mapped to scoped principals; no default token or startup. Not a TLS endpoint or production authorization/proxy configuration. |
 | `offline_demo`, `workloads/` | Checked-in three-class Missy draft catalog; one constant fake-adapter tool-call demonstration with a disposable clean checkout. Catalog definitions are non-executable drafts: providers empty, image host `registry.invalid`, source commit fixed to historical fixture reference. |
 
 Import paths include `from missy.repoeval import FoundryService, FoundryAPI,
@@ -73,8 +74,30 @@ review before attempting real client/core integration. Do not bypass the
 client's checks, invent policy evidence, or treat a snapshot request as a
 verified snapshot.
 
-Missing for live operation: a separately reviewed and authorized transport
-and authentication layer; real per-project snapshot attestations and approved
+An **opt-in local adapter** now exists in `missy.repoeval.http_server`:
+construct `CredentialVerifier` from operator-managed token-to-`Principal`
+entries and pass it, a service, and a fixed project ID to
+`FoundryHTTPServer`. The caller must explicitly start and stop
+`server.serve_forever()`; imports and construction do not launch it. It
+binds to `127.0.0.1` by default and exposes only fixed routes under
+`/api/projects/{configured-project}` or `/projects/{configured-project}`.
+It authenticates Bearer tokens with
+fixed-size digest constant-time comparisons, forwards to `FoundryAPI` for
+operation permissions, refuses unsupported methods and unframed, chunked,
+oversized or non-JSON requests, caps serialized responses, closes each
+connection, and never logs raw request paths or headers. It does not offer
+TLS, manage token rotation/revocation or credential storage, or prove a
+whole-request constant-time property. To bind a non-loopback IPv4 address,
+an operator must provide an explicit `ExternalTLSProxyContract` asserting
+TLS termination, proxy authentication and backend isolation. This assertion
+does **not** enforce those external controls. Do not expose this plain HTTP
+listener to untrusted networks, and do not treat an assertion as evidence
+that proxy/firewall enforcement exists. Local loopback tests use only an
+ephemeral test port with fake service and fixture principals.
+
+Missing for live operation: an operationally reviewed and authorized
+transport/proxy, identity/key lifecycle and persistence; real per-project
+snapshot attestations and approved
 executable images; persistent transactional dispatch/outbox and a trusted
 Nomad worker; provider adapters/secret custody/budget metering; independent
 validator and artifact attestations; production database migrations and
