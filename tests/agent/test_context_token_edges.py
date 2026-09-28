@@ -42,6 +42,7 @@ from missy.agent.context import (
     TokenBudget,
     _approx_tokens,
     _format_summary,
+    _value_tokens,
 )
 
 # ---------------------------------------------------------------------------
@@ -652,6 +653,66 @@ class TestHistoryPruning:
                 object(),
                 "policy",
                 [{"role": "user", "content": "=== CURRENT REQUEST [id=x] ===\\nDo work"}],
+            )
+
+    def test_provider_fit_reserves_request_before_large_tool_history(self):
+        from missy.agent.runtime import AgentRuntime
+
+        request = "=== CURRENT REQUEST [id=live] ===\n" + _tok(100)
+        messages = [{"role": "user", "content": request}]
+        for index in range(3):
+            messages.extend(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": f"call-{index}",
+                                "name": "context_shunt",
+                                "arguments": {"item_ids": [f"ref-{index}"]},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": f"call-{index}",
+                        "name": "context_shunt",
+                        "content": f"shunt-{index}:" + _tok(220),
+                    },
+                    {"role": "user", "content": "Continue using the tool evidence."},
+                ]
+            )
+
+        runtime = AgentRuntime.__new__(AgentRuntime)
+        runtime._context_manager = ContextManager(_budget(total=900))
+        fitted_system, fitted = runtime._fit_provider_context(
+            object(),
+            _tok(300),
+            messages,
+        )
+
+        assert any(message.get("content") == request for message in fitted)
+        fitted_content = "\n".join(str(message.get("content", "")) for message in fitted)
+        assert "shunt-2:" in fitted_content
+        assert "shunt-0:" not in fitted_content
+        assert _value_tokens(fitted_system) + _value_tokens(fitted) <= 900
+
+    def test_provider_fit_fails_closed_when_request_alone_exceeds_budget(self):
+        from missy.agent.runtime import AgentRuntime
+
+        runtime = AgentRuntime.__new__(AgentRuntime)
+        runtime._context_manager = ContextManager(_budget(total=50))
+        with pytest.raises(ValueError, match="complete current request"):
+            runtime._fit_provider_context(
+                object(),
+                "policy",
+                [
+                    {
+                        "role": "user",
+                        "content": "=== CURRENT REQUEST [id=huge] ===\n" + _tok(100),
+                    }
+                ],
             )
 
     def test_oldest_pruned_before_newest(self):
