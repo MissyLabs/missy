@@ -19,7 +19,10 @@ def _load(tmp_path, section: str):
 def _registered(config: RepoevalFoundryConfig) -> bool:
     registry = ToolRegistry()
     register_builtin_tools(registry, repoeval_foundry_config=config)
-    return registry.get("repoeval_foundry_read") is not None and registry.get("repoeval_foundry_mutate") is not None
+    return (
+        registry.get("repoeval_foundry_read") is not None
+        and registry.get("repoeval_foundry_mutate") is not None
+    )
 
 
 def test_default_disabled_and_no_endpoint(tmp_path):
