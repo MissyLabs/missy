@@ -835,6 +835,21 @@ class TestSwitchProvider:
 
 
 class TestCapabilityMode:
+    def test_discord_runtime_exposes_configured_foundry_surfaces_independently(self):
+        names = ["repoeval_foundry_read", "repoeval_foundry_mutate"]
+        registry = MagicMock()
+        tools = {name: MagicMock(name=name) for name in names}
+        for name, tool in tools.items():
+            tool.name = name
+        registry.list_tools.return_value = names
+        registry.is_enabled.return_value = True
+        registry.get.side_effect = tools.get
+        runtime = _make_runtime(capability_mode="discord")
+        with patch("missy.agent.runtime.get_tool_registry", return_value=registry):
+            assert [tool.name for tool in runtime._get_tools()] == names
+            runtime.config.tool_policy = {"deny": ["repoeval_foundry_mutate"]}
+            assert [tool.name for tool in runtime._get_tools()] == ["repoeval_foundry_read"]
+
     def test_no_tools_mode_returns_empty(self):
         runtime = _make_runtime(capability_mode="no-tools")
         tools = runtime._get_tools()

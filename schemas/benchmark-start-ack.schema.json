@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:repoeval-foundry:schema:benchmark-start-ack:v1",
+  "title": "RepoEval Foundry benchmark start acknowledgement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "data"],
+  "properties": {
+    "ok": {"const": true},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "cancel_requested", "project_id", "plan_id", "state", "job_id", "children", "required_artifacts"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^run-[a-f0-9]{24}$"},
+        "cancel_requested": {"const": false},
+        "project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "plan_id": {"type": "string", "pattern": "^plan-[a-f0-9]{24}$"},
+        "state": {"const": "reserved"},
+        "job_id": {"const": null},
+        "children": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "provider_index", "repetition", "state", "job_id"],
+            "properties": {
+              "run_id": {"type": "string", "pattern": "^run-[a-f0-9]{24}$"},
+              "provider_index": {"type": "integer", "minimum": 0},
+              "repetition": {"type": "integer", "minimum": 0},
+              "state": {"const": "reserved"},
+              "job_id": {"type": "string", "minLength": 1, "maxLength": 256}
+            }
+          }
+        },
+        "required_artifacts": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+      }
+    }
+  }
+}

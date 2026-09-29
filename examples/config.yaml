@@ -66,6 +66,17 @@ plugins:
   enabled: false
   allowed_plugins: []
 
+# Foundry is disabled unless an operator asserts a compatible authenticated API
+# is available, supplies a protected token file, and separately grants the exact
+# endpoint through network.tool_allowed_hosts. api_available is not a health check.
+repoeval_foundry:
+  enabled: false
+  api_available: false
+  base_url: ""
+  project_id: ""
+  allowed_hosts: []
+  token_file: ""
+
 # ---------------------------------------------------------------------------
 # Provider configuration
 # Three providers are shown; only configure those you intend to use.

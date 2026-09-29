@@ -144,6 +144,10 @@ MISSY_DISCORD_TOOLS: tuple[str, ...] = (
     # (entirely disconnected from how Missy actually authenticates its own
     # providers) when a Discord user asked it to benchmark across providers.
     "provider_benchmark",
+    # Foundry's client remains disabled until explicitly configured; when it
+    # is enabled, keep read and mutation separately grantable by tool policy.
+    "repoeval_foundry_read",
+    "repoeval_foundry_mutate",
     # Read-only / policy-inheriting agent tools that a Discord user legitimately
     # needs: memory retrieval is read-only, and delegate_task sub-agents inherit
     # (never widen) the parent's capability_mode/policy.

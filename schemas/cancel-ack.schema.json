@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MissyLabs/repoeval-foundry/schemas/cancel-ack.schema.json",
+  "title": "RepoEval cancellation acknowledgement v1",
+  "description": "Successful cancellation request acknowledgement, not terminal success. HTTP wraps this object in {ok:true,data:...}; MCP returns it directly.",
+  "type": "object",
+  "properties": {
+    "id": {"type": "string", "pattern": "^run-[A-Za-z0-9_-]{1,128}$"},
+    "state": {"enum": ["cancel_pending", "cancelled", "failed"]},
+    "cancel_requested": {"const": true}
+  },
+  "required": ["id", "state", "cancel_requested"],
+  "additionalProperties": false
+}

@@ -106,6 +106,11 @@ from missy.tools.builtin.obs_tools import (
 )
 from missy.tools.builtin.provider_benchmark import ProviderBenchmarkTool
 from missy.tools.builtin.rag_query import RagQueryTool
+from missy.tools.builtin.repoeval_tools import (
+    RepoevalFoundryMutateTool,
+    RepoevalFoundryReadTool,
+    RepoevalFoundryTool,
+)
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.singing_generate import SingingGenerateTool
@@ -201,6 +206,7 @@ __all__ = [
     "NomadScheduleTool",
     "ProviderBenchmarkTool",
     "RagQueryTool",
+    "RepoevalFoundryTool",
     "SelfCreateTool",
     "ShellExecTool",
     "SingingGenerateTool",
@@ -359,7 +365,9 @@ _ALL_TOOL_CLASSES = [
 ]
 
 
-def register_builtin_tools(registry=None, *, shell_allowed_env_vars=None) -> None:
+def register_builtin_tools(
+    registry=None, *, shell_allowed_env_vars=None, repoeval_foundry_config=None
+) -> None:
     """Register all built-in tools with a :class:`~missy.tools.registry.ToolRegistry`.
 
     When *registry* is ``None`` the process-level registry returned by
@@ -373,6 +381,9 @@ def register_builtin_tools(registry=None, *, shell_allowed_env_vars=None) -> Non
             process-level singleton.
         shell_allowed_env_vars: Extra operator-approved environment-variable
             names inherited only by the registered ``shell_exec`` tool.
+        repoeval_foundry_config: Explicit operator configuration for the
+            optional Foundry integration. Omitted or incomplete configuration
+            registers no Foundry tool.
 
     Raises:
         RuntimeError: When *registry* is ``None`` and
@@ -389,3 +400,20 @@ def register_builtin_tools(registry=None, *, shell_allowed_env_vars=None) -> Non
             registry.register(tool_cls(allowed_env_vars=shell_allowed_env_vars))
         else:
             registry.register(tool_cls())
+
+    config = repoeval_foundry_config
+    if (
+        config is not None
+        and getattr(config, "enabled", False) is True
+        and getattr(config, "api_available", False) is True
+    ):
+        foundry = RepoevalFoundryTool(
+            base_url=getattr(config, "base_url", ""),
+            project_id=getattr(config, "project_id", ""),
+            allowed_hosts=getattr(config, "allowed_hosts", []),
+            token_file=getattr(config, "token_file", ""),
+            api_available=True,
+        )
+        if foundry.registration_ready:
+            registry.register(RepoevalFoundryReadTool(foundry))
+            registry.register(RepoevalFoundryMutateTool(foundry))

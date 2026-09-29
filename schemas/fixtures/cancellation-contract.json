@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "schema": "schemas/cancel-ack.schema.json",
+  "http_status": 202,
+  "accepted_states": ["cancel_pending", "cancelled", "failed"],
+  "example_response": {
+    "ok": true,
+    "data": {"id": "run-example", "state": "cancel_pending", "cancel_requested": true}
+  }
+}
