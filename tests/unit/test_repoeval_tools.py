@@ -88,6 +88,36 @@ def list_repos(instance, client):
     }
 
 
+def test_forge_repository_snapshot_preserves_exact_json_identity():
+    repository_id = "github:MissyLabs/missy"
+    instance, client = tool()
+    client.responses.append(FakeResponse({"ok": True, "data": [repository_id]}))
+    assert instance.execute(action="list").success
+    client.responses.append(
+        response(
+            {
+                "id": "snap-1",
+                "repository_id": repository_id,
+                "commit_sha": SHA,
+                "state": "requested",
+            },
+            status=202,
+        )
+    )
+    result = instance.execute(
+        action="snapshot",
+        repository_id=repository_id,
+        commit_sha=SHA,
+        acknowledge_project_scope=True,
+        idempotency_key="scan-forge-0001",
+    )
+    assert result.success
+    assert client.calls[-1][2]["json"] == {
+        "repository_id": "github:MissyLabs/missy",
+        "commit_sha": SHA,
+    }
+
+
 def workload():
     return {
         "schema_version": "1.0",
@@ -239,6 +269,54 @@ def test_project_scope_and_no_remote_error_or_secret_echo():
     )
     output = instance.execute(action="list").output
     assert output is None
+
+
+@pytest.mark.parametrize(
+    "repository_id",
+    [
+        "legacy",
+        "MissyLabs/missy",
+        "github:MissyLabs/missy",
+        "A" * 128 + "/" + "b" * 128,
+    ],
+)
+def test_list_accepts_canonical_repository_ids_byte_for_byte(repository_id):
+    instance, client = tool()
+    client.responses.append(FakeResponse({"ok": True, "data": [repository_id]}))
+    result = instance.execute(action="list")
+    assert result.success
+    assert result.output["repositories"] == [repository_id]
+
+
+@pytest.mark.parametrize(
+    "repository_id",
+    [
+        "../repo",
+        "owner/..",
+        ".owner/repo",
+        "owner/.repo",
+        "github:/repo",
+        "1github:owner/repo",
+        "owner%2Frepo",
+        "owner/repo/extra",
+        "a" * 129,
+        "a" * 129 + "/repo",
+        "owner/" + "r" * 129,
+    ],
+)
+def test_list_rejects_noncanonical_repository_ids(repository_id):
+    instance, _ = tool()
+    with pytest.raises(ValueError, match="Invalid repository ID"):
+        instance._repository_id(repository_id)
+
+
+def test_foundry_list_response_with_forge_identity_is_consumable_end_to_end():
+    instance, client = tool()
+    client.responses.append(FakeResponse({"ok": True, "data": ["github:example/project"]}))
+    result = instance.execute(action="list")
+    assert result.success
+    assert result.output["repositories"] == ["github:example/project"]
+    assert client.calls[0][2]["follow_redirects"] is False
 
 
 def test_snapshot_requires_registered_repo_immutable_sha_approval_and_idempotency():

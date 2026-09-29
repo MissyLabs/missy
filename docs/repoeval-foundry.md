@@ -66,10 +66,14 @@ or `/api` prefix; the client appends the project-scoped resource route.
 The pinned client wire contract wraps responses as
 `{"ok": true, "data": ...}`. `list_repositories()` returns a bare `list[str]`,
 not repository objects and not a project-tagged document. The client accepts
-only unique, validated repository IDs (a single legacy segment or exactly
-`owner/repo`, each segment bounded to 128 ASCII characters beginning with an
-alphanumeric and otherwise containing only alphanumerics, `.`, `_`, `-`). Dot
-segments, escapes, URLs and extra slashes are refused without normalization.
+only unique, validated repository IDs using Foundry's canonical grammar: either
+one legacy segment, or an optional forge prefix plus `owner/repo`. Each
+repository segment matches `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; a forge prefix
+matches `[A-Za-z][A-Za-z0-9+.-]{0,31}:`. The complete expression is
+`^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|(?:[A-Za-z][A-Za-z0-9+.-]{0,31}:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127})$`.
+Dot segments, escapes, URLs and extra slashes are refused. Accepted identifiers
+are preserved byte-for-byte, including any forge prefix: they are never
+decoded, normalized, stripped, or treated as filesystem paths.
 This repository-only grammar does not extend to plan, run, snapshot, project or
 other resource IDs. Repository IDs travel in JSON bodies, not URL path
 segments. The client labels its scope as coming from the

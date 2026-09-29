@@ -17,7 +17,7 @@
         "project_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "plan_id": {"type": "string", "pattern": "^plan-[a-f0-9]{24}$"},
         "state": {"const": "reserved"},
-        "job_id": {"type": ["string", "null"]},
+        "job_id": {"const": null},
         "children": {
           "type": "array",
           "maxItems": 256,

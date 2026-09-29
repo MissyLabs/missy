@@ -17,6 +17,12 @@ from missy.gateway.client import PolicyHTTPClient
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_REPOSITORY_ID = re.compile(
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|"
+    r"(?:[A-Za-z][A-Za-z0-9+.-]{0,31}:)?"
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/"
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127})\Z"
+)
 _SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}\Z")
 _TOKEN = re.compile(rb"[A-Za-z0-9._~+/-]+=*\Z")
@@ -318,9 +324,11 @@ class RepoevalFoundryTool(BaseTool):
                 getattr(config, "base_url", None),
                 getattr(config, "project_id", None),
                 getattr(config, "token_file", None),
-                tuple(config.allowed_hosts)
-                if isinstance(getattr(config, "allowed_hosts", None), list)
-                else None,
+                (
+                    tuple(config.allowed_hosts)
+                    if isinstance(getattr(config, "allowed_hosts", None), list)
+                    else None
+                ),
             )
         )
 
@@ -352,17 +360,13 @@ class RepoevalFoundryTool(BaseTool):
 
     @staticmethod
     def _repository_id(value: Any) -> str:
-        """A repository is a legacy single ID or exactly two owner/repo segments.
+        """Validate Foundry's canonical ID without decoding or normalization.
 
-        Never normalize or decode a remote identity: percent escapes, extra
-        separators and dot segments are not repository names.
+        Legacy IDs are one bounded segment; forge-qualified IDs are an optional
+        bounded prefix plus exactly ``owner/repo``. Keep the original bytes as
+        text, including the forge prefix, and never interpret it as a path.
         """
-        if not isinstance(value, str):
-            raise ValueError("Invalid repository ID")
-        parts = value.split("/")
-        if not 1 <= len(parts) <= 2 or any(
-            not _ID.fullmatch(part) or part in (".", "..") for part in parts
-        ):
+        if not isinstance(value, str) or not _REPOSITORY_ID.fullmatch(value):
             raise ValueError("Invalid repository ID")
         return value
 
