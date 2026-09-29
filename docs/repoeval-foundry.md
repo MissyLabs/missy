@@ -8,7 +8,11 @@ opt-in Missy HTTP client, its configuration/hot-reload/gateway integration, and
 client-side contract tests. This is code only: no API deployed, credentials
 provisioned, client enabled, or evaluation run.
 
-`repoeval_foundry` is a deliberately gated project-scoped tool. It is **not**
+`repoeval_foundry_read` and `repoeval_foundry_mutate` are distinct, deliberately gated
+project-scoped tools. The read tool supports list, plan, status, compare, artifacts,
+and draft report. The mutation tool alone supports snapshot, start, and cancel.
+Granting the read tool through Missy tool policy cannot dispatch a mutation;
+`writes_state` is descriptive metadata, not a policy enforcement boundary. Neither is
 a Nomad, shell, repository-write, deployment, credential, or arbitrary HTTP
 tool. The separate Foundry repository owns the server contract; neither a live
 endpoint nor a completed scan or benchmark has been established by these
@@ -73,9 +77,11 @@ fixed authenticated `/projects/{configured_project}/repositories` route. The
 separate server must check the principal's project against that route. This is
 **not** an independent per-item project assertion. The HTTP server must preserve
 that authentication and route check before enabling the tool. Snapshot,
-plan, run status and cancellation records contain `project_id`, which the
-client requires to equal its configured project; missing or mismatched scope
-is refused. Plans require a trusted staging capacity and policy attestation
+plan and run-status records contain `project_id`, which the client requires
+to equal its configured project; missing or mismatched scope is refused.
+Cancellation acknowledgement v1 intentionally has no `project_id`; the client
+binds it to the authenticated project route and matches the returned run ID.
+Plans require a trusted staging capacity and policy attestation
 provider; without it, planning fails closed. A plan without matched workload,
 staging placement and seven explicit policy checks cannot authorize start.
 The client cannot infer execution approval from HTTP 200, a plan ID,
@@ -90,27 +96,29 @@ policy category. The policy-aware HTTP client accepts Authorization headers
 and does not follow redirects by default. Do not bypass or relax global network
 policy. Redirects, arbitrary method/path/header inputs, host suffix matching,
 query/fragment credentials and raw provider credentials are not available.
-Mutations require an idempotency key matching Foundry's 8-128 character
+Snapshot/start requests require an idempotency key matching Foundry's 8-128 character
 `[A-Za-z0-9._:-]` grammar, and client output redacts secret-shaped strings
 including short `sk-...` values under otherwise innocuous metadata keys.
+Cancellation is idempotent by project-scoped run ID, with no ignored key sent.
 
 Action arguments (all other arguments refused):
 
 | Action | Arguments | Behavior |
 | --- | --- | --- |
-| `capabilities` | none | Fail closed without wire evidence. |
 | `list` | none | Read project repository IDs before any scoped scan or plan. |
 | `plan` | `workload` | Pinned commit/image, registered repository, and bounded execution; response must contain required server staging placement/policy evidence. |
-| `snapshot` | `repository_id`, `commit_sha`, `self_approve: true`, `idempotency_key` | Bounded project-registered snapshot **request** at immutable SHA; acknowledgement is not a completed scan or verified snapshot. |
-| `start` | `plan_id`, `self_approve: true`, `idempotency_key` | Requires a previously observed server-reviewed staging plan. A verified `reserved` response acknowledges only durable reservation, not scheduler submission or completion; a valid legacy `submitted` response acknowledges submission, not completion. |
+| `snapshot` | `repository_id`, `commit_sha`, `acknowledge_project_scope: true`, `idempotency_key` | Bounded project-registered snapshot **request** at immutable SHA; acknowledgement is not a completed scan or verified snapshot. |
+| `start` | `plan_id`, `acknowledge_project_scope: true`, `idempotency_key` | Requires a previously observed server-reviewed staging plan. A verified `reserved` response acknowledges only durable reservation, not scheduler submission or completion; a valid legacy `submitted` response acknowledges submission, not completion. |
 | `status` | `resource_type: run|snapshot`, `resource_id` | Status without assuming a submitted request succeeded. |
 | `compare` | `run_ids` (2..16 unique) | Fixed POST `/compare`; verified run manifests, `project_id`, stable `comparison_id`, exact run IDs, bounded pairwise comparability and reasons. |
 | `artifacts` | `run_id` | Fixed GET `/runs/{run_id}/artifacts`; verified run and trusted independently cleared, digest-checked bytes before bounded metadata only. No raw bytes or URI. |
 | `report` | `run_ids` (1..16 unique) | Fixed POST `/report`; verified run manifests, stable `report_id`, `project_id`, exact run IDs, bounded comparability groups, `status: draft`, `published: false`. Never publishes. |
-| `cancel` | `run_id`, `idempotency_key` | Project-scoped cancellation; not deletion. |
+| `cancel` | `run_id` | Project-scoped cancellation, idempotent by run ID; not deletion. |
 
-Self-approval applies only to bounded project scans and benchmarks and does
-not override server authorization, provider registry, staging capacity, quotas,
+The `acknowledge_project_scope` flag is merely a caller acknowledgement of the
+bounded request, **not** authorization or self-approval. The authenticated
+Foundry server permission remains authoritative and this flag cannot override
+server authorization, provider registry, staging capacity, quotas,
 egress, budget, audit, or platform policy. Mutation responses require explicit
 acknowledgement, matching project identity and resource evidence. Snapshot
 responses saying `requested` are not proof of execution. Start fails closed
@@ -123,7 +131,12 @@ coordinator's HTTP 202 `reserved` start must carry the exact project and plan,
 idempotency-key-derived parent ID, null parent job ID, and a bounded complete
 set of uniquely indexed reserved children with derived IDs and preassigned
 exact job IDs. Reserved children have not been submitted to the scheduler.
-This evidence does not claim dispatch. Legacy `submitted` with a nonempty valid
+This evidence does not claim dispatch. A 202 cancellation response with matching
+project and run identity and state `cancel_pending`, `cancelled`, or `failed`
+acknowledges that the request was accepted, not terminal success or deletion.
+The versioned cross-repository contract fixture is
+`schemas/fixtures/cancellation-contract.json` in both repositories.
+Legacy `submitted` with a nonempty valid
 job ID remains accepted, but neither form marks `execution_complete` true.
 API response bodies and exceptions
 are not echoed as error text. Metadata output is bounded and sensitive keys

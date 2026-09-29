@@ -245,9 +245,12 @@ Network policy must independently allow the exact endpoint through
 Foundry-specific `allowed_hosts` does not grant network access. Requests use
 the `tool` policy category and the policy-aware HTTP client, which accepts
 Authorization headers and does not follow redirects by default. Do not relax
-global policy to enable this integration. Supported routes are `list`, `plan`,
-`snapshot`, `start`, `status`, and `cancel`. `capabilities`, `compare`,
-`artifacts`, and `report` fail closed without wire evidence. Configuration does
+global policy to enable this integration. Registration exposes two separately
+grantable tool-policy identities: `repoeval_foundry_read` (list, plan, status,
+compare, artifacts, draft report) and `repoeval_foundry_mutate` (snapshot,
+start, cancel). Merely enabling the read tool cannot call mutation actions.
+`writes_state` metadata does not enforce authorization. The `capabilities`
+action is not offered until Foundry implements it. Configuration does
 not create or deploy an API, prove availability, or authorize production work.
 
 ```yaml

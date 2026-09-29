@@ -247,7 +247,7 @@ def test_snapshot_requires_registered_repo_immutable_sha_approval_and_idempotenc
         "action": "snapshot",
         "repository_id": "repo-a",
         "commit_sha": SHA,
-        "self_approve": True,
+        "acknowledge_project_scope": True,
         "idempotency_key": "scan-0001",
     }
     assert not instance.execute(**request).success
@@ -255,7 +255,7 @@ def test_snapshot_requires_registered_repo_immutable_sha_approval_and_idempotenc
     for changes in (
         {"repository_id": "repo-b"},
         {"commit_sha": "main"},
-        {"self_approve": False},
+        {"acknowledge_project_scope": False},
         {"idempotency_key": ""},
         {"idempotency_key": "short"},
     ):
@@ -282,7 +282,7 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
         "action": "snapshot",
         "repository_id": "MissyLabs/missy",
         "commit_sha": SHA,
-        "self_approve": True,
+        "acknowledge_project_scope": True,
         "idempotency_key": "scan-slash-repo-01",
     }
     client.responses.append(
@@ -312,13 +312,13 @@ def test_slash_repository_identity_only_in_json_bodies_and_not_other_resource_id
         ("status", {"resource_type": "snapshot", "resource_id": "MissyLabs/missy"}),
         ("status", {"resource_type": "snapshot", "resource_id": ".."}),
         ("status", {"resource_type": "snapshot", "resource_id": "%2e%2e"}),
-        ("cancel", {"run_id": "MissyLabs/missy", "idempotency_key": "cancel-test-01"}),
-        ("cancel", {"run_id": "..", "idempotency_key": "cancel-test-01"}),
+        ("cancel", {"run_id": "MissyLabs/missy"}),
+        ("cancel", {"run_id": ".."}),
         (
             "start",
             {
                 "plan_id": "MissyLabs/missy",
-                "self_approve": True,
+                "acknowledge_project_scope": True,
                 "idempotency_key": "start-test-01",
             },
         ),
@@ -349,7 +349,7 @@ def test_invalid_repository_ids_fail_before_snapshot_or_plan_request(malicious):
         action="snapshot",
         repository_id=malicious,
         commit_sha=SHA,
-        self_approve=True,
+        acknowledge_project_scope=True,
         idempotency_key="invalid-repo-01",
     ).success
     candidate = workload()
@@ -397,7 +397,10 @@ def test_plan_refuses_secret_fields_and_response_with_changed_workload():
     )
     assert not instance.execute(action="plan", workload=workload()).success
     assert not instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=True,
     ).success
 
 
@@ -425,7 +428,10 @@ def test_start_refuses_non_staging_or_unverified_server_plan(replacement):
     client.responses.append(response(data))
     assert not instance.execute(action="plan", workload=workload()).success
     assert not instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=True,
     ).success
     assert len(client.calls) == 2
 
@@ -434,7 +440,10 @@ def test_start_requires_explicit_approval_and_reuses_idempotency_key():
     instance, client = tool()
     plan(instance, client)
     assert not instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=False
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=False,
     ).success
     client.responses.append(
         response(
@@ -443,7 +452,10 @@ def test_start_requires_explicit_approval_and_reuses_idempotency_key():
         )
     )
     started = instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=True,
     )
     assert started.success and started.output["acknowledged"]
     assert started.output["execution_complete"] is False
@@ -477,7 +489,10 @@ def test_reserved_start_ack_is_inert_and_same_key_replay_is_same_identity():
     for _ in range(2):
         client.responses.append(response(copy.deepcopy(ack), status=202))
         started = instance.execute(
-            action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+            action="start",
+            plan_id="plan-a",
+            idempotency_key="benchmark-0001",
+            acknowledge_project_scope=True,
         )
         assert started.success and started.output == {
             "acknowledged": True,
@@ -558,7 +573,10 @@ def test_reserved_start_refuses_false_or_malformed_ack(change):
     ack.update(change)
     client.responses.append(response(ack, status=202))
     denied = instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=True,
     )
     assert not denied.success and denied.output is None
 
@@ -573,7 +591,10 @@ def test_reserved_start_rejects_cross_project_and_other_key_replay():
     ):
         client.responses.append(response(remote_ack, status=202, project=remote_project))
         assert not instance.execute(
-            action="start", plan_id="plan-a", idempotency_key=request_key, self_approve=True
+            action="start",
+            plan_id="plan-a",
+            idempotency_key=request_key,
+            acknowledge_project_scope=True,
         ).success
 
 
@@ -581,16 +602,16 @@ def test_unknown_actions_arguments_and_capabilities_cannot_make_requests():
     instance, client = tool()
     assert not instance.execute(action="deploy", command="nomad run").success
     assert not instance.execute(action="list", arbitrary="widen-scope").success
-    assert not instance.execute(action="capabilities").success  # route not implemented upstream
+    assert not instance.execute(action="capabilities").success  # not offered upstream
+    assert not instance.execute(action="snapshot", self_approve=True).success
+    assert "capabilities" not in instance.get_schema()["parameters"]["properties"]["action"]["enum"]
     assert not client.calls
 
 
 def test_status_compare_cancel_artifacts_and_report_are_fixed_routes_only():
     instance, client = tool()
     assert not instance.execute(action="status", resource_type="provider", resource_id="x").success
-    assert not instance.execute(
-        action="cancel", run_id="../foreign", idempotency_key="cancel-0001"
-    ).success
+    assert not instance.execute(action="cancel", run_id="../foreign").success
     assert not instance.execute(action="compare", run_ids=["run-a", "run-a"]).success
     client.responses += [
         response({"id": "run-a", "state": "running"}),
@@ -602,8 +623,13 @@ def test_status_compare_cancel_artifacts_and_report_are_fixed_routes_only():
     assert not instance.execute(action="report", run_ids=["run-a"]).success
     # Read requests consume one mocked response each; cancellation still uses
     # its own acknowledgement rather than a stale unrelated response.
-    client.responses.append(response({"id": "run-a", "state": "cancelled"}, status=202))
-    cancelled = instance.execute(action="cancel", run_id="run-a", idempotency_key="cancel-0001")
+    client.responses.append(
+        FakeResponse(
+            {"ok": True, "data": {"id": "run-a", "state": "cancelled", "cancel_requested": True}},
+            202,
+        )
+    )
+    cancelled = instance.execute(action="cancel", run_id="run-a")
     assert cancelled.success and cancelled.output["execution_complete"] is False
     assert [call[1].rsplit("/projects/alpha", 1)[-1] for call in client.calls] == [
         "/runs/run-a",
@@ -620,7 +646,10 @@ def test_pr1_plan_without_policy_and_placement_is_rejected_without_start_call():
     client.responses.append(response({"id": "plan-a", "state": "planned", "workload": workload()}))
     assert "lacks reviewed" in instance.execute(action="plan", workload=workload()).error
     assert not instance.execute(
-        action="start", plan_id="plan-a", idempotency_key="benchmark-0001", self_approve=True
+        action="start",
+        plan_id="plan-a",
+        idempotency_key="benchmark-0001",
+        acknowledge_project_scope=True,
     ).success
     assert len(client.calls) == 2
 
@@ -769,7 +798,7 @@ def test_mutation_rejects_unbound_or_incomplete_acknowledgement(action):
             "action": "snapshot",
             "repository_id": "repo-a",
             "commit_sha": SHA,
-            "self_approve": True,
+            "acknowledge_project_scope": True,
             "idempotency_key": "scan-0001",
         }
         data = {"id": "snap-1", "repository_id": "repo-a", "commit_sha": SHA, "state": "requested"}
@@ -778,16 +807,20 @@ def test_mutation_rejects_unbound_or_incomplete_acknowledgement(action):
         kwargs = {
             "action": "start",
             "plan_id": "plan-a",
-            "self_approve": True,
+            "acknowledge_project_scope": True,
             "idempotency_key": "benchmark-0001",
         }
         data = {"id": "run-1", "plan_id": "plan-a", "state": "failed", "job_id": None}
     else:
-        kwargs = {"action": "cancel", "run_id": "run-a", "idempotency_key": "cancel-0001"}
-        data = {"id": "run-a", "state": "cancelled"}
+        kwargs = {"action": "cancel", "run_id": "run-a"}
+        data = {"id": "run-a", "state": "cancelled", "cancel_requested": True}
     client.responses.append(response(data, project="other", status=202))
     assert not instance.execute(**kwargs).success
-    client.responses.append(response(data, status=202))
+    client.responses.append(
+        FakeResponse({"ok": True, "data": data}, 202)
+        if action == "cancel"
+        else response(data, status=202)
+    )
     assert instance.execute(**kwargs).success is (action != "start")
 
 

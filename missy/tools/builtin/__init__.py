@@ -106,7 +106,11 @@ from missy.tools.builtin.obs_tools import (
 )
 from missy.tools.builtin.provider_benchmark import ProviderBenchmarkTool
 from missy.tools.builtin.rag_query import RagQueryTool
-from missy.tools.builtin.repoeval_tools import RepoevalFoundryTool
+from missy.tools.builtin.repoeval_tools import (
+    RepoevalFoundryMutateTool,
+    RepoevalFoundryReadTool,
+    RepoevalFoundryTool,
+)
 from missy.tools.builtin.self_create_tool import SelfCreateTool
 from missy.tools.builtin.shell_exec import ShellExecTool
 from missy.tools.builtin.singing_generate import SingingGenerateTool
@@ -411,4 +415,5 @@ def register_builtin_tools(
             api_available=True,
         )
         if foundry.registration_ready:
-            registry.register(foundry)
+            registry.register(RepoevalFoundryReadTool(foundry))
+            registry.register(RepoevalFoundryMutateTool(foundry))

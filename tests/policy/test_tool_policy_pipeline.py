@@ -35,6 +35,25 @@ def test_glob_allow_and_inline_deny_syntax_are_applied_in_one_layer():
     assert decision.trace[1].matched == ("shell_exec",)
 
 
+def test_foundry_read_grant_cannot_expose_mutation_tool():
+    available = ["repoeval_foundry_read", "repoeval_foundry_mutate"]
+    read_only = resolve_tool_policy(
+        available,
+        [ToolPolicyLayer(label="project", allow=["repoeval_foundry_read"])],
+    )
+    assert read_only.tools == ("repoeval_foundry_read",)
+    mutation_only = resolve_tool_policy(
+        available,
+        [ToolPolicyLayer(label="project", allow=["repoeval_foundry_mutate"])],
+    )
+    assert mutation_only.tools == ("repoeval_foundry_mutate",)
+    denied = resolve_tool_policy(
+        available,
+        [ToolPolicyLayer(label="operator", deny=["repoeval_foundry_mutate"])],
+    )
+    assert denied.tools == ("repoeval_foundry_read",)
+
+
 def test_also_allow_can_restore_tools_after_a_restrictive_layer():
     decision = resolve_tool_policy(
         ["calculator", "file_read", "shell_exec"],

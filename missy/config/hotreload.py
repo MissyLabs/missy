@@ -329,17 +329,24 @@ def _apply_config(new_config) -> None:
     # never retain its project/endpoint/credential authority after a reload,
     # even when a caller kept a direct reference outside the tool registry.
     # Do not change the registry or the behavior of unrelated tools here.
-    from missy.tools.builtin.repoeval_tools import RepoevalFoundryTool
+    from missy.tools.builtin.repoeval_tools import (
+        RepoevalFoundryMutateTool,
+        RepoevalFoundryReadTool,
+    )
     from missy.tools.registry import get_tool_registry
 
     try:
-        foundry = get_tool_registry().get("repoeval_foundry")
+        registry = get_tool_registry()
     except RuntimeError:  # No registry during early initialization.
-        foundry = None
-    if isinstance(foundry, RepoevalFoundryTool) and not foundry.matches_config(
-        new_config.repoeval_foundry
-    ):
-        foundry.revoke()
+        registry = None
+    if registry is not None:
+        for name, cls in (
+            ("repoeval_foundry_read", RepoevalFoundryReadTool),
+            ("repoeval_foundry_mutate", RepoevalFoundryMutateTool),
+        ):
+            foundry = registry.get(name)
+            if isinstance(foundry, cls) and not foundry.matches_config(new_config.repoeval_foundry):
+                foundry.revoke()
 
     try:
         from missy.providers.registry import get_registry as _get_registry

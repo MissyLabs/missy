@@ -9,7 +9,11 @@ import pytest
 
 from missy.config.hotreload import ConfigWatcher, _apply_config
 from missy.config.settings import RepoevalFoundryConfig, get_default_config
-from missy.tools.builtin.repoeval_tools import RepoevalFoundryTool
+from missy.tools.builtin.repoeval_tools import (
+    RepoevalFoundryMutateTool,
+    RepoevalFoundryReadTool,
+    RepoevalFoundryTool,
+)
 from missy.tools.registry import ToolRegistry
 
 
@@ -70,7 +74,8 @@ def _setup(tmp_path):
         http_client=client,
     )
     registry = ToolRegistry()
-    registry.register(tool)
+    registry.register(RepoevalFoundryReadTool(tool))
+    registry.register(RepoevalFoundryMutateTool(tool))
     assert tool.registration_ready
     assert tool.execute(action="list").success
     assert len(client.calls) == 1
@@ -96,10 +101,13 @@ def test_reload_revokes_old_client_without_request(tmp_path, monkeypatch, change
     next_config = replace(config, repoeval_foundry=replace(config.repoeval_foundry, **change))
     _reload(next_config, registry, monkeypatch)
 
-    assert registry.get("repoeval_foundry") is tool  # stale registration is harmless
+    assert registry.get("repoeval_foundry_read")._foundry is tool
+    assert (
+        registry.get("repoeval_foundry_mutate")._foundry is tool
+    )  # stale registrations are harmless
     assert not tool.registration_ready
     assert not tool.execute(action="list").success
-    assert not registry.get("repoeval_foundry").execute(action="list").success
+    assert not registry.get("repoeval_foundry_read").execute(action="list").success
     assert len(client.calls) == 1
 
 

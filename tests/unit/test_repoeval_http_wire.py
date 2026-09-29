@@ -126,14 +126,14 @@ def test_project_pinned_wire_and_snapshot_request(tmp_path):
             action="snapshot",
             repository_id="MissyLabs/other",
             commit_sha="a" * 40,
-            self_approve=True,
+            acknowledge_project_scope=True,
             idempotency_key="snapshot-01",
         ).success
         result = tool.execute(
             action="snapshot",
             repository_id="MissyLabs/missy",
             commit_sha="a" * 40,
-            self_approve=True,
+            acknowledge_project_scope=True,
             idempotency_key="snapshot-01",
         )
         assert result.success and result.output["execution_complete"] is False

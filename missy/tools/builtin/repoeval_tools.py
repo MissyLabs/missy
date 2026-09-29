@@ -23,7 +23,6 @@ _TOKEN = re.compile(rb"[A-Za-z0-9._~+/-]+=*\Z")
 _TOKEN_MAX_BYTES = 4096
 _URI = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|(?:file|data|javascript):)")
 _ACTIONS = {
-    "capabilities",
     "list",
     "plan",
     "snapshot",
@@ -34,6 +33,8 @@ _ACTIONS = {
     "cancel",
     "report",
 }
+_READ_ACTIONS = frozenset({"list", "plan", "status", "compare", "artifacts", "report"})
+_MUTATION_ACTIONS = frozenset({"snapshot", "start", "cancel"})
 _SECRET = re.compile(
     r"(?i)(?<![a-z0-9])(?:token|password|secret|api[_-]?key|authorization|cookie|credential|private[_-]?key|url|uri|href|location|stdout|stderr|raw[_-]?output|environment|env|content)(?![a-z0-9])"
 )
@@ -624,8 +625,6 @@ class RepoevalFoundryTool(BaseTool):
     def _execute_active(self, *, action: str, **kwargs: Any) -> ToolResult:
         if not isinstance(action, str) or action not in _ACTIONS:
             return ToolResult(False, None, "Unsupported Foundry action")
-        if action == "capabilities":
-            return ToolResult(False, None, "Foundry capabilities route unavailable")
         if not self._valid or not self._available:
             return ToolResult(False, None, "Foundry HTTP API unavailable; no run was submitted")
         try:
@@ -680,7 +679,11 @@ class RepoevalFoundryTool(BaseTool):
                         "scope_source": "authenticated_project_route",
                     },
                 )
-            if not isinstance(result, dict) or result.get("project_id") != self._project:
+            # Foundry's cancellation v1 payload has no project_id; scope there
+            # comes from the authenticated, fixed project route and run ID.
+            if not isinstance(result, dict) or (
+                action != "cancel" and result.get("project_id") != self._project
+            ):
                 return ToolResult(False, None, "Foundry response project scope mismatch")
             if action in ("compare", "artifacts", "report") and not self._read_contract(
                 action, result, kwargs
@@ -730,7 +733,12 @@ class RepoevalFoundryTool(BaseTool):
                 )
                 or (
                     action == "cancel"
-                    and (result["id"] != kwargs["run_id"] or result.get("state") != "cancelled")
+                    and (
+                        result["id"] != kwargs["run_id"]
+                        or result.get("state") not in ("cancelled", "cancel_pending", "failed")
+                        or set(result) != {"id", "state", "cancel_requested"}
+                        or result["cancel_requested"] is not True
+                    )
                 )
             ):
                 return ToolResult(
@@ -739,7 +747,19 @@ class RepoevalFoundryTool(BaseTool):
             if action in ("snapshot", "start", "cancel"):
                 return ToolResult(
                     True,
-                    {"acknowledged": True, "execution_complete": False, "resource": _safe(result)},
+                    {
+                        "acknowledged": True,
+                        "execution_complete": False,
+                        "resource": _safe(result),
+                        **(
+                            {
+                                "route_project_id": self._project,
+                                "scope_source": "authenticated_project_route",
+                            }
+                            if action == "cancel"
+                            else {}
+                        ),
+                    },
                 )
             return ToolResult(True, _safe(result))
         except (KeyError, TypeError, ValueError):
@@ -752,22 +772,24 @@ class RepoevalFoundryTool(BaseTool):
         self, action: str, args: dict[str, Any]
     ) -> tuple[str, str, dict[str, Any] | None, dict[str, str]]:
         fields = {
-            "capabilities": set(),
             "list": set(),
             "plan": {"workload"},
-            "snapshot": {"repository_id", "commit_sha", "idempotency_key", "self_approve"},
-            "start": {"plan_id", "idempotency_key", "self_approve"},
+            "snapshot": {
+                "repository_id",
+                "commit_sha",
+                "idempotency_key",
+                "acknowledge_project_scope",
+            },
+            "start": {"plan_id", "idempotency_key", "acknowledge_project_scope"},
             "status": {"resource_type", "resource_id"},
             "compare": {"run_ids"},
             "artifacts": {"run_id"},
-            "cancel": {"run_id", "idempotency_key"},
+            "cancel": {"run_id"},
             "report": {"run_ids"},
         }
         if set(args) != fields[action]:
             raise ValueError("Unsupported or missing Foundry argument")
         headers = {"Accept": "application/json"}
-        if action == "capabilities":
-            raise ValueError("Foundry capabilities route unavailable")
         if action == "list":
             return "GET", "/repositories", None, headers
         if action == "plan":
@@ -823,9 +845,13 @@ class RepoevalFoundryTool(BaseTool):
             return "POST", "/benchmark/plan", {"workload": workload}, headers
         if action == "snapshot":
             repo = self._repository_id(args["repository_id"])
-            if not self._listed or repo not in self._repos or args["self_approve"] is not True:
+            if (
+                not self._listed
+                or repo not in self._repos
+                or args["acknowledge_project_scope"] is not True
+            ):
                 raise ValueError(
-                    "Registered repository and explicit bounded self approval required"
+                    "Registered repository and explicit project-scope acknowledgement required"
                 )
             sha = args["commit_sha"]
             if not isinstance(sha, str) or not _SHA.fullmatch(sha):
@@ -834,9 +860,11 @@ class RepoevalFoundryTool(BaseTool):
             return "POST", "/snapshots", {"repository_id": repo, "commit_sha": sha}, headers
         if action == "start":
             plan_id = self._id(args["plan_id"])
-            if args["self_approve"] is not True or not self._approved(self._plans.get(plan_id, {})):
+            if args["acknowledge_project_scope"] is not True or not self._approved(
+                self._plans.get(plan_id, {})
+            ):
                 raise ValueError(
-                    "Reviewed staging plan and explicit bounded self approval required"
+                    "Reviewed staging plan and explicit project-scope acknowledgement required"
                 )
             headers["Idempotency-Key"] = self._key(args["idempotency_key"])
             return "POST", "/benchmark/start", {"plan_id": plan_id}, headers
@@ -857,7 +885,6 @@ class RepoevalFoundryTool(BaseTool):
                 headers,
             )
         if action == "cancel":
-            headers["Idempotency-Key"] = self._key(args["idempotency_key"])
             return "POST", f"/runs/{quote(self._id(args['run_id']), safe='')}/cancel", {}, headers
         raise ValueError("Unsupported Foundry action")
 
@@ -875,7 +902,10 @@ class RepoevalFoundryTool(BaseTool):
                     "workload": {"type": "object"},
                     "plan_id": {"type": "string"},
                     "idempotency_key": {"type": "string"},
-                    "self_approve": {"type": "boolean"},
+                    "acknowledge_project_scope": {
+                        "type": "boolean",
+                        "description": "Caller acknowledgement only; the authenticated Foundry permission is authoritative.",
+                    },
                     "resource_type": {"type": "string", "enum": ["run", "snapshot"]},
                     "resource_id": {"type": "string"},
                     "run_id": {"type": "string"},
@@ -884,3 +914,66 @@ class RepoevalFoundryTool(BaseTool):
                 "required": ["action"],
             },
         }
+
+
+class _FoundrySurface(BaseTool):
+    """Distinct policy identity, with shared project evidence and revocation.
+
+    Deliberately do not inherit from RepoevalFoundryTool: doing so would expose
+    its unrestricted execute method through a policy-granted read tool.
+    """
+
+    permissions = ToolPermissions(network=True)
+    actions: frozenset[str] = frozenset()
+    writes_state = False
+
+    def __init__(self, client: RepoevalFoundryTool) -> None:
+        self._foundry = client
+        self.permissions = client.permissions
+
+    def execute(self, *, action: str, **kwargs: Any) -> ToolResult:
+        if not isinstance(action, str) or action not in self.actions:
+            return ToolResult(False, None, "Unsupported Foundry action for this tool")
+        if "self_approve" in kwargs:
+            return ToolResult(
+                False, None, "Use acknowledge_project_scope; the server authorizes mutations"
+            )
+        return self._foundry.execute(action=action, **kwargs)
+
+    def resolve_network_hosts(self, kwargs: dict[str, Any]) -> list[str]:
+        if kwargs.get("action") not in self.actions:
+            raise ValueError("Unsupported Foundry action for this tool")
+        return self._foundry.resolve_network_hosts(kwargs)
+
+    def matches_config(self, config: Any) -> bool:
+        return self._foundry.matches_config(config)
+
+    def revoke(self) -> None:
+        self._foundry.revoke()
+
+    def get_schema(self) -> dict[str, Any]:
+        schema = self._foundry.get_schema()
+        schema["name"] = self.name
+        schema["description"] = self.description
+        schema["parameters"]["properties"]["action"]["enum"] = sorted(self.actions)
+        props = schema["parameters"]["properties"]
+        if not self.writes_state:
+            for key in ("idempotency_key", "acknowledge_project_scope", "commit_sha"):
+                props.pop(key)
+        else:
+            for key in ("workload", "resource_type", "resource_id", "run_ids"):
+                props.pop(key)
+        return schema
+
+
+class RepoevalFoundryReadTool(_FoundrySurface):
+    name = "repoeval_foundry_read"
+    description = "Read project repositories, stage a bounded plan without starting it, check run/snapshot status, compare runs and inspect artifact metadata or draft reports."
+    actions = _READ_ACTIONS
+
+
+class RepoevalFoundryMutateTool(_FoundrySurface):
+    name = "repoeval_foundry_mutate"
+    description = "Request project-scoped repository snapshots, start a reviewed staging plan, or cancel a run; requires explicit Foundry mutation permission."
+    actions = _MUTATION_ACTIONS
+    writes_state = True
