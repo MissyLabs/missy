@@ -468,6 +468,7 @@ def reserved_ack(project="alpha", plan_id="plan-a", key="benchmark-0001"):
         "id": run,
         "plan_id": plan_id,
         "state": "reserved",
+        "cancel_requested": False,
         "job_id": None,
         "required_artifacts": ["response", "validator-report"],
         "children": [
@@ -514,6 +515,8 @@ def test_reserved_start_ack_is_inert_and_same_key_replay_is_same_identity():
         {"state": "reserved", "job_id": "fake-job"},
         {"state": "reserved", "id": "run-attacker"},
         {"state": "reserved", "plan_id": "plan-b"},
+        {"cancel_requested": True},
+        {"cancel_requested": None},
         {"project_id": "beta"},
         {"children": []},
         {"children": "not-children"},

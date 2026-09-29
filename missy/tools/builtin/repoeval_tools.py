@@ -420,10 +420,20 @@ class RepoevalFoundryTool(BaseTool):
         artifact_policy = plan["workload"].get("artifacts")
         if (
             set(result)
-            != {"id", "project_id", "plan_id", "state", "job_id", "children", "required_artifacts"}
+            != {
+                "id",
+                "project_id",
+                "plan_id",
+                "state",
+                "job_id",
+                "children",
+                "required_artifacts",
+                "cancel_requested",
+            }
             or result["id"] != expected_run
             or result["plan_id"] != plan_id
             or result["state"] != "reserved"
+            or result["cancel_requested"] is not False
             or result["job_id"] is not None
             or not isinstance(children, list)
             or len(children) != len(providers) * repetitions

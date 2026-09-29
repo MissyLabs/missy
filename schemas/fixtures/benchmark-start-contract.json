@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "schema": "schemas/benchmark-start-ack.schema.json",
+  "http_status": 202,
+  "example_response": {
+    "ok": true,
+    "data": {
+      "id": "run-748321fb26ba2224751ea9c3",
+      "cancel_requested": false,
+      "project_id": "project",
+      "plan_id": "plan-4b142645f3c2896d750d31f8",
+      "state": "reserved",
+      "job_id": null,
+      "children": [
+        {
+          "run_id": "run-6363ff36aae81c5b372d9e5b",
+          "provider_index": 0,
+          "repetition": 0,
+          "state": "reserved",
+          "job_id": "foundry-run-6363ff36aae81c5b372d9e5b"
+        }
+      ],
+      "required_artifacts": ["result"]
+    }
+  }
+}
