@@ -1,8 +1,0 @@
-{
-  "cases": [
-    {"id": "positive", "value": 250, "percentage": 18, "expected": 45},
-    {"id": "zero-percent", "value": 12, "percentage": 0, "expected": 0},
-    {"id": "fractional", "value": 80, "percentage": 12.5, "expected": 10},
-    {"id": "negative-value", "value": -40, "percentage": 25, "expected": -10}
-  ]
-}

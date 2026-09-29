@@ -1,9 +1,0 @@
-{
-  "version": "1",
-  "checks": [
-    {"id": "exact-tool-name", "weight": 0.25, "expected": "calculator"},
-    {"id": "valid-arguments-schema", "weight": 0.25},
-    {"id": "expression-equivalence", "weight": 0.5, "expected_value": 45, "evaluation": "offline arithmetic parser only; never invoke a tool"}
-  ],
-  "source_review": "Tool name and expression parameter were checked against CalculatorTool at the pinned source commit. The arithmetic answer is 45."
-}

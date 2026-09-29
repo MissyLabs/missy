@@ -206,7 +206,10 @@ tool_intelligence:
 
 ## `repoeval_foundry`
 
-Optional project-pinned RepoEval Foundry HTTP tool. **Disabled by default.**
+Optional project-pinned RepoEval Foundry HTTP **client**. **Disabled by default.**
+`MissyLabs/missy` is the first repository being evaluated; Foundry core, server,
+workload catalog and deployment belong in `MissyLabs/repoeval-foundry`, not here.
+This change only provides opt-in client code and does not deploy or enable a service.
 `api_available` is an explicit operator assertion that a compatible authenticated
 API is available; it is not a health check and does not establish that a service
 exists. No real API availability or deployment is claimed here.

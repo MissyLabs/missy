@@ -1,10 +1,18 @@
 # RepoEval Foundry client boundary
 
+**Repository ownership:** `MissyLabs/missy` is the first repository under
+evaluation, not the home of the Foundry implementation. Foundry's coordinator,
+API server, workload catalog, scheduler adapter, deployment packaging, and core
+tests belong in `MissyLabs/repoeval-foundry`. This repository contains only an
+opt-in Missy HTTP client, its configuration/hot-reload/gateway integration, and
+client-side contract tests. This is code only: no API deployed, credentials
+provisioned, client enabled, or evaluation run.
+
 `repoeval_foundry` is a deliberately gated project-scoped tool. It is **not**
 a Nomad, shell, repository-write, deployment, credential, or arbitrary HTTP
-tool. Foundry has a framework-neutral route facade and an opt-in HTTP listener;
-neither a live endpoint nor a completed scan or benchmark has been established
-by these tests. The integration defaults to unavailable.
+tool. The separate Foundry repository owns the server contract; neither a live
+endpoint nor a completed scan or benchmark has been established by these
+client tests. The integration defaults to unavailable.
 Configuration supports an opt-in authenticated bridge using a protected token
 file. `api_available` is only an operator assertion, not a health check; this
 document does not claim a real API is deployed or reachable. Registration
@@ -51,7 +59,7 @@ base (optionally with trailing `/`), a valid hostname, and a valid nonzero port.
 The adapter must expose `/projects/{id}` or
 `/api/projects/{id}`, never `/api/v1/projects/{id}`. Configure only the origin
 or `/api` prefix; the client appends the project-scoped resource route.
-`FoundryAPI.handle()` wraps responses as
+The pinned client wire contract wraps responses as
 `{"ok": true, "data": ...}`. `list_repositories()` returns a bare `list[str]`,
 not repository objects and not a project-tagged document. The client accepts
 only unique, validated repository IDs (a single legacy segment or exactly
@@ -61,10 +69,10 @@ segments, escapes, URLs and extra slashes are refused without normalization.
 This repository-only grammar does not extend to plan, run, snapshot, project or
 other resource IDs. Repository IDs travel in JSON bodies, not URL path
 segments. The client labels its scope as coming from the
-fixed authenticated `/projects/{configured_project}/repositories` route: PR1
-checks the principal's project against that route. This is **not** an
-independent per-item project assertion. A future HTTP adapter must preserve
-that authentication and route check before enabling the tool. PR1 snapshot,
+fixed authenticated `/projects/{configured_project}/repositories` route. The
+separate server must check the principal's project against that route. This is
+**not** an independent per-item project assertion. The HTTP server must preserve
+that authentication and route check before enabling the tool. Snapshot,
 plan, run status and cancellation records contain `project_id`, which the
 client requires to equal its configured project; missing or mismatched scope
 is refused. Plans require a trusted staging capacity and policy attestation

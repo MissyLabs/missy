@@ -38,9 +38,6 @@ dev = [
     "hypothesis>=6.100",
     "jsonschema>=4.18",
 ]
-repoeval = [
-    "jsonschema>=4.18",
-]
 otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20",
@@ -90,11 +87,6 @@ missy = "missy.cli.main:cli"
 
 [tool.setuptools.package-data]
 missy = ["py.typed", "channels/screencast/web/*.html"]
-"missy.repoeval" = [
-    "schema.sql", "schemas/*.json", "schemas/examples/*.json",
-    "workloads/missy/*/*.json", "workloads/missy/*/*.md",
-    "workloads/missy/*/fixtures/*.json", "workloads/missy/*/fixtures/*.py",
-]
 
 [tool.setuptools.packages.find]
 where = ["."]

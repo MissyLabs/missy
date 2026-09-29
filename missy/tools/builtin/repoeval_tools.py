@@ -14,7 +14,6 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from missy.gateway.client import PolicyHTTPClient
-from missy.repoeval.contracts import COMPARABILITY_PATHS
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -47,7 +46,35 @@ _RESPONSE_LIMIT = 1024 * 1024
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _ARTIFACT_ID = re.compile(r"artifact-[A-Za-z0-9_-]{8,128}\Z")
 _KIND = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
-_REASONS = frozenset(COMPARABILITY_PATHS) | {
+# Client-side allowlist for Foundry's version 1.0 comparison reason paths.
+# Keep this pinned at the wire boundary: Missy must not import the Foundry core.
+_COMPARABILITY_PATHS_V1 = frozenset(
+    {
+        "repository.repository_id",
+        "repository.commit_sha",
+        "repository.snapshot_id",
+        "repository.subdirectory",
+        "task.class",
+        "task.prompt_sha256",
+        "task.fixture_digests",
+        "task.tool_schema_uris",
+        "workload_id",
+        "workload_version",
+        "definition_sha256",
+        "sandbox.image_digest",
+        "sandbox.network_policy",
+        "sandbox.cpu_mhz",
+        "sandbox.memory_mb",
+        "sandbox.disk_mb",
+        "sandbox.timeout_seconds",
+        "sandbox.architecture",
+        "evaluator_version",
+        "validators",
+        "provider_independent_settings_sha256",
+        "tool_schemas_sha256",
+    }
+)
+_REASONS = _COMPARABILITY_PATHS_V1 | {
     "comparability_key_invalid",
     "comparability_key_mismatch",
     "comparability_rules_version_mismatch",
