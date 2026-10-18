@@ -16,6 +16,7 @@ Example::
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urljoin
 
 from missy.security.sanitizer import sanitizer as input_sanitizer
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
@@ -137,6 +138,16 @@ class WebFetchTool(BaseTool):
             status = response.status_code
             success = 200 <= status < 300
             error = f"HTTP {status}" if not success else None
+            location = response.headers.get("location") if 300 <= status < 400 else None
+            if isinstance(location, str) and location:
+                # Redirects are never followed automatically (each hop must
+                # pass network policy), so name the target instead of leaving
+                # a bare status code the agent cannot act on.
+                target = urljoin(url, location)
+                error = (
+                    f"HTTP {status} redirect to {target} (not followed automatically; "
+                    "fetch that URL to continue if it is allowed)"
+                )
             return ToolResult(
                 success=success,
                 output=content,
