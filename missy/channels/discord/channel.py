@@ -107,6 +107,10 @@ class DiscordChannel(BaseChannel):
         self._stopped = asyncio.Event()
         #: Set when the gateway task ends without stop() being called.
         self.gateway_failure: str | None = None
+        #: Strong references to fire-and-forget sends; the event loop only
+        #: holds weak references, so an unreferenced task can be collected
+        #: before it finishes and the message silently lost.
+        self._background_sends: set[asyncio.Task[Any]] = set()
         self._current_channel_id: str | None = None
 
         # Pairing state: set of Discord user IDs that have initiated pairing
@@ -407,9 +411,17 @@ class DiscordChannel(BaseChannel):
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.send_with_retry(self._current_channel_id, message))
         except RuntimeError:
             logger.warning("DiscordChannel.send(): no running event loop — message dropped")
+            return
+        task = loop.create_task(self.send_with_retry(self._current_channel_id, message))
+        self._background_sends.add(task)
+        task.add_done_callback(self._on_background_send_done)
+
+    def _on_background_send_done(self, task: asyncio.Task[Any]) -> None:
+        self._background_sends.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("DiscordChannel.send(): background send failed: %s", task.exception())
 
     async def send_to(
         self,

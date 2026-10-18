@@ -1390,3 +1390,21 @@ class TestGatewayFailureDetection:
         await ch.start()
         await ch.stop()
         assert ch.gateway_failure is None
+
+
+class TestBackgroundSendIsTracked:
+    async def test_send_keeps_a_reference_until_the_task_finishes(self):
+        ch = _make_channel()
+        ch._current_channel_id = "123"
+        gate = asyncio.Event()
+
+        async def slow_send(channel_id, message):
+            await gate.wait()
+
+        ch.send_with_retry = slow_send  # type: ignore[method-assign]
+        ch.send("hello")
+        assert len(ch._background_sends) == 1
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert ch._background_sends == set()
