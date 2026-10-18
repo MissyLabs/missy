@@ -740,9 +740,45 @@ class CodexProvider(BaseProvider):
         body = self._build_body(messages, tools=tool_schemas)
         client = self._make_client(session_id=session_id, task_id=task_id)
 
-        tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
-        current_fn: dict = {}
+        # Parallel function calls can be announced before (or interleaved
+        # with) each other's argument deltas, so every call is tracked by its
+        # own item id. A single "current call" slot let later calls overwrite
+        # earlier ones and concatenated their argument fragments into invalid
+        # JSON, which then executed with empty arguments.
+        pending: dict[str, dict] = {}
+        finished: dict[str, tuple[int, ToolCall]] = {}
+        last_key = ""
+
+        def _event_key(event: dict) -> str:
+            item_id = event.get("item_id")
+            if item_id:
+                return str(item_id)
+            if event.get("output_index") is not None:
+                for key, entry in pending.items():
+                    if entry["index"] == event["output_index"]:
+                        return key
+            return last_key
+
+        def _finish(key: str, arguments: str | None = None) -> None:
+            entry = pending.get(key)
+            if entry is None or key in finished or not entry["name"]:
+                return
+            raw = arguments if arguments else entry["arguments"]
+            try:
+                args = json.loads(raw or "{}")
+            except json.JSONDecodeError:
+                logger.warning(
+                    "openai-codex: could not parse arguments for tool call %r (%s); "
+                    "executing with empty arguments",
+                    entry["name"],
+                    entry["id"],
+                )
+                args = {}
+            finished[key] = (
+                entry["index"],
+                ToolCall(id=entry["id"], name=entry["name"], arguments=args),
+            )
 
         try:
             for event in self._stream_sse(client, body, token, account_id):
@@ -752,33 +788,30 @@ class CodexProvider(BaseProvider):
                 elif etype == "response.output_item.added":
                     item = event.get("item", {})
                     if item.get("type") == "function_call":
-                        current_fn = {
+                        last_key = str(item.get("id") or item.get("call_id") or len(pending))
+                        pending[last_key] = {
                             "id": item.get("call_id", item.get("id", "")),
                             "name": item.get("name", ""),
-                            "arguments": item.get("arguments", ""),
+                            "arguments": item.get("arguments", "") or "",
+                            "index": event.get("output_index", len(pending)),
                         }
                 elif etype == "response.function_call_arguments.delta":
-                    current_fn["arguments"] = current_fn.get("arguments", "") + event.get(
-                        "delta", ""
-                    )
-                elif etype == "response.function_call_arguments.done" and current_fn.get("name"):
-                    try:
-                        args = json.loads(current_fn.get("arguments", "{}"))
-                    except json.JSONDecodeError:
-                        args = {}
-                    tool_calls.append(
-                        ToolCall(
-                            id=current_fn["id"],
-                            name=current_fn["name"],
-                            arguments=args,
-                        )
-                    )
-                    current_fn = {}
+                    entry = pending.get(_event_key(event))
+                    if entry is not None:
+                        entry["arguments"] += event.get("delta", "")
+                elif etype == "response.function_call_arguments.done":
+                    _finish(_event_key(event), event.get("arguments"))
+                elif etype == "response.output_item.done":
+                    item = event.get("item", {})
+                    if item.get("type") == "function_call":
+                        key = str(item.get("id") or "") or _event_key(event)
+                        _finish(key, item.get("arguments"))
         except ProviderError as exc:
             logger.warning("openai-codex tool completion failed: %s", exc, exc_info=True)
             self._emit_event(session_id, task_id, "error", str(exc))
             raise
 
+        tool_calls = [call for _index, call in sorted(finished.values(), key=lambda v: v[0])]
         finish_reason = "tool_calls" if tool_calls else "stop"
 
         raw_content = "".join(text_parts)
