@@ -2366,3 +2366,24 @@ class TestSessionContinuityAcrossToolLoopRounds:
             transcript.append(
                 Message(role="user", content=f"[Tool result for step_{round_num}]: ok")
             )
+
+
+def test_model_fallback_notice_starts_its_own_paragraph() -> None:
+    """The agent's fallback notice must not run into the reply's last word."""
+    import json as _json
+
+    from missy.providers.acpx_provider import AcpxProvider as _Acpx
+
+    def chunk(text: str) -> str:
+        return _json.dumps(
+            {
+                "method": "session/update",
+                "params": {
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": {"text": text}}
+                },
+            }
+        )
+
+    stdout = "\n".join([chunk("not a fail"), chunk("ure."), chunk("**Model fallback:** retried.")])
+    text = _Acpx._parse_ndjson_output(_Acpx.__new__(_Acpx), stdout)
+    assert text == "not a failure.\n\n**Model fallback:** retried."

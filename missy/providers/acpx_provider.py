@@ -1044,6 +1044,10 @@ def _run_subprocess_with_group_kill(
 # ---------------------------------------------------------------------------
 
 
+#: The ACP agent's notice that it retried on a different model.
+_FALLBACK_NOTICE_RE = re.compile(r"\s*\*\*Model fallback:\*\*")
+
+
 class AcpxProvider(BaseProvider):
     """Provider that delegates to ``acp_bridge.mjs`` over the Agent Client Protocol.
 
@@ -1806,6 +1810,16 @@ class AcpxProvider(BaseProvider):
 
             text = self._extract_text_from_event(event)
             if text:
+                # Chunks are usually mid-word deltas and must join directly,
+                # but the agent's provider-fallback notice is a separate
+                # message; without a break it ran into the reply's last word
+                # ("...not a failure.**Model fallback:** ...").
+                if (
+                    text_parts
+                    and _FALLBACK_NOTICE_RE.match(text)
+                    and not text_parts[-1].endswith("\n")
+                ):
+                    text = "\n\n" + text
                 text_parts.append(text)
 
         if text_parts:
