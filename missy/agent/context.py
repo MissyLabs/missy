@@ -48,6 +48,23 @@ def quarantine_untrusted_context(text: str) -> str:
     return text
 
 
+def quarantine_untrusted_entries(entries: list[str]) -> list[str]:
+    """Quarantine recalled entries one at a time.
+
+    Scanning the joined block let one matching entry withhold every recalled
+    memory. Each entry is now judged on its own, and only matching entries
+    are replaced. A payload split across entries is still caught: if the
+    joined text matches while no single entry does, the whole block is
+    withheld, as before.
+    """
+    checked = [quarantine_untrusted_context(entry) for entry in entries]
+    if _CONTEXT_SECURITY_BLOCK not in checked:
+        joined = "\n".join(entries)
+        if quarantine_untrusted_context(joined) == _CONTEXT_SECURITY_BLOCK:
+            return [_CONTEXT_SECURITY_BLOCK]
+    return checked
+
+
 def _approx_tokens(text: str) -> int:
     """Approximate token count using the 4-chars-per-token heuristic.
 
@@ -212,14 +229,14 @@ class ContextManager:
             )
 
         if memory_results:
-            memory_text = quarantine_untrusted_context("\n".join(memory_results))
+            memory_text = "\n".join(quarantine_untrusted_entries(memory_results))
             if _approx_tokens(memory_text) > memory_budget:
                 memory_text = memory_text[: memory_budget * 4]
             enriched_system += f"\n\n## Relevant Memory\n{memory_text}"
 
         if learnings:
-            learnings_text = quarantine_untrusted_context(
-                "\n".join(f"- {item}" for item in learnings[:5])
+            learnings_text = "\n".join(
+                quarantine_untrusted_entries([f"- {item}" for item in learnings[:5]])
             )
             if _approx_tokens(learnings_text) <= learnings_budget:
                 enriched_system += f"\n\n## Past Learnings\n{learnings_text}"
