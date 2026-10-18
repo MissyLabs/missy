@@ -1650,6 +1650,84 @@ class TestCodexProviderCompleteWithTools:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].arguments == {"num": 42}
 
+    def test_parallel_tool_calls_keep_their_own_arguments(self):
+        # All calls announced before any arguments stream, then deltas tagged
+        # by item_id. A single "current call" slot gave every call after the
+        # first empty arguments (validation case RAG-004).
+        def added(item_id, call_id, index):
+            return {
+                "type": "response.output_item.added",
+                "output_index": index,
+                "item": {
+                    "type": "function_call",
+                    "id": item_id,
+                    "call_id": call_id,
+                    "name": "rag_query",
+                    "arguments": "",
+                },
+            }
+
+        def delta(item_id, text):
+            return {
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id,
+                "delta": text,
+            }
+
+        lines = _make_sse_lines(
+            [
+                added("fc_a", "call_a", 0),
+                added("fc_b", "call_b", 1),
+                added("fc_c", "call_c", 2),
+                delta("fc_b", '{"action": '),
+                delta("fc_a", '{"action": "index_text", "doc_id": "garden", "text": "x"}'),
+                delta("fc_c", '{"query": '),
+                delta("fc_b", '"stats"}'),
+                delta("fc_c", '"opening hours"}'),
+                {"type": "response.function_call_arguments.done", "item_id": "fc_c"},
+                {"type": "response.function_call_arguments.done", "item_id": "fc_a"},
+                {"type": "response.function_call_arguments.done", "item_id": "fc_b"},
+            ]
+        )
+        result = self._run(lines)
+        assert [tc.id for tc in result.tool_calls] == ["call_a", "call_b", "call_c"]
+        assert [tc.arguments for tc in result.tool_calls] == [
+            {"action": "index_text", "doc_id": "garden", "text": "x"},
+            {"action": "stats"},
+            {"query": "opening hours"},
+        ]
+
+    def test_output_item_done_supplies_complete_arguments(self):
+        # No argument deltas: the complete arguments arrive on output_item.done.
+        lines = _make_sse_lines(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "id": "fc_z",
+                        "call_id": "call_z",
+                        "name": "rag_query",
+                        "arguments": "",
+                    },
+                },
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "id": "fc_z",
+                        "call_id": "call_z",
+                        "name": "rag_query",
+                        "arguments": '{"action": "stats"}',
+                    },
+                },
+            ]
+        )
+        result = self._run(lines)
+        assert [tc.arguments for tc in result.tool_calls] == [{"action": "stats"}]
+
     def test_invalid_json_arguments_yields_empty_dict(self):
         lines = _make_sse_lines(
             [

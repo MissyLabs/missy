@@ -340,3 +340,41 @@ class TestSingleton:
         second = init_registry(config)
         assert get_registry() is second
         assert first is not second
+
+
+class TestFallbackHonorsSlowAvailabilityProbes:
+    """A provider whose cold availability probe exceeds the 0.5 s bulk budget
+    must still be selectable as a fallback (validation cases RAG-005/WB-002:
+    acpx's ~1 s probe made a quota-exhausted turn fail with no fallback)."""
+
+    class _SlowProbe(BaseProvider):
+        name = "slow"
+        availability_probe_wait_seconds = 3.0
+
+        def is_available(self) -> bool:
+            import time as _time
+
+            _time.sleep(1.0)
+            return True
+
+        def complete(self, messages, **kwargs):  # pragma: no cover - unused
+            raise NotImplementedError
+
+    def test_select_weighted_waits_for_declared_probe_time(self) -> None:
+        registry = ProviderRegistry()
+        registry.register("primary", _make_provider("primary"))
+        registry.register("slow", self._SlowProbe())
+
+        picked = registry.select_weighted(exclude={"primary"})
+
+        assert picked is not None and picked.name == "slow"
+
+    def test_plain_availability_listing_keeps_the_fast_budget(self) -> None:
+        import time as _time
+
+        registry = ProviderRegistry()
+        registry.register("slow", self._SlowProbe())
+
+        started = _time.monotonic()
+        registry.get_available()
+        assert _time.monotonic() - started < 0.9

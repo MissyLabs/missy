@@ -402,7 +402,10 @@ class ProviderRegistry:
             The selected provider, or ``None`` when no eligible candidate
             is currently available.
         """
-        names = self._wait_for_available_names(exclude=exclude)
+        # Fallback selection runs right after a failure, when probe caches are
+        # usually stale; a provider with a slow cold probe (acpx: ~1 s) must
+        # get its declared wait or it is silently skipped as unavailable.
+        names = self._wait_for_available_names(exclude=exclude, honor_provider_waits=True)
         if only is not None:
             names = [name for name in names if name in only]
         if not names:
@@ -416,7 +419,9 @@ class ProviderRegistry:
                 picked_name = names[0]
             return self._providers.get(picked_name)
 
-    def _wait_for_available_names(self, *, exclude: set[str] | None = None) -> list[str]:
+    def _wait_for_available_names(
+        self, *, exclude: set[str] | None = None, honor_provider_waits: bool = False
+    ) -> list[str]:
         """Return currently-available, non-excluded, non-disabled registry keys.
 
         Shared by :meth:`get_available` and :meth:`select_weighted`:
@@ -432,13 +437,16 @@ class ProviderRegistry:
                 for name, provider in self._providers.items()
                 if name not in self._runtime_disabled and name not in exclude
             ]
-        deadline = time.monotonic() + self.AVAILABILITY_BULK_DEADLINE_SECONDS
+        start = time.monotonic()
         events = [self._ensure_availability_probe(name, provider) for name, provider in snapshot]
-        for event in events:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            event.wait(remaining)
+        for (_name, provider), event in zip(snapshot, events, strict=True):
+            budget = self.AVAILABILITY_BULK_DEADLINE_SECONDS
+            provider_wait = getattr(provider, "availability_probe_wait_seconds", None)
+            if honor_provider_waits and isinstance(provider_wait, (int, float)):
+                budget = max(budget, float(provider_wait))
+            remaining = start + budget - time.monotonic()
+            if remaining > 0:
+                event.wait(remaining)
         now = time.monotonic()
         with self._lock:
             return [
