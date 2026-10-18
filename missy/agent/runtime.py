@@ -80,6 +80,8 @@ _PROMPT_INJECTION_FLAG = "prompt_injection"
 _PROMPT_INJECTION_SCAN_INCOMPLETE_FLAGS = frozenset(
     {"prompt_injection_scan_incomplete", "prompt_injection_scan_failed"}
 )
+_CHECKPOINT_MANAGER_LOCK = threading.Lock()
+
 _LOW_CONFIDENCE_INJECTION_PATTERNS = frozenset({r"<!--(?:(?!-->)[\s\S])*-->"})
 
 _DISCORD_CHANNEL_SCOPE_RE = re.compile(r"\[Discord channel ([^\]\r\n]+)\]")
@@ -1850,13 +1852,13 @@ class AgentRuntime:
         _cm = _checkpoint_manager
         if _cm is None:
             try:
-                from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
-
-                _cm = _CheckpointManager()
+                _cm = self._shared_checkpoint_manager()
                 _checkpoint_id = _cm.create(session_id, task_id, user_input)
             except Exception:
-                logger.debug(
-                    "CheckpointManager init failed; proceeding without checkpoints",
+                # WARNING, not DEBUG: a corrupt checkpoint database silently
+                # disabled crash recovery for weeks (premortem item 2).
+                logger.warning(
+                    "Checkpointing unavailable; proceeding without crash recovery",
                     exc_info=True,
                 )
                 _cm = None
@@ -6371,6 +6373,24 @@ class AgentRuntime:
             breaker = self._make_circuit_breaker(provider_name)
             self._fallback_breakers[provider_name] = breaker
         return breaker
+
+    def _shared_checkpoint_manager(self) -> Any:
+        """Return this runtime's single CheckpointManager, creating it once.
+
+        Constructing one per run re-ran database setup on every turn while
+        sibling threads held open connections to the same file.
+        """
+        cached = getattr(self, "_checkpoint_manager_instance", None)
+        if cached is not None:
+            return cached
+        with _CHECKPOINT_MANAGER_LOCK:
+            cached = getattr(self, "_checkpoint_manager_instance", None)
+            if cached is None:
+                from missy.agent.checkpoint import CheckpointManager as _CheckpointManager
+
+                cached = _CheckpointManager()
+                self._checkpoint_manager_instance = cached
+            return cached
 
     def _call_provider_with_fallback(
         self,

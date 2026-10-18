@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from missy.core.events import AuditEvent, event_bus
+from missy.core.sqlite_files import ensure_private_db_file
 from missy.security.censor import censor_response
 
 logger = logging.getLogger(__name__)
@@ -156,12 +157,9 @@ class CheckpointManager:
         unsafe_to_repermission = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
         if resolved_parent not in unsafe_to_repermission:
             os.chmod(parent, 0o700)
-        if os.path.islink(self.db_path):
-            raise ValueError(f"Refusing symlinked checkpoint database: {self.db_path}")
-        flags = os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(self.db_path, flags, 0o600)
-        os.close(fd)
-        os.chmod(self.db_path, 0o600)
+        # Never open/close an existing database file here: that releases the
+        # POSIX locks held by other SQLite connections in this process.
+        ensure_private_db_file(self.db_path, label="checkpoint database")
         # Eagerly initialise the schema on the calling thread
         conn = self._connect()
         conn.executescript(_DDL)
