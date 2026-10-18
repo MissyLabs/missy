@@ -1650,6 +1650,28 @@ class TestCodexProviderCompleteWithTools:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].arguments == {"num": 42}
 
+    def test_reported_usage_is_used(self):
+        # Premortem item 5: usage was hard-coded to zero, so budgets never tripped.
+        lines = _make_sse_lines(
+            [
+                {"type": "response.output_text.delta", "delta": "Hello."},
+                {
+                    "type": "response.completed",
+                    "response": {"usage": {"input_tokens": 120, "output_tokens": 30}},
+                },
+            ]
+        )
+        result = self._run(lines)
+        assert result.usage == {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+        assert "usage_estimated" not in result.raw
+
+    def test_missing_usage_is_estimated_and_flagged(self):
+        lines = _make_sse_lines([{"type": "response.output_text.delta", "delta": "x" * 400}])
+        result = self._run(lines)
+        assert result.usage["completion_tokens"] == 100
+        assert result.usage["total_tokens"] > 0
+        assert result.raw == {"usage_estimated": True}
+
     def test_parallel_tool_calls_keep_their_own_arguments(self):
         # All calls announced before any arguments stream, then deltas tagged
         # by item_id. A single "current call" slot gave every call after the

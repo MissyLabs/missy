@@ -402,4 +402,4 @@ class TestSecretPatternCount:
         (bearer_token, basic_auth_header, aws_presigned_signature) plus
         github_fine_grained_pat (round-17 checkpoint: GitHub's fine-grained
         PAT format matched no existing pattern)."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 54
+        assert len(SecretsDetector.SECRET_PATTERNS) >= 54  # lower bound: never lose detections

@@ -529,3 +529,33 @@ class TestMaxSubAgentDepth:
         """A sanity check that this hasn't been accidentally set to 0 or
         an unbounded value -- the whole point is a real, small cap."""
         assert 0 < MAX_SUB_AGENT_DEPTH <= 5
+
+
+def test_subrun_budget_is_shared_across_the_delegation_tree():
+    """Premortem item 10: a total cap, not a per-level one."""
+    import contextvars
+    from unittest.mock import MagicMock
+
+    from missy.agent.sub_agent import (
+        MAX_TOTAL_SUB_RUNS,
+        SubAgentRunner,
+        SubTask,
+        start_subrun_budget,
+    )
+
+    def scenario() -> tuple[list[str], int]:
+        start_subrun_budget()
+        runtime = MagicMock()
+        runtime.run.return_value = "ok"
+        results = []
+        for i in range(MAX_TOTAL_SUB_RUNS + 1):
+            runner = SubAgentRunner(runtime=runtime, session_id="s", depth=1)
+            results.append(runner.run_subtask(SubTask(id=i, description=f"task {i}")))
+        return results, runtime.run.call_count
+
+    # Run in a copied context so the exhausted budget cannot leak into other
+    # tests sharing this worker thread.
+    results, calls = contextvars.copy_context().run(scenario)
+    assert results[:MAX_TOTAL_SUB_RUNS] == ["ok"] * MAX_TOTAL_SUB_RUNS
+    assert "budget exhausted" in results[-1]
+    assert calls == MAX_TOTAL_SUB_RUNS

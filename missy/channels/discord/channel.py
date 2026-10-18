@@ -105,6 +105,12 @@ class DiscordChannel(BaseChannel):
         self._task_id = task_id
         self._queue: asyncio.Queue[ChannelMessage] = asyncio.Queue(maxsize=queue_max)
         self._stopped = asyncio.Event()
+        #: Set when the gateway task ends without stop() being called.
+        self.gateway_failure: str | None = None
+        #: Strong references to fire-and-forget sends; the event loop only
+        #: holds weak references, so an unreferenced task can be collected
+        #: before it finishes and the message silently lost.
+        self._background_sends: set[asyncio.Task[Any]] = set()
         self._current_channel_id: str | None = None
 
         # Pairing state: set of Discord user IDs that have initiated pairing
@@ -252,7 +258,9 @@ class DiscordChannel(BaseChannel):
             logger.warning("Discord channel start() ignored: Gateway task is already running")
             return
         self._stopped.clear()
+        self.gateway_failure = None
         self._gateway_task = asyncio.create_task(self._gateway.run())
+        self._gateway_task.add_done_callback(self._on_gateway_task_done)
 
         # Register global slash commands if an application ID is configured.
         if self.account_config.application_id:
@@ -317,6 +325,33 @@ class DiscordChannel(BaseChannel):
                 await self._gateway_task
             self._gateway_task = None
 
+    def _on_gateway_task_done(self, task: asyncio.Task[None]) -> None:
+        """Record a gateway that stopped without being asked to.
+
+        A non-reconnectable close (e.g. a rotated token) ended the gateway
+        task while the process kept running, so systemd never restarted it
+        and Discord stayed dark with nothing reporting it.
+        """
+        if self._stopped.is_set() or task.cancelled():
+            return
+        exc = task.exception()
+        reason = f"gateway task failed: {exc!r}" if exc else "gateway stopped reconnecting"
+        self.gateway_failure = reason
+        logger.error("Discord channel is no longer connected: %s", reason)
+        with contextlib.suppress(Exception):
+            from missy.core.events import AuditEvent, event_bus
+
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="",
+                    task_id="",
+                    event_type="discord.gateway.stopped",
+                    category="network",
+                    result="error",
+                    detail={"reason": reason},
+                )
+            )
+
     # ------------------------------------------------------------------
     # BaseChannel interface
     # ------------------------------------------------------------------
@@ -376,9 +411,17 @@ class DiscordChannel(BaseChannel):
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.send_with_retry(self._current_channel_id, message))
         except RuntimeError:
             logger.warning("DiscordChannel.send(): no running event loop — message dropped")
+            return
+        task = loop.create_task(self.send_with_retry(self._current_channel_id, message))
+        self._background_sends.add(task)
+        task.add_done_callback(self._on_background_send_done)
+
+    def _on_background_send_done(self, task: asyncio.Task[Any]) -> None:
+        self._background_sends.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("DiscordChannel.send(): background send failed: %s", task.exception())
 
     async def send_to(
         self,

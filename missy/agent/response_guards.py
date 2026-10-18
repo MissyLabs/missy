@@ -77,6 +77,15 @@ _FABRICATION_PATTERNS: list[re.Pattern[str]] = [
     ),
 ]
 
+#: A claim about content the user supplied in this conversation, or about the
+#: assistant's own reasoning, needs no tool behind it ("I reviewed the code you
+#: pasted", "I verified the math", "I've written a script below").
+_SELF_CONTAINED_CLAIM = re.compile(
+    r"(?i)\byou(?:'ve| have)?\s+(?:pasted|shared|provided|sent|gave|posted|attached|"
+    r"wrote|included|quoted)\b|\b(?:above|below)\b|\b(?:the|my)\s+(?:math|"
+    r"arithmetic|calculation|reasoning|logic|answer|working)\b"
+)
+
 #: Minimum response length to consider for fabrication detection -- a very
 #: short response ("ok", "sure") can't meaningfully match any of the
 #: patterns above, so skip the (cheap, but non-zero) regex work.
@@ -169,16 +178,19 @@ def detect_fabrication(text: str, tools_used: list[str]) -> bool:
     """
     if not text or len(text) < _MIN_FABRICATION_LENGTH:
         return False
-    claims: list[str] = []
+    claims: list[tuple[str, str]] = []
     for index, pattern in enumerate(_FABRICATION_PATTERNS):
         for match in pattern.finditer(text):
-            if index == 0:
-                sentence_end = re.search(r"[.!?\n]", text[match.end() :])
-                end = match.end() + sentence_end.start() if sentence_end is not None else len(text)
-                claims.append(text[match.start() : end])
-            else:
-                claims.append(match.group(0))
-    return any(not _has_relevant_tool_evidence(claim, tools_used) for claim in claims)
+            sentence_end = re.search(r"[.!?\n]", text[match.end() :])
+            end = match.end() + sentence_end.start() if sentence_end is not None else len(text)
+            start = max(text.rfind(mark, 0, match.start()) for mark in ".!?\n") + 1
+            claim = text[match.start() : end] if index == 0 else match.group(0)
+            claims.append((claim, text[start:end]))
+    return any(
+        not _has_relevant_tool_evidence(claim, tools_used)
+        and not _SELF_CONTAINED_CLAIM.search(sentence)
+        for claim, sentence in claims
+    )
 
 
 def make_fabrication_retry_prompt(user_input: str = "") -> str:
@@ -290,6 +302,7 @@ _ACTION_REQUEST = re.compile(
     r"(?i)\b(?:please\s+)?(?:run|execute|check|inspect|look up|fetch|search|"
     r"download|upload|install|deploy|restart|start|stop|update|change|edit|"
     r"modify|fix|test|verify|create|delete|remove|send|post|save|"
+    r"generate|produce|render|export|compile|"
     r"take (?:a |the )?(?:photo|screenshot))\b"
 )
 _NON_EXECUTION_REQUEST = re.compile(
@@ -314,6 +327,24 @@ _DEFERRED_EXECUTION = re.compile(
 _AFFIRMATION_REQUEST = re.compile(
     r"(?i)^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please\s+do|"
     r"proceed|sounds\s+good|confirmed?|approved?|absolutely|definitely)\b[^?]{0,60}$"
+)
+# Thanks and sign-offs close a conversation; they never approve an action.
+_CLOSING_REPLY = re.compile(
+    r"(?i)\b(?:thanks?|thank\s+you|thx|ty|appreciated?|cheers|bye|goodnight|"
+    r"that'?s\s+(?:all|it|everything)|nothing\s+else|all\s+good)\b"
+)
+# A sentence offering further, unrequested work ("anything else?", "should I
+# also restart nginx?") is not a deferral of the work that was requested.
+_OPEN_OFFER_SENTENCE = re.compile(
+    r"(?i)[^.!?\n]*\b(?:anything|something)\s+else\b[^.!?\n]*[.!?]?|"
+    r"[^.!?\n]*\b(?:also|additionally|as\s+well|afterwards?|after\s+that)\b[^.!?\n]*\?"
+)
+# Asking before an irreversible action is the safe behavior, not hedging.
+# Only the first confirmation is exempt: a bare "yes, go ahead" afterwards
+# carries no destructive verb, so a second confirmation is still caught.
+_DESTRUCTIVE_REQUEST = re.compile(
+    r"(?i)\b(?:delete|remove|rm|wipe|erase|drop|purge|format|overwrite|reset|"
+    r"uninstall|kill|truncate|destroy|revoke|force[- ]push)\b"
 )
 # The user explicitly handed the remaining choices to the assistant.
 _DELEGATED_CHOICE = re.compile(
@@ -356,6 +387,29 @@ def _is_non_execution_request(user_input: str) -> bool:
 _SHELL_FENCE = re.compile(r"```(?:bash|shell|sh|zsh|console)\s*\n", re.I)
 
 
+def is_action_request(user_input: object) -> bool:
+    """Return whether *user_input* asks for something to be done, not explained.
+
+    Completion-claim guards only make sense for action requests; running them
+    on chat ("I'll explain how DNS works") replaced ordinary answers with a
+    canned refusal.
+    """
+    return (
+        isinstance(user_input, str)
+        and bool(_ACTION_REQUEST.search(user_input))
+        and not _is_non_execution_request(user_input)
+    )
+
+
+def unverified_answer_notice(text: str) -> str:
+    """Keep *text* but say plainly that no tool ran, so nothing was done."""
+    notice = (
+        "Note: no tool ran for this request, so nothing described below was "
+        "actually done or verified."
+    )
+    return f"{notice}\n\n{text}" if text.strip() else notice
+
+
 def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
     """Catch permission-seeking instead of execution, without policing advice.
 
@@ -368,11 +422,15 @@ def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
         return False
     prose = re.sub(r"```.*?```|`[^`]+`", "", text, flags=re.S)
     prose = re.sub(r"^[ \t]*>[^\n]*$", "", prose, flags=re.M)
+    prose = _OPEN_OFFER_SENTENCE.sub(" ", prose)
     # After an explicit "use your judgment"/"no questions", any question
     # back to the user is an interview the user already declined.
     if _DELEGATED_CHOICE.search(user_input) and "?" in prose:
         return True
-    if not (_ACTION_REQUEST.search(user_input) or _AFFIRMATION_REQUEST.search(user_input)):
+    if _DESTRUCTIVE_REQUEST.search(user_input):
+        return False
+    affirmed = _AFFIRMATION_REQUEST.search(user_input) and not _CLOSING_REPLY.search(user_input)
+    if not (_ACTION_REQUEST.search(user_input) or affirmed):
         return False
     return bool(_DEFERRED_EXECUTION.search(prose))
 

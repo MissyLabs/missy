@@ -113,6 +113,23 @@ class TestRunRetention:
             )
         assert str(results["checkpoints"]).startswith("error")
 
+    def test_failed_step_is_audited_as_error(self, tmp_path):
+        # A malformed checkpoints.db was audited as result="allow" for weeks.
+        with (
+            patch(
+                "missy.agent.checkpoint.CheckpointManager", side_effect=RuntimeError("malformed")
+            ),
+            patch("missy.core.events.event_bus.publish") as publish,
+        ):
+            run_retention(
+                RetentionConfig(
+                    captures_days=0, inbound_attachments_days=0, request_tracker_days=0
+                ),
+                captures_dir=str(tmp_path),
+                devices_path=str(tmp_path / "devices.json"),
+            )
+        assert publish.call_args.args[0].result == "error"
+
 
 def test_register_uses_fresh_config_each_run():
     scheduler = MagicMock()

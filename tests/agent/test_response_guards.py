@@ -28,6 +28,7 @@ from missy.agent.response_guards import (
     find_unverified_desktop_action,
     find_unverified_filesystem_action,
     find_video_reproducibility_issue,
+    is_action_request,
     is_image_generation_request,
     is_image_reproducibility_request,
     is_security_refusal,
@@ -53,6 +54,7 @@ from missy.agent.response_guards import (
     make_video_reproducibility_prompt,
     make_web_request_retry_prompt,
     terminal_parameter_errors_are_reported,
+    unverified_answer_notice,
 )
 
 
@@ -90,6 +92,51 @@ class TestExecutionGuards:
         assert detect_hedging("Do you want me to proceed?", "sure", [])
         assert not detect_hedging("Do you want me to proceed?", "sure", ["file_write"])
         assert not detect_hedging("Done, I wrote note.txt.", "Yes, go ahead.", [])
+
+    def test_claims_about_supplied_content_or_reasoning_are_not_fabrication(self):
+        # Premortem item 4: ordinary answers were replaced with a refusal.
+        for text in [
+            "I reviewed the code you pasted and it looks fine.",
+            "I've written a script below that does it.",
+            "According to the logs you pasted, the disk is full.",
+            "I verified the math: 17*3 = 51",
+        ]:
+            assert not detect_fabrication(text, []), text
+        assert detect_fabrication("I checked the logs and everything looks fine.", [])
+        assert detect_fabrication("According to the logs, the disk is full.", [])
+
+    def test_action_request_classification(self):
+        assert is_action_request("generate me a report")
+        assert is_action_request("delete the old logs")
+        assert not is_action_request("explain how DNS works")
+        assert not is_action_request("how do I check disk usage?")
+
+    def test_unverified_notice_keeps_the_answer(self):
+        out = unverified_answer_notice("Deleted 3 files.")
+        assert out.endswith("Deleted 3 files.")
+        assert "no tool ran" in out
+
+    def test_thanks_and_open_offers_are_not_confirmation_loops(self):
+        # "ok thanks" must never be read as approval to redo the last action
+        # (premortem item 3).
+        assert not detect_hedging(
+            "You're welcome! Let me know if you'd like me to do anything else.", "ok thanks", []
+        )
+        assert not detect_hedging("Want me to do anything else?", "sounds good, thank you", [])
+        assert not detect_hedging(
+            "Should I also restart nginx after?", "check the nginx config", []
+        )
+
+    def test_first_confirmation_before_destructive_action_is_allowed(self):
+        assert not detect_hedging(
+            "This will permanently delete 412 files. Do you want me to proceed?",
+            "delete everything in ~/workspace/old",
+            [],
+        )
+        # ...but a second confirmation after the user already said yes is a loop.
+        assert detect_hedging(
+            "Are you sure? Do you want me to proceed with the deletion?", "Yes, go ahead.", []
+        )
 
     def test_delegated_choice_answered_with_a_question_is_hedging(self):
         # The user handed the details over; a preference interview stalls it (DIRECT-013).

@@ -1365,3 +1365,46 @@ class TestEmitAuditExceptionSwallowed:
             event_arg = mock_bus.publish.call_args[0][0]
             assert event_arg.event_type == "discord.test"
             assert event_arg.result == "allow"
+
+
+class TestGatewayFailureDetection:
+    """Premortem item 6: a gateway that stops on its own must be reported."""
+
+    async def test_gateway_ending_without_stop_is_recorded(self):
+        ch = _make_channel()
+        ch.account_config.application_id = None
+        ch._gateway.run = AsyncMock(return_value=None)  # e.g. fatal close code
+        with patch("missy.core.events.event_bus.publish") as publish:
+            await ch.start()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert ch.gateway_failure == "gateway stopped reconnecting"
+        assert publish.call_args.args[0].event_type == "discord.gateway.stopped"
+        assert publish.call_args.args[0].result == "error"
+
+    async def test_deliberate_stop_is_not_a_failure(self):
+        ch = _make_channel()
+        ch.account_config.application_id = None
+        ch._gateway.run = AsyncMock(side_effect=asyncio.Event().wait)
+        ch._gateway.disconnect = AsyncMock()
+        await ch.start()
+        await ch.stop()
+        assert ch.gateway_failure is None
+
+
+class TestBackgroundSendIsTracked:
+    async def test_send_keeps_a_reference_until_the_task_finishes(self):
+        ch = _make_channel()
+        ch._current_channel_id = "123"
+        gate = asyncio.Event()
+
+        async def slow_send(channel_id, message):
+            await gate.wait()
+
+        ch.send_with_retry = slow_send  # type: ignore[method-assign]
+        ch.send("hello")
+        assert len(ch._background_sends) == 1
+        gate.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert ch._background_sends == set()

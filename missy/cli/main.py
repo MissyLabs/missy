@@ -1799,7 +1799,9 @@ def logs_group(ctx: click.Context) -> None:
 def logs_path_cmd(ctx: click.Context) -> None:
     """Print the configured application log path."""
     cfg = _load_subsystems(ctx.obj["config_path"])
-    console.print(str(_app_log_path(cfg)))
+    # Plain output: Rich wrapped paths longer than the terminal width, which
+    # broke `tail -f "$(missy logs path)"` (and a parallel-run test).
+    click.echo(str(_app_log_path(cfg)))
 
 
 @logs_group.command("tail")
@@ -3101,6 +3103,44 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
     """
     import signal
 
+    from missy.core.subsystem_status import DISABLED, FAILED, RUNNING, get_status_registry
+
+    _status = get_status_registry()
+
+    def _publish_status() -> None:
+        try:
+            _status.write()
+        except Exception:
+            logger.debug("gateway status file write failed", exc_info=True)
+
+    def _startup_ok(name: str, detail: str = "") -> None:
+        _status.record(name, RUNNING, detail)
+        _publish_status()
+
+    def _startup_disabled(name: str) -> None:
+        _status.record(name, DISABLED, "disabled via config")
+        _publish_status()
+
+    def _startup_failed(name: str, exc: object) -> None:
+        # Previously only a yellow console line: the gateway kept running
+        # without the subsystem and nothing else reported it.
+        console.print(f"[yellow]{name} failed to start: {exc}[/]")
+        _status.record(name, FAILED, str(exc))
+        _publish_status()
+        with contextlib.suppress(Exception):
+            from missy.core.events import AuditEvent, event_bus
+
+            event_bus.publish(
+                AuditEvent.now(
+                    session_id="",
+                    task_id="",
+                    event_type="gateway.subsystem.failed",
+                    category="plugin",
+                    result="error",
+                    detail={"subsystem": name, "error": str(exc)[:500]},
+                )
+            )
+
     cfg = _load_subsystems(ctx.obj["config_path"])
 
     # F07: apply the Landlock filesystem sandbox if enabled (irreversible,
@@ -3223,8 +3263,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             )
             proactive_manager.start()
             console.print(f"[green]Proactive manager started[/] ({len(triggers)} trigger(s))")
+            _startup_ok("proactive", f"{len(triggers)} trigger(s)")
     except Exception as _pe:
-        console.print(f"[yellow]Proactive manager failed to start: {_pe}[/]")
+        _startup_failed("proactive", _pe)
 
     # Build the shared agent runtime for all channels.
     from missy.agent.runtime import DISCORD_SYSTEM_PROMPT, AgentConfig, AgentRuntime
@@ -3308,10 +3349,27 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         mgr.health_check()
         return all(server["alive"] for server in mgr.list_servers())
 
+    _db_integrity_cache: dict[str, Any] = {"checked_at": 0.0, "healthy": True}
+
+    def _check_database_integrity() -> bool:
+        # quick_check reads the whole file, so run it at most hourly and
+        # report the cached verdict in between.
+        now = time.monotonic()
+        if now - _db_integrity_cache["checked_at"] >= 3600:
+            from missy.core.sqlite_files import check_known_databases
+
+            results = check_known_databases()
+            _db_integrity_cache["checked_at"] = now
+            _db_integrity_cache["healthy"] = all(v == "ok" for v in results.values())
+            if not _db_integrity_cache["healthy"]:
+                logger.error("SQLite integrity check failed: %s", results)
+        return bool(_db_integrity_cache["healthy"])
+
     watchdog = Watchdog()
     watchdog.register("provider_registry", _check_provider_registry)
     watchdog.register("memory_store", _check_memory_store)
     watchdog.register("mcp_servers", _check_mcp_servers)
+    watchdog.register("database_integrity", _check_database_integrity)
     watchdog.start()
 
     # Job scheduler. Fully built and tested (missy/scheduler/manager.py,
@@ -3358,10 +3416,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             console.print(
                 f"[green]Scheduler started[/] ({len(scheduler_manager.list_jobs())} job(s) loaded)"
             )
+            _startup_ok("scheduler", f"{len(scheduler_manager.list_jobs())} job(s)")
         else:
             console.print("[dim]Scheduler disabled via config (scheduling.enabled: false).[/]")
+            _startup_disabled("scheduler")
     except Exception as _sched_exc:
-        console.print(f"[yellow]Scheduler failed to start: {_sched_exc}[/]")
+        _startup_failed("scheduler", _sched_exc)
         logger.warning("Scheduler startup error: %s", _sched_exc, exc_info=True)
 
     # Heartbeat (F06). HeartbeatRunner (missy/agent/heartbeat.py) — periodic
@@ -3392,10 +3452,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 f"[green]Heartbeat started[/] (every {getattr(hb, 'interval_seconds', 1800)}s"
                 f"{', ' + hb.active_hours if getattr(hb, 'active_hours', '') else ''})"
             )
+            _startup_ok("heartbeat")
         else:
             console.print("[dim]Heartbeat disabled via config (heartbeat.enabled: false).[/]")
+            _startup_disabled("heartbeat")
     except Exception as _hb_exc:
-        console.print(f"[yellow]Heartbeat failed to start: {_hb_exc}[/]")
+        _startup_failed("heartbeat", _hb_exc)
         logger.warning("Heartbeat startup error: %s", _hb_exc, exc_info=True)
 
     # Config hot-reload. Fully built and tested (missy/config/hotreload.py,
@@ -3544,8 +3606,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             console.print(
                 f"[green]Voice channel started[/] on {_vc_scheme}://{_vc_host}:{_vc_port}"
             )
+            _startup_ok("voice", f"{_vc_scheme}://{_vc_host}:{_vc_port}")
     except Exception as _ve:
-        console.print(f"[yellow]Voice channel failed to start: {_ve}[/]")
+        _startup_failed("voice", _ve)
         logger.warning("Voice channel startup error: %s", _ve, exc_info=True)
 
     # SR-1.12/task #12: shared list the Web API's /api/v1/discord/pairing
@@ -3587,8 +3650,9 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             console.print(
                 f"[green]Screencast channel started[/] on {_sc_scheme}://{_sc_host}:{_sc_port}"
             )
+            _startup_ok("screencast", f"{_sc_scheme}://{_sc_host}:{_sc_port}")
     except Exception as _sc_exc:
-        console.print(f"[yellow]Screencast channel failed to start: {_sc_exc}[/]")
+        _startup_failed("screencast", _sc_exc)
         logger.warning("Screencast channel startup error: %s", _sc_exc, exc_info=True)
 
     # Start the Web TUI (operator console + REST API) if configured. Enabled
@@ -3677,10 +3741,12 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 f"[green]Web console started[/] on [bold]{api_server.url}[/]\n"
                 f"  [dim]{_operator_auth_status}[/]"
             )
+            _startup_ok("web_console", str(api_server.url))
         else:
             console.print("[dim]Web console disabled via config (api.enabled: false).[/]")
+            _startup_disabled("web_console")
     except Exception as _api_exc:
-        console.print(f"[yellow]Web console failed to start: {_api_exc}[/]")
+        _startup_failed("web_console", _api_exc)
         logger.warning("Web console startup error: %s", _api_exc, exc_info=True)
 
     # Start Discord channel if configured.
@@ -3986,10 +4052,19 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                     channels.append(ch)
                     discord_channels.append(ch)
                     console.print(f"[green]Discord channel started[/] ({account.token_env_var})")
+                    _startup_ok(f"discord:{account.token_env_var}")
                     tasks.append(asyncio.create_task(_process_channel(ch)))
                 try:
                     while not stop_event:
                         await asyncio.sleep(1)
+                        failed = [ch for ch in channels if getattr(ch, "gateway_failure", None)]
+                        for ch in failed:
+                            _startup_failed(
+                                f"discord:{ch.account_config.token_env_var}", ch.gateway_failure
+                            )
+                        if failed:
+                            _discord_fatal.extend(ch.gateway_failure for ch in failed)
+                            break
                 finally:
                     for t in tasks:
                         t.cancel()
@@ -4001,7 +4076,13 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         with contextlib.suppress(ValueError):
                             discord_channels.remove(ch)
 
+            _discord_fatal: list[str] = []
             asyncio.run(_run_discord())
+            if _discord_fatal:
+                # Exit non-zero so systemd (Restart=on-failure) restarts the
+                # gateway instead of leaving Discord dark indefinitely.
+                console.print(f"[red]Discord gateway stopped:[/] {'; '.join(_discord_fatal)}")
+                raise SystemExit(1)
         else:
             console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
             import time
@@ -4169,6 +4250,34 @@ def gateway_status(ctx: click.Context) -> None:
     console.print(
         f"\n[bold]Providers registered:[/] {', '.join(provider_names) if provider_names else '[dim]none[/]'}"
     )
+    _print_live_gateway_status()
+
+
+def _print_live_gateway_status() -> None:
+    """Show what the running gateway actually started (not just config)."""
+    from missy.core.subsystem_status import FAILED, RUNNING, pid_is_alive, read_status_file
+
+    status = read_status_file()
+    if not status:
+        console.print("\n[bold]Gateway process:[/] [dim]no status recorded (not started yet)[/]")
+        return
+    pid = status.get("pid")
+    if not pid_is_alive(pid):
+        console.print(f"\n[bold]Gateway process:[/] [red]not running[/] (last pid {pid})")
+        return
+    started = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(status.get("started_at", 0))))
+    console.print(f"\n[bold]Gateway process:[/] [green]running[/] (pid {pid}, since {started})")
+    live = Table(title="Running subsystems", show_lines=False)
+    live.add_column("Subsystem", style="bold")
+    live.add_column("State")
+    live.add_column("Detail")
+    styles = {RUNNING: "green", FAILED: "red"}
+    for name, entry in sorted((status.get("subsystems") or {}).items()):
+        state = str(entry.get("state", "?"))
+        live.add_row(
+            name, Text(state, style=styles.get(state, "dim")), str(entry.get("detail", ""))
+        )
+    console.print(live)
 
 
 # ---------------------------------------------------------------------------
@@ -4467,15 +4576,21 @@ def doctor(ctx: click.Context) -> None:
     except Exception as exc:
         table.add_row("voice channel", warn, f"error checking voice: {exc}")
 
-    # 15. Checkpoint database
+    # 15. SQLite integrity. Checking only that the file existed reported a
+    # corrupt checkpoints.db as "ok" for weeks.
     try:
-        cp_path = Path("~/.missy/checkpoints.db").expanduser()
-        if cp_path.exists():
-            table.add_row("checkpoints", ok, f"database: {cp_path}")
-        else:
-            table.add_row("checkpoints", Text("none", style="dim"), "no checkpoint database")
-    except Exception:
-        logger.debug("doctor: failed to check checkpoints", exc_info=True)
+        from missy.core.sqlite_files import check_known_databases
+
+        integrity = check_known_databases()
+        if not integrity:
+            table.add_row("databases", Text("none", style="dim"), "no SQLite stores yet")
+        for db_name, status in integrity.items():
+            if status == "ok":
+                table.add_row(f"db: {db_name}", ok, "quick_check ok")
+            else:
+                table.add_row(f"db: {db_name}", fail, f"integrity check failed: {status}")
+    except Exception as exc:
+        table.add_row("databases", warn, f"error checking databases: {exc}")
 
     console.print(table)
 

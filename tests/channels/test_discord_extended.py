@@ -1013,7 +1013,11 @@ class TestGatewaySendHeartbeat:
         assert sent_payload["d"] == 15
 
     @pytest.mark.asyncio
-    async def test_send_heartbeat_emits_audit_event(self):
+    async def test_send_heartbeat_emits_periodic_summary(self):
+        # Premortem item 12: routine heartbeats are summarized, not audited
+        # one by one (they were ~40% of the audit log).
+        from missy.channels.discord.gateway import HEARTBEAT_AUDIT_EVERY
+
         gw = _make_gateway()
         gw._ws = AsyncMock()
         gw._sequence = 7
@@ -1021,10 +1025,14 @@ class TestGatewaySendHeartbeat:
         gw._emit_audit = lambda et, r, d: audit_calls.append((et, r, d))  # type: ignore[method-assign]
 
         await gw._send_heartbeat()
+        assert audit_calls == []
 
-        assert any(et == "discord.gateway.heartbeat_sent" for et, _, _ in audit_calls)
-        hb_details = [d for et, r, d in audit_calls if et == "discord.gateway.heartbeat_sent"]
-        assert hb_details[0]["seq"] == 7
+        for _ in range(HEARTBEAT_AUDIT_EVERY - 1):
+            await gw._send_heartbeat()
+        summaries = [d for et, _, d in audit_calls if et == "discord.gateway.heartbeat_summary"]
+        assert len(summaries) == 1
+        assert summaries[0]["sent"] == HEARTBEAT_AUDIT_EVERY
+        assert summaries[0]["seq"] == 7
 
     @pytest.mark.asyncio
     async def test_send_heartbeat_noop_when_ws_is_none(self):

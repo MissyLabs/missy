@@ -851,6 +851,85 @@ class TestDoneCriteriaEnforcement:
         assert "remains incomplete" in result
         assert "successfully computed" not in result
 
+    def test_chat_answer_with_promise_phrasing_is_kept_without_retry(self):
+        provider = _make_provider()
+        tool_reg = _make_tool_registry([_make_mock_tool("calculator")])
+        answer = "Sure! I'll explain how DNS works: it maps names to IP addresses."
+        provider.complete_with_tools.side_effect = [_make_stop_response(answer)]
+        registry = _make_registry({"fake": provider})
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run("explain how DNS works")
+        assert result == answer
+        assert provider.complete_with_tools.call_count == 1
+        assert not [e for e in events if "promise" in e["event_type"]]
+
+    def test_unresolved_claim_keeps_answer_with_notice(self):
+        provider = _make_provider()
+        tool_reg = _make_tool_registry([_make_mock_tool("shell_exec")])
+        claim = "I checked the logs and everything looks fine."
+        provider.complete_with_tools.side_effect = [_make_stop_response(claim)] * 3
+        registry = _make_registry({"fake": provider})
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: None
+            result = rt.run("is everything okay on the server?")
+        assert result.endswith(claim)
+        assert "no tool ran" in result
+
+    def _run_with_config(self, responses, prompt, **config):
+        provider = _make_provider()
+        tool_reg = _make_tool_registry([_make_mock_tool("shell_exec")])
+        provider.complete_with_tools.side_effect = responses
+        registry = _make_registry({"fake": provider})
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=8, **config))
+            rt._emit_event = lambda **kw: events.append(kw)
+            result = rt.run(prompt)
+        return result, provider, events
+
+    def test_shared_guard_budget_stops_retries(self):
+        # Premortem item 10: one shared cap bounds guard retries per turn.
+        claim = "I checked the logs and everything looks fine."
+        result, provider, events = self._run_with_config(
+            [_make_stop_response(claim)] * 5,
+            "is everything okay on the server?",
+            max_guard_retries=0,
+        )
+        assert provider.complete_with_tools.call_count == 1
+        assert result.endswith(claim) and "no tool ran" in result
+        assert [e for e in events if e["event_type"] == "agent.response.guard_budget_exhausted"]
+
+    def test_turn_deadline_ends_the_loop(self):
+        claim = "I checked the logs and everything looks fine."
+        now = [1000.0]
+
+        def answer_then_jump(*_args, **_kwargs):
+            now[0] += 10_000.0  # the turn has now run far past its deadline
+            return _make_stop_response(claim)
+
+        with patch("missy.agent.runtime.time.monotonic", side_effect=lambda: now[0]):
+            result, provider, events = self._run_with_config(
+                answer_then_jump,
+                "is everything okay on the server?",
+                max_turn_seconds=60.0,
+            )
+        assert provider.complete_with_tools.call_count == 1
+        assert result.endswith(claim)
+        assert [e for e in events if e["event_type"] == "agent.turn.deadline_exceeded"]
+
     def test_hedging_that_survives_the_retry_is_audited(self):
         """A permission question repeated after the single anti-hedging
         correction must leave an audit trail (validation case DIRECT-014)."""

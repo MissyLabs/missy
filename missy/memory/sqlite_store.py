@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from missy.core.sqlite_files import ensure_private_db_file
+
 logger = logging.getLogger(__name__)
 
 #: Default database location (read at construction time so tests can
@@ -292,12 +294,9 @@ class SQLiteMemoryStore:
         }
         if resolved_parent not in unsafe_to_repermission:
             os.chmod(self._path.parent, 0o700)
-        if self._path.is_symlink():
-            raise ValueError(f"Refusing symlinked memory database: {self._path}")
-        flags = os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(self._path, flags, 0o600)
-        os.close(fd)
-        os.chmod(self._path, 0o600)
+        # Never open/close an existing database file here: that releases the
+        # POSIX locks held by other SQLite connections in this process.
+        ensure_private_db_file(self._path, label="memory database")
         self._local = threading.local()
         self._init_db()
 

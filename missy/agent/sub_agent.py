@@ -35,6 +35,7 @@ Example::
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import threading
@@ -54,6 +55,39 @@ MAX_CONCURRENT = 3
 #: more calls), so this must be enforced regardless of how deep a
 #: determined/compromised prompt tries to nest.
 MAX_SUB_AGENT_DEPTH = 2
+
+#: Total sub-agent runs allowed across one top-level task's whole delegation
+#: tree. Per-level caps multiplied (10 sub-runs, each able to fan out 10 more,
+#: each with its own tool loop) into thousands of provider calls per turn.
+MAX_TOTAL_SUB_RUNS = 12
+
+
+class SubRunBudget:
+    """Thread-safe count of sub-agent runs left for one top-level task."""
+
+    def __init__(self, limit: int = MAX_TOTAL_SUB_RUNS) -> None:
+        self._lock = threading.Lock()
+        self.remaining = max(0, int(limit))
+
+    def take(self) -> bool:
+        with self._lock:
+            if self.remaining <= 0:
+                return False
+            self.remaining -= 1
+            return True
+
+
+_SUBRUN_BUDGET: contextvars.ContextVar[SubRunBudget | None] = contextvars.ContextVar(
+    "missy_subrun_budget", default=None
+)
+
+
+def start_subrun_budget(limit: int = MAX_TOTAL_SUB_RUNS) -> SubRunBudget:
+    """Give the current (top-level) run a fresh budget; nested runs inherit it."""
+    budget = SubRunBudget(limit)
+    _SUBRUN_BUDGET.set(budget)
+    return budget
+
 
 # Dependency results are deliberately short for ordinary workflow steps so a
 # long upstream response cannot crowd the actual task out of the model's
@@ -314,6 +348,9 @@ class SubAgentRunner:
         self._default_provider = default_provider
         self._max_concurrent = max(1, min(int(max_concurrent), 50))
         self._semaphore = threading.Semaphore(self._max_concurrent)
+        # Captured on the delegating thread; worker threads re-install it so
+        # nested delegations draw from the same tree-wide budget.
+        self._budget = _SUBRUN_BUDGET.get() or SubRunBudget()
 
     def run_subtask(self, subtask: SubTask, context: str = "") -> str:
         """Execute a single subtask, optionally prepending *context*.
@@ -348,6 +385,14 @@ class SubAgentRunner:
         # invokes run_subtask() directly from several threads (bypassing
         # run_all() entirely) must still be bounded -- this semaphore is
         # what enforces the configured concurrency for that path too.
+        if not self._budget.take():
+            subtask.status = "error"
+            subtask.error = (
+                f"sub-agent budget exhausted ({MAX_TOTAL_SUB_RUNS} runs per top-level task)"
+            )
+            subtask.finished_at = datetime.now(UTC).isoformat()
+            return f"[Error in subtask {subtask.id}: {subtask.error}]"
+        budget_token = _SUBRUN_BUDGET.set(self._budget)
         with self._semaphore:
             subtask.status = "running"
             subtask.started_at = datetime.now(UTC).isoformat()
@@ -392,6 +437,7 @@ class SubAgentRunner:
                 return f"[Error in subtask {subtask.id}: {exc}]"
             finally:
                 subtask.finished_at = datetime.now(UTC).isoformat()
+                _SUBRUN_BUDGET.reset(budget_token)
 
     def run_all(
         self,
