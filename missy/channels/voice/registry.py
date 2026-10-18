@@ -237,6 +237,8 @@ class DeviceRegistry:
                         self._path,
                     )
                     self._nodes = {}
+                    # Remember the refused file so reads don't retry it until it changes.
+                    self._file_stamp = (st.st_mtime_ns, st.st_size)
                     return
                 if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                     logger.error(
@@ -244,6 +246,7 @@ class DeviceRegistry:
                         self._path,
                     )
                     self._nodes = {}
+                    self._file_stamp = (st.st_mtime_ns, st.st_size)
                     return
 
                 raw = self._path.read_text(encoding="utf-8")
@@ -256,6 +259,7 @@ class DeviceRegistry:
                     "Failed to load device registry from %s — starting empty.", self._path
                 )
                 self._nodes = {}
+                self._file_stamp = self._current_stamp()
 
     def save(self) -> None:
         """Atomically persist the current registry state to disk.

@@ -45,5 +45,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def _guard_live_missy_home() -> None:
     """Fail loudly if a test re-points HOME back at the real home directory."""
     yield
-    if _REAL_HOME and os.path.expanduser("~") == _REAL_HOME:
+    # Compare HOME itself: with HOME unset, expanduser falls back to the passwd
+    # entry, which tests that strip the environment trigger legitimately.
+    if _REAL_HOME and os.environ.get("HOME") == _REAL_HOME:
         pytest.fail("test restored HOME to the operator's real home directory")
