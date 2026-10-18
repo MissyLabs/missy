@@ -499,6 +499,17 @@ _DISCORD_KNOWN_USERS_CAP = 25
 _DISCORD_USER_MENTION_RE = re.compile(r"<@!?(\d{1,20})>")
 
 
+def _prefix_author_mention(response: str, author_id: str) -> str:
+    """Start *response* with exactly one mention of *author_id*.
+
+    The model often opens its reply with the author's mention itself, so an
+    unconditional prefix produced "<@id> <@id> ...". Any leading mentions of
+    the same author are collapsed before the single prefix is added.
+    """
+    leading = re.compile(rf"^(?:\s*<@!?{re.escape(str(author_id))}>)+\s*")
+    return f"<@{author_id}> {leading.sub('', response)}"
+
+
 def _discord_safe_context_text(text: str) -> str:
     """Fail closed when third-party Discord metadata/history looks instructional."""
     try:
@@ -3892,7 +3903,7 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         # Never use Discord reply; for bots, tag them with a mention.
                         mention_ids: list[str] | None = None
                         if msg.metadata.get("discord_author_is_bot"):
-                            response = f"<@{msg.sender}> {response}"
+                            response = _prefix_author_mention(response, msg.sender)
                             mention_ids = [msg.sender]
                         # General mention support: Discord silently drops any
                         # <@ID> in the outbound text unless that exact ID is
