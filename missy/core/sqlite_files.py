@@ -41,3 +41,45 @@ def ensure_private_db_file(path: str | os.PathLike[str], *, label: str = "databa
         raise ValueError(f"Refusing non-regular {label}: {db_path}")
     if stat.S_IMODE(info.st_mode) != 0o600:
         os.chmod(db_path, 0o600)
+
+
+#: SQLite stores Missy keeps under ~/.missy, checked by doctor and the watchdog.
+KNOWN_DATABASES = (
+    "memory.db",
+    "checkpoints.db",
+    "graph_memory.db",
+    "request_tracker.db",
+)
+
+
+def quick_check(path: str | os.PathLike[str]) -> tuple[bool, str]:
+    """Run a read-only ``PRAGMA quick_check`` and return ``(ok, detail)``.
+
+    Opens the file through SQLite (read-only URI), never through a raw
+    descriptor, so it cannot disturb locks held by other connections.
+    """
+    import sqlite3
+
+    uri = f"file:{Path(path).as_posix()}?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True, timeout=5)
+        try:
+            rows = con.execute("PRAGMA quick_check(1)").fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return False, str(exc)
+    detail = rows[0][0] if rows else "no result"
+    return detail == "ok", detail.splitlines()[0] if detail else detail
+
+
+def check_known_databases(state_dir: str | os.PathLike[str] = "~/.missy") -> dict[str, str]:
+    """Return ``{name: "ok" | problem}`` for every known database that exists."""
+    base = Path(state_dir).expanduser()
+    results: dict[str, str] = {}
+    for name in KNOWN_DATABASES:
+        db_path = base / name
+        if db_path.exists():
+            ok, detail = quick_check(db_path)
+            results[name] = "ok" if ok else detail
+    return results

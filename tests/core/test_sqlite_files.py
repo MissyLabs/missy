@@ -72,3 +72,27 @@ def test_existing_database_keeps_its_write_lock(tmp_path) -> None:
     assert _other_process_can_write(db) == "locked"
     holder.rollback()
     holder.close()
+
+
+def test_quick_check_reports_healthy_and_corrupt_databases(tmp_path) -> None:
+    from missy.core.sqlite_files import check_known_databases, quick_check
+
+    good = tmp_path / "memory.db"
+    con = sqlite3.connect(good)
+    con.execute("CREATE TABLE t (x)")
+    con.executemany("INSERT INTO t VALUES (?)", [("x" * 500,) for _ in range(200)])
+    con.commit()
+    con.close()
+    assert quick_check(good) == (True, "ok")
+
+    bad = tmp_path / "checkpoints.db"
+    bad.write_bytes(good.read_bytes())
+    data = bytearray(bad.read_bytes())
+    data[4096 + 8 : 4096 + 64] = b"\xff" * 56  # trash the second page's header
+    bad.write_bytes(bytes(data))
+    ok, detail = quick_check(bad)
+    assert not ok and detail
+
+    results = check_known_databases(tmp_path)
+    assert results["memory.db"] == "ok"
+    assert results["checkpoints.db"] != "ok"

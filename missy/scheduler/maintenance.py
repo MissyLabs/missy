@@ -192,7 +192,13 @@ def run_retention(
                 task_id="",
                 event_type="maintenance.retention",
                 category="scheduler",
-                result="allow",
+                # A failed step (e.g. a malformed database) must not be
+                # audited as success; it went unnoticed for weeks that way.
+                result=(
+                    "error"
+                    if any(str(value).startswith("error:") for value in results.values())
+                    else "allow"
+                ),
                 detail=results,
             )
         )
