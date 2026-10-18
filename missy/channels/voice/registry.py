@@ -23,6 +23,7 @@ Example::
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import logging
@@ -166,6 +167,46 @@ class DeviceRegistry:
         self._path = Path(registry_path).expanduser()
         self._lock = threading.RLock()
         self._nodes: dict[str, EdgeNode] = {}
+        #: (mtime_ns, size) of the file as last loaded or saved by us.
+        self._file_stamp: tuple[int, int] | None = None
+
+    # ------------------------------------------------------------------
+    # Cross-process freshness. The gateway and CLI each hold a registry; the
+    # gateway never re-read the file, so a heartbeat saved its stale copy
+    # over a CLI `devices policy --mode muted` (premortem item 11).
+    # ------------------------------------------------------------------
+
+    def _current_stamp(self) -> tuple[int, int] | None:
+        try:
+            st = self._path.stat()
+        except FileNotFoundError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _refresh_if_changed(self) -> None:
+        if self._current_stamp() != self._file_stamp:
+            self.load()
+
+    @contextlib.contextmanager
+    def _reading(self):
+        with self._lock:
+            self._refresh_if_changed()
+            yield
+
+    @contextlib.contextmanager
+    def _mutation(self):
+        """Serialize read-modify-write across processes, starting from disk."""
+        with self._lock:
+            self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            lock_path = self._path.with_name(self._path.name + ".lock")
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                self._refresh_if_changed()
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -182,6 +223,7 @@ class DeviceRegistry:
             if not self._path.exists():
                 logger.debug("Registry file %s not found — starting empty.", self._path)
                 self._nodes = {}
+                self._file_stamp = None
                 return
             try:
                 import os
@@ -207,6 +249,7 @@ class DeviceRegistry:
                 raw = self._path.read_text(encoding="utf-8")
                 data: list[dict[str, Any]] = json.loads(raw)
                 self._nodes = {entry["node_id"]: _node_from_dict(entry) for entry in data}
+                self._file_stamp = (st.st_mtime_ns, st.st_size)
                 logger.debug("Loaded %d node(s) from %s.", len(self._nodes), self._path)
             except Exception:
                 logger.exception(
@@ -236,6 +279,7 @@ class DeviceRegistry:
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 os.replace(tmp_path, self._path)
+                self._file_stamp = self._current_stamp()
             except Exception:
                 # Best-effort cleanup of the temp file.
                 with contextlib.suppress(OSError):
@@ -255,7 +299,7 @@ class DeviceRegistry:
         Returns:
             The :class:`EdgeNode` instance, or ``None``.
         """
-        with self._lock:
+        with self._reading():
             return self._nodes.get(node_id)
 
     def add_node(self, node: EdgeNode) -> None:
@@ -267,7 +311,7 @@ class DeviceRegistry:
             node: The :class:`EdgeNode` to add.  If a node with the same
                 ``node_id`` already exists it is silently replaced.
         """
-        with self._lock:
+        with self._mutation():
             self._nodes[node.node_id] = node
             self.save()
 
@@ -302,7 +346,7 @@ class DeviceRegistry:
             KeyError: If *node_id* is not found in the registry.
         """
         valid_fields = EdgeNode.__dataclass_fields__.keys()
-        with self._lock:
+        with self._mutation():
             node = self._nodes.get(node_id)
             if node is None:
                 raise KeyError(f"Node not found: {node_id!r}")
@@ -322,7 +366,7 @@ class DeviceRegistry:
         Args:
             node_id: The identifier of the node to remove.
         """
-        with self._lock:
+        with self._mutation():
             node = self._nodes.pop(node_id, None)
             if node is None:
                 logger.debug("remove_node: node %r not found — no-op.", node_id)
@@ -351,7 +395,7 @@ class DeviceRegistry:
         Returns:
             A snapshot list of all :class:`EdgeNode` instances.
         """
-        with self._lock:
+        with self._reading():
             return list(self._nodes.values())
 
     def list_paired(self) -> list[EdgeNode]:
@@ -360,7 +404,7 @@ class DeviceRegistry:
         Returns:
             A list of :class:`EdgeNode` instances with ``paired=True``.
         """
-        with self._lock:
+        with self._reading():
             return [n for n in self._nodes.values() if n.paired]
 
     def list_pending(self) -> list[EdgeNode]:
@@ -369,7 +413,7 @@ class DeviceRegistry:
         Returns:
             A list of :class:`EdgeNode` instances with ``paired=False``.
         """
-        with self._lock:
+        with self._reading():
             return [n for n in self._nodes.values() if not n.paired]
 
     # ------------------------------------------------------------------
@@ -387,7 +431,7 @@ class DeviceRegistry:
         Raises:
             KeyError: If *node_id* is not present in the registry.
         """
-        with self._lock:
+        with self._mutation():
             node = self._nodes.get(node_id)
             if node is None:
                 raise KeyError(f"Node not found: {node_id!r}")
@@ -562,7 +606,7 @@ class DeviceRegistry:
         deleted_total = 0
         now = time.time()
 
-        with self._lock:
+        with self._reading():
             nodes_snapshot = [
                 n for n in self._nodes.values() if n.audio_logging and n.audio_log_dir
             ]
