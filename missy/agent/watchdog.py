@@ -18,6 +18,13 @@ class SubsystemHealth:
     consecutive_failures: int = 0
     last_checked: float = 0.0
     last_error: str = ""
+    last_audited: float | None = None
+
+
+#: A healthy, unchanged subsystem is audited at most this often. Auditing
+#: every 60 s check made watchdog events ~40% of the audit log, so security
+#: events aged out of rotation within weeks (premortem item 12).
+HEALTHY_AUDIT_INTERVAL_SECONDS = 3600.0
 
 
 class Watchdog:
@@ -96,6 +103,11 @@ class Watchdog:
                     exc,
                 )
 
+            now = time.monotonic()
+            due = h.last_audited is None or now - h.last_audited >= HEALTHY_AUDIT_INTERVAL_SECONDS
+            if h.healthy and prev_healthy and not due:
+                continue
+            h.last_audited = now
             try:
                 event = AuditEvent.now(
                     session_id="watchdog",

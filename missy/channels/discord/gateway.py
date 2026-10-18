@@ -96,6 +96,10 @@ AsyncMessageCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 GatewayInfoProvider = Callable[[], dict[str, Any]]
 
 
+#: Emit one heartbeat summary audit event per this many heartbeats (~20 min).
+HEARTBEAT_AUDIT_EVERY = 30
+
+
 class DiscordGatewayClient:
     """Async Discord Gateway client.
 
@@ -622,11 +626,7 @@ class DiscordGatewayClient:
 
         elif op == _OP_HEARTBEAT_ACK:
             self._last_heartbeat_ack_at = time.time()
-            self._emit_audit(
-                "discord.gateway.heartbeat_ack",
-                "allow",
-                {"seq": self._sequence},
-            )
+            self._heartbeat_acks = getattr(self, "_heartbeat_acks", 0) + 1
             logger.debug("Gateway: heartbeat acknowledged")
 
         elif op == _OP_RECONNECT:
@@ -774,7 +774,20 @@ class DiscordGatewayClient:
         try:
             await self._ws.send(payload)
             self._last_heartbeat_sent_at = time.time()
-            self._emit_audit("discord.gateway.heartbeat_sent", "allow", {"seq": self._sequence})
+            # Routine heartbeats were ~40% of the audit log; record a summary
+            # every HEARTBEAT_AUDIT_EVERY beats instead. Missed ACKs are still
+            # audited individually as errors.
+            self._heartbeats_sent = getattr(self, "_heartbeats_sent", 0) + 1
+            if self._heartbeats_sent % HEARTBEAT_AUDIT_EVERY == 0:
+                self._emit_audit(
+                    "discord.gateway.heartbeat_summary",
+                    "allow",
+                    {
+                        "sent": self._heartbeats_sent,
+                        "acked": getattr(self, "_heartbeat_acks", 0),
+                        "seq": self._sequence,
+                    },
+                )
             logger.debug("Gateway: heartbeat sent (seq=%s)", self._sequence)
         except Exception as exc:
             logger.warning("Gateway: heartbeat failed: %s", exc)
