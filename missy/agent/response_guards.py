@@ -315,6 +315,24 @@ _AFFIRMATION_REQUEST = re.compile(
     r"(?i)^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please\s+do|"
     r"proceed|sounds\s+good|confirmed?|approved?|absolutely|definitely)\b[^?]{0,60}$"
 )
+# Thanks and sign-offs close a conversation; they never approve an action.
+_CLOSING_REPLY = re.compile(
+    r"(?i)\b(?:thanks?|thank\s+you|thx|ty|appreciated?|cheers|bye|goodnight|"
+    r"that'?s\s+(?:all|it|everything)|nothing\s+else|all\s+good)\b"
+)
+# A sentence offering further, unrequested work ("anything else?", "should I
+# also restart nginx?") is not a deferral of the work that was requested.
+_OPEN_OFFER_SENTENCE = re.compile(
+    r"(?i)[^.!?\n]*\b(?:anything|something)\s+else\b[^.!?\n]*[.!?]?|"
+    r"[^.!?\n]*\b(?:also|additionally|as\s+well|afterwards?|after\s+that)\b[^.!?\n]*\?"
+)
+# Asking before an irreversible action is the safe behavior, not hedging.
+# Only the first confirmation is exempt: a bare "yes, go ahead" afterwards
+# carries no destructive verb, so a second confirmation is still caught.
+_DESTRUCTIVE_REQUEST = re.compile(
+    r"(?i)\b(?:delete|remove|rm|wipe|erase|drop|purge|format|overwrite|reset|"
+    r"uninstall|kill|truncate|destroy|revoke|force[- ]push)\b"
+)
 # The user explicitly handed the remaining choices to the assistant.
 _DELEGATED_CHOICE = re.compile(
     r"(?i)\b(?:use your (?:own )?judge?ment|(?:pick|choose|use) (?:sensible|reasonable) "
@@ -368,11 +386,15 @@ def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
         return False
     prose = re.sub(r"```.*?```|`[^`]+`", "", text, flags=re.S)
     prose = re.sub(r"^[ \t]*>[^\n]*$", "", prose, flags=re.M)
+    prose = _OPEN_OFFER_SENTENCE.sub(" ", prose)
     # After an explicit "use your judgment"/"no questions", any question
     # back to the user is an interview the user already declined.
     if _DELEGATED_CHOICE.search(user_input) and "?" in prose:
         return True
-    if not (_ACTION_REQUEST.search(user_input) or _AFFIRMATION_REQUEST.search(user_input)):
+    if _DESTRUCTIVE_REQUEST.search(user_input):
+        return False
+    affirmed = _AFFIRMATION_REQUEST.search(user_input) and not _CLOSING_REPLY.search(user_input)
+    if not (_ACTION_REQUEST.search(user_input) or affirmed):
         return False
     return bool(_DEFERRED_EXECUTION.search(prose))
 

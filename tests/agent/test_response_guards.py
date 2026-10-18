@@ -91,6 +91,28 @@ class TestExecutionGuards:
         assert not detect_hedging("Do you want me to proceed?", "sure", ["file_write"])
         assert not detect_hedging("Done, I wrote note.txt.", "Yes, go ahead.", [])
 
+    def test_thanks_and_open_offers_are_not_confirmation_loops(self):
+        # "ok thanks" must never be read as approval to redo the last action
+        # (premortem item 3).
+        assert not detect_hedging(
+            "You're welcome! Let me know if you'd like me to do anything else.", "ok thanks", []
+        )
+        assert not detect_hedging("Want me to do anything else?", "sounds good, thank you", [])
+        assert not detect_hedging(
+            "Should I also restart nginx after?", "check the nginx config", []
+        )
+
+    def test_first_confirmation_before_destructive_action_is_allowed(self):
+        assert not detect_hedging(
+            "This will permanently delete 412 files. Do you want me to proceed?",
+            "delete everything in ~/workspace/old",
+            [],
+        )
+        # ...but a second confirmation after the user already said yes is a loop.
+        assert detect_hedging(
+            "Are you sure? Do you want me to proceed with the deletion?", "Yes, go ahead.", []
+        )
+
     def test_delegated_choice_answered_with_a_question_is_hedging(self):
         # The user handed the details over; a preference interview stalls it (DIRECT-013).
         assert detect_hedging(
