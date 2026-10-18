@@ -3308,10 +3308,27 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
         mgr.health_check()
         return all(server["alive"] for server in mgr.list_servers())
 
+    _db_integrity_cache: dict[str, Any] = {"checked_at": 0.0, "healthy": True}
+
+    def _check_database_integrity() -> bool:
+        # quick_check reads the whole file, so run it at most hourly and
+        # report the cached verdict in between.
+        now = time.monotonic()
+        if now - _db_integrity_cache["checked_at"] >= 3600:
+            from missy.core.sqlite_files import check_known_databases
+
+            results = check_known_databases()
+            _db_integrity_cache["checked_at"] = now
+            _db_integrity_cache["healthy"] = all(v == "ok" for v in results.values())
+            if not _db_integrity_cache["healthy"]:
+                logger.error("SQLite integrity check failed: %s", results)
+        return bool(_db_integrity_cache["healthy"])
+
     watchdog = Watchdog()
     watchdog.register("provider_registry", _check_provider_registry)
     watchdog.register("memory_store", _check_memory_store)
     watchdog.register("mcp_servers", _check_mcp_servers)
+    watchdog.register("database_integrity", _check_database_integrity)
     watchdog.start()
 
     # Job scheduler. Fully built and tested (missy/scheduler/manager.py,
@@ -3990,6 +4007,10 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                 try:
                     while not stop_event:
                         await asyncio.sleep(1)
+                        failed = [ch for ch in channels if getattr(ch, "gateway_failure", None)]
+                        if failed:
+                            _discord_fatal.extend(ch.gateway_failure for ch in failed)
+                            break
                 finally:
                     for t in tasks:
                         t.cancel()
@@ -4001,7 +4022,13 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                         with contextlib.suppress(ValueError):
                             discord_channels.remove(ch)
 
+            _discord_fatal: list[str] = []
             asyncio.run(_run_discord())
+            if _discord_fatal:
+                # Exit non-zero so systemd (Restart=on-failure) restarts the
+                # gateway instead of leaving Discord dark indefinitely.
+                console.print(f"[red]Discord gateway stopped:[/] {'; '.join(_discord_fatal)}")
+                raise SystemExit(1)
         else:
             console.print("[dim]No Discord channels configured. Running in idle service mode.[/]")
             import time
@@ -4467,15 +4494,21 @@ def doctor(ctx: click.Context) -> None:
     except Exception as exc:
         table.add_row("voice channel", warn, f"error checking voice: {exc}")
 
-    # 15. Checkpoint database
+    # 15. SQLite integrity. Checking only that the file existed reported a
+    # corrupt checkpoints.db as "ok" for weeks.
     try:
-        cp_path = Path("~/.missy/checkpoints.db").expanduser()
-        if cp_path.exists():
-            table.add_row("checkpoints", ok, f"database: {cp_path}")
-        else:
-            table.add_row("checkpoints", Text("none", style="dim"), "no checkpoint database")
-    except Exception:
-        logger.debug("doctor: failed to check checkpoints", exc_info=True)
+        from missy.core.sqlite_files import check_known_databases
+
+        integrity = check_known_databases()
+        if not integrity:
+            table.add_row("databases", Text("none", style="dim"), "no SQLite stores yet")
+        for db_name, status in integrity.items():
+            if status == "ok":
+                table.add_row(f"db: {db_name}", ok, "quick_check ok")
+            else:
+                table.add_row(f"db: {db_name}", fail, f"integrity check failed: {status}")
+    except Exception as exc:
+        table.add_row("databases", warn, f"error checking databases: {exc}")
 
     console.print(table)
 
