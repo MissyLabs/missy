@@ -851,6 +851,30 @@ class TestDoneCriteriaEnforcement:
         assert "remains incomplete" in result
         assert "successfully computed" not in result
 
+    def test_hedging_that_survives_the_retry_is_audited(self):
+        """A permission question repeated after the single anti-hedging
+        correction must leave an audit trail (validation case DIRECT-014)."""
+        provider = _make_provider()
+        tool_reg = _make_tool_registry([_make_mock_tool("file_write")])
+        hedge = "Would you like me to create that file?"
+        provider.complete_with_tools.side_effect = [_make_stop_response(hedge)] * 6
+        registry = _make_registry({"fake": provider})
+
+        events = []
+        with (
+            patch("missy.agent.runtime.get_registry", return_value=registry),
+            patch("missy.agent.runtime.get_tool_registry", return_value=tool_reg),
+        ):
+            rt = AgentRuntime(AgentConfig(provider="fake", max_iterations=5))
+            rt._emit_event = lambda **kw: events.append(kw)
+            rt.run("Create flowtest/direct-014/a.txt containing hi")
+
+        unresolved = [
+            e for e in events if e["event_type"] == "agent.response.execution_hedging_unresolved"
+        ]
+        assert len(unresolved) == 1
+        assert hedge in unresolved[0]["detail"]["response_excerpt"]
+
     def test_successful_tool_call_never_triggers_rejection(self):
         """Happy path: a tool call that succeeds must not trigger any
         done-criteria rejection or extra provider calls."""

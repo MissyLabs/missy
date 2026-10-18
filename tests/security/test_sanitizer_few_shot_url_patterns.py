@@ -109,7 +109,7 @@ class TestInjectionPatternCount:
 
     def test_total_pattern_count(self):
         """Should include the 100 patterns after indirect-injection additions."""
-        assert len(InputSanitizer.INJECTION_PATTERNS) == 100
+        assert len(InputSanitizer.INJECTION_PATTERNS) == 101
 
 
 class TestMCPBlockInjection:

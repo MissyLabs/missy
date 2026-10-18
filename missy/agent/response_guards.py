@@ -210,10 +210,16 @@ _PROMISE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(?i)\bI'(?:ll|m going to)\s+\w+"),
     re.compile(r"(?i)\bI'm\s+\w+ing\b"),
     re.compile(r"(?i)\bI will\s+\w+"),
+    re.compile(r"(?i)^(?:On it|Working on it)\b", re.MULTILINE),
+    # A leading gerund announces work only when it takes an object or trails
+    # off ("Running the tests now", "Creating your file..."). A gerund noun
+    # phrase reporting state ("Running tally: 15", "Building permits are
+    # due") is an answer, not a promise.
     re.compile(
-        r"(?i)^(?:On it|Working on it|Spinning up|Starting|Kicking off|"
-        r"Setting up|Pulling|Generating|Building|Deploying|Running|"
-        r"Creating|Launching|Firing up|Booting|Preparing|Fetching)\b",
+        r"(?i)^(?:Spinning up|Starting|Kicking off|Setting up|Pulling|Generating|"
+        r"Building|Deploying|Running|Creating|Launching|Firing up|Booting|"
+        r"Preparing|Fetching)(?:\s+(?:the|a|an|your|my|it|that|this|these|those|"
+        r"up|now)\b|\s*(?:\.\.\.|\u2026))",
         re.MULTILINE,
     ),
 ]
@@ -298,7 +304,22 @@ _DEFERRED_EXECUTION = re.compile(
     r"let me know (?:if|when) (?:you(?:'d| would)? (?:like|want)|"
     r"I (?:should|can|may))|"
     r"(?:once|when) you (?:confirm|approve|give (?:me )?the go[- ]ahead)|"
-    r"I(?:'ll| will) wait for (?:your )?(?:approval|confirmation|go[- ]ahead))\b"
+    r"I(?:'ll| will) wait for (?:your )?(?:approval|confirmation|go[- ]ahead)|"
+    r"just to confirm|before I (?:start|proceed|begin|do (?:that|this))|"
+    r"do you want (?:me to|the|it|this|that)|(?:can|could) you confirm)\b"
+)
+# A short affirmation approves whatever action was just proposed, so asking
+# for permission again is a confirmation loop even though the message itself
+# names no action verb.
+_AFFIRMATION_REQUEST = re.compile(
+    r"(?i)^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go\s+ahead|do\s+it|please\s+do|"
+    r"proceed|sounds\s+good|confirmed?|approved?|absolutely|definitely)\b[^?]{0,60}$"
+)
+# The user explicitly handed the remaining choices to the assistant.
+_DELEGATED_CHOICE = re.compile(
+    r"(?i)\b(?:use your (?:own )?judge?ment|(?:pick|choose|use) (?:sensible|reasonable) "
+    r"defaults|sensible defaults|(?:do not|don't) ask(?: me)?(?: any)? questions|"
+    r"no questions|up to you|your call|whatever you think)\b"
 )
 _PURE_ADVICE_REQUEST = re.compile(
     r"(?is)^\s*(?:please\s+)?(?:how (?:would|can|do|should)|what (?:would|does)|"
@@ -343,14 +364,16 @@ def detect_hedging(text: str, user_input: str, tools_used: list[str]) -> bool:
     """
     if not isinstance(user_input, str) or not isinstance(text, str):
         return False
-    if (
-        tools_used
-        or not _ACTION_REQUEST.search(user_input)
-        or _is_non_execution_request(user_input)
-    ):
+    if tools_used or _is_non_execution_request(user_input):
         return False
     prose = re.sub(r"```.*?```|`[^`]+`", "", text, flags=re.S)
     prose = re.sub(r"^[ \t]*>[^\n]*$", "", prose, flags=re.M)
+    # After an explicit "use your judgment"/"no questions", any question
+    # back to the user is an interview the user already declined.
+    if _DELEGATED_CHOICE.search(user_input) and "?" in prose:
+        return True
+    if not (_ACTION_REQUEST.search(user_input) or _AFFIRMATION_REQUEST.search(user_input)):
+        return False
     return bool(_DEFERRED_EXECUTION.search(prose))
 
 

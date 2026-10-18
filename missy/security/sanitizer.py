@@ -247,9 +247,15 @@ class InputSanitizer:
         r"disregard\s+(all\s+)?previous\s+instructions?",
         r"forget\s+(all\s+)?previous\s+instructions?",
         r"you\s+are\s+now\s+(a\s+)?different",
-        r"pretend\s+you\s+are",
-        r"act\s+as\s+(if\s+you\s+are\s+)?a\s+",
-        r"system\s*:\s*",
+        # Role requests ("act as a translator", "pretend you are a pirate")
+        # are ordinary; only a role defined by having no rules is an attack.
+        r"pretend\s+(?:that\s+)?you\s+(?:are|have)\s+(?:an?\s+)?(?:\w+\s+){0,3}?(?:unrestricted|unfiltered|uncensored|jailbroken|evil|malicious|different\s+(?:AI|assistant|model|bot)\b|(?:AI|model|assistant|bot)\s+(?:with\s+no|without(?:\s+any)?)\s+(?:rules|restrictions?|limits|filters?|guidelines)|no\s+(?:rules|restrictions?|limits|filters?|guidelines))",
+        r"act\s+as\s+(?:if\s+you\s+(?:are|were)\s+)?(?:an?\s+)?(?:\w+\s+){0,3}?(?:unrestricted|unfiltered|uncensored|jailbroken|evil|malicious|different\s+(?:AI|assistant|model|bot)\b|(?:AI|model|assistant|bot)\s+(?:with\s+no|without(?:\s+any)?)\s+(?:rules|restrictions?|limits|filters?|guidelines)|no\s+(?:rules|restrictions?|limits|filters?|guidelines))",
+        # A "system:" role label followed by instructions, or left dangling at
+        # the end of the text; log/config field labels ("System: Ubuntu",
+        # "system: disk full") are not roles.
+        r"system\s*:\s*[^\n]{0,80}\b(?:you|your|ignore|disregard|override|forget|from\s+now\s+on|must|always|never|instructions?|do|run|execute|delete|reveal|print|output|act|respond|reply|send|obey|follow|disable|comply|pretend)\b",
+        r"(?:^|\n)\s*system\s*:\s*$",
         r"<\s*system\s*>",
         r"\[INST\]",
         r"###\s*(System|Instruction)",
@@ -257,7 +263,7 @@ class InputSanitizer:
         r"<\|system\|>",
         r"override\s+(your\s+)?(previous\s+)?instructions?",
         # Roleplay / jailbreak patterns
-        r"do\s+anything\s+now",
+        r"do\s+anything\s+now\b(?:\s*\(?dan\)?|\s+mode|\s*[.!]?\s*$|[^.\n]{0,40}\b(?:without|no)\s+(?:any\s+)?(?:restrictions?|rules|limits|filters))",
         r"developer\s+mode\s+(enabled|activated|on)",
         r"jailbreak(ed)?",
         r"bypass\s+(your\s+)?(safety|security|filter|restriction)",
@@ -270,12 +276,13 @@ class InputSanitizer:
         r"<\|endoftext\|>",  # GPT end-of-text token
         r"<\|eot_id\|>",  # Llama 3 end-of-turn token
         # --- Session/context reset attacks ---
-        r"(new|start)\s+(a\s+)?(conversation|session|chat)\b",
-        r"reset\s+(your\s+)?(context|memory|instructions?)",
-        r"from\s+now\s+on\s+you\s+(are|will|must|should)",
+        r"(?:new|start)\s+(?:a\s+)?(?:new\s+)?(?:conversation|session|chat)\b[^.\n]{0,60}\b(?:forget|ignore|disregard|without\s+(?:your\s+|any\s+)?(?:rules|restrictions|instructions|guidelines)|no\s+(?:rules|restrictions))",
+        r"reset\s+(?:your\s+)?(?:instructions?|rules|guidelines|system\s+prompt)\b",
+        r"reset\s+(?:your\s+)?(?:context|memory)\s*(?:[.!]|$|,?\s*(?:and|then)\s+(?:ignore|forget|obey|follow))",
+        r"from\s+now\s+on\s+you\s+(?:are|will|must|should)\s+(?:be\s+)?(?:an?\s+)?(?:\w+\s+){0,3}?(?:unrestricted|unfiltered|uncensored|jailbroken|evil|malicious|different\s+(?:AI|assistant|model|bot)\b|(?:AI|model|assistant|bot)\s+(?:with\s+no|without(?:\s+any)?)\s+(?:rules|restrictions?|limits|filters?|guidelines)|no\s+(?:rules|restrictions?|limits|filters?|guidelines)|ignor\w*|disregard\w*|bypass\w*|no\s+longer\s+(?:bound|restricted|follow))",
         # --- Additional jailbreak / override patterns ---
         r"sudo\s+mode",
-        r"respond\s+as\s+if\s+you\s+(are|were|have)",
+        r"respond\s+as\s+if\s+you\s+(?:are|were|have)\s+(?:an?\s+)?(?:\w+\s+){0,3}?(?:unrestricted|unfiltered|uncensored|jailbroken|evil|malicious|different\s+(?:AI|assistant|model|bot)\b|(?:AI|model|assistant|bot)\s+(?:with\s+no|without(?:\s+any)?)\s+(?:rules|restrictions?|limits|filters?|guidelines)|no\s+(?:rules|restrictions?|limits|filters?|guidelines))",
         r"ignore\s+(your\s+)?(safety|security|content)\s+(guidelines?|rules?|policies?|filters?)",
         r"you\s+have\s+no\s+(restrictions?|rules?|limitations?|guidelines?)",
         r"(enable|activate|enter)\s+(god|admin|root|unrestricted)\s+mode",
@@ -299,9 +306,9 @@ class InputSanitizer:
         r"<\|end_header_id\|>",  # Llama 3 header end token
         r"<\|reserved_special_token",  # Any reserved special token
         # --- Chained instruction patterns ---
-        r"new\s+instructions?\s*:",  # "new instructions:"
-        r"updated?\s+instructions?\s*:",  # "updated instructions:"
-        r"revised?\s+instructions?\s*:",  # "revised instructions:"
+        # "New instructions: bring snacks" is an everyday update; require
+        # the replacement instructions to address the assistant.
+        r"(?:new|updated?|revised?)\s+instructions?\s*:\s*[^\n]{0,80}\b(?:you|your|ignore|disregard|forget|override|assistant|AI|model|token|password|api\s+key|credentials?|authenticate|execute|curl)\b",
         r"real\s+instructions?\s*:",  # "real instructions:"
         # --- Portuguese / Russian injection keywords ---
         r"ignore\s+as\s+instru[çc][õo]es\s+anteriores",  # Portuguese
@@ -315,15 +322,17 @@ class InputSanitizer:
         r"Human:\s*$",  # Attempting to inject a new Human: turn
         r"Assistant:\s*$",  # Attempting to inject an Assistant: turn
         # --- Prompt leaking / exfiltration ---
-        r"(show|reveal|print|output|display)\s+(?:\w+\s+){0,10}(system\s+)?(prompt|instructions?)",
-        r"what\s+(are|is)\s+your\s+(system\s+)?(prompt|instructions?)",
+        # The object must be the assistant's own prompt, not a README's
+        # "install instructions".
+        r"(?:show|reveal|print|output|display|repeat|dump|leak)\s+(?:me\s+)?(?:\w+\s+){0,4}?(?:your|the\s+(?:system|initial|original|hidden|secret))\s+(?:\w+\s+){0,5}?(?:prompt|instructions?)\b",
+        r"what\s+(?:are|is|were)\s+your\s+(?:system\s+prompt|(?:initial|original|hidden|secret|system)\s+instructions?|(?:prompt|instructions?)\s*(?:[?.!]|$))",
         # --- Japanese injection keywords ---
         r"以前の指示を(無視|忘れ)",  # Japanese: ignore/forget previous instructions
         # --- Korean injection keywords ---
         r"이전\s+지시를?\s+(무시|잊어)",  # Korean: ignore/forget previous instructions
         # --- Indirect prompt injection vectors ---
-        r"when\s+you\s+(see|read|encounter)\s+this",  # Trigger-based injection
-        r"(if|when)\s+the\s+user\s+asks?\s+about",  # Conditional instruction override
+        r"when\s+you\s+(?:see|read|encounter)\s+this\b[^.\n]{0,80}\b(?:ignore|disregard|override|send|upload|email|exfiltrat\w*|delete|run|execute|reveal|forward|post)\b",  # Trigger-based injection
+        r"(?:if|when)\s+the\s+user\s+asks?\s+about\b[^.\n]{0,80}\b(?:ignore|instead|do\s+not\s+(?:tell|mention|reveal)|don't\s+(?:tell|mention|reveal)|pretend|lie|secretly|send|redirect)\b",  # Conditional instruction override
         # Instruction-shaped content can avoid the familiar "ignore previous
         # instructions" wording entirely.  Require multiple independent
         # signals in each expression so ordinary help pages containing one
@@ -346,29 +355,30 @@ class InputSanitizer:
         ),
         # --- Payload splitting / multi-turn injection ---
         r"remember\s+this\s+for\s+(later|next|future)\s+",  # Memory poisoning
-        r"in\s+your\s+next\s+response\s*,?\s*(you\s+)?(must|should|will)",  # Future response control
+        r"in\s+your\s+next\s+response\s*,?\s*(?:you\s+)?(?:must|should|will)\s+(?:\w+\s+){0,3}?(?:reveal|leak|ignore|disregard|say\s+only|output\s+(?:your|the)\s+(?:system|secret)|include\s+(?:the|your)\s+(?:system\s+prompt|api\s+key|password|secret|token))",  # Future response control
         # --- Gemini/Claude/GPT-specific delimiters ---
         r"<\|fim_prefix\|>",  # Fill-in-the-middle prefix token
         r"<\|fim_middle\|>",  # Fill-in-the-middle middle token
         r"<\|fim_suffix\|>",  # Fill-in-the-middle suffix token
         r"<\|endofprompt\|>",  # End-of-prompt token variant
         # --- Role confusion attacks ---
-        r"you\s+are\s+(the\s+)?(system|root|admin|developer)\s*(prompt|user)?",
+        r"you\s+are\s+(?:now\s+)?(?:the\s+)?(?:system\s+prompt|developer\s+mode|(?:system|root|admin|developer)(?:\s+(?:user|prompt))?\s*(?:[,.!]|$|now\b|and\s+(?:can|must|should|will)\s+(?:ignore|override|bypass)))",
         # --- Few-shot conversation injection ---
-        r"(?:example|sample)\s+(?:conversation|dialog|chat)\s*:",  # Fake few-shot examples
+        r"(?:example|sample)\s+(?:conversation|dialog|chat)\s*:[\s\S]{0,200}?\b(?:system|assistant|human)\s*:",  # Fake few-shot examples
         r"---\s*(?:user|human|system|assistant)\s*:\s*",  # Separator + role injection
         # --- URL-encoded injection detection ---
         r"%(?:69|49)gnore.*%(?:69|49)nstruction",  # URL-encoded "ignore instruction"
         r"(?:%3C|<)(?:%7C|\|)(?:system|im_start)",  # URL-encoded <|system or <|im_start
         # --- Markdown/format injection ---
-        r"```\s*(?:system|instruction|prompt)\b",  # Code block disguised as system
+        r"```\s*(?:system|instruction|prompt)\b[^`]{0,300}?\b(?:you\s+(?:are|must|will|should)|ignore|disregard|override|from\s+now\s+on|system\s+prompt)\b",  # Code block disguised as system
         # --- Payload concatenation attack ---
-        r"continue\s+from\s+where\s+(?:you|I)\s+left\s+off",  # Multi-turn chain attack
-        r"the\s+previous\s+(?:message|response)\s+was\s+(?:wrong|incorrect|a\s+test)",  # Context override
+        r"continue\s+from\s+where\s+(?:you|I)\s+left\s+off[^.\n]{0,40}\b(?:ignor\w*|without\s+(?:the\s+|your\s+|any\s+)?(?:rules|restrictions|filters?|guidelines))",  # Multi-turn chain attack
+        r"the\s+previous\s+(?:message|response|instructions?)\s+(?:was|were)\s+(?:just\s+)?a\s+test",  # Context override
+        r"the\s+previous\s+(?:message|response)\s+was\s+(?:wrong|incorrect)\b[^.\n]{0,30}\b(?:you\s+(?:should|must|will|are)|ignore|instead\s+you)",
         # --- Session 21: additional attack vectors ---
         r"output\s+your\s+(?:system|initial|original)\s+(?:prompt|instructions?)",  # Prompt extraction
         r"repeat\s+(?:back|everything|all)\s+(?:above|before|from\s+the\s+start)",  # Prompt leaking via repetition
-        r"translate\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Translate-based extraction
+        r"translate\s+(?:your\s+(?:system|initial)\s+(?:prompt|instructions?)|the\s+(?:system|initial)\s+(?:prompt|instructions?)\s*(?:[.!?]|$|into\b|to\s+\w+\s*[.!?]?\s*$|you\s+(?:were|are)|above|you\s+received))",  # Translate-based extraction
         r"write\s+(?:a\s+)?poem\s+(?:about|using|with)\s+your\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Creative extraction
         r"(?:base64|hex|rot13)\s+(?:encode|decode)\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?)",  # Encoding extraction
         r"you\s+(?:must|have\s+to|need\s+to)\s+(?:always|now)\s+(?:respond|answer|reply)\s+in",  # Forced behavior change
@@ -377,7 +387,7 @@ class InputSanitizer:
         r"<\|tool_result\|>",  # Tool-result token injection
         r"<function_calls>",  # XML function call injection
         r"<\|pad\|>",  # Padding token injection
-        r"(?:IMPORTANT|CRITICAL|URGENT)\s*:\s*(?:ignore|disregard|override)\b",  # Urgency-prefixed override
+        r"(?:IMPORTANT|CRITICAL|URGENT)\s*:\s*(?:ignore|disregard|override)\s+(?:all|everything|any)|(?:IMPORTANT|CRITICAL|URGENT)\s*:\s*(?:ignore|disregard|override)\b[^.\n]{0,40}\b(?:instructions?|rules|guidelines|system\s+prompt|safety|polic(?:y|ies)|restrictions?|context)\b",  # Urgency-prefixed override
         r"(?:as\s+an?\s+AI|as\s+a\s+language\s+model)\s*,?\s*you\s+(?:should|must|can)\s+(?:not\s+)?(?:ignore|override|bypass)",  # Meta-AI instruction
         r"<\|diff_marker\|>",  # Diff marker token injection
         r"<tool_use>",  # Claude-style tool_use XML injection
@@ -389,7 +399,7 @@ class InputSanitizer:
         r"(?:SYSTEM|USER|ASSISTANT)\s+OVERRIDE\s+MODE",  # Uppercase override pattern
         r"<\|separator\|>",  # Separator token injection
         r"<\|context\|>",  # Context boundary token injection
-        r"(?:real|actual|true)\s+(?:system|user)\s+(?:message|prompt|instruction)",  # Authority claim
+        r"(?:real|actual|true)\s+(?:system\s+(?:message|prompt|instructions?)|user\s+instructions?\b|user\s+(?:message|prompt)\s*:)",  # Authority claim
     ]
 
     def __init__(self) -> None:
