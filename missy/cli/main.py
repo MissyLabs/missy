@@ -3353,8 +3353,11 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
 
     def _check_database_integrity() -> bool:
         # quick_check reads the whole file, so run it at most hourly and
-        # report the cached verdict in between.
-        now = time.monotonic()
+        # report the cached verdict in between. Import locally: gateway_start
+        # binds ``time`` later in its body, so the closure can't use it.
+        import time as _time
+
+        now = _time.monotonic()
         if now - _db_integrity_cache["checked_at"] >= 3600:
             from missy.core.sqlite_files import check_known_databases
 
