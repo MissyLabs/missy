@@ -17,13 +17,45 @@ from missy.core.exceptions import MissyError
 # ---------------------------------------------------------------------------
 
 
+class _FakeClock:
+    """Deterministic monotonic clock; time only moves when a test advances it."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def _make_breaker(
-    threshold: int = 3, base_timeout: float = 60.0, max_timeout: float = 300.0
+    threshold: int = 3,
+    base_timeout: float = 60.0,
+    max_timeout: float = 300.0,
+    *,
+    real_clock: bool = False,
 ) -> CircuitBreaker:
-    """Return a breaker with test-friendly defaults."""
-    return CircuitBreaker(
-        "test", threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+    """Return a breaker with test-friendly defaults and a fake clock.
+
+    Recovery-timeout tests used real sleeps with ~2x margins and failed under
+    parallel CI load; advancing ``breaker._test_clock`` is exact.
+    """
+    if real_clock:
+        return CircuitBreaker(
+            "test", threshold=threshold, base_timeout=base_timeout, max_timeout=max_timeout
+        )
+    clock = _FakeClock()
+    breaker = CircuitBreaker(
+        "test",
+        threshold=threshold,
+        base_timeout=base_timeout,
+        max_timeout=max_timeout,
+        clock=clock,
     )
+    breaker._test_clock = clock  # type: ignore[attr-defined]
+    return breaker
 
 
 def _trip(breaker: CircuitBreaker, n: int | None = None) -> None:
@@ -167,7 +199,7 @@ class TestClosedToOpen:
         assert breaker._failure_count == 3
 
     def test_last_failure_time_is_set_on_open(self):
-        breaker = _make_breaker(threshold=2)
+        breaker = _make_breaker(threshold=2, real_clock=True)
         before = time.monotonic()
         _trip(breaker, n=2)
         after = time.monotonic()
@@ -224,7 +256,7 @@ class TestOpenToHalfOpen:
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
         _trip(breaker, n=1)
         assert breaker.state == CircuitState.OPEN
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         assert breaker.state == CircuitState.HALF_OPEN
 
     def test_does_not_transition_before_timeout(self):
@@ -236,7 +268,7 @@ class TestOpenToHalfOpen:
         """Accessing .state is the trigger for OPEN → HALF_OPEN."""
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         # Internal state is still OPEN; the property must flip it.
         assert breaker._state == CircuitState.OPEN
         _ = breaker.state  # trigger the transition
@@ -244,7 +276,7 @@ class TestOpenToHalfOpen:
 
     def test_monkeypatched_monotonic(self):
         """State transition works with a monkeypatched clock."""
-        breaker = _make_breaker(threshold=1, base_timeout=30.0)
+        breaker = _make_breaker(threshold=1, base_timeout=30.0, real_clock=True)
 
         with patch("missy.agent.circuit_breaker.time.monotonic") as mock_time:
             mock_time.return_value = 1000.0
@@ -268,7 +300,7 @@ class TestHalfOpenSuccess:
     def _open_then_expire(self, breaker: CircuitBreaker) -> None:
         _trip(breaker, n=breaker._threshold)
         assert breaker.state == CircuitState.OPEN
-        time.sleep(breaker._base_timeout * 1.1)
+        breaker._test_clock.advance(breaker._base_timeout * 1.1)
 
     def test_successful_probe_closes_circuit(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
@@ -286,12 +318,12 @@ class TestHalfOpenSuccess:
     def test_success_resets_recovery_timeout_to_base(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=1.0)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         # Force a failed probe to double the timeout first
         with pytest.raises(RuntimeError):
             breaker.call(_raise)
         # Now recover properly
-        time.sleep(breaker._recovery_timeout * 1.1)
+        breaker._test_clock.advance(breaker._recovery_timeout * 1.1)
         breaker.call(lambda: None)
         assert breaker._recovery_timeout == breaker._base_timeout
 
@@ -317,7 +349,7 @@ class TestHalfOpenSuccess:
 class TestHalfOpenFailure:
     def _open_and_expire(self, breaker: CircuitBreaker) -> None:
         _trip(breaker, n=breaker._threshold)
-        time.sleep(breaker._base_timeout * 1.1)
+        breaker._test_clock.advance(breaker._base_timeout * 1.1)
 
     def test_failed_probe_returns_to_open(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
@@ -330,7 +362,7 @@ class TestHalfOpenFailure:
     def test_failed_probe_doubles_recovery_timeout(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=10.0)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         assert breaker.state == CircuitState.HALF_OPEN
         original_timeout = breaker._recovery_timeout
         with pytest.raises(RuntimeError):
@@ -374,7 +406,7 @@ class TestExponentialBackoff:
         the recovery-timeout doubling math below.
         """
         assert breaker.state in (CircuitState.OPEN, CircuitState.HALF_OPEN)
-        time.sleep(breaker._recovery_timeout * 1.1)
+        breaker._test_clock.advance(breaker._recovery_timeout * 1.1)
         assert breaker.state == CircuitState.HALF_OPEN
         with pytest.raises(RuntimeError):
             breaker.call(_raise)
@@ -420,7 +452,7 @@ class TestExponentialBackoff:
         self._cycle_open_halfopen_fail(breaker)
         assert breaker._recovery_timeout > breaker._base_timeout
         # Now let the next probe succeed
-        time.sleep(breaker._recovery_timeout * 1.1)
+        breaker._test_clock.advance(breaker._recovery_timeout * 1.1)
         breaker.call(lambda: None)  # success probe
         assert breaker._recovery_timeout == breaker._base_timeout
 
@@ -447,7 +479,7 @@ class TestMaxTimeoutCap:
         """When max == base the timeout must not grow at all."""
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=0.01)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         with pytest.raises(RuntimeError):
             breaker.call(_raise)
         assert breaker._recovery_timeout == pytest.approx(0.01)
@@ -475,7 +507,7 @@ class TestReset:
     def test_on_success_resets_recovery_timeout(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=1.0)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         with pytest.raises(RuntimeError):
             breaker.call(_raise)
         assert breaker._recovery_timeout > 0.01
@@ -485,7 +517,7 @@ class TestReset:
     def test_call_success_after_open_then_halfopen_resets_everything(self):
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
         breaker.call(lambda: None)
         assert breaker.state == CircuitState.CLOSED
         assert breaker._failure_count == 0
@@ -588,7 +620,7 @@ class TestThreadSafety:
         """Accessing .state from multiple threads simultaneously is safe."""
         breaker = _make_breaker(threshold=1, base_timeout=0.01)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
 
         seen_states = []
         barrier = threading.Barrier(10)
@@ -616,7 +648,7 @@ class TestThreadSafety:
         hammering the very backend the breaker exists to protect."""
         breaker = _make_breaker(threshold=1, base_timeout=0.02)
         _trip(breaker, n=1)
-        time.sleep(0.03)  # recovery timeout elapses -> next call() sees HALF_OPEN
+        breaker._test_clock.advance(0.03)  # recovery timeout elapses -> next call() sees HALF_OPEN
 
         executed = []
         rejected = []
@@ -649,7 +681,7 @@ class TestThreadSafety:
         permanently rejecting further calls."""
         breaker = _make_breaker(threshold=1, base_timeout=0.02)
         _trip(breaker, n=1)
-        time.sleep(0.03)
+        breaker._test_clock.advance(0.03)
 
         assert breaker.call(lambda: "ok") == "ok"
         assert breaker.state == CircuitState.CLOSED
@@ -663,13 +695,13 @@ class TestThreadSafety:
         recovery attempt spuriously rejected as "already in flight")."""
         breaker = _make_breaker(threshold=1, base_timeout=0.01, max_timeout=0.05)
         _trip(breaker, n=1)
-        time.sleep(0.02)
+        breaker._test_clock.advance(0.02)
 
         with contextlib.suppress(RuntimeError):
             breaker.call(_raise)  # failed probe -> back to OPEN
         assert breaker.state == CircuitState.OPEN
 
-        time.sleep(0.06)  # doubled recovery timeout elapses
+        breaker._test_clock.advance(0.06)  # doubled recovery timeout elapses
         # Must be allowed through as a fresh probe, not rejected due to a
         # leftover "probe in flight" flag from the failed attempt above.
         assert breaker.call(lambda: "recovered") == "recovered"
