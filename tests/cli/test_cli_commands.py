@@ -968,6 +968,17 @@ class TestLogs:
         assert result.exit_code == 0
         assert str(tmp_path / "missy.log") in result.output
 
+    def test_logs_path_is_never_wrapped(self, runner: CliRunner, tmp_path):
+        cfg_path = _write_temp_config()
+        cfg = _make_mock_config()
+        long_path = tmp_path / ("x" * 120) / "missy.log"
+        cfg.observability.log_file_path = str(long_path)
+
+        with _SubsystemsPatch(cfg):
+            result = runner.invoke(cli, ["--config", cfg_path, "logs", "path"])
+
+        assert result.output == f"{long_path}\n"
+
     def test_logs_tail_prints_recent_lines(self, runner: CliRunner, tmp_path):
         cfg_path = _write_temp_config()
         log_path = tmp_path / "missy.log"

@@ -1799,7 +1799,9 @@ def logs_group(ctx: click.Context) -> None:
 def logs_path_cmd(ctx: click.Context) -> None:
     """Print the configured application log path."""
     cfg = _load_subsystems(ctx.obj["config_path"])
-    console.print(str(_app_log_path(cfg)))
+    # Plain output: Rich wrapped paths longer than the terminal width, which
+    # broke `tail -f "$(missy logs path)"` (and a parallel-run test).
+    click.echo(str(_app_log_path(cfg)))
 
 
 @logs_group.command("tail")
