@@ -42,6 +42,7 @@ def build_diagnostics(
         _sleeptime_section(runtime),
         _policy_section(),
         _gateway_section(),
+        _subsystems_section(),
         _discord_section(),
         _scheduler_section(runtime),
         _runtime_section(runtime, session_count),
@@ -511,6 +512,32 @@ def _scheduler_section(runtime: AgentRuntime | None) -> dict[str, Any]:
         jobs = scheduler.list_jobs()
         checks.append(_check("Jobs", "ok", len(jobs)))
     return _section("scheduler", "Scheduler", checks)
+
+
+def _subsystems_section() -> dict[str, Any]:
+    """What the gateway actually started, not just what config enables."""
+    from missy.core.subsystem_status import FAILED, RUNNING, get_status_registry
+
+    entries = get_status_registry().snapshot()
+    if not entries:
+        return _section("subsystems", "Subsystems", [_check("Startup", "ok", "none recorded")])
+    checks = []
+    for name, entry in sorted(entries.items()):
+        state = entry.get("state")
+        if state == FAILED:
+            checks.append(
+                _check(
+                    name,
+                    "error",
+                    f"failed: {entry.get('detail', '')}",
+                    remediation="Check the gateway journal for this subsystem and restart.",
+                )
+            )
+        else:
+            label = "running" if state == RUNNING else str(state)
+            detail = entry.get("detail", "")
+            checks.append(_check(name, "ok", f"{label}: {detail}" if detail else label))
+    return _section("subsystems", "Subsystems", checks)
 
 
 def _runtime_section(runtime: AgentRuntime | None, session_count: int) -> dict[str, Any]:
