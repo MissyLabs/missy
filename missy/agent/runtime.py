@@ -562,6 +562,11 @@ class AgentConfig:
         "telling the operator the capability is missing."
     )
     max_iterations: int = 10
+    #: Shared cap on guard-forced retries per turn. Each guard also has its
+    #: own small cap, but together they allowed ~30 retries (premortem #10).
+    max_guard_retries: int = 4
+    #: Wall-clock limit for one turn's tool loop in seconds; 0 disables.
+    max_turn_seconds: float = 600.0
     temperature: float = 0.7
     max_sub_agents: int = 10
     max_concurrent_agents: int = 3
@@ -1105,7 +1110,24 @@ class AgentRuntime:
             "_capability_mode": _capability_mode,
             "_request_context": _request_context,
         }
-        if session_id is None or _delegation_depth > 0:
+        # A top-level run owns one sub-agent budget for its whole delegation
+        # tree; scope it to this call so it never leaks to later work on the
+        # same thread.
+        budget_token = None
+        if _delegation_depth == 0:
+            from missy.agent.sub_agent import _SUBRUN_BUDGET, SubRunBudget
+
+            budget_token = _SUBRUN_BUDGET.set(SubRunBudget())
+        try:
+            return self._run_with_session_lock(user_input, run_kwargs)
+        finally:
+            if budget_token is not None:
+                _SUBRUN_BUDGET.reset(budget_token)
+
+    def _run_with_session_lock(self, user_input: str, run_kwargs: dict[str, Any]) -> str:
+        """Serialize top-level runs per session; delegated runs bypass the lock."""
+        session_id = run_kwargs["session_id"]
+        if session_id is None or run_kwargs["_delegation_depth"] > 0:
             return self._run_once(user_input, **run_kwargs)
 
         key = str(session_id)
@@ -2050,6 +2072,26 @@ class AgentRuntime:
                 + 2 * _MAX_IMAGE_DELIVERY_RETRIES
                 + 2 * _MAX_VIDEO_GENERATION_RETRIES
             )
+            _loop_started = time.monotonic()
+            _text_only_rounds = 0
+            _last_text_answer: str | None = None
+
+            def _finish_with_last_answer(event_type: str, detail: dict) -> tuple[str, list[str]]:
+                with contextlib.suppress(Exception):
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type=event_type,
+                        result="warn",
+                        detail=detail,
+                    )
+                if _cm is not None and _checkpoint_id is not None:
+                    with contextlib.suppress(Exception):
+                        _cm.complete(_checkpoint_id)
+                _progress.on_complete(event_type)
+                answer = unverified_answer_notice(_last_text_answer or "")
+                return _with_prompt_injection_notice(answer), tool_names_used
+
             for iteration in range(_desktop_grace_limit):
                 _desktop_grace_used = (
                     min(_desktop_request_retries, _MAX_DESKTOP_REQUEST_RETRIES)
@@ -2080,6 +2122,31 @@ class AgentRuntime:
                     )
                 )
                 if iteration >= self.config.max_iterations + _desktop_grace_used:
+                    break
+                # Every guard retry is a text-only round that did not return.
+                if (
+                    _text_only_rounds > self.config.max_guard_retries
+                    and _last_text_answer is not None
+                ):
+                    return _finish_with_last_answer(
+                        "agent.response.guard_budget_exhausted",
+                        {"guard_retries": _text_only_rounds - 1},
+                    )
+                if (
+                    self.config.max_turn_seconds
+                    and time.monotonic() - _loop_started > self.config.max_turn_seconds
+                ):
+                    detail = {"seconds": round(time.monotonic() - _loop_started, 1)}
+                    if _last_text_answer is not None:
+                        return _finish_with_last_answer("agent.turn.deadline_exceeded", detail)
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.turn.deadline_exceeded",
+                            result="warn",
+                            detail=detail,
+                        )
                     break
                 _progress.on_iteration(
                     iteration,
@@ -2637,6 +2704,8 @@ class AgentRuntime:
 
                 # finish_reason == "stop" or "length": we have a final response
                 final_text = response.content or ""
+                _text_only_rounds += 1
+                _last_text_answer = final_text
                 logger.debug(
                     "Tool loop completed after %d iteration(s); finish_reason=%r",
                     iteration + 1,
