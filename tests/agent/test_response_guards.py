@@ -69,6 +69,40 @@ class TestExecutionGuards:
         )
         assert not detect_hedging("They wrote `shall I run the check?`", "Check server", [])
 
+    def test_affirmation_followed_by_another_permission_question_is_hedging(self):
+        # A confirmation loop after the user already said yes (DIRECT-012).
+        assert detect_hedging(
+            "Would you like me to go ahead and write it now?", "Yes, go ahead.", []
+        )
+        assert detect_hedging(
+            "Just to confirm, do you want the file in the workspace root?", "Do it.", []
+        )
+        assert detect_hedging("Do you want me to proceed?", "sure", [])
+        assert not detect_hedging("Do you want me to proceed?", "sure", ["file_write"])
+        assert not detect_hedging("Done, I wrote note.txt.", "Yes, go ahead.", [])
+
+    def test_delegated_choice_answered_with_a_question_is_hedging(self):
+        # The user handed the details over; a preference interview stalls it (DIRECT-013).
+        assert detect_hedging(
+            "Before I start, what format would you prefer?",
+            "Make me a packing list file for camping, use your judgment.",
+            [],
+        )
+        assert detect_hedging(
+            "What port should the app listen on?",
+            "Create flowtest/x/config.yaml with sensible defaults, no questions.",
+            [],
+        )
+
+    def test_necessary_clarification_is_not_hedging(self):
+        # Missing information that changes the outcome still warrants a question.
+        assert not detect_hedging(
+            "Which file, and what is the new name?",
+            "Rename the file to the new name we discussed.",
+            [],
+        )
+        assert not detect_hedging("Is that a yes from Bravo too?", "Yes, I think so?", [])
+
     def test_code_hedging_exempts_explicit_script_request(self):
         shell = "Run this instead:\n```bash\nsystemctl status nginx\n```"
         assert detect_code_hedging(shell, "Check nginx", [])

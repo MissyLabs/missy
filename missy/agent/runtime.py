@@ -3397,6 +3397,22 @@ class AgentRuntime:
                         }
                     )
                     continue
+                if (
+                    _execution_retries >= 1
+                    and not tool_names_used
+                    and not is_security_refusal(final_text, _tool_request_input)
+                    and detect_hedging(final_text, _tool_request_input, tool_names_used)
+                ):
+                    # The single correction did not stop the permission loop.
+                    # Record it so the stall is auditable rather than silent.
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.execution_hedging_unresolved",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
 
                 if detect_promise_without_action(final_text, successful_tool_names):
                     if _promise_retries < _MAX_PROMISE_RETRIES:
