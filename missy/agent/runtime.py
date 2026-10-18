@@ -1814,6 +1814,7 @@ class AgentRuntime:
             find_unverified_desktop_action,
             find_unverified_filesystem_action,
             find_video_reproducibility_issue,
+            is_action_request,
             is_image_reproducibility_request,
             is_security_refusal,
             is_video_reproducibility_request,
@@ -1838,6 +1839,7 @@ class AgentRuntime:
             make_video_reproducibility_prompt,
             make_web_request_retry_prompt,
             terminal_parameter_errors_are_reported,
+            unverified_answer_notice,
         )
 
         # --- Feature #7: failure tracker (graceful degradation) ---
@@ -3368,7 +3370,9 @@ class AgentRuntime:
                                 detail={"response_excerpt": final_text[:200]},
                             )
                         continue
-                    final_text = _UNVERIFIED_COMPLETION_RESPONSE
+                    # Keep the answer but flag it; a canned replacement threw
+                    # away correct answers and was saved into session history.
+                    final_text = unverified_answer_notice(final_text)
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
@@ -3398,6 +3402,16 @@ class AgentRuntime:
                             "content": make_execution_retry_prompt(_tool_request_input),
                         }
                     )
+                    # The retry tells the model to act now, so it must be
+                    # auditable, not only its rare exhaustion.
+                    with contextlib.suppress(Exception):
+                        self._emit_event(
+                            session_id=session_id,
+                            task_id=task_id,
+                            event_type="agent.response.execution_hedging_retry",
+                            result="warn",
+                            detail={"response_excerpt": final_text[:200]},
+                        )
                     continue
                 if (
                     _execution_retries >= 1
@@ -3416,7 +3430,9 @@ class AgentRuntime:
                             detail={"response_excerpt": final_text[:200]},
                         )
 
-                if detect_promise_without_action(final_text, successful_tool_names):
+                if is_action_request(_tool_request_input) and detect_promise_without_action(
+                    final_text, successful_tool_names
+                ):
                     if _promise_retries < _MAX_PROMISE_RETRIES:
                         _promise_retries += 1
                         logger.warning(
@@ -3436,7 +3452,7 @@ class AgentRuntime:
                                 detail={"response_excerpt": final_text[:200]},
                             )
                         continue
-                    final_text = _UNVERIFIED_COMPLETION_RESPONSE
+                    final_text = unverified_answer_notice(final_text)
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
