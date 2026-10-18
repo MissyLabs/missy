@@ -210,10 +210,16 @@ _PROMISE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(?i)\bI'(?:ll|m going to)\s+\w+"),
     re.compile(r"(?i)\bI'm\s+\w+ing\b"),
     re.compile(r"(?i)\bI will\s+\w+"),
+    re.compile(r"(?i)^(?:On it|Working on it)\b", re.MULTILINE),
+    # A leading gerund announces work only when it takes an object or trails
+    # off ("Running the tests now", "Creating your file..."). A gerund noun
+    # phrase reporting state ("Running tally: 15", "Building permits are
+    # due") is an answer, not a promise.
     re.compile(
-        r"(?i)^(?:On it|Working on it|Spinning up|Starting|Kicking off|"
-        r"Setting up|Pulling|Generating|Building|Deploying|Running|"
-        r"Creating|Launching|Firing up|Booting|Preparing|Fetching)\b",
+        r"(?i)^(?:Spinning up|Starting|Kicking off|Setting up|Pulling|Generating|"
+        r"Building|Deploying|Running|Creating|Launching|Firing up|Booting|"
+        r"Preparing|Fetching)(?:\s+(?:the|a|an|your|my|it|that|this|these|those|"
+        r"up|now)\b|\s*(?:\.\.\.|\u2026))",
         re.MULTILINE,
     ),
 ]

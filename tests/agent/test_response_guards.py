@@ -69,6 +69,16 @@ class TestExecutionGuards:
         )
         assert not detect_hedging("They wrote `shall I run the check?`", "Check server", [])
 
+    def test_leading_gerund_noun_phrase_is_not_a_promise(self):
+        # "Running tally: 15" answered the user; the guard replaced it with an
+        # "unverified completion" refusal (validation case FLOW-008).
+        assert not detect_promise_without_action("Running tally started at **10**.", [])
+        assert not detect_promise_without_action("Running tally: **15**.", [])
+        assert not detect_promise_without_action("Building permits are due Friday.", [])
+        assert detect_promise_without_action("Running the tests now, hang tight.", [])
+        assert detect_promise_without_action("Creating your file...", [])
+        assert detect_promise_without_action("On it, give me a second please.", [])
+
     def test_affirmation_followed_by_another_permission_question_is_hedging(self):
         # A confirmation loop after the user already said yes (DIRECT-012).
         assert detect_hedging(
