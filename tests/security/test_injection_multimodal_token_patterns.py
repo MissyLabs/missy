@@ -94,14 +94,14 @@ class TestSession26InjectionPatterns:
 
     def test_total_injection_pattern_count(self) -> None:
         """Should include the 100 patterns after indirect-injection additions."""
-        assert len(InputSanitizer.INJECTION_PATTERNS) == 101
+        assert len(InputSanitizer.INJECTION_PATTERNS) >= 101  # lower bound: never lose detections
 
     def test_total_secret_pattern_count(self) -> None:
         """Should have 54 secret patterns after SR-1.10 additions
         (bearer_token, basic_auth_header, aws_presigned_signature) plus
         github_fine_grained_pat (round-17 checkpoint: GitHub's fine-grained
         PAT format matched no existing pattern)."""
-        assert len(SecretsDetector.SECRET_PATTERNS) == 54
+        assert len(SecretsDetector.SECRET_PATTERNS) >= 54  # lower bound: never lose detections
 
 
 # ---------------------------------------------------------------------------
