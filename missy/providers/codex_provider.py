@@ -261,6 +261,41 @@ def _extract_system(messages: list[Message]) -> str:
     return ""
 
 
+def _usage_from_event(event: dict) -> dict[str, int] | None:
+    """Return token usage from a terminal Responses stream event, if present."""
+    if event.get("type") not in ("response.completed", "response.done"):
+        return None
+    response = event.get("response")
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    prompt = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+    completion = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    total = int(usage.get("total_tokens") or prompt + completion)
+    if not (prompt or completion or total):
+        return None
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4) if text else 0
+
+
+def _estimate_usage(messages: list[Any], output: str) -> dict[str, int]:
+    """Rough usage (~4 chars/token) when the backend reports none.
+
+    Reporting zero made every Codex call free to the cost tracker, so
+    max_spend_usd and the global budget could never trip (premortem item 5).
+    """
+    prompt = sum(_estimate_tokens(str(getattr(m, "content", "") or "")) for m in messages)
+    completion = _estimate_tokens(output)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+
+
 class CodexProvider(BaseProvider):
     """Provider that calls ChatGPT's backend API with an OAuth token.
 
@@ -618,10 +653,15 @@ class CodexProvider(BaseProvider):
         session_id = kwargs.pop("session_id", "")
         task_id = kwargs.pop("task_id", "")
 
-        self._prepare_call()
+        self._prepare_call(estimated_tokens=_estimate_usage(messages, "")["prompt_tokens"])
 
+        reported: dict[str, int] = {}
         try:
-            text = "".join(self._iter_deltas(messages, session_id=session_id, task_id=task_id))
+            text = "".join(
+                self._iter_deltas(
+                    messages, session_id=session_id, task_id=task_id, usage_sink=reported
+                )
+            )
         except ProviderError as exc:
             logger.warning("openai-codex completion failed: %s", exc, exc_info=True)
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -633,8 +673,8 @@ class CodexProvider(BaseProvider):
             content=text,
             model=self._model,
             provider=self.name,
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            raw={},
+            usage=reported or _estimate_usage(messages, text),
+            raw={} if reported else {"usage_estimated": True},
             finish_reason="stop",
         )
 
@@ -650,7 +690,11 @@ class CodexProvider(BaseProvider):
         return data.get("text", "") or data.get("content", "") or ""
 
     def _iter_deltas(
-        self, messages: list[Message], session_id: str = "", task_id: str = ""
+        self,
+        messages: list[Message],
+        session_id: str = "",
+        task_id: str = "",
+        usage_sink: dict[str, int] | None = None,
     ) -> Iterator[str]:
         """Issue the SSE request and yield output-text delta chunks.
 
@@ -671,6 +715,8 @@ class CodexProvider(BaseProvider):
                 delta = event.get("delta", "")
                 if delta:
                     yield delta
+            elif usage_sink is not None and (usage := _usage_from_event(event)):
+                usage_sink.update(usage)
 
     def stream(self, messages: list[Message], system: str = "", **kwargs: Any) -> Iterator[str]:
         """Stream tokens from the Codex backend via SSE.
@@ -690,7 +736,7 @@ class CodexProvider(BaseProvider):
         if system:
             messages = [Message(role="system", content=system), *messages]
 
-        self._prepare_call()
+        self._prepare_call(estimated_tokens=_estimate_usage(messages, "")["prompt_tokens"])
 
         yield from self._iter_deltas(
             messages,
@@ -723,10 +769,10 @@ class CodexProvider(BaseProvider):
         Raises:
             ProviderError: On transport failure or stream errors.
         """
-        self._prepare_call()
-
         if system:
             messages = [Message(role="system", content=system), *messages]
+
+        self._prepare_call(estimated_tokens=_estimate_usage(messages, "")["prompt_tokens"])
 
         session_id = str(kwargs.get("session_id", ""))
         task_id = str(kwargs.get("task_id", ""))
@@ -741,6 +787,7 @@ class CodexProvider(BaseProvider):
         client = self._make_client(session_id=session_id, task_id=task_id)
 
         text_parts: list[str] = []
+        reported: dict[str, int] = {}
         # Parallel function calls can be announced before (or interleaved
         # with) each other's argument deltas, so every call is tracked by its
         # own item id. A single "current call" slot let later calls overwrite
@@ -806,6 +853,8 @@ class CodexProvider(BaseProvider):
                     if item.get("type") == "function_call":
                         key = str(item.get("id") or "") or _event_key(event)
                         _finish(key, item.get("arguments"))
+                elif usage := _usage_from_event(event):
+                    reported.update(usage)
         except ProviderError as exc:
             logger.warning("openai-codex tool completion failed: %s", exc, exc_info=True)
             self._emit_event(session_id, task_id, "error", str(exc))
@@ -830,8 +879,11 @@ class CodexProvider(BaseProvider):
             content=content,
             model=self._model,
             provider=self.name,
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            raw={},
+            usage=reported
+            or _estimate_usage(
+                messages, content + "".join(json.dumps(c.arguments) for c in tool_calls)
+            ),
+            raw={} if reported else {"usage_estimated": True},
             finish_reason=finish_reason,
             tool_calls=tool_calls,
         )
