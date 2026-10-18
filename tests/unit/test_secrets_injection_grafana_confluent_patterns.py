@@ -174,7 +174,7 @@ class TestNewInjectionPatterns:
         """Verify indirect-injection additions bring the pattern set to 100."""
         from missy.security.sanitizer import InputSanitizer
 
-        assert len(InputSanitizer.INJECTION_PATTERNS) == 100
+        assert len(InputSanitizer.INJECTION_PATTERNS) == 101
 
     def test_negative_normal_text_not_flagged(self):
         """Normal text should not trigger injection detection."""
