@@ -506,6 +506,12 @@ _SEARCH_REPEAT_TOOL_NAMES = frozenset({"memory_search", "rag_query", "graph_quer
 # use this window to cancel their job and return their own error.
 _TOOL_DEADLINE_GRACE_SECONDS = 10.0
 
+# Hard ceiling for one provider prompt, applied in _fit_provider_context()
+# (a provider-advertised context_window/max_context_tokens still lowers it).
+# History/memory assembly keeps TokenBudget.total; this only gives a live
+# tool loop room for its own results so they are not pruned mid-turn.
+_DEFAULT_MAX_PROMPT_TOKENS = 120_000
+
 
 def _repeat_call_fingerprint(name: str, arguments: dict) -> str:
     """Fingerprint a call so trivially re-worded arguments compare equal.
@@ -5731,9 +5737,9 @@ class AgentRuntime:
             ``None`` when the module is unavailable.
         """
         try:
-            from missy.agent.context import ContextManager
+            from missy.agent.context import ContextManager, TokenBudget
 
-            return ContextManager()
+            return ContextManager(TokenBudget(max_prompt_tokens=_DEFAULT_MAX_PROMPT_TOKENS))
         except Exception:
             return None
 

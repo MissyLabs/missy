@@ -698,6 +698,83 @@ class TestHistoryPruning:
         assert "shunt-0:" not in fitted_content
         assert _value_tokens(fitted_system) + _value_tokens(fitted) <= 900
 
+    @staticmethod
+    def _tool_loop_messages(rounds: int, result_tokens: int) -> list[dict]:
+        messages = [{"role": "user", "content": "=== CURRENT REQUEST [id=live] ===\n" + _tok(200)}]
+        for index in range(rounds):
+            messages.extend(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": f"call-{index}", "name": "list_files", "arguments": {}}
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": f"call-{index}",
+                        "name": "list_files",
+                        "content": f"round-{index}:" + _tok(result_tokens),
+                    },
+                    {"role": "user", "content": "Review the tool output above."},
+                ]
+            )
+        return messages
+
+    @staticmethod
+    def _schemas(tokens: int) -> list:
+        class _Tool:
+            def get_schema(self):
+                return {"description": _tok(tokens)}
+
+        return [_Tool()]
+
+    def test_large_tool_set_does_not_evict_active_turn_results(self):
+        # Validation 2026-10-18: ~21k schema tokens + a memory-enriched system
+        # prompt filled the 30k total, every earlier round's results were
+        # pruned, and the model re-ran the same tools 25 times.
+        cm = ContextManager(TokenBudget())
+        _, fitted = cm.fit_messages(
+            _tok(9_000),
+            self._tool_loop_messages(rounds=3, result_tokens=800),
+            tool_definitions=self._schemas(21_000),
+        )
+        content = "\n".join(str(m.get("content", "")) for m in fitted)
+        for index in range(3):
+            assert f"round-{index}:" in content
+
+    def test_max_prompt_tokens_gives_long_tool_loops_room(self):
+        messages = self._tool_loop_messages(rounds=20, result_tokens=2_000)
+        _, capped = ContextManager(TokenBudget()).fit_messages(
+            _tok(6_000), messages, tool_definitions=self._schemas(21_000)
+        )
+        _, roomy = ContextManager(TokenBudget(max_prompt_tokens=120_000)).fit_messages(
+            _tok(6_000), messages, tool_definitions=self._schemas(21_000)
+        )
+        assert "round-0:" not in "\n".join(str(m.get("content", "")) for m in capped)
+        assert "round-0:" in "\n".join(str(m.get("content", "")) for m in roomy)
+
+    def test_max_prompt_tokens_still_bounded_by_provider_limit(self):
+        system, fitted = ContextManager(TokenBudget(max_prompt_tokens=120_000)).fit_messages(
+            _tok(1_000),
+            self._tool_loop_messages(rounds=20, result_tokens=2_000),
+            tool_definitions=self._schemas(2_000),
+            total_limit=10_000,
+        )
+        assert _value_tokens(system) + _value_tokens(fitted) <= 10_000 - 2_000
+
+    def test_runtime_context_manager_uses_prompt_ceiling(self):
+        from missy.agent.runtime import _DEFAULT_MAX_PROMPT_TOKENS, AgentRuntime
+
+        manager = AgentRuntime._make_context_manager()
+        assert manager._budget.max_prompt_tokens == _DEFAULT_MAX_PROMPT_TOKENS
+        assert manager._budget.total == TokenBudget().total
+
+    def test_max_prompt_tokens_must_be_positive(self):
+        with pytest.raises(ValueError, match="max_prompt_tokens"):
+            TokenBudget(max_prompt_tokens=0)
+
     def test_provider_fit_fails_closed_when_request_alone_exceeds_budget(self):
         from missy.agent.runtime import AgentRuntime
 
