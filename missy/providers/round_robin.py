@@ -308,6 +308,20 @@ class RoundRobinAccounts:
             account.backoff_seconds = 0.0
             account.unhealthy_until = 0.0
 
+    def bench_until(self, account: Account, until: float) -> None:
+        """Skip *account* until ``time.monotonic()`` reaches *until*.
+
+        For an upstream-declared outage of known length (e.g. a usage limit
+        with a reset time), where exponential failure backoff would keep
+        probing a credential that is guaranteed to fail until then.
+        Never shortens an existing backoff window.
+        """
+        with self._lock:
+            account.unhealthy_until = max(account.unhealthy_until, until)
+            account.consecutive_failures = max(
+                account.consecutive_failures, self._failure_threshold
+            )
+
     def record_failure(self, account: Account, *, immediate: bool = False) -> None:
         """Report that a call on *account* failed.
 
