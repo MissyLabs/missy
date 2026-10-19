@@ -34,12 +34,12 @@ import * as acp from "@agentclientprotocol/sdk";
 
 // Pin the adapter exactly.  Older 0.76.x releases rejected concrete model
 // preferences such as "claude-opus-5-5" and silently made operators fall
-// back to a moving family alias.  0.81.2 resolves a concrete preference
+// back to a moving family alias.  0.81.2+ (now 0.93.0) resolves a concrete preference
 // against the adapter's advertised model metadata while still rejecting a
 // different generation.  An exact pin also prevents an unreviewed adapter
 // release from entering this paid-provider path on the next npx invocation.
 const AGENT_COMMAND = "npx";
-const AGENT_ARGS = ["-y", "@agentclientprotocol/claude-agent-acp@0.81.2"];
+const AGENT_ARGS = ["-y", "@agentclientprotocol/claude-agent-acp@0.93.0"];
 
 async function readStdin() {
   const chunks = [];

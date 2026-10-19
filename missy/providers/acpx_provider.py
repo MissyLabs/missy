@@ -8,7 +8,7 @@ tool-specific validation run's headline finding, it spawns
 official ``@agentclientprotocol/sdk`` package) which talks the real
 Agent Client Protocol directly to ``@agentclientprotocol/claude-agent-acp``.
 
-Why the direct bridge remains: modern acpx (validated at 0.19.3) now
+Why the direct bridge remains: modern acpx (validated at 0.19.6) now
 exposes system-prompt, no-tools, filesystem, terminal, cancellation, and
 strict-NDJSON controls. Missy nevertheless needs only a single temporary
 turn and owns stricter process-group cleanup and audit boundaries, so the
@@ -43,8 +43,8 @@ This makes all 44+ Missy tools available through this delegate across
 Discord, CLI, webhook, or any other channel.
 
 Requires Node.js on ``PATH`` (``acp_bridge.mjs`` uses the exact Claude adapter
-version validated with acpx 0.19.3,
-``@agentclientprotocol/claude-agent-acp@0.81.2``).
+version validated with acpx 0.19.6,
+``@agentclientprotocol/claude-agent-acp@0.93.0``).
 
 Configure in ``config.yaml``::
 
