@@ -139,6 +139,14 @@ class TokenBudget:
     memory_fraction: float = 0.15
     learnings_fraction: float = 0.05
     fresh_tail_count: int = 16
+    #: Hard ceiling for one provider prompt (system + messages + tool
+    #: schemas) in :meth:`ContextManager.fit_messages`. ``total`` sizes the
+    #: history/memory *assembly* and assumes ``tool_definitions_reserve`` for
+    #: schemas; it is far too small to also cap a live tool loop, whose
+    #: results arrive after assembly. ``None`` keeps ``total`` as the cap but
+    #: still credits schema tokens beyond the reserve so a large tool set
+    #: cannot crowd the active turn's results out of the prompt.
+    max_prompt_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.total < 0:
@@ -147,6 +155,8 @@ class TokenBudget:
             raise ValueError(f"memory_fraction must be 0.0-1.0, got {self.memory_fraction}")
         if not 0.0 <= self.learnings_fraction <= 1.0:
             raise ValueError(f"learnings_fraction must be 0.0-1.0, got {self.learnings_fraction}")
+        if self.max_prompt_tokens is not None and self.max_prompt_tokens <= 0:
+            raise ValueError(f"max_prompt_tokens must be > 0, got {self.max_prompt_tokens}")
         if self.fresh_tail_count < 0:
             raise ValueError(f"fresh_tail_count must be >= 0, got {self.fresh_tail_count}")
         reserves = self.system_reserve + self.tool_definitions_reserve
@@ -308,10 +318,6 @@ class ContextManager:
         results, and the immediately following verification prompt are kept
         or removed as one unit so pruning never leaves an orphaned tool result.
         """
-        configured_total = self._budget.total
-        if isinstance(total_limit, int) and total_limit > 0:
-            configured_total = min(configured_total, total_limit)
-
         tool_tokens = 0
         if tool_definitions:
             schemas = []
@@ -322,6 +328,20 @@ class ContextManager:
                     schemas.append(str(tool))
             tool_tokens = _value_tokens(schemas)
         schema_budget = max(self._budget.tool_definitions_reserve, tool_tokens)
+
+        # Validation 2026-10-18: with ~100 tools (~21k schema tokens) against
+        # the 30k assembly total, a system prompt carrying recalled memory
+        # left no room for the active turn's tool results. They were pruned
+        # newest-first, the model never saw them, and it re-ran the same
+        # tools until the iteration limit.
+        if self._budget.max_prompt_tokens is not None:
+            configured_total = self._budget.max_prompt_tokens
+        else:
+            configured_total = self._budget.total + max(
+                0, schema_budget - self._budget.tool_definitions_reserve
+            )
+        if isinstance(total_limit, int) and total_limit > 0:
+            configured_total = min(configured_total, total_limit)
         prompt_budget = max(0, configured_total - schema_budget)
         groups = self._message_groups(messages)
 
