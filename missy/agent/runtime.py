@@ -512,6 +512,10 @@ _TOOL_DEADLINE_GRACE_SECONDS = 10.0
 # tool loop room for its own results so they are not pruned mid-turn.
 _DEFAULT_MAX_PROMPT_TOKENS = 120_000
 
+# Consecutive tool rounds made up entirely of repeat-limited calls before the
+# loop stops asking for more tools and synthesizes a final answer.
+_MAX_BLOCKED_REPEAT_ROUNDS = 2
+
 
 def _repeat_call_fingerprint(name: str, arguments: dict) -> str:
     """Fingerprint a call so trivially re-worded arguments compare equal.
@@ -2178,6 +2182,12 @@ class AgentRuntime:
             # Repeated-call control (see _READ_ONLY_REPEAT_TOOL_NAMES).
             _repeat_fp_counts: dict[str, int] = {}
             _search_call_counts: dict[str, int] = {}
+            # Rounds in a row in which every requested call was refused by the
+            # repeat limit. Each such round is a full provider call that can
+            # learn nothing new (RAG-005 2026-10-19: 15 blocked rounds after
+            # the limit fired), so after _MAX_BLOCKED_REPEAT_ROUNDS the loop
+            # stops and goes straight to final synthesis.
+            _blocked_repeat_rounds = 0
             _max_identical = int(getattr(self.config, "max_identical_tool_calls", 0) or 0)
             _max_search = int(getattr(self.config, "max_search_calls_per_tool", 0) or 0)
 
@@ -2427,6 +2437,7 @@ class AgentRuntime:
                     # that support parallel tool calling make this a real,
                     # not merely theoretical, scenario.
                     strategy_rotation_targets: list[tuple[str, str]] = []
+                    _round_repeat_limited = 0
                     for tc in response.tool_calls:
                         tool_names_used.append(tc.name)
                         _progress.on_tool_start(tc.name)
@@ -2456,7 +2467,9 @@ class AgentRuntime:
                         )
                         tool_started = time.monotonic()
                         tr = _repeat_limited_result(tc)
-                        if tr is None:
+                        if tr is not None:
+                            _round_repeat_limited += 1
+                        else:
                             tr = self._execute_tool_with_deadline(
                                 tc,
                                 _tool_deadline(),
@@ -2871,6 +2884,21 @@ class AgentRuntime:
                             _video_generation_observations
                         )
                     loop_messages.append({"role": "user", "content": verification})
+
+                    if response.tool_calls and _round_repeat_limited == len(response.tool_calls):
+                        _blocked_repeat_rounds += 1
+                    else:
+                        _blocked_repeat_rounds = 0
+                    if _blocked_repeat_rounds >= _MAX_BLOCKED_REPEAT_ROUNDS:
+                        with contextlib.suppress(Exception):
+                            self._emit_event(
+                                session_id=session_id,
+                                task_id=task_id,
+                                event_type="agent.tool.repeat_loop_stopped",
+                                result="warn",
+                                detail={"blocked_rounds": _blocked_repeat_rounds},
+                            )
+                        break
 
                     # Continue loop to get model's next response
                     continue
@@ -3852,7 +3880,8 @@ class AgentRuntime:
 
         # Iteration limit reached: return whatever content we have
         logger.warning(
-            "Agent hit max_iterations=%d without a final stop response.",
+            "Agent tool loop ended (max_iterations=%d or repeated blocked rounds) "
+            "without a final stop response.",
             self.config.max_iterations,
         )
         # Make one final plain completion attempt. The provider no longer has

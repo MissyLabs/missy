@@ -415,14 +415,45 @@ class TestRepeatedCallControl:
             ],
             _make_stop_response("Nothing about Project X is stored."),
         ]
+        provider.complete.return_value = _make_stop_response("Nothing about Project X is stored.")
         tool_reg, _ = _tool_registry({"memory_search": _ok("no results")})
         result, events = _run(
             provider, tool_reg, "what do you remember about project x?", max_iterations=10
         )
         assert tool_reg.execute.call_count == 3
         limited = [e for e in events if e["event_type"] == "agent.tool.repeat_call_limited"]
-        assert len(limited) == 3
+        # Two fully blocked rounds in a row end the loop (validation 2026-10-19).
+        assert len(limited) == 2
         assert "Project X" in result
+
+    def test_consecutive_blocked_rounds_stop_the_loop_and_synthesize(self):
+        # RAG-005 2026-10-19: after the limit fired the model spent 15 more
+        # provider rounds on calls that were all refused.
+        provider = _make_provider()
+        provider.complete_with_tools.side_effect = [
+            _make_tool_call_response("rag_query", f"tc-{i}", {"action": "stats"}) for i in range(20)
+        ]
+        provider.complete.return_value = _make_stop_response("Stats: 4 documents, 4 chunks.")
+        tool_reg, _ = _tool_registry({"rag_query": _ok("{'documents': 4, 'chunks': 4}")})
+        result, events = _run(provider, tool_reg, "ask rag_query for its stats", max_iterations=25)
+        assert tool_reg.execute.call_count == 3
+        assert provider.complete_with_tools.call_count == 5
+        assert any(e["event_type"] == "agent.tool.repeat_loop_stopped" for e in events)
+        assert "4 documents" in result
+
+    def test_a_round_with_a_fresh_call_resets_the_blocked_count(self):
+        provider = _make_provider()
+        same = {"action": "stats"}
+        provider.complete_with_tools.side_effect = [
+            *[_make_tool_call_response("rag_query", f"tc-{i}", same) for i in range(4)],
+            _make_tool_call_response("rag_query", "tc-new", {"action": "query", "query": "x"}),
+            _make_tool_call_response("rag_query", "tc-5", same),
+            _make_stop_response("done"),
+        ]
+        tool_reg, _ = _tool_registry({"rag_query": _ok("result")})
+        result, events = _run(provider, tool_reg, "query rag", max_iterations=25)
+        assert not any(e["event_type"] == "agent.tool.repeat_loop_stopped" for e in events)
+        assert result.endswith("done")
 
     def test_rephrased_searches_hit_the_per_turn_cap(self):
         provider = _make_provider()
