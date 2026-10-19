@@ -92,7 +92,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.base import (
+    BaseTool,
+    ToolPermissions,
+    ToolResult,
+    bound_timeout_to_deadline,
+    current_tool_deadline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1127,7 +1133,10 @@ class VideoGenerateTool(BaseTool):
         augmentation_level = float(_clamp(augmentation_level, 0.0, 10.0))
         crf = int(_clamp(crf, 0, 51))
         interpolate = int(_clamp(interpolate, 0, 8)) or d["interpolate"]
-        timeout = timeout or d["timeout"]
+        # A turn deadline (AgentConfig.max_turn_seconds) bounds the wait too:
+        # the runtime abandons a tool that outlives the turn, so polling past
+        # it would only keep the GPU busy for a result nobody receives.
+        timeout = int(bound_timeout_to_deadline(timeout or d["timeout"]))
         seed = seed or random.randint(1, 2**32 - 1)
         negative_prompt = negative_prompt or (
             _WAN_NEGATIVE_PROMPT if backend in ("wan", "wan14b") else _SD_NEGATIVE_PROMPT
@@ -1556,6 +1565,13 @@ class VideoGenerateTool(BaseTool):
             by type since a dict is never a valid error message here).
         """
         deadline = time.monotonic() + timeout
+        # The caller's own timeout may predate the turn deadline (image and
+        # singing tools pass theirs straight through); honor whichever ends
+        # first so the job is cancelled before the runtime gives up on it.
+        turn_deadline = current_tool_deadline()
+        turn_limited = turn_deadline is not None and turn_deadline < deadline
+        if turn_limited:
+            deadline = turn_deadline
         while time.monotonic() < deadline:
             hist_resp = http.get(f"{base_url}/history/{prompt_id}")
             if hist_resp.status_code == 200:
@@ -1568,8 +1584,13 @@ class VideoGenerateTool(BaseTool):
                     if status.get("status_str") == "error":
                         messages = status.get("messages", [])
                         return f"ComfyUI generation failed: {json.dumps(messages)[:1000]}"
-            time.sleep(_POLL_INTERVAL_SECONDS)
+            time.sleep(max(0.0, min(_POLL_INTERVAL_SECONDS, deadline - time.monotonic())))
         queue_note = cls._cancel(http, base_url, prompt_id)
+        if turn_limited:
+            return (
+                "Stopped waiting for ComfyUI because this turn's time budget ran "
+                f"out; the job was {queue_note}. Do not retry it in this turn."
+            )
         return (
             f"Timed out after {timeout}s waiting for ComfyUI to finish "
             f"generating; the job was {queue_note}."

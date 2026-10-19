@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult, bound_timeout_to_deadline
 from missy.tools.builtin.video_generate import (
     VideoGenerateTool,
     _comfyui_candidates_from_env,
@@ -440,7 +440,7 @@ class SingingGenerateTool(BaseTool):
         top_p = float(_clamp(float(top_p), 0.0, 1.0))
         top_k = int(_clamp(int(top_k), 0, 100))
         min_p = float(_clamp(float(min_p), 0.0, 1.0))
-        timeout = int(timeout or 3600)
+        timeout = int(bound_timeout_to_deadline(int(timeout or 3600)))
         seed = int(seed or random.randint(1, 2**32 - 1))
 
         candidates = (

@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.base import BaseTool, ToolPermissions, ToolResult, bound_timeout_to_deadline
 from missy.tools.builtin.video_generate import (
     VideoGenerateTool,
     _comfyui_candidates_from_env,
@@ -173,7 +173,7 @@ class ImageGenerateTool(BaseTool):
         steps = int(_clamp(int(steps), 1, 100))
         cfg = float(_clamp(float(cfg), 0.0, 30.0))
         batch_size = int(_clamp(int(batch_size), 1, 4))
-        timeout = int(_clamp(int(timeout), 10, 3600))
+        timeout = int(bound_timeout_to_deadline(_clamp(int(timeout), 10, 3600)))
         seed = int(seed) or random.randint(1, 2**32 - 1)
 
         candidates = (
