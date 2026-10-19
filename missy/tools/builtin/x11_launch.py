@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.builtin._desktop_shared import xdotool_literal_pattern
 
 
 def _display_env() -> dict:
@@ -91,7 +92,7 @@ class X11LaunchTool(BaseTool):
         while time.time() < deadline:
             time.sleep(0.5)
             result = subprocess.run(
-                f"xdotool search --onlyvisible --name {shlex.quote(hint)}",
+                f"xdotool search --onlyvisible --name {shlex.quote(xdotool_literal_pattern(hint))}",
                 shell=True,
                 capture_output=True,
                 text=True,

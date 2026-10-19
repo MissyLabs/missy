@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.builtin._desktop_shared import xdotool_literal_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +474,7 @@ class X11ClickTool(BaseTool):
         x, y = int(x), int(y)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -551,7 +552,7 @@ class X11TypeTool(BaseTool):
         delay_ms = int(delay_ms)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -615,7 +616,7 @@ class X11KeyTool(BaseTool):
             return ToolResult(success=False, output=None, error=window_error)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
