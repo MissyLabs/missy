@@ -384,6 +384,15 @@ class X11ScreenshotTool(BaseTool):
                 )
             return ToolResult(success=False, output=None, error=f"scrot failed: {err}")
 
+        from missy.vision.blank_frame import blank_capture_error, uniform_image_file
+
+        if (blank := uniform_image_file(path)) is not None:
+            return ToolResult(
+                success=False,
+                output={"path": path, "blank_capture": True},
+                error=blank_capture_error(blank),
+            )
+
         redaction: dict[str, Any] = {
             "redaction_available": False,
             "redaction_applied": False,
@@ -829,6 +838,17 @@ class X11ReadScreenTool(BaseTool):
         err = self._take_screenshot(path, region)
         if err:
             return ToolResult(success=False, output=None, error=err)
+
+        # 1b. Refuse to interpret a blank/uniform frame: vision models
+        # hallucinate plausible UI content for an all-black capture.
+        from missy.vision.blank_frame import blank_capture_error, uniform_image_file
+
+        if (blank := uniform_image_file(path)) is not None:
+            return ToolResult(
+                success=False,
+                output={"screenshot_path": path, "blank_capture": True},
+                error=blank_capture_error(blank),
+            )
 
         # 2. Read and base64-encode.
         try:
