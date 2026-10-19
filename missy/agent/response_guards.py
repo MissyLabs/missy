@@ -248,22 +248,61 @@ _PROMISE_EXEMPTIONS: list[re.Pattern[str]] = [
 
 _MIN_PROMISE_LENGTH = 15
 
+#: Language reporting that an attempted operation failed.
+_FAILURE_REPORT = re.compile(
+    r"(?i)\b(?:failed|failure|errored|error\s*:|returned\s+an\s+error|timed\s+out|"
+    r"could(?:n['’]t|\s+not)|was(?:n['’]t|\s+not)\s+able|unable\s+to|"
+    r"did(?:n['’]t|\s+not)\s+(?:succeed|complete|work|finish)|"
+    r"no\s+\w+(?:\s+\w+)?\s+(?:was|were)\s+(?:generated|created|produced|made|saved|"
+    r"completed|written))\b"
+)
+#: An explicit statement that the requested task was not completed.
+_TASK_NOT_COMPLETED = re.compile(
+    r"(?i)\b(?:could(?:n['’]t|\s+not)|can(?:['’]t|not)|was(?:n['’]t|\s+not)\s+able\s+to|"
+    r"unable\s+to)\s+(?:complete|finish|generate|create|produce|fulfil+|perform|"
+    r"carry\s+out)\b"
+    r"|\b(?:task|request)\s+(?:could\s+not|couldn['’]t|cannot|was\s+not|wasn['’]t|"
+    r"remains?)\s+(?:be\s+)?(?:completed|done|finished|incomplete)\b"
+)
 
-def detect_promise_without_action(text: str, tools_used: list[str]) -> bool:
+
+def is_honest_failure_report(text: str, failed_tools: list[str] | None = None) -> bool:
+    """Return ``True`` when *text* honestly reports that the work failed.
+
+    Either the reply describes a failure while a tool really did fail this
+    turn, or it explicitly states the task could not be completed. Such a
+    reply is the correct answer, not an unfulfilled promise: retrying it made
+    the model repeat the failing call and argue with the guard.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    if failed_tools and _FAILURE_REPORT.search(text):
+        return True
+    return bool(_TASK_NOT_COMPLETED.search(text))
+
+
+def detect_promise_without_action(
+    text: str, tools_used: list[str], failed_tools: list[str] | None = None
+) -> bool:
     """Return ``True`` if a response promises action without relevant evidence.
 
     Args:
         text: The candidate final response text.
         tools_used: Successful tool names. Only evidence relevant to the
             promised action can satisfy the guard.
+        failed_tools: Tools that ran and failed this turn. A reply reporting
+            such a failure is exempt (see :func:`is_honest_failure_report`).
 
     Returns:
         ``True`` when *text* matches a promise-of-action pattern, isn't
-        covered by :data:`_PROMISE_EXEMPTIONS`, and has no relevant evidence.
+        covered by :data:`_PROMISE_EXEMPTIONS`, isn't an honest failure
+        report, and has no relevant evidence.
     """
     if not text or len(text) < _MIN_PROMISE_LENGTH:
         return False
     if any(p.search(text) for p in _PROMISE_EXEMPTIONS):
+        return False
+    if is_honest_failure_report(text, failed_tools):
         return False
     if not any(p.search(text) for p in _PROMISE_PATTERNS):
         return False
@@ -401,12 +440,40 @@ def is_action_request(user_input: object) -> bool:
     )
 
 
-def unverified_answer_notice(text: str) -> str:
-    """Keep *text* but say plainly that no tool ran, so nothing was done."""
-    notice = (
-        "Note: no tool ran for this request, so nothing described below was "
-        "actually done or verified."
-    )
+def unverified_answer_notice(
+    text: str,
+    tools_used: list[str] | None = None,
+    successful_tools: list[str] | None = None,
+) -> str:
+    """Keep *text* but say plainly what the turn's tool evidence supports.
+
+    Args:
+        text: The model's answer, kept verbatim below the notice.
+        tools_used: Every tool attempted this turn (successful or not).
+            ``None``/empty means no tool ran.
+        successful_tools: The subset that succeeded.
+
+    The notice must match reality: claiming "no tool ran" after a tool ran
+    and failed (validation case: video_generate errored) misleads the user
+    about what was attempted.
+    """
+    attempted = list(dict.fromkeys(tools_used or []))
+    succeeded = set(successful_tools or [])
+    if not attempted:
+        notice = (
+            "Note: no tool ran for this request, so nothing described below was "
+            "actually done or verified."
+        )
+    elif not succeeded.intersection(attempted):
+        notice = (
+            f"Note: the tool call(s) attempted for this request ({', '.join(attempted)}) "
+            "failed, so nothing described below as done was actually completed or verified."
+        )
+    else:
+        notice = (
+            "Note: parts of the answer below are not backed by a successful tool "
+            "result in this turn and were not verified."
+        )
     return f"{notice}\n\n{text}" if text.strip() else notice
 
 
@@ -1031,6 +1098,21 @@ _DESKTOP_VERIFICATION_TOOLS = frozenset(
         "desktop_status",
     }
 )
+#: Reading the clipboard back observes the result of a copy/select/type
+#: action (e.g. "select all and copy"), so it verifies the preceding desktop
+#: mutation as well as a screen read would. Matched by name so clipboard
+#: tools from any surface (x11/desktop/plain) qualify.
+_CLIPBOARD_VERIFICATION_TOOL_RE = re.compile(
+    r"^(?:x11_|desktop_|atspi_)?clipboard_(?:read|get|text|contents|paste)$"
+)
+
+
+def _is_desktop_verification_tool(name: object) -> bool:
+    return isinstance(name, str) and (
+        name in _DESKTOP_VERIFICATION_TOOLS
+        or _CLIPBOARD_VERIFICATION_TOOL_RE.match(name) is not None
+    )
+
 
 _DESKTOP_REQUEST_RULES: tuple[tuple[str, re.Pattern[str], frozenset[str]], ...] = (
     (
@@ -1149,7 +1231,7 @@ def find_unverified_desktop_action(tool_names_used: list[str]) -> str | None:
     if last_action_index < 0:
         return None
     if any(
-        name in _DESKTOP_VERIFICATION_TOOLS for name in tool_names_used[last_action_index + 1 :]
+        _is_desktop_verification_tool(name) for name in tool_names_used[last_action_index + 1 :]
     ):
         return None
     return last_action_name
@@ -1162,7 +1244,8 @@ def make_desktop_verification_retry_prompt(action_name: str, user_input: str = "
         f"Your last desktop action was {action_name}, but you made no later observation "
         "to confirm it affected the intended control or changed the UI. A successful input "
         "event is not proof of the requested outcome. Inspect the current state now with "
-        "x11_read_screen, x11_window_list, or the matching AT-SPI read/tree tool. If the "
+        "x11_read_screen, x11_window_list, the matching AT-SPI read/tree tool, or (after a "
+        "copy) a clipboard read. If the "
         "target state is not present, correct the target and retry the action, then observe "
         f"again before reporting success.{anchor}"
     )
@@ -1226,6 +1309,21 @@ _BROWSER_TOOL_NAMES = frozenset(
 )
 
 
+#: A concrete fetch target: a URL, ``www.`` host, ``localhost``/IP (with
+#: optional port), or a dotted hostname with a common TLD. Bare file names
+#: such as ``notes.md`` do not match.
+_CONCRETE_WEB_TARGET = re.compile(
+    r"(?i)\bhttps?://\S+"
+    r"|\bwww\.[a-z0-9-]+(?:\.[a-z0-9-]+)+"
+    r"|\blocalhost(?::\d+)?\b"
+    r"|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"
+    r"|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"(?:com|org|net|io|dev|ai|app|gov|edu|co|uk|de|fr|info|biz|me|tv|us|ca|au|"
+    r"xyz|site|tech|cloud|page|blog|news|wiki|local|internal|lan|test|example)"
+    r"(?::\d+)?(?:/\S*)?(?=$|[\s,;:!?)\]'\"]|\.(?:\s|$))"
+)
+
+
 def find_unmet_web_requests(
     user_input: str,
     tool_names_used: list[str],
@@ -1244,7 +1342,12 @@ def find_unmet_web_requests(
     available = set(available_tool_names) if available_tool_names is not None else None
     expected: set[str] = set()
 
-    if re.search(r"\bfetch\b.{0,100}\b(?:url|https?://)", text, re.DOTALL):
+    # Only demand web_fetch when there is something concrete to fetch. "Fetch
+    # the URL from my notes" names no target; forcing web_fetch there pushed
+    # the model into a 27-call memory_search loop hunting for one (WB-001).
+    if re.search(r"\bfetch\b.{0,100}\b(?:url|https?://)", text, re.DOTALL) and (
+        _CONCRETE_WEB_TARGET.search(user_input)
+    ):
         expected.add("web_fetch")
 
     browser_intent = bool(
