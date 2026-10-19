@@ -212,11 +212,16 @@ class DiscordConfig:
             change to the tool's default "always ask" behavior. Does not
             affect any other confirmation gate (OBS streaming,
             ``install_software_confirmed``, etc.).
+        max_concurrent_conversations: How many Discord conversations
+            (channels/threads) the gateway processes at once, per account.
+            Messages within one conversation are always handled one at a
+            time, in order; this only bounds concurrency *across* them.
     """
 
     accounts: list[DiscordAccountConfig] = field(default_factory=list)
     enabled: bool = False
     auto_approve_uploads: bool = False
+    max_concurrent_conversations: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -339,4 +344,27 @@ def parse_discord_config(
         accounts=accounts,
         enabled=_coerce_bool(data.get("enabled"), False),
         auto_approve_uploads=_coerce_bool(data.get("auto_approve_uploads"), False),
+        max_concurrent_conversations=_parse_max_concurrent_conversations(
+            data.get("max_concurrent_conversations")
+        ),
     )
+
+
+#: Upper bound for ``discord.max_concurrent_conversations``; each slot can
+#: hold an agent run (and a worker thread) for minutes.
+_MAX_CONCURRENT_CONVERSATIONS_LIMIT = 16
+
+
+def _parse_max_concurrent_conversations(raw: Any) -> int:
+    """Parse ``max_concurrent_conversations``, clamped to 1..16 (default 3)."""
+    default = DiscordConfig.max_concurrent_conversations
+    if raw is None or isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "discord.max_concurrent_conversations=%r is not an integer; using %d", raw, default
+        )
+        return default
+    return max(1, min(value, _MAX_CONCURRENT_CONVERSATIONS_LIMIT))

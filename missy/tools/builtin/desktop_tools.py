@@ -64,6 +64,7 @@ from missy.tools.builtin._desktop_shared import (
     check_window_allowed,
     load_missy_config,
     require_approval,
+    xdotool_literal_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,7 +230,7 @@ class DesktopFocusWindowTool(BaseTool):
     parameters: dict[str, Any] = {
         "window_name": {
             "type": "string",
-            "description": "Window name pattern to search for and focus.",
+            "description": "Window title (or part of it) to focus; matched literally, case-insensitively.",
             "required": True,
         },
     }
@@ -244,7 +245,7 @@ class DesktopFocusWindowTool(BaseTool):
             return ToolResult(success=False, output=None, error=window_error)
 
         result = subprocess.run(
-            ["xdotool", "search", "--name", window_name, "windowfocus"],
+            ["xdotool", "search", "--name", xdotool_literal_pattern(window_name), "windowfocus"],
             capture_output=True,
             text=True,
             env=_display_env(),

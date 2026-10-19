@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from missy.tools.base import BaseTool, ToolPermissions, ToolResult
+from missy.tools.builtin._desktop_shared import xdotool_literal_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +385,15 @@ class X11ScreenshotTool(BaseTool):
                 )
             return ToolResult(success=False, output=None, error=f"scrot failed: {err}")
 
+        from missy.vision.blank_frame import blank_capture_error, uniform_image_file
+
+        if (blank := uniform_image_file(path)) is not None:
+            return ToolResult(
+                success=False,
+                output={"path": path, "blank_capture": True},
+                error=blank_capture_error(blank),
+            )
+
         redaction: dict[str, Any] = {
             "redaction_available": False,
             "redaction_applied": False,
@@ -464,7 +474,7 @@ class X11ClickTool(BaseTool):
         x, y = int(x), int(y)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -542,7 +552,7 @@ class X11TypeTool(BaseTool):
         delay_ms = int(delay_ms)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -606,7 +616,7 @@ class X11KeyTool(BaseTool):
             return ToolResult(success=False, output=None, error=window_error)
 
         if window_name:
-            focus_cmd = f"xdotool search --name {shlex.quote(window_name)} windowfocus"
+            focus_cmd = f"xdotool search --name {shlex.quote(xdotool_literal_pattern(window_name))} windowfocus"
             r = _run(focus_cmd)
             if r.returncode != 0:
                 logger.debug("xdotool windowfocus stderr: %s", r.stderr.strip())
@@ -829,6 +839,17 @@ class X11ReadScreenTool(BaseTool):
         err = self._take_screenshot(path, region)
         if err:
             return ToolResult(success=False, output=None, error=err)
+
+        # 1b. Refuse to interpret a blank/uniform frame: vision models
+        # hallucinate plausible UI content for an all-black capture.
+        from missy.vision.blank_frame import blank_capture_error, uniform_image_file
+
+        if (blank := uniform_image_file(path)) is not None:
+            return ToolResult(
+                success=False,
+                output={"screenshot_path": path, "blank_capture": True},
+                error=blank_capture_error(blank),
+            )
 
         # 2. Read and base64-encode.
         try:

@@ -203,3 +203,27 @@ def check_window_allowed(window_name: str) -> str | None:
         reason=f"{window_name!r} does not match any entry in desktop.window_allowlist.",
         risk="medium",
     )
+
+
+# ---------------------------------------------------------------------------
+# xdotool search patterns
+# ---------------------------------------------------------------------------
+
+#: Characters special in POSIX extended regular expressions.  libxdo's
+#: ``xdotool search --name/--class`` compiles its argument with glibc
+#: ``regcomp(REG_EXTENDED | REG_ICASE)``, so an unescaped ``(`` in a title
+#: such as ``"Report (Draft) - Writer"`` turns into a group and the literal
+#: title never matches.  ``]`` and ``}`` are literal outside a bracket /
+#: interval expression, and escaping a non-special character is undefined
+#: in POSIX, so only these are escaped.
+_ERE_SPECIAL = frozenset("\\.[()*+?{|^$")
+
+
+def xdotool_literal_pattern(text: str) -> str:
+    """Escape *text* so ``xdotool search --name/--class`` matches it literally.
+
+    The result is a case-insensitive *substring* match of the raw text
+    (xdotool's regex search is unanchored).  Allowlist checks
+    (:func:`check_window_allowed`) must keep using the raw name.
+    """
+    return "".join("\\" + ch if ch in _ERE_SPECIAL else ch for ch in text)

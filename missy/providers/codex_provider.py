@@ -137,9 +137,89 @@ def _http_body_excerpt(exc: Exception, limit: int = 240) -> str:
     return text[:limit] + ("..." if len(text) > limit else "")
 
 
+#: Upper bound on an upstream-declared usage-limit cooldown (ChatGPT plan
+#: limits can be weekly) so a garbage ``resets_at`` can't disable the
+#: provider indefinitely.
+_USAGE_LIMIT_MAX_SECONDS = 7 * 24 * 3600.0
+#: Cooldown used when upstream says ``usage_limit_reached`` but gives no
+#: reset time at all.
+_USAGE_LIMIT_DEFAULT_SECONDS = 300.0
+
+
+def _response_json(exc: Exception) -> dict[str, Any]:
+    """Best-effort JSON body of an HTTP error response (``{}`` on failure)."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return {}
+    try:
+        data = response.json()
+    except Exception:
+        try:
+            data = json.loads(getattr(response, "text", "") or "")
+        except Exception:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _finite_non_negative(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    if value != value or value in (float("inf"), float("-inf")) or value < 0:
+        return None
+    return value
+
+
+def _usage_limit_reset_seconds(exc: Exception, *, now: float | None = None) -> float | None:
+    """Seconds until a Codex ``usage_limit_reached`` 429 resets, else ``None``.
+
+    The ChatGPT backend answers an exhausted plan with HTTP 429 and
+    ``{"error": {"type": "usage_limit_reached", "resets_at": <epoch>,
+    "resets_in_seconds": <n>}}``. Prefers ``resets_in_seconds``, then
+    ``resets_at`` (wall clock), then the ``Retry-After`` header, then a
+    short default; always bounded by ``_USAGE_LIMIT_MAX_SECONDS``.
+    """
+    if _http_status(exc) != 429:
+        return None
+    error = _response_json(exc).get("error")
+    error = error if isinstance(error, dict) else {}
+    if "usage_limit_reached" not in (str(error.get("type", "")), str(error.get("code", ""))):
+        return None
+    seconds = _finite_non_negative(error.get("resets_in_seconds"))
+    if seconds is None:
+        resets_at = _finite_non_negative(error.get("resets_at"))
+        if resets_at is not None:
+            seconds = max(0.0, resets_at - (time.time() if now is None else now))
+    if seconds is None:
+        headers = getattr(getattr(exc, "response", None), "headers", None) or {}
+        raw = headers.get("retry-after")
+        if raw is not None:
+            seconds = parse_retry_after(raw, default=0.0, maximum=_USAGE_LIMIT_MAX_SECONDS)
+    if not seconds:
+        seconds = _USAGE_LIMIT_DEFAULT_SECONDS
+    return min(seconds, _USAGE_LIMIT_MAX_SECONDS)
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = int(round(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
 def _codex_request_error(exc: Exception) -> ProviderError:
     """Translate low-level transport errors into operator-facing ProviderError."""
     status_code = _http_status(exc)
+    reset_seconds = _usage_limit_reset_seconds(exc)
+    if reset_seconds is not None:
+        return ProviderError(
+            "openai-codex usage limit reached (HTTP 429); resets in "
+            f"{_format_duration(reset_seconds)}. Skipping openai-codex until then."
+        )
     if status_code in _AUTH_STATUS_CODES:
         status_label = "Unauthorized" if status_code == 401 else "Forbidden"
         detail = _http_body_excerpt(exc)
@@ -356,6 +436,11 @@ class CodexProvider(BaseProvider):
             weights=_rr_weights or None,
         )
         self._accounts: list[Account] = self._rr._live_accounts
+        # Upstream usage-limit cooldowns (time.monotonic() deadlines): one
+        # for the single default account, one per round-robin account index.
+        self._cooldown_lock = threading.Lock()
+        self._cooldown_until: float = 0.0
+        self._account_cooldown_until: dict[int, float] = {}
 
     @property
     def is_multi_account(self) -> bool:
@@ -451,6 +536,7 @@ class CodexProvider(BaseProvider):
         internally reuses the streaming machinery.
         """
         self._account_local.current = self._select_account()
+        self._raise_if_cooling_down()
         self._acquire_rate_limit(estimated_tokens=estimated_tokens)
 
     def _acquire_rate_limit(self, estimated_tokens: int = 0) -> None:
@@ -468,6 +554,55 @@ class CodexProvider(BaseProvider):
             return account.rate_limiter
         return self.rate_limiter
 
+    def cooldown_remaining(self) -> float:
+        """Seconds until a usage-limited Codex can serve again (``0.0`` = now).
+
+        With multi-account balancing the provider is only cooling down while
+        *every* account is; one account still within its plan keeps it
+        available.
+        """
+        now = time.monotonic()
+        with self._cooldown_lock:
+            if self._accounts:
+                return min(
+                    max(0.0, self._account_cooldown_until.get(a.index, 0.0) - now)
+                    for a in self._accounts
+                )
+            return max(0.0, self._cooldown_until - now)
+
+    def _enter_cooldown(self, seconds: float) -> None:
+        """Mark the active account (or the provider) unusable for *seconds*."""
+        until = time.monotonic() + seconds
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        with self._cooldown_lock:
+            if account is not None:
+                previous = self._account_cooldown_until.get(account.index, 0.0)
+                self._account_cooldown_until[account.index] = max(previous, until)
+            else:
+                self._cooldown_until = max(self._cooldown_until, until)
+        if account is not None:
+            self._rr.bench_until(account, until)
+        logger.warning(
+            "openai-codex%s usage limit reached; skipping it for %s",
+            f" account {account.index}" if account is not None else "",
+            _format_duration(seconds),
+        )
+
+    def _raise_if_cooling_down(self) -> None:
+        """Fail fast, without an HTTP call, while the selected credential is limited."""
+        account: _CodexAccount | None = getattr(self._account_local, "current", None)
+        now = time.monotonic()
+        with self._cooldown_lock:
+            if account is not None:
+                remaining = self._account_cooldown_until.get(account.index, 0.0) - now
+            else:
+                remaining = self._cooldown_until - now
+        if remaining > 0:
+            raise ProviderError(
+                "openai-codex usage limit reached (HTTP 429); resets in "
+                f"{_format_duration(remaining)}. Skipping openai-codex until then."
+            )
+
     def _note_rate_limit_response(self, exc: Exception) -> None:
         """Feed a 429 response's Retry-After back into the active rate limiter.
 
@@ -480,11 +615,25 @@ class CodexProvider(BaseProvider):
         """
         if _http_status(exc) != 429:
             return
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", {}) or {}
+        # A usage limit (or any Retry-After longer than this provider would
+        # ever block for) won't clear by sleeping and retrying: record a
+        # cooldown so selection skips straight to a fallback until reset,
+        # instead of sleeping max_wait_seconds on every turn first.
+        cooldown = _usage_limit_reset_seconds(exc)
+        if cooldown is None:
+            long_wait = parse_retry_after(
+                headers.get("retry-after"), default=0.0, maximum=_USAGE_LIMIT_MAX_SECONDS
+            )
+            if long_wait > self._max_wait_seconds:
+                cooldown = long_wait
+        if cooldown is not None:
+            self._enter_cooldown(cooldown)
+            return
         limiter = self._current_rate_limiter()
         if limiter is None:
             return
-        response = getattr(exc, "response", None)
-        headers = getattr(response, "headers", {}) or {}
         retry_after = parse_retry_after(headers.get("retry-after"))
         limiter.on_rate_limit_response(retry_after)
 
@@ -921,6 +1070,8 @@ class CodexProvider(BaseProvider):
         account before it's fully signed in shouldn't make the whole
         provider report unavailable.
         """
+        if self.cooldown_remaining() > 0:
+            return False
         try:
             if self._accounts:
                 return any(_load_oauth_token(account=account.api_key) for account in self._accounts)
