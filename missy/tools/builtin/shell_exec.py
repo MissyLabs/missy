@@ -287,7 +287,20 @@ class ShellExecTool(BaseTool):
                 # Mount the host tree read/write, then overlay each protected
                 # file/directory (or nearest existing parent for a not-yet-
                 # created key) read-only in the child mount namespace.
-                argv = [bwrap, "--die-with-parent", "--bind", "/", "/"]
+                # ``--bind / /`` alone leaves /dev mounted nodev inside the
+                # namespace, so even ``2>/dev/null`` fails with EACCES
+                # (validation 2026-10-19 SH-003: pytest could not open
+                # /dev/null). Re-bind the host /dev with device access.
+                argv = [
+                    bwrap,
+                    "--die-with-parent",
+                    "--bind",
+                    "/",
+                    "/",
+                    "--dev-bind",
+                    "/dev",
+                    "/dev",
+                ]
                 for path in sorted(read_only_mounts, key=lambda item: len(item.parts)):
                     argv.extend(["--ro-bind", str(path), str(path)])
                 if cwd:

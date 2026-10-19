@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -352,6 +353,29 @@ def test_shell_subprocess_cannot_overwrite_operator_protected_file(tmp_path: Pat
             )
         )
     assert result.success is False
+    assert protected.read_text() == "safe"
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="bubblewrap not installed")
+def test_protected_path_shell_can_still_use_dev_null(tmp_path: Path) -> None:
+    # Validation 2026-10-19 SH-003: under ``bwrap --bind / /`` /dev was nodev,
+    # so ``2>/dev/null`` and pytest's /dev/null open failed with EACCES.
+    protected = tmp_path / "config.yaml"
+    protected.write_text("safe")
+    fake_engine = SimpleNamespace(
+        filesystem=SimpleNamespace(protected_write_paths=(str(protected),))
+    )
+    with patch("missy.policy.engine.get_policy_engine", return_value=fake_engine):
+        result = ShellExecTool().execute(
+            command=(
+                "echo discarded > /dev/null && "
+                "python3 -c \"import os; os.close(os.open('/dev/null', os.O_RDWR)); print('ok')\" && "
+                f"(echo owned > {protected} 2>/dev/null || echo blocked)"
+            )
+        )
+    assert result.success is True, result.error
+    assert "ok" in result.output
+    assert "blocked" in result.output
     assert protected.read_text() == "safe"
 
 
