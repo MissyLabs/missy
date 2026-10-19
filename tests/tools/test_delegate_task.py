@@ -190,7 +190,10 @@ class TestAdvancedOrchestration:
         assert "Success criteria: list exploitable gaps" in prompt
         assert "Suggested tools: file_read" in prompt
 
-    def test_explicit_agents_forward_independent_providers(self, tool):
+    def test_explicit_agents_forward_independent_providers(self, tool, monkeypatch):
+        registry = MagicMock()
+        registry.list_providers.return_value = ["acpx", "openai"]
+        monkeypatch.setattr("missy.providers.registry.get_registry", lambda: registry)
         runtime = MagicMock()
         runtime.run.return_value = "ok"
 
