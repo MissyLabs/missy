@@ -39,6 +39,44 @@ def current_tool_context() -> tuple[str, str]:
     return _TOOL_CALL_CONTEXT.get()
 
 
+#: ``time.monotonic()`` instant by which the tool call in progress must
+#: finish, or ``None`` when unbounded. The agent runtime sets it from the
+#: turn's remaining ``max_turn_seconds`` budget so long-running tools (e.g.
+#: ComfyUI polling) can stop and clean up before the runtime abandons them.
+_TOOL_DEADLINE: ContextVar[float | None] = ContextVar("missy_tool_deadline", default=None)
+
+
+def current_tool_deadline() -> float | None:
+    """Return the monotonic deadline of the tool call in progress, if any."""
+    return _TOOL_DEADLINE.get()
+
+
+def remaining_tool_seconds() -> float | None:
+    """Return seconds left before the current tool deadline, or ``None``.
+
+    The result is never negative; ``0.0`` means the deadline has passed.
+    """
+    import time
+
+    deadline = _TOOL_DEADLINE.get()
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
+def bound_timeout_to_deadline(timeout: float, minimum: float = 1.0) -> float:
+    """Clamp a tool's own *timeout* to the remaining tool deadline.
+
+    Returns *timeout* unchanged when no deadline is set; otherwise the
+    smaller of the two, floored at *minimum* so callers never pass a
+    zero/negative timeout to an HTTP client.
+    """
+    remaining = remaining_tool_seconds()
+    if remaining is None:
+        return timeout
+    return max(minimum, min(float(timeout), remaining))
+
+
 @dataclass
 class ToolPermissions:
     """Declares the permissions a tool requires to operate.

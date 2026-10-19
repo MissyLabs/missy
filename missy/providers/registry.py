@@ -24,6 +24,7 @@ import copy
 import logging
 import threading
 import time
+from typing import Any
 from urllib.parse import urlparse
 
 from missy.config.settings import MissyConfig, ProviderConfig
@@ -48,6 +49,24 @@ _PROVIDER_CLASSES: dict[str, type[BaseProvider]] = {
     "openai-codex": CodexProvider,
     "ollama": OllamaProvider,
 }
+
+
+def _in_cooldown(provider: Any) -> bool:
+    """Return ``True`` while *provider* reports a positive upstream cooldown.
+
+    See :meth:`~missy.providers.base.BaseProvider.cooldown_remaining`. Checked
+    on every selection (not cached like availability probes) so a provider
+    that just hit e.g. a usage limit is skipped immediately.
+    """
+    method = getattr(provider, "cooldown_remaining", None)
+    if not callable(method):
+        return False
+    try:
+        remaining = method()
+    except Exception:
+        logger.debug("cooldown_remaining() failed for %r", provider, exc_info=True)
+        return False
+    return isinstance(remaining, (int, float)) and not isinstance(remaining, bool) and remaining > 0
 
 
 class ProviderRegistry:
@@ -447,12 +466,14 @@ class ProviderRegistry:
             remaining = start + budget - time.monotonic()
             if remaining > 0:
                 event.wait(remaining)
+        cooling = {name for name, provider in snapshot if _in_cooldown(provider)}
         now = time.monotonic()
         with self._lock:
             return [
                 name
                 for name, _provider in snapshot
-                if (cached := self._availability_cache.get(name)) is not None
+                if name not in cooling
+                and (cached := self._availability_cache.get(name)) is not None
                 and now - cached[1] <= self.AVAILABILITY_CACHE_SECONDS
                 and cached[0]
             ]

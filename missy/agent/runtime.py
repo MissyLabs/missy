@@ -212,6 +212,21 @@ def _failed_tool_response(errors: list[str]) -> str:
     )
 
 
+def _with_guard_notice(notice: str, text: str) -> str:
+    """Prepend an exhausted guard's *notice* to the model's *text* (ADR-0003)."""
+    return f"{notice}\n\n{text}" if text and text.strip() else notice
+
+
+def _unresolved_errors_notice(errors: list[str], text: str) -> str:
+    """Keep the model's *text* and prepend the tool errors it left unresolved."""
+    observed = "\n".join(f"- {str(error)[:500]}" for error in errors)
+    notice = (
+        "Note: these tool call(s) were still failing when I stopped, so the task "
+        f"may be incomplete:\n{observed}"
+    )
+    return f"{notice}\n\n{text}" if text.strip() else notice
+
+
 _PLACEHOLDER_RETRY_NUDGE = (
     "[System reminder]: Your previous response was not a real reply -- it was "
     "an internal placeholder artifact, not synthesized text. Produce an "
@@ -466,6 +481,50 @@ _MEMORY_RETRIEVAL_TOOL_NAMES = frozenset(
     {"memory_search", "memory_describe", "memory_expand", "context_shunt"}
 )
 
+# Repeated-call control. These tools only observe state, so calling one again
+# with the same (normalized) arguments cannot yield new information unless a
+# state-changing tool succeeded in between. Live validation saw 15-29 tool
+# calls per turn, including 27 near-identical memory_search calls.
+_READ_ONLY_REPEAT_TOOL_NAMES = frozenset(
+    {
+        "memory_search",
+        "memory_describe",
+        "memory_expand",
+        "rag_query",
+        "graph_query",
+        "web_fetch",
+        "file_read",
+        "list_files",
+    }
+)
+# Search-style tools additionally get a per-turn call cap regardless of
+# arguments: rephrasing the same query over and over is the loop pattern.
+_SEARCH_REPEAT_TOOL_NAMES = frozenset({"memory_search", "rag_query", "graph_query"})
+
+# Extra seconds a tool may run past the turn deadline before the runtime
+# abandons it. Tools that honor the deadline themselves (ComfyUI polling)
+# use this window to cancel their job and return their own error.
+_TOOL_DEADLINE_GRACE_SECONDS = 10.0
+
+
+def _repeat_call_fingerprint(name: str, arguments: dict) -> str:
+    """Fingerprint a call so trivially re-worded arguments compare equal.
+
+    Strings are case-folded with whitespace collapsed, so "Foo  bar" and
+    "foo bar" count as the same query.
+    """
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, str):
+            return " ".join(value.casefold().split())
+        if isinstance(value, dict):
+            return {str(k): normalize(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [normalize(v) for v in value]
+        return value
+
+    return _fingerprint_tc(name, normalize(arguments or {}))
+
 
 @dataclass
 class AgentConfig:
@@ -565,8 +624,18 @@ class AgentConfig:
     #: Shared cap on guard-forced retries per turn. Each guard also has its
     #: own small cap, but together they allowed ~30 retries (premortem #10).
     max_guard_retries: int = 4
-    #: Wall-clock limit for one turn's tool loop in seconds; 0 disables.
+    #: Wall-clock limit for one turn's tool loop in seconds; 0 disables. It
+    #: also bounds each tool call: a tool still running when the turn's time
+    #: runs out is abandoned with a timeout result.
     max_turn_seconds: float = 600.0
+    #: A read-only tool (memory/file/web reads) called with the same
+    #: normalized arguments more than this many times in a turn, with no
+    #: state-changing tool succeeding in between, is not run again; the model
+    #: is told to use the results it already has. 0 disables.
+    max_identical_tool_calls: int = 3
+    #: Per-turn cap on calls to each search tool (memory_search, rag_query,
+    #: graph_query) regardless of arguments. 0 disables.
+    max_search_calls_per_tool: int = 8
     temperature: float = 0.7
     max_sub_agents: int = 10
     max_concurrent_agents: int = 3
@@ -1385,6 +1454,11 @@ class AgentRuntime:
         if self._drift_detector is not None:
             self._drift_detector.register("system_prompt", system_prompt)
 
+        def _served_by() -> str:
+            # A mid-turn fallback updates the execution identity (see
+            # _record_effective_provider); report the provider that served.
+            return str(self._current_agent_execution().get("provider") or provider.name)
+
         # Attempt agentic tool loop; fall back to single-turn on any issue
         all_tool_names_used: list[str] = []
         try:
@@ -1410,7 +1484,7 @@ class AgentRuntime:
                 detail={
                     "error": str(exc),
                     "stage": "completion",
-                    "provider": provider.name,
+                    "provider": _served_by(),
                 },
             )
             # Break the over-refusal spiral at its source. A user message that
@@ -1456,7 +1530,7 @@ class AgentRuntime:
                 detail={
                     "error": str(exc),
                     "stage": "completion",
-                    "provider": provider.name,
+                    "provider": _served_by(),
                 },
             )
             if _HAS_MESSAGE_BUS:
@@ -1509,11 +1583,11 @@ class AgentRuntime:
         final_response = censor_response(final_response)
 
         # Record turn to request tracker for pattern detection.
-        self._track_request(user_input, sid, all_tool_names_used, provider.name)
+        self._track_request(user_input, sid, all_tool_names_used, _served_by())
 
         # Persist the assistant turn (the user turn was already saved
         # above, before the provider call was attempted).
-        self._save_turn(sid, "assistant", final_response, provider=provider.name, task_id=task_id)
+        self._save_turn(sid, "assistant", final_response, provider=_served_by(), task_id=task_id)
         self._record_patch_outcome(final_response)
 
         # Extract learnings from tool-augmented runs
@@ -1531,7 +1605,7 @@ class AgentRuntime:
             event_type="agent.run.complete",
             result="allow",
             detail={
-                "provider": provider.name,
+                "provider": _served_by(),
                 "tools_used": all_tool_names_used,
                 **cost_detail,
             },
@@ -1542,7 +1616,7 @@ class AgentRuntime:
                 {
                     "session_id": sid,
                     "task_id": task_id,
-                    "provider": provider.name,
+                    "provider": _served_by(),
                     "tools_used": all_tool_names_used,
                     "cost": cost_detail,
                     **agent_execution,
@@ -1552,7 +1626,7 @@ class AgentRuntime:
             "Agent %s completed task %s with provider %s and %d tool call(s)",
             agent_execution["agent_id"],
             task_id,
-            provider.name,
+            _served_by(),
             len(all_tool_names_used),
         )
 
@@ -1890,6 +1964,7 @@ class AgentRuntime:
 
         tool_names_used: list[str] = []
         successful_tool_names: list[str] = []
+        failed_tool_names: list[str] = []
         _user_visible_injection_tools: set[str] = set()
         _user_visible_scan_failure_tools: set[str] = set()
 
@@ -2074,6 +2149,90 @@ class AgentRuntime:
             )
             _loop_started = time.monotonic()
             _text_only_rounds = 0
+
+            def _tool_deadline() -> float | None:
+                """Monotonic instant a tool started now must finish by.
+
+                The turn's own max_turn_seconds, tightened by any deadline
+                inherited from a parent turn (a delegated sub-agent runs
+                inside its parent's delegate_task call).
+                """
+                from missy.tools.base import current_tool_deadline
+
+                deadline = (
+                    _loop_started + self.config.max_turn_seconds
+                    if self.config.max_turn_seconds
+                    else None
+                )
+                inherited = current_tool_deadline()
+                if inherited is not None:
+                    deadline = inherited if deadline is None else min(deadline, inherited)
+                return deadline
+
+            # Repeated-call control (see _READ_ONLY_REPEAT_TOOL_NAMES).
+            _repeat_fp_counts: dict[str, int] = {}
+            _search_call_counts: dict[str, int] = {}
+            _max_identical = int(getattr(self.config, "max_identical_tool_calls", 0) or 0)
+            _max_search = int(getattr(self.config, "max_search_calls_per_tool", 0) or 0)
+
+            def _repeat_limited_result(call: ToolCall) -> ToolResult | None:
+                """Return a corrective result instead of running a looping call."""
+                if call.name not in _READ_ONLY_REPEAT_TOOL_NAMES:
+                    return None
+                reason = ""
+                if _max_identical:
+                    fp = _repeat_call_fingerprint(call.name, call.arguments or {})
+                    if _repeat_fp_counts.get(fp, 0) >= _max_identical:
+                        reason = (
+                            f"it was already called {_repeat_fp_counts[fp]} times this turn "
+                            "with the same arguments and nothing has changed since"
+                        )
+                if (
+                    not reason
+                    and _max_search
+                    and call.name in _SEARCH_REPEAT_TOOL_NAMES
+                    and _search_call_counts.get(call.name, 0) >= _max_search
+                ):
+                    reason = (
+                        f"it already ran {_search_call_counts[call.name]} times this turn "
+                        "(the per-turn search limit)"
+                    )
+                if not reason:
+                    return None
+                with contextlib.suppress(Exception):
+                    self._emit_event(
+                        session_id=session_id,
+                        task_id=task_id,
+                        event_type="agent.tool.repeat_call_limited",
+                        result="warn",
+                        detail={"tool": call.name, "reason": reason},
+                    )
+                # Not an error: the earlier calls' results stand, and an
+                # error here would make the done-criteria check demand yet
+                # another retry of the very call being limited.
+                return ToolResult(
+                    tool_call_id=call.id,
+                    name=call.name,
+                    content=(
+                        f"[Repeat-call limit] {call.name} was not run again because "
+                        f"{reason}. Further calls would return no new information. "
+                        "Answer from the results you already have, say plainly what "
+                        "could not be found, or use a different tool."
+                    ),
+                    is_error=False,
+                )
+
+            def _record_tool_call_for_repeats(call: ToolCall, result: ToolResult) -> None:
+                if call.name in _READ_ONLY_REPEAT_TOOL_NAMES:
+                    fp = _repeat_call_fingerprint(call.name, call.arguments or {})
+                    _repeat_fp_counts[fp] = _repeat_fp_counts.get(fp, 0) + 1
+                    if call.name in _SEARCH_REPEAT_TOOL_NAMES:
+                        _search_call_counts[call.name] = _search_call_counts.get(call.name, 0) + 1
+                elif not result.is_error:
+                    # A state-changing tool succeeded: re-reading may now
+                    # legitimately return something new.
+                    _repeat_fp_counts.clear()
+
             _last_text_answer: str | None = None
 
             def _finish_with_last_answer(event_type: str, detail: dict) -> tuple[str, list[str]]:
@@ -2089,7 +2248,9 @@ class AgentRuntime:
                     with contextlib.suppress(Exception):
                         _cm.complete(_checkpoint_id)
                 _progress.on_complete(event_type)
-                answer = unverified_answer_notice(_last_text_answer or "")
+                answer = unverified_answer_notice(
+                    _last_text_answer or "", tool_names_used, successful_tool_names
+                )
                 return _with_prompt_injection_notice(answer), tool_names_used
 
             for iteration in range(_desktop_grace_limit):
@@ -2288,13 +2449,17 @@ class AgentRuntime:
                             },
                         )
                         tool_started = time.monotonic()
-                        tr = self._execute_tool(
-                            tc,
-                            session_id=session_id,
-                            task_id=task_id,
-                            allowed_tool_names=allowed_tool_names,
-                            _delegation_depth=_delegation_depth,
-                        )
+                        tr = _repeat_limited_result(tc)
+                        if tr is None:
+                            tr = self._execute_tool_with_deadline(
+                                tc,
+                                _tool_deadline(),
+                                session_id=session_id,
+                                task_id=task_id,
+                                allowed_tool_names=allowed_tool_names,
+                                _delegation_depth=_delegation_depth,
+                            )
+                            _record_tool_call_for_repeats(tc, tr)
                         tool_duration_ms = round((time.monotonic() - tool_started) * 1000, 1)
                         self._emit_event(
                             session_id=session_id,
@@ -2334,6 +2499,8 @@ class AgentRuntime:
                         tool_results.append(tr)
                         if not tr.is_error:
                             successful_tool_names.append(tc.name)
+                        else:
+                            failed_tool_names.append(tc.name)
 
                         # Preserve every calculator outcome for a deterministic
                         # final-response completeness check.  In a sequence of
@@ -3313,10 +3480,12 @@ class AgentRuntime:
                             result="deny",
                             detail={"missing_requirements": _missing_desktop_requests},
                         )
-                    final_text = (
-                        "I could not complete the requested desktop operation because the "
-                        "required current-turn desktop tools did not run. I cannot confirm "
-                        "the desktop task as complete."
+                    # ADR-0003: keep the model's answer, flag what is missing.
+                    final_text = _with_guard_notice(
+                        "Note: the desktop tools this request needs "
+                        f"({', '.join(_missing_desktop_requests)}) did not run in this turn, "
+                        "so I cannot confirm the desktop task as complete.",
+                        final_text,
                     )
 
                 # A low-level desktop mutation reports whether input was
@@ -3360,10 +3529,13 @@ class AgentRuntime:
                             result="deny",
                             detail={"unverified_action": _unverified_desktop_action},
                         )
-                    final_text = (
-                        "I sent the desktop action, but I could not verify that it affected "
-                        "the intended control or produced the requested UI state. I cannot "
-                        "confirm the desktop task as complete."
+                    # ADR-0003: keep the model's answer, flag what is unverified.
+                    final_text = _with_guard_notice(
+                        f"Note: I sent the desktop action ({_unverified_desktop_action}), but "
+                        "I could not verify that it affected the intended control or produced "
+                        "the requested UI state, so I cannot confirm the desktop task as "
+                        "complete.",
+                        final_text,
                     )
 
                 _unverified_filesystem_action = find_unverified_filesystem_action(
@@ -3441,7 +3613,9 @@ class AgentRuntime:
                         continue
                     # Keep the answer but flag it; a canned replacement threw
                     # away correct answers and was saved into session history.
-                    final_text = unverified_answer_notice(final_text)
+                    final_text = unverified_answer_notice(
+                        final_text, tool_names_used, successful_tool_names
+                    )
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
@@ -3500,7 +3674,7 @@ class AgentRuntime:
                         )
 
                 if is_action_request(_tool_request_input) and detect_promise_without_action(
-                    final_text, successful_tool_names
+                    final_text, successful_tool_names, failed_tool_names
                 ):
                     if _promise_retries < _MAX_PROMISE_RETRIES:
                         _promise_retries += 1
@@ -3521,7 +3695,9 @@ class AgentRuntime:
                                 detail={"response_excerpt": final_text[:200]},
                             )
                         continue
-                    final_text = unverified_answer_notice(final_text)
+                    final_text = unverified_answer_notice(
+                        final_text, tool_names_used, successful_tool_names
+                    )
                     with contextlib.suppress(Exception):
                         self._emit_event(
                             session_id=session_id,
@@ -3697,10 +3873,16 @@ class AgentRuntime:
             fallback_text = _strip_leaked_tool_call_narration(fallback.content or "")
             if fallback_text:
                 if _last_round_errors:
-                    fallback_text = _failed_tool_response(_last_round_errors)
+                    # Keep the synthesis: it reports earlier successes that a
+                    # failure-only reply would drop (X11-002: the typing
+                    # succeeded, but the reply named only the last focus
+                    # error). The notice makes the unresolved errors explicit.
+                    fallback_text = _unresolved_errors_notice(_last_round_errors, fallback_text)
                 elif detect_fabrication(
                     fallback_text, successful_tool_names
-                ) or detect_promise_without_action(fallback_text, successful_tool_names):
+                ) or detect_promise_without_action(
+                    fallback_text, successful_tool_names, failed_tool_names
+                ):
                     fallback_text = ""
                     with contextlib.suppress(Exception):
                         self._emit_event(
@@ -3710,6 +3892,8 @@ class AgentRuntime:
                             result="deny",
                             detail={"successful_tools": list(dict.fromkeys(successful_tool_names))},
                         )
+            elif _last_round_errors:
+                fallback_text = _failed_tool_response(_last_round_errors)
             if fallback_text:
                 with contextlib.suppress(Exception):
                     self._emit_event(
@@ -3740,7 +3924,12 @@ class AgentRuntime:
         if _cm is not None and _checkpoint_id is not None:
             with contextlib.suppress(Exception):
                 _cm.incomplete(_checkpoint_id)
-        return _with_prompt_injection_notice(_ITERATION_LIMIT_UNRESOLVED_RESPONSE), tool_names_used
+        unresolved = (
+            _failed_tool_response(_last_round_errors)
+            if _last_round_errors
+            else _ITERATION_LIMIT_UNRESOLVED_RESPONSE
+        )
+        return _with_prompt_injection_notice(unresolved), tool_names_used
 
     def _single_turn(
         self,
@@ -4237,6 +4426,113 @@ class AgentRuntime:
         except Exception:
             logger.debug("F13: prompt-patch proposal failed — skipping.", exc_info=True)
             return None
+
+    def _execute_tool_with_deadline(
+        self,
+        tool_call: ToolCall,
+        deadline: float | None,
+        *,
+        session_id: str = "",
+        task_id: str = "",
+        allowed_tool_names: set[str] | None = None,
+        _delegation_depth: int = 0,
+    ) -> ToolResult:
+        """Run :meth:`_execute_tool` without letting it outlive *deadline*.
+
+        *deadline* is a ``time.monotonic()`` instant (``None`` = unbounded).
+        The tool runs on a daemon worker thread that inherits this thread's
+        context variables, agent-execution identity and session, and sees
+        the deadline through :func:`missy.tools.base.current_tool_deadline`
+        so cooperative tools can stop and clean up on their own. If it is
+        still running :data:`_TOOL_DEADLINE_GRACE_SECONDS` after the
+        deadline, the call is abandoned: a timeout result is returned and
+        the worker is left to finish (or fail) in the background, since a
+        Python thread cannot be killed safely.
+        """
+        import contextvars
+
+        from missy.tools.base import _TOOL_DEADLINE
+
+        def _call() -> ToolResult:
+            return self._execute_tool(
+                tool_call,
+                session_id=session_id,
+                task_id=task_id,
+                allowed_tool_names=allowed_tool_names,
+                _delegation_depth=_delegation_depth,
+            )
+
+        if deadline is None:
+            return _call()
+
+        def _timeout_result(budget: float) -> ToolResult:
+            with contextlib.suppress(Exception):
+                self._emit_event(
+                    session_id=session_id,
+                    task_id=task_id,
+                    event_type="agent.tool.deadline_exceeded",
+                    result="error",
+                    detail={"tool": tool_call.name, "budget_seconds": round(budget, 1)},
+                )
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=(
+                    f"{tool_call.name}: did not finish within this turn's remaining time "
+                    f"budget ({max(0.0, budget):.0f}s, max_turn_seconds="
+                    f"{self.config.max_turn_seconds:g}). It was abandoned and may still "
+                    "complete in the background, but its result is not available. Do not "
+                    "call it again in this turn; report the timeout to the user."
+                ),
+                is_error=True,
+            )
+
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            return _timeout_result(budget)
+
+        execution_local = getattr(self, "_agent_execution_local", None)
+        execution = getattr(execution_local, "value", None) if execution_local else None
+        execution = dict(execution) if isinstance(execution, dict) else None
+        session_mgr = getattr(self, "_session_mgr", None)
+        session = None
+        with contextlib.suppress(Exception):
+            session = session_mgr.get_current_session() if session_mgr is not None else None
+        context = contextvars.copy_context()
+        outcome: dict[str, Any] = {}
+        done = threading.Event()
+
+        def _worker() -> None:
+            try:
+                if execution is not None and execution_local is not None:
+                    execution_local.value = execution
+                if session is not None:
+                    with contextlib.suppress(Exception):
+                        session_mgr._local.session = session
+
+                def _bounded() -> ToolResult:
+                    parent = _TOOL_DEADLINE.get()
+                    _TOOL_DEADLINE.set(deadline if parent is None else min(parent, deadline))
+                    return _call()
+
+                outcome["result"] = context.run(_bounded)
+            except BaseException as exc:  # re-raised on the calling thread
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(target=_worker, name=f"missy-tool-{tool_call.name}", daemon=True)
+        worker.start()
+        if not done.wait(budget + _TOOL_DEADLINE_GRACE_SECONDS):
+            logger.warning(
+                "Tool %r exceeded the turn deadline (%.1fs budget); abandoning it.",
+                tool_call.name,
+                budget,
+            )
+            return _timeout_result(budget)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def _execute_tool(
         self,
@@ -6477,6 +6773,23 @@ class AgentRuntime:
                 self._checkpoint_manager_instance = cached
             return cached
 
+    def _record_effective_provider(self, provider: Any) -> None:
+        """Make later audit events name the provider that actually served.
+
+        ``provider`` in the thread's agent-execution identity is merged into
+        every ``agent.*`` event. After a mid-turn fallback it must name the
+        fallback, not the provider that failed; ``requested_provider`` keeps
+        what was asked for.
+        """
+        local = getattr(self, "_agent_execution_local", None)
+        value = getattr(local, "value", None) if local is not None else None
+        name = getattr(provider, "name", None)
+        if not isinstance(value, dict) or not isinstance(name, str) or not name:
+            return
+        if value.get("provider") != name:
+            value["provider"] = name
+            value["effective_provider"] = name
+
     def _call_provider_with_fallback(
         self,
         provider: Any,
@@ -6740,7 +7053,9 @@ class AgentRuntime:
                         },
                     )
                     try:
-                        return _attempt(fallback), fallback
+                        result = _attempt(fallback)
+                        self._record_effective_provider(fallback)
+                        return result, fallback
                     except (ProviderError, MissyError) as exc3:
                         last_exc = exc3
                         self._emit_event(

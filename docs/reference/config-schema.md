@@ -121,6 +121,8 @@ voice:
 
 discord:
   # See missy/channels/discord/config.py for full schema
+  max_concurrent_conversations: 3   # channels/threads processed at once per
+                                    # account (1-16); each channel stays serial
 
 # Web TUI / REST API — auto-started by `missy gateway start` (read from raw
 # YAML, not a dataclass). api_key defaults to the persisted key at

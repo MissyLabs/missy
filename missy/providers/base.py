@@ -157,6 +157,20 @@ class BaseProvider(ABC):
         """
         ...
 
+    def cooldown_remaining(self) -> float:
+        """Seconds until this provider may be called again, ``0.0`` if now.
+
+        A provider that learns from upstream that it cannot serve requests
+        for a known period (e.g. openai-codex's ``usage_limit_reached`` 429
+        with ``resets_in_seconds``) returns the remaining time here.
+        :class:`~missy.providers.registry.ProviderRegistry` treats a positive
+        value as unavailable regardless of any cached availability probe, so
+        selection (``get_available``/``select_weighted``) and the agent's
+        fallback go straight to another provider instead of retrying this
+        one on every turn until the reset.
+        """
+        return 0.0
+
     def get_tool_schema(self, tools: list) -> list:
         """Convert BaseTool instances to provider-native tool schema format.
 

@@ -295,7 +295,7 @@ class TestVisionToolIntegration:
         from missy.tools.builtin.vision_tools import VisionAnalyzeTool, VisionSceneMemoryTool
 
         frame = MagicMock()
-        frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        frame.image = np.tile(np.arange(100, dtype=np.uint8)[:, None, None], (1, 100, 3))
         mock_acquire.return_value = frame
         mock_analyze.return_value = ("Edge pieces are grouped in the top-left.", "anthropic")
 

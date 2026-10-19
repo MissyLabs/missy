@@ -522,6 +522,17 @@ def _discord_safe_context_text(text: str) -> str:
     return text
 
 
+def _discord_conversation_key(msg: Any) -> str:
+    """Return the dispatch serialization key for an inbound Discord message.
+
+    One key per Discord channel (a thread is its own channel): messages in
+    the same channel are processed one at a time in order, different
+    channels concurrently (see ``missy.channels.discord.dispatch``).
+    """
+    meta = getattr(msg, "metadata", None) or {}
+    return str(meta.get("discord_channel_id") or meta.get("discord_thread_id") or "")
+
+
 def _discord_remember_speaker(
     known_users: dict[str, dict[str, str]], channel_id: str, user_id: str, display_name: str
 ) -> None:
@@ -3785,252 +3796,244 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
             # (module-level, independently tested) for the actual logic.
             _discord_channel_activity: dict[str, deque] = {}
 
-            async def _process_channel(ch: DiscordChannel) -> None:
-                """Drain the channel queue and run the agent for each message."""
-                while not stop_event:
+            async def _handle_discord_message(ch: DiscordChannel, msg: Any) -> None:
+                """Run the agent for one inbound Discord message and send the reply."""
+                author_meta = msg.metadata.get("discord_author", {}) or {}
+                author_id = str(author_meta.get("id", "") or "")
+                author_display = str(
+                    author_meta.get("global_name") or author_meta.get("username") or "someone"
+                )
+                safe_author_display = _discord_safe_context_text(author_display)
+                channel_id = msg.metadata.get("discord_channel_id", "")
+                guild_id = msg.metadata.get("discord_guild_id", "")
+                from missy.channels.discord.session_scope import discord_session_id
+
+                session_id = discord_session_id(author_id, guild_id, channel_id)
+
+                if author_id:
+                    _discord_remember_speaker(
+                        _discord_known_users, channel_id, author_id, safe_author_display
+                    )
+
+                # Inject channel context so the agent knows which Discord
+                # channel it is responding in (for discord_upload_file etc.),
+                # who is talking to it, and real user IDs it can use to
+                # actually tag/mention/ping someone -- plain "@name" text
+                # never pings; only the literal <@USER_ID> syntax does.
+                mention_help = (
+                    f"This message is from {safe_author_display} (Discord user ID: {author_id}). "
+                    "To mention/tag/ping a user in your reply, use the literal syntax "
+                    "<@USER_ID> with their real numeric Discord ID -- writing @name as "
+                    "plain text will NOT ping anyone. "
+                    + _discord_known_users_context(_discord_known_users, channel_id, author_id)
+                    + (
+                        f"To find the ID of someone not listed above, call "
+                        f"discord_lookup_user(guild_id='{guild_id}', query=<their name>) "
+                        "before replying."
+                        if guild_id
+                        else ""
+                    )
+                )
+                # Computed before this message is recorded below, so the
+                # current message never appears inside its own "recent
+                # activity" context.
+                channel_activity_ctx = _discord_channel_activity_context(
+                    _discord_channel_activity, channel_id
+                )
+                discord_ctx = (
+                    f"[Discord channel {channel_id}] "
+                    f"Use discord_upload_file with channel_id='{channel_id}' "
+                    f"to share files here. "
+                    f"{mention_help}\n"
+                    f"{channel_activity_ctx}"
+                )
+                enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
+
+                _discord_remember_channel_message(
+                    _discord_channel_activity, channel_id, author_display, msg.content
+                )
+
+                # DiscordChannel._handle_message() already policy-validated any
+                # image/text/zip attachments and attached their metadata to
+                # msg.metadata -- download them now and make the agent
+                # actually aware of them (a local path + vision_capture
+                # instruction for images, sanitized inline content for text,
+                # a safely-extracted directory listing for zip archives).
+                # Previously this metadata was built and forwarded but never
+                # consumed anywhere, so an attached image or spec file was
+                # invisible to the agent regardless of the policy gate.
+                image_atts = msg.metadata.get("discord_image_attachments") or []
+                text_atts = msg.metadata.get("discord_text_attachments") or []
+                zip_atts = msg.metadata.get("discord_zip_attachments") or []
+                if image_atts or text_atts or zip_atts:
+                    from missy.channels.discord.attachment_context import (
+                        build_inbound_attachment_context,
+                    )
+
                     try:
-                        msg = await asyncio.wait_for(ch._queue.get(), timeout=1.0)
-                    except TimeoutError:
-                        continue
+                        attachment_context = await build_inbound_attachment_context(
+                            ch._rest,  # noqa: SLF001
+                            image_atts,
+                            text_atts,
+                            zip_atts,
+                            message_id=msg.metadata.get("discord_message_id", ""),
+                        )
                     except Exception:
-                        logging.getLogger(__name__).debug("Discord queue error", exc_info=True)
-                        break
+                        logger.exception("Failed to build inbound attachment context")
+                        attachment_context = ""
+                    if attachment_context:
+                        enriched_prompt = f"{enriched_prompt}\n\n{attachment_context}"
 
-                    author_meta = msg.metadata.get("discord_author", {}) or {}
-                    author_id = str(author_meta.get("id", "") or "")
-                    author_display = str(
-                        author_meta.get("global_name") or author_meta.get("username") or "someone"
+                # Keep "Missy is typing..." visible for the entire agent run.
+                # Discord's typing indicator expires after ~10s, so refresh it.
+                typing_stop = asyncio.Event()
+
+                async def _typing_keepalive(
+                    cid: str = channel_id,
+                    stop: asyncio.Event = typing_stop,
+                ) -> None:
+                    while not stop.is_set():
+                        with contextlib.suppress(Exception):
+                            await asyncio.to_thread(ch._rest.trigger_typing, cid)  # noqa: SLF001
+                        with contextlib.suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(stop.wait(), timeout=7.0)
+
+                # Snapshot existing evolution proposal IDs before the
+                # agent runs, so a genuine new proposal created this
+                # turn can be detected reliably afterward (see below)
+                # instead of regex-matching Missy's own final reply
+                # text for a literal "Evolution proposed:" string --
+                # the model paraphrases its own tool-call summaries
+                # (e.g. "Proposed a calculator hardening evolution:"),
+                # so that literal string is not guaranteed to survive
+                # into the user-facing response at all.
+                _existing_proposal_ids: set[str] = set()
+                try:
+                    from missy.agent.code_evolution import CodeEvolutionManager
+
+                    _existing_proposal_ids = {p.id for p in CodeEvolutionManager().list_all()}
+                except Exception:
+                    logger.debug("Could not snapshot existing evolution proposals", exc_info=True)
+
+                typing_task = asyncio.create_task(_typing_keepalive())
+                _provider_content_policy_refusal = False
+                try:
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            _discord_agent.run,
+                            enriched_prompt,
+                            session_id,
+                            _explicit_tool_request_input=msg.content,
+                            _capability_mode=msg.metadata.get("discord_capability_mode", "discord"),
+                            _request_context={
+                                "author": safe_author_display,
+                                "author_id": author_id,
+                                "channel": channel_id,
+                            },
+                        ),
                     )
-                    safe_author_display = _discord_safe_context_text(author_display)
-                    channel_id = msg.metadata.get("discord_channel_id", "")
-                    guild_id = msg.metadata.get("discord_guild_id", "")
-                    from missy.channels.discord.session_scope import discord_session_id
+                except ProviderError as exc:
+                    # Never forward the raw provider exception to Discord --
+                    # it can name the backend, embed a third party's
+                    # marketing URL (e.g. openai-codex's cyber-program
+                    # link), or leak internal error detail. Log the full
+                    # error for operators; show the user a clean message.
+                    from missy.providers.health import (
+                        is_content_policy_error,
+                        user_facing_provider_error,
+                    )
 
-                    session_id = discord_session_id(author_id, guild_id, channel_id)
+                    logger.warning("Discord provider error: %s", exc)
+                    _provider_content_policy_refusal = is_content_policy_error(exc)
+                    if _provider_content_policy_refusal:
+                        cleared = _discord_clear_channel_activity(
+                            _discord_channel_activity, channel_id
+                        )
+                        logger.warning(
+                            "Cleared %d cached Discord channel-activity messages "
+                            "after content-policy refusal in channel %s",
+                            cleared,
+                            channel_id,
+                        )
+                    response = user_facing_provider_error(exc, user_input=msg.content)
+                except Exception as exc:
+                    logger.exception("Discord agent error: %s", exc)
+                    response = "Sorry, an unexpected error occurred. Please try again."
+                finally:
+                    typing_stop.set()
+                    with contextlib.suppress(Exception):
+                        await typing_task
 
-                    if author_id:
-                        _discord_remember_speaker(
-                            _discord_known_users, channel_id, author_id, safe_author_display
+                try:
+                    # Never use Discord reply; for bots, tag them with a mention.
+                    mention_ids: list[str] | None = None
+                    if msg.metadata.get("discord_author_is_bot"):
+                        response = _prefix_author_mention(response, msg.sender)
+                        mention_ids = [msg.sender]
+                    # General mention support: Discord silently drops any
+                    # <@ID> in the outbound text unless that exact ID is
+                    # allowlisted in allowed_mentions.users (send_message's
+                    # default is parse=[] -- deliberate, so a response can
+                    # never accidentally ping @everyone/@here or an
+                    # arbitrary ID beyond what actually appears in the
+                    # model's own reply text). Extracting and allowlisting
+                    # every real <@ID> the model wrote is what makes a
+                    # user-requested tag ("tell @bob...") actually ping
+                    # bob instead of rendering as dead text.
+                    response_mention_ids = _discord_extract_mention_ids(response)
+                    if response_mention_ids:
+                        mention_ids = list({*(mention_ids or []), *response_mention_ids})
+                    sent_id = await ch.send_with_retry(
+                        channel_id,
+                        response,
+                        mention_user_ids=mention_ids,
+                    )
+                    if sent_id:
+                        _discord_remember_bot_response(
+                            _discord_channel_activity,
+                            channel_id,
+                            response,
+                            content_policy_refusal=_provider_content_policy_refusal,
                         )
 
-                    # Inject channel context so the agent knows which Discord
-                    # channel it is responding in (for discord_upload_file etc.),
-                    # who is talking to it, and real user IDs it can use to
-                    # actually tag/mention/ping someone -- plain "@name" text
-                    # never pings; only the literal <@USER_ID> syntax does.
-                    mention_help = (
-                        f"This message is from {safe_author_display} (Discord user ID: {author_id}). "
-                        "To mention/tag/ping a user in your reply, use the literal syntax "
-                        "<@USER_ID> with their real numeric Discord ID -- writing @name as "
-                        "plain text will NOT ping anyone. "
-                        + _discord_known_users_context(_discord_known_users, channel_id, author_id)
-                        + (
-                            f"To find the ID of someone not listed above, call "
-                            f"discord_lookup_user(guild_id='{guild_id}', query=<their name>) "
-                            "before replying."
-                            if guild_id
-                            else ""
-                        )
-                    )
-                    # Computed before this message is recorded below, so the
-                    # current message never appears inside its own "recent
-                    # activity" context.
-                    channel_activity_ctx = _discord_channel_activity_context(
-                        _discord_channel_activity, channel_id
-                    )
-                    discord_ctx = (
-                        f"[Discord channel {channel_id}] "
-                        f"Use discord_upload_file with channel_id='{channel_id}' "
-                        f"to share files here. "
-                        f"{mention_help}\n"
-                        f"{channel_activity_ctx}"
-                    )
-                    enriched_prompt = f"{discord_ctx}\n\n{msg.content}"
-
-                    _discord_remember_channel_message(
-                        _discord_channel_activity, channel_id, author_display, msg.content
-                    )
-
-                    # DiscordChannel._handle_message() already policy-validated any
-                    # image/text/zip attachments and attached their metadata to
-                    # msg.metadata -- download them now and make the agent
-                    # actually aware of them (a local path + vision_capture
-                    # instruction for images, sanitized inline content for text,
-                    # a safely-extracted directory listing for zip archives).
-                    # Previously this metadata was built and forwarded but never
-                    # consumed anywhere, so an attached image or spec file was
-                    # invisible to the agent regardless of the policy gate.
-                    image_atts = msg.metadata.get("discord_image_attachments") or []
-                    text_atts = msg.metadata.get("discord_text_attachments") or []
-                    zip_atts = msg.metadata.get("discord_zip_attachments") or []
-                    if image_atts or text_atts or zip_atts:
-                        from missy.channels.discord.attachment_context import (
-                            build_inbound_attachment_context,
-                        )
-
+                    # Detect evolution proposals and add reaction buttons.
+                    # Ground-truth comparison against the pre-run
+                    # snapshot above, not text-matching Missy's own
+                    # (unreliable, paraphrased) reply -- a proposal
+                    # created via code_evolve is real, durable state
+                    # in CodeEvolutionManager regardless of how the
+                    # model chose to describe it to the user.
+                    if sent_id:
                         try:
-                            attachment_context = await build_inbound_attachment_context(
-                                ch._rest,  # noqa: SLF001
-                                image_atts,
-                                text_atts,
-                                zip_atts,
-                                message_id=msg.metadata.get("discord_message_id", ""),
+                            from missy.agent.code_evolution import (
+                                CodeEvolutionManager,
+                                EvolutionStatus,
                             )
+
+                            for _prop in CodeEvolutionManager().list_all():
+                                if (
+                                    _prop.id not in _existing_proposal_ids
+                                    and _prop.status == EvolutionStatus.PROPOSED
+                                ):
+                                    ch.add_evolution_reactions(channel_id, sent_id, _prop.id)
                         except Exception:
-                            logger.exception("Failed to build inbound attachment context")
-                            attachment_context = ""
-                        if attachment_context:
-                            enriched_prompt = f"{enriched_prompt}\n\n{attachment_context}"
-
-                    # Keep "Missy is typing..." visible for the entire agent run.
-                    # Discord's typing indicator expires after ~10s, so refresh it.
-                    typing_stop = asyncio.Event()
-
-                    async def _typing_keepalive(
-                        cid: str = channel_id,
-                        stop: asyncio.Event = typing_stop,
-                    ) -> None:
-                        while not stop.is_set():
-                            with contextlib.suppress(Exception):
-                                await asyncio.to_thread(ch._rest.trigger_typing, cid)  # noqa: SLF001
-                            with contextlib.suppress(asyncio.TimeoutError):
-                                await asyncio.wait_for(stop.wait(), timeout=7.0)
-
-                    # Snapshot existing evolution proposal IDs before the
-                    # agent runs, so a genuine new proposal created this
-                    # turn can be detected reliably afterward (see below)
-                    # instead of regex-matching Missy's own final reply
-                    # text for a literal "Evolution proposed:" string --
-                    # the model paraphrases its own tool-call summaries
-                    # (e.g. "Proposed a calculator hardening evolution:"),
-                    # so that literal string is not guaranteed to survive
-                    # into the user-facing response at all.
-                    _existing_proposal_ids: set[str] = set()
-                    try:
-                        from missy.agent.code_evolution import CodeEvolutionManager
-
-                        _existing_proposal_ids = {p.id for p in CodeEvolutionManager().list_all()}
-                    except Exception:
-                        logger.debug(
-                            "Could not snapshot existing evolution proposals", exc_info=True
-                        )
-
-                    typing_task = asyncio.create_task(_typing_keepalive())
-                    _provider_content_policy_refusal = False
-                    try:
-                        loop = asyncio.get_running_loop()
-                        response = await loop.run_in_executor(
+                            logger.debug("Evolution proposal detection failed", exc_info=True)
+                except Exception as exc:
+                    logger.error(
+                        "Discord send failed after retries (channel=%s): %s",
+                        channel_id,
+                        exc,
+                    )
+                    # Inform the agent that its response was not delivered.
+                    # Off the event loop: a synchronous agent run here would
+                    # stall every other conversation's dispatch.
+                    with contextlib.suppress(Exception):
+                        await asyncio.get_running_loop().run_in_executor(
                             None,
                             functools.partial(
                                 _discord_agent.run,
-                                enriched_prompt,
-                                session_id,
-                                _explicit_tool_request_input=msg.content,
-                                _capability_mode=msg.metadata.get(
-                                    "discord_capability_mode", "discord"
-                                ),
-                                _request_context={
-                                    "author": safe_author_display,
-                                    "author_id": author_id,
-                                    "channel": channel_id,
-                                },
-                            ),
-                        )
-                    except ProviderError as exc:
-                        # Never forward the raw provider exception to Discord --
-                        # it can name the backend, embed a third party's
-                        # marketing URL (e.g. openai-codex's cyber-program
-                        # link), or leak internal error detail. Log the full
-                        # error for operators; show the user a clean message.
-                        from missy.providers.health import (
-                            is_content_policy_error,
-                            user_facing_provider_error,
-                        )
-
-                        logger.warning("Discord provider error: %s", exc)
-                        _provider_content_policy_refusal = is_content_policy_error(exc)
-                        if _provider_content_policy_refusal:
-                            cleared = _discord_clear_channel_activity(
-                                _discord_channel_activity, channel_id
-                            )
-                            logger.warning(
-                                "Cleared %d cached Discord channel-activity messages "
-                                "after content-policy refusal in channel %s",
-                                cleared,
-                                channel_id,
-                            )
-                        response = user_facing_provider_error(exc, user_input=msg.content)
-                    except Exception as exc:
-                        logger.exception("Discord agent error: %s", exc)
-                        response = "Sorry, an unexpected error occurred. Please try again."
-                    finally:
-                        typing_stop.set()
-                        with contextlib.suppress(Exception):
-                            await typing_task
-
-                    try:
-                        # Never use Discord reply; for bots, tag them with a mention.
-                        mention_ids: list[str] | None = None
-                        if msg.metadata.get("discord_author_is_bot"):
-                            response = _prefix_author_mention(response, msg.sender)
-                            mention_ids = [msg.sender]
-                        # General mention support: Discord silently drops any
-                        # <@ID> in the outbound text unless that exact ID is
-                        # allowlisted in allowed_mentions.users (send_message's
-                        # default is parse=[] -- deliberate, so a response can
-                        # never accidentally ping @everyone/@here or an
-                        # arbitrary ID beyond what actually appears in the
-                        # model's own reply text). Extracting and allowlisting
-                        # every real <@ID> the model wrote is what makes a
-                        # user-requested tag ("tell @bob...") actually ping
-                        # bob instead of rendering as dead text.
-                        response_mention_ids = _discord_extract_mention_ids(response)
-                        if response_mention_ids:
-                            mention_ids = list({*(mention_ids or []), *response_mention_ids})
-                        sent_id = await ch.send_with_retry(
-                            channel_id,
-                            response,
-                            mention_user_ids=mention_ids,
-                        )
-                        if sent_id:
-                            _discord_remember_bot_response(
-                                _discord_channel_activity,
-                                channel_id,
-                                response,
-                                content_policy_refusal=_provider_content_policy_refusal,
-                            )
-
-                        # Detect evolution proposals and add reaction buttons.
-                        # Ground-truth comparison against the pre-run
-                        # snapshot above, not text-matching Missy's own
-                        # (unreliable, paraphrased) reply -- a proposal
-                        # created via code_evolve is real, durable state
-                        # in CodeEvolutionManager regardless of how the
-                        # model chose to describe it to the user.
-                        if sent_id:
-                            try:
-                                from missy.agent.code_evolution import (
-                                    CodeEvolutionManager,
-                                    EvolutionStatus,
-                                )
-
-                                for _prop in CodeEvolutionManager().list_all():
-                                    if (
-                                        _prop.id not in _existing_proposal_ids
-                                        and _prop.status == EvolutionStatus.PROPOSED
-                                    ):
-                                        ch.add_evolution_reactions(channel_id, sent_id, _prop.id)
-                            except Exception:
-                                logger.debug("Evolution proposal detection failed", exc_info=True)
-                    except Exception as exc:
-                        logger.error(
-                            "Discord send failed after retries (channel=%s): %s",
-                            channel_id,
-                            exc,
-                        )
-                        # Inform the agent that its response was not delivered.
-                        with contextlib.suppress(Exception):
-                            _discord_agent.run(
                                 f"[SYSTEM] Your previous response to channel "
                                 f"{channel_id} FAILED to send after multiple "
                                 f"retries. Error: {exc}. The user did NOT see "
@@ -4040,7 +4043,40 @@ def gateway_start(ctx: click.Context, host: str, port: int) -> None:
                                 _capability_mode=msg.metadata.get(
                                     "discord_capability_mode", "discord"
                                 ),
-                            )
+                            ),
+                        )
+
+            async def _process_channel(ch: DiscordChannel) -> None:
+                """Drain the channel queue: serial per conversation, concurrent across them.
+
+                One account's inbound queue used to be processed strictly
+                serially, so a long agent run in one channel blocked every
+                other channel. Messages in the same channel/thread are still
+                handled one at a time in order (the reply context depends on
+                it); different channels run concurrently up to
+                ``discord.max_concurrent_conversations``.
+                """
+                from missy.channels.discord.dispatch import (
+                    DEFAULT_MAX_CONCURRENCY,
+                    KeyedSerialDispatcher,
+                )
+
+                _discord_max_concurrency = getattr(
+                    cfg.discord, "max_concurrent_conversations", DEFAULT_MAX_CONCURRENCY
+                )
+                if not isinstance(_discord_max_concurrency, int) or _discord_max_concurrency < 1:
+                    _discord_max_concurrency = DEFAULT_MAX_CONCURRENCY
+                dispatcher: KeyedSerialDispatcher[Any] = KeyedSerialDispatcher(
+                    functools.partial(_handle_discord_message, ch),
+                    _discord_conversation_key,
+                    max_concurrency=_discord_max_concurrency,
+                )
+                try:
+                    await dispatcher.run(ch._queue, lambda: bool(stop_event))  # noqa: SLF001
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logging.getLogger(__name__).debug("Discord queue error", exc_info=True)
 
             async def _run_discord() -> None:
                 channels = []

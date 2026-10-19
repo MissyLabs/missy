@@ -152,6 +152,16 @@ class VisionCaptureTool(BaseTool):
 
             frame = img_source.acquire()
 
+            if source == "screenshot":
+                from missy.vision.blank_frame import blank_capture_error, uniform_image_array
+
+                if (blank := uniform_image_array(frame.image)) is not None:
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error=blank_capture_error(blank),
+                    )
+
             # Preprocess
             pipeline = ImagePipeline()
             processed = pipeline.process(frame.image)
@@ -471,6 +481,24 @@ class VisionAnalyzeTool(BaseTool):
                     error=f"Image source not available: {source}",
                 )
             frame = img_source.acquire()
+
+            # A uniform image (typically a blank screen capture from a
+            # display that is off/locked) has nothing to analyse; vision
+            # models hallucinate content for it, so don't send it.
+            from missy.vision.blank_frame import uniform_image_array
+
+            if (blank := uniform_image_array(frame.image)) is not None:
+                return ToolResult(
+                    success=False,
+                    output=None,
+                    error=(
+                        f"Image is blank/uniform ({blank}); it was NOT sent to "
+                        "the vision model. If this is a screen capture, the "
+                        "display is probably off, locked, or not accessible to "
+                        "this process. Report this rather than describing "
+                        "image content."
+                    ),
+                )
 
             pipeline = ImagePipeline()
             processed = pipeline.process(frame.image)

@@ -337,7 +337,7 @@ class TestVisionAnalyzeTool:
 
     def _mock_frame(self):
         frame = MagicMock()
-        frame.image = np.full((100, 100, 3), 128, dtype=np.uint8)
+        frame.image = np.tile(np.arange(100, dtype=np.uint8)[:, None, None], (1, 100, 3))
         return frame
 
     def test_name_and_description(self):
