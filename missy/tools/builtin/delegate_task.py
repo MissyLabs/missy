@@ -73,9 +73,10 @@ class DelegateTaskTool(BaseTool):
                     "provider": {
                         "type": "string",
                         "description": (
-                            "Optional configured provider registry key for this agent "
-                            "(for example 'acpx' or 'openai'). Omit to inherit the "
-                            "parent runtime's provider."
+                            "Optional provider registry key for this agent; it must be one "
+                            "configured in this deployment. Omit it (the usual choice) to "
+                            "inherit the parent runtime's provider. An unknown key falls "
+                            "back to the parent's provider."
                         ),
                     },
                     "tool_hints": {"type": "array", "items": {"type": "string"}},
@@ -274,6 +275,7 @@ class DelegateTaskTool(BaseTool):
         # unhandled ValueError and crashing tool execution.
         if len(subtasks) > max_agents:
             subtasks = subtasks[:max_agents]
+        provider_notes = _drop_unregistered_providers(subtasks)
         try:
             validate_subtasks(subtasks)
         except DelegationPlanError as exc:
@@ -304,6 +306,8 @@ class DelegateTaskTool(BaseTool):
             f"Delegation summary — strategy={strategy_used}; agents={len(subtasks)}; "
             f"succeeded={succeeded}; failed={failed}; skipped={skipped}."
         )
+        if provider_notes:
+            summary += "\n" + "\n".join(provider_notes)
         synthesis = next((task for task in subtasks if task.is_synthesis), None)
         synthesis_section = ""
         if synthesis is not None and synthesis.result:
@@ -330,3 +334,31 @@ class DelegateTaskTool(BaseTool):
             output=summary + synthesis_section + "\n\nAgent results:\n\n" + "\n\n".join(lines),
             error="One or more sub-agent steps failed; see output above." if any_failed else None,
         )
+
+
+def _drop_unregistered_providers(subtasks: list) -> list[str]:
+    """Let agents naming an unconfigured provider inherit the parent's instead.
+
+    Validation 2026-10-19 (SH-003): the model asked for ``provider="openai"``
+    (the old schema example) on a deployment that only registers
+    ``openai-codex``/``acpx``; the sub-agent failed provider resolution and its
+    step was lost. A wrong optional hint should not cost the step.
+    """
+    try:
+        from missy.providers.registry import get_registry
+
+        registered = set(get_registry().list_providers())
+    except Exception:
+        return []
+    if not registered:
+        return []
+    notes = []
+    for task in subtasks:
+        if task.provider and task.provider not in registered:
+            notes.append(
+                f"Note: agent {task.name or task.id} requested provider {task.provider!r}, "
+                f"which is not configured ({', '.join(sorted(registered))}); it used the "
+                "parent's provider instead."
+            )
+            task.provider = ""
+    return notes
