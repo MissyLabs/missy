@@ -1993,7 +1993,10 @@ class TestDesktopActionVerificationRetry:
 
         assert "could not verify" in result
         assert "cannot confirm the desktop task as complete" in result
-        assert "Still claiming success" not in result
+        # ADR-0003: on exhaustion the model's answer is kept under a notice
+        # instead of being replaced with canned text (validation X11-003).
+        assert result.startswith("Note: I sent the desktop action (x11_click)")
+        assert result.endswith("Still claiming success.")
         unresolved = [
             e for e in events if e["event_type"] == "agent.response.desktop_verification_unresolved"
         ]
