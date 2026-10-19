@@ -304,7 +304,7 @@ class TestAcpxAvailability:
 
     def test_bridge_pins_model_resolving_adapter(self):
         source = _ACP_BRIDGE_SCRIPT_PATH.read_text(encoding="utf-8")
-        assert "@agentclientprotocol/claude-agent-acp@0.81.2" in source
+        assert "@agentclientprotocol/claude-agent-acp@0.93.0" in source
         assert "@agentclientprotocol/claude-agent-acp@^" not in source
 
     @patch("missy.providers.acpx_provider._run_subprocess_with_group_kill")
