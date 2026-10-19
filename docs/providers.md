@@ -271,6 +271,60 @@ providers:
 
 ---
 
+### Claude Code CLI
+
+**Implementation**: `missy/providers/claude_cli_provider.py`
+
+Runs `claude -p` once per model turn, billed to the Claude subscription the
+CLI is logged in with. It replaces the `acpx` provider (an ACP bridge), whose
+adapter appended Missy's prompt to Claude Code's own agentic prompt and mixed
+safety notices into reply text. The `acpx` provider is still registered but
+deprecated.
+
+**Invocation**: the prompt goes on stdin, the system prompt (delegation
+envelope plus rendered tool schemas) through a `0600` temporary file:
+
+```
+claude -p --output-format stream-json --verbose --tools "" --disallowedTools "mcp__*" \
+  --strict-mcp-config --setting-sources "" --disable-slash-commands \
+  --permission-mode dontAsk --no-session-persistence --max-turns 1 \
+  --settings '{"switchModelsOnFlag":false}' --system-prompt-file <file> --model <model>
+```
+
+- `--tools ""` removes every built-in tool; Missy's tools are called through
+  the same text `<tool_call>` protocol the acpx provider used.
+- `--system-prompt-file` replaces Claude Code's default prompt rather than
+  appending to it.
+- The process runs in the empty directory `~/.missy/claude_cli_sandbox`, so
+  no `CLAUDE.md`, hooks or `.mcp.json` are picked up.
+- `ANTHROPIC_*` credential variables and `CLAUDECODE` are removed from the
+  child environment.
+
+**Refusals**: model switching on a safety flag is off, so a flagged turn ends
+as a refusal instead of being re-answered by an older model. It is raised as
+a content-policy `ProviderError`: the user sees the sanitized refusal and no
+fallback provider is tried. A `rate_limit_event` with status `rejected` is
+raised as a rate-limit error.
+
+**Availability check**: the `claude` binary is on `PATH` (or at
+`~/.local/bin/claude`) and `claude auth status` reports `loggedIn: true`.
+
+**Images**: not supported (history is flattened to text).
+
+**Configuration**:
+
+```yaml
+default_provider: claude-cli
+providers:
+  claude-cli:
+    name: claude-cli
+    model: "claude-opus-5-5"
+    timeout: 120
+    enabled: true
+```
+
+---
+
 ## Provider Registry
 
 The `ProviderRegistry` (`missy/providers/registry.py`) is the single point of
@@ -331,7 +385,7 @@ agent that delegated to them:
 ```json
 {
   "agents": [
-    {"name": "Implementer", "task": "Implement the change", "provider": "acpx"},
+    {"name": "Implementer", "task": "Implement the change", "provider": "claude-cli"},
     {"name": "Reviewer", "task": "Review the design", "provider": "openai"}
   ]
 }

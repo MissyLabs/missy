@@ -42,7 +42,7 @@ missy CLI (cli/main.py) ── setup/wizard, config migrate + hot reload
 |---|---|---|
 | Policy | `missy/policy/` | Network (CIDR/domain/per-category hosts, presets), filesystem, shell allow-list (`unrestricted` skips matching), REST method+path rules. |
 | HTTP gateway | `missy/gateway/client.py` | `PolicyHTTPClient` is the only outbound HTTP path; never follows redirects automatically. |
-| Providers | `missy/providers/` | Anthropic, OpenAI, Ollama, Codex (OAuth), acpx. Fallback in `AgentRuntime._call_provider_with_fallback`; per-provider circuit breakers. |
+| Providers | `missy/providers/` | Anthropic, OpenAI, Ollama, Codex (OAuth), Claude Code CLI (`claude -p`; supersedes acpx). Fallback in `AgentRuntime._call_provider_with_fallback`; per-provider circuit breakers. |
 | Agent loop | `missy/agent/runtime.py` | `_tool_loop` runs tools then regex response guards (`response_guards.py`). Guards share `max_guard_retries`; turns have `max_turn_seconds`; delegation is capped tree-wide (`sub_agent.MAX_TOTAL_SUB_RUNS`). |
 | Security | `missy/security/` | Prompt-injection regexes (101) require a second signal, not bare phrases; secrets detector (54 patterns); vault (ChaCha20-Poly1305); Ed25519 identity. |
 | Memory | `missy/memory/`, `agent/context.py` | Recalled history/memory is scanned and quarantined per entry. |

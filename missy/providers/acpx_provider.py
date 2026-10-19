@@ -982,7 +982,11 @@ def _kill_process_group(proc: subprocess.Popen, *, force: bool = True) -> None:
 
 
 def _run_subprocess_with_group_kill(
-    cmd: list[str], cwd: str, timeout: float, input_text: str | None = None
+    cmd: list[str],
+    cwd: str,
+    timeout: float,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run *cmd* via ``Popen``, killing its whole process group on timeout.
 
@@ -1000,6 +1004,7 @@ def _run_subprocess_with_group_kill(
             acp_bridge.mjs invocation passes its JSON request this way,
             rather than as a CLI argument, to avoid OS argv-length limits
             on a long flattened conversation).
+        env: Optional child environment; defaults to inheriting this one.
 
     Returns:
         A :class:`subprocess.CompletedProcess` with ``returncode``,
@@ -1020,6 +1025,7 @@ def _run_subprocess_with_group_kill(
         stderr=subprocess.PIPE,
         text=True,
         cwd=cwd,
+        env=env,
         start_new_session=True,
     )
     with _ACTIVE_PROCESSES_LOCK:
@@ -1141,23 +1147,24 @@ class AcpxProvider(BaseProvider):
             self._emit_event("", "", "error", "acp_bridge.mjs missing")
             return False
 
-        now = time.monotonic()
+        return self._cached_readiness()
+
+    def _readiness_is_fresh(self) -> bool:
         ttl = (
             _READINESS_PROBE_SUCCESS_TTL_SECONDS
             if self._readiness_result
             else _READINESS_PROBE_FAILURE_TTL_SECONDS
         )
-        if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
-            return self._readiness_result
+        return bool(
+            self._readiness_checked_at and time.monotonic() - self._readiness_checked_at < ttl
+        )
 
+    def _cached_readiness(self) -> bool:
+        """Return the cached :meth:`_probe_bridge_readiness` result, re-probing when stale."""
+        if self._readiness_is_fresh():
+            return self._readiness_result
         with self._readiness_lock:
-            now = time.monotonic()
-            ttl = (
-                _READINESS_PROBE_SUCCESS_TTL_SECONDS
-                if self._readiness_result
-                else _READINESS_PROBE_FAILURE_TTL_SECONDS
-            )
-            if self._readiness_checked_at and now - self._readiness_checked_at < ttl:
+            if self._readiness_is_fresh():
                 return self._readiness_result
             result = self._probe_bridge_readiness()
             self._readiness_result = result

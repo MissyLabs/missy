@@ -13,9 +13,9 @@ Provider support:
 - openai-codex, ollama: ``missy/providers/codex_provider.py`` and
   ``missy/providers/ollama_provider.py`` were extended to translate a
   list-content ``Message`` into their own real API shape.
-- acpx: structurally cannot carry real image bytes -- it flattens every
+- acpx, claude-cli: structurally cannot carry real image bytes -- it flattens every
   message to plain text for the underlying CLI (see
-  ``AcpxProvider._build_prompt()``). Deliberately excluded from the
+  ``AcpxProvider._build_prompt()``, which claude-cli inherits). Deliberately excluded from the
   candidate list below rather than attempted and left to fail (or worse,
   silently send a garbled Python repr of the content-block list as text).
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 #: acpx note in the module docstring. Excluded from candidate selection
 #: entirely, not merely deprioritized, since attempting one produces a
 #: confusing garbled-text failure rather than a clean "not supported" one.
-_IMAGE_INCOMPATIBLE_PROVIDER_NAMES = frozenset({"acpx"})
+_IMAGE_INCOMPATIBLE_PROVIDER_NAMES = frozenset({"acpx", "claude-cli"})
 
 
 def _ollama_fallback_candidate(already_present_names: set[str]) -> object | None:
