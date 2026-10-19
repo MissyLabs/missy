@@ -190,7 +190,10 @@ class TestAdvancedOrchestration:
         assert "Success criteria: list exploitable gaps" in prompt
         assert "Suggested tools: file_read" in prompt
 
-    def test_explicit_agents_forward_independent_providers(self, tool):
+    def test_explicit_agents_forward_independent_providers(self, tool, monkeypatch):
+        registry = MagicMock()
+        registry.list_providers.return_value = ["acpx", "openai"]
+        monkeypatch.setattr("missy.providers.registry.get_registry", lambda: registry)
         runtime = MagicMock()
         runtime.run.return_value = "ok"
 
@@ -209,6 +212,30 @@ class TestAdvancedOrchestration:
         assert "[provider=openai]" in result.output
         providers = {call.kwargs["_provider"] for call in runtime.run.call_args_list}
         assert providers == {"acpx", "openai"}
+
+    def test_unregistered_provider_inherits_parent_provider(self, tool, monkeypatch):
+        registry = MagicMock()
+        registry.list_providers.return_value = ["acpx", "openai-codex"]
+        monkeypatch.setattr("missy.providers.registry.get_registry", lambda: registry)
+        runtime = MagicMock()
+        runtime.run.return_value = "ok"
+
+        result = tool.execute(
+            agents=[
+                {"name": "Delegate", "task": "implement", "provider": "acpx"},
+                {"name": "Verifier", "task": "verify", "provider": "openai"},
+            ],
+            _runtime=runtime,
+            _session_id="sess-1",
+            _depth=0,
+            _parent_provider="openai-codex",
+        )
+
+        assert result.success
+        providers = sorted(call.kwargs["_provider"] for call in runtime.run.call_args_list)
+        assert providers == ["acpx", "openai-codex"]
+        assert "requested provider 'openai', which is not configured" in result.output
+        assert "[provider=openai]" not in result.output
 
     @pytest.mark.parametrize("provider", ["", "   ", 7, ["openai"]])
     def test_invalid_explicit_provider_is_rejected(self, tool, provider):
