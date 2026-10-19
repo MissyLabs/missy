@@ -510,7 +510,10 @@ class TestX11ReadScreenTool:
         from PIL import Image
 
         dest = str(tmp_path / "screen.png")
-        Image.new("RGB", (1920, 1080), "white").save(dest)
+        # Not a single colour: uniform captures are rejected as blank frames.
+        img = Image.new("RGB", (1920, 1080), "white")
+        img.paste((40, 40, 40), (100, 100, 400, 160))
+        img.save(dest)
         ocr_data = {
             "text": ["Run", "Test"],
             "conf": ["96", "95"],
