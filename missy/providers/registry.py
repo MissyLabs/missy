@@ -32,6 +32,7 @@ from missy.config.settings import MissyConfig, ProviderConfig
 from .acpx_provider import AcpxProvider
 from .anthropic_provider import AnthropicProvider
 from .base import BaseProvider
+from .claude_cli_provider import ClaudeCliProvider
 from .codex_provider import CodexProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 _PROVIDER_CLASSES: dict[str, type[BaseProvider]] = {
     "acpx": AcpxProvider,
     "anthropic": AnthropicProvider,
+    "claude-cli": ClaudeCliProvider,
     "openai": OpenAIProvider,
     "openai-codex": CodexProvider,
     "ollama": OllamaProvider,
