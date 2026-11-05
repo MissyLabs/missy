@@ -89,7 +89,7 @@ pub(super) fn migrate(c: &mut Connection) -> Result<()> {
     );
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let v: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(v <= 3, "database schema newer than binary");
+    ensure!(v <= 4, "database schema newer than binary");
     if v == 0 {
         let tables: i64 = tx.query_row(
             "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -124,8 +124,13 @@ pub(super) fn migrate(c: &mut Connection) -> Result<()> {
             )?;
         }
     }
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS exact_tool_requests(scope TEXT NOT NULL,turn_id TEXT NOT NULL,calls TEXT NOT NULL,PRIMARY KEY(scope,turn_id),FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id) ON DELETE CASCADE);
+    CREATE TABLE IF NOT EXISTS raw_tool_evidence(scope TEXT NOT NULL,turn_id TEXT NOT NULL,call_id TEXT NOT NULL,data TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(scope,turn_id,call_id),FOREIGN KEY(scope,turn_id,call_id) REFERENCES tools(scope,turn_id,call_id) ON DELETE CASCADE);")?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS session_metadata(scope TEXT PRIMARY KEY,display_name TEXT NOT NULL DEFAULT '',history_cutoff INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS budget_policy(id INTEGER PRIMARY KEY CHECK(id=1),max_cost INTEGER NOT NULL,max_tokens INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS budget_reservations(scope TEXT NOT NULL,turn_id TEXT NOT NULL,cost INTEGER NOT NULL,tokens INTEGER NOT NULL,used_cost INTEGER NOT NULL DEFAULT 0,used_tokens INTEGER NOT NULL DEFAULT 0,uncertain INTEGER NOT NULL DEFAULT 0,settled INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(scope,turn_id),FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id));")?;
     tx.pragma_update(None, "application_id", 0x4d535953)?;
-    tx.pragma_update(None, "user_version", 3)?;
+    tx.pragma_update(None, "user_version", 4)?;
     tx.commit()?;
     Ok(())
 }

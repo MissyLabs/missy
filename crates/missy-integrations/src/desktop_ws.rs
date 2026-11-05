@@ -21,6 +21,10 @@ pub(crate) enum ObsRead {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ObsMutate {
+    SetSourceText {
+        source: String,
+        text: String,
+    },
     SwitchScene {
         scene: String,
     },
@@ -41,6 +45,9 @@ pub(crate) struct Obs {
 impl Obs {
     pub fn validate(cfg: &ObsConfig) -> Result<()> {
         for s in &cfg.scenes {
+            label(s)?;
+        }
+        for s in &cfg.text_sources {
             label(s)?;
         }
         for s in &cfg.scene_items {
@@ -142,6 +149,19 @@ impl Obs {
     }
     pub async fn mutate(&self, a: ObsMutate) -> Result<Value> {
         let (action, kind, data) = match a {
+            ObsMutate::SetSourceText { source, text } => {
+                if !self.cfg.text_sources.contains(&source)
+                    || text.len() > 8192
+                    || text.contains('\0')
+                {
+                    bail!("OBS text source/content denied");
+                }
+                (
+                    ObsAction::SetSourceText,
+                    "SetInputSettings",
+                    json!({"inputName":source,"inputSettings":{"text":text},"overlay":true}),
+                )
+            }
             ObsMutate::SwitchScene { scene } => {
                 if !self.cfg.scenes.contains(&scene) {
                     bail!("OBS scene denied");
@@ -233,7 +253,12 @@ impl Vtube {
         }
         Ok(())
     }
-    async fn request(&self, ws: &mut PolicyWebSocket, kind: &str, data: Value) -> Result<Value> {
+    pub(crate) async fn request(
+        &self,
+        ws: &mut PolicyWebSocket,
+        kind: &str,
+        data: Value,
+    ) -> Result<Value> {
         let id = uuid::Uuid::new_v4().to_string();
         send(ws,json!({"apiName":"VTubeStudioPublicAPI","apiVersion":"1.0","requestID":id,"messageType":kind,"data":data})).await?;
         let r = receive(ws, self.conn.cfg.max_output_bytes).await?;
@@ -256,7 +281,7 @@ impl Vtube {
         }
         Ok(r["data"].clone())
     }
-    async fn connect(&self) -> Result<PolicyWebSocket> {
+    pub(crate) async fn connect(&self) -> Result<PolicyWebSocket> {
         let mut ws = self.conn.socket().await?;
         let token = self
             .conn

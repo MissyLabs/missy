@@ -71,19 +71,27 @@ pub(crate) fn validate_executable_path(p: &Path) -> Result<()> {
 /// Hash into sealed memfd, then execute that very image. No hash/exec path race.
 pub(crate) fn pinned_executable(c: &CommandTemplate) -> Result<File> {
     validate_executable_path(&c.executable)?;
+    pinned_native(c, 32 * 1024 * 1024)
+}
+pub(crate) fn pinned_native(c: &CommandTemplate, max: usize) -> Result<File> {
+    validate_root(
+        c.executable
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("executable parent required"))?,
+    )?;
     let f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(&c.executable)?;
     let meta = f.metadata()?;
     ensure!(
-        meta.is_file() && meta.len() <= 32 * 1024 * 1024 && meta.mode() & 0o111 != 0,
+        meta.is_file() && meta.len() <= max as u64 && meta.mode() & 0o111 != 0,
         "plugin must be bounded executable regular file"
     );
     let mut bytes = Vec::new();
-    f.take(32 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    f.take(max as u64 + 1).read_to_end(&mut bytes)?;
     ensure!(
-        bytes.len() <= 32 * 1024 * 1024
+        bytes.len() <= max
             && bytes.starts_with(b"\x7fELF")
             && bytes.get(4) == Some(&2)
             && bytes.get(5) == Some(&1),
@@ -131,6 +139,12 @@ struct Rule {
     fd: i32,
 }
 fn landlock(reads: &[std::path::PathBuf], temp: &Path) -> Result<File> {
+    landlock_mode(reads, temp, false)
+}
+pub(crate) fn build_landlock(reads: &[std::path::PathBuf], temp: &Path) -> Result<File> {
+    landlock_mode(reads, temp, true)
+}
+fn landlock_mode(reads: &[std::path::PathBuf], temp: &Path, build: bool) -> Result<File> {
     check_available()?;
     let attr = Attr { fs: (1 << 15) - 1 };
     let raw = unsafe {
@@ -148,7 +162,11 @@ fn landlock(reads: &[std::path::PathBuf], temp: &Path) -> Result<File> {
         .map(|p| (p.as_path(), (1 << 0) | (1 << 2) | (1 << 3)))
         .chain(std::iter::once((
             temp,
-            (1 << 1)
+            (if build {
+                (1 << 0) | (1 << 2) | (1 << 3)
+            } else {
+                0
+            }) | (1 << 1)
                 | (1 << 4)
                 | (1 << 5)
                 | (1 << 7)
@@ -189,7 +207,7 @@ fn landlock(reads: &[std::path::PathBuf], temp: &Path) -> Result<File> {
     }
     Ok(rules)
 }
-fn filter() -> Vec<libc::sock_filter> {
+pub(crate) fn filter() -> Vec<libc::sock_filter> {
     #[cfg(target_arch = "x86_64")]
     const ARCH: u32 = 0xc000003e;
     #[cfg(target_arch = "aarch64")]
@@ -393,6 +411,147 @@ pub(crate) async fn execute(
         json!({"trust":"untrusted","status":status.code(),"success":status.success(),"stdout":String::from_utf8_lossy(&stdout),"stderr":String::from_utf8_lossy(&stderr),"sandbox":{"backend":"landlock+seccomp","network_denied":true,"sealed_elf":true}}),
     )
 }
+pub(crate) async fn compile_rust(
+    compiler: File,
+    cfg: &crate::RustBuildConfig,
+    temp: &Path,
+    source: &Path,
+    linker: &Path,
+    output: &Path,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let rules = build_landlock(&cfg.read_roots, temp)?;
+    let filters = filter();
+    let mut command = Command::new(format!("/proc/self/fd/{}", compiler.as_raw_fd()));
+    command
+        .args([
+            "--edition=2024",
+            "--crate-name",
+            "missy_generated_plugin",
+            "-C",
+            "linker-flavor=ld.lld",
+            "-C",
+            "opt-level=0",
+            "-C",
+            "debuginfo=0",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "panic=abort",
+        ])
+        .arg("--sysroot")
+        .arg(&cfg.sysroot)
+        .arg("-C")
+        .arg(format!("linker={}", linker.display()))
+        .arg(source)
+        .arg("-o")
+        .arg(output)
+        .env_clear()
+        .env("TMPDIR", temp)
+        .env("HOME", temp)
+        .env("LD_LIBRARY_PATH", cfg.sysroot.join("lib"))
+        .current_dir(temp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    for root in &cfg.native_library_roots {
+        command.arg("-L").arg(format!("native={}", root.display()));
+    }
+    for argument in &cfg.linker_args {
+        command.arg("-C").arg(format!("link-arg={argument}"));
+    }
+    unsafe {
+        command.pre_exec(move || {
+            for (resource, size) in [
+                (libc::RLIMIT_CORE, 0),
+                (libc::RLIMIT_FSIZE, 64 * 1024 * 1024),
+                (libc::RLIMIT_AS, 2 * 1024 * 1024 * 1024),
+                (libc::RLIMIT_CPU, 120),
+                (libc::RLIMIT_NOFILE, 256),
+            ] {
+                let limit = libc::rlimit {
+                    rlim_cur: size,
+                    rlim_max: size,
+                };
+                if libc::setrlimit(resource, &limit) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0
+                || libc::syscall(libc::SYS_landlock_restrict_self, rules.as_raw_fd(), 0u32) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            let prog = libc::sock_fprog {
+                len: filters.len() as u16,
+                filter: filters.as_ptr() as *mut _,
+            };
+            if libc::prctl(libc::PR_SET_SECCOMP, 2, &prog) < 0
+                || libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 4u32) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command
+        .spawn()
+        .context("reviewed Rust compiler confinement/exec failed; no fallback")?;
+    drop(compiler);
+    let mut owned = Owned {
+        child,
+        killed: false,
+    };
+    use std::os::fd::IntoRawFd;
+    let stdout = unsafe { File::from_raw_fd(owned.child.stdout.take().unwrap().into_raw_fd()) };
+    let stderr = unsafe { File::from_raw_fd(owned.child.stderr.take().unwrap().into_raw_fd()) };
+    let remaining = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(cfg.max_output_bytes));
+    let work = async {
+        tokio::try_join!(
+            async {
+                loop {
+                    // Keep leader unreaped until group cleanup, preventing a reused
+                    // numeric PID/process group from receiving our timeout kill.
+                    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                    ensure!(
+                        unsafe {
+                            libc::waitid(
+                                libc::P_PID,
+                                owned.child.id(),
+                                &mut info,
+                                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                            )
+                        } == 0,
+                        "compiler waitid failed"
+                    );
+                    if unsafe { info.si_pid() } != 0 {
+                        owned.kill();
+                        return Ok::<_, anyhow::Error>(owned.child.wait()?);
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            },
+            capture(stdout, remaining.clone()),
+            capture(stderr, remaining)
+        )
+    };
+    let result = tokio::select! {biased;
+        _=cancellation.cancelled()=>Err(anyhow::anyhow!("source build cancelled")),
+        _=tokio::time::sleep(Duration::from_millis(cfg.timeout_ms))=>Err(anyhow::anyhow!("source build timed out")),
+        result=work=>result
+    };
+    drop(owned);
+    let (status, _stdout, _stderr) = result?;
+    // Compiler diagnostics can contain source strings/include_str! secrets.
+    // Never publish them as a trusted/operator-visible build error.
+    ensure!(
+        status.success(),
+        "reviewed Rust compile failed; compiler diagnostics withheld (untrusted source)"
+    );
+    Ok(())
+}
+
 async fn capture(
     file: File,
     remaining: std::sync::Arc<std::sync::atomic::AtomicUsize>,

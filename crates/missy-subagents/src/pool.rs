@@ -38,6 +38,60 @@ impl AgentPool {
     pub fn limits(&self) -> &Limits {
         &self.limits
     }
+    pub fn provider_ids(&self) -> Vec<String> {
+        self.runtimes.keys().cloned().collect()
+    }
+    pub(crate) fn planner(&self, provider: &str) -> Result<Runtime> {
+        self.runtimes
+            .get(provider)
+            .ok_or_else(|| anyhow!("unknown planner provider"))?
+            .no_tools()
+    }
+    pub(crate) fn remaining(&self, reserved: &Reservation, deadline_ms: u64) -> Result<Self> {
+        let mut limits = self.limits.clone();
+        if reserved.steps > 0 {
+            limits.max_agents = limits
+                .max_agents
+                .checked_sub(1)
+                .ok_or_else(|| anyhow!("planner exhausted root agent count"))?;
+        }
+        limits.max_steps = limits
+            .max_steps
+            .checked_sub(reserved.steps)
+            .ok_or_else(|| anyhow!("root steps exhausted"))?;
+        limits.max_tokens = limits
+            .max_tokens
+            .checked_sub(reserved.tokens)
+            .ok_or_else(|| anyhow!("root tokens exhausted"))?;
+        limits.max_cost_microusd = limits
+            .max_cost_microusd
+            .checked_sub(reserved.cost_microusd)
+            .ok_or_else(|| anyhow!("root cost exhausted"))?;
+        let remaining_ms = deadline_ms.saturating_sub(now_ms());
+        ensure!(remaining_ms >= 1000, "root deadline exhausted");
+        limits.deadline_seconds = remaining_ms / 1000;
+        Self::new(self.runtimes.clone(), limits)
+    }
+    pub(crate) fn delegation_catalog(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<missy_core::ToolDefinition>> {
+        Ok(self
+            .runtimes
+            .get(provider)
+            .ok_or_else(|| anyhow!("unknown delegation provider"))?
+            .tool_definitions()
+            .to_vec())
+    }
+    pub(crate) fn delegation_fingerprint(&self, provider: &str) -> Result<String> {
+        hash(&(
+            &self.limits,
+            self.runtimes
+                .get(provider)
+                .ok_or_else(|| anyhow!("unknown delegation provider"))?
+                .configuration_fingerprint()?,
+        ))
+    }
     pub fn validate(&self, spec: &DagSpec) -> Result<()> {
         ensure!(
             !spec.agents.is_empty() && spec.agents.len() <= self.limits.max_agents,
@@ -114,6 +168,25 @@ impl AgentPool {
         spec: DagSpec,
         cancellation: CancellationToken,
     ) -> Result<RootReceipt> {
+        self.run_with_policy(
+            registry,
+            scope,
+            request_id,
+            spec,
+            cancellation,
+            FailurePolicy::BlockDependents,
+        )
+        .await
+    }
+    pub async fn run_with_policy(
+        &self,
+        registry: &AgentRegistry,
+        scope: Scope,
+        request_id: &str,
+        spec: DagSpec,
+        cancellation: CancellationToken,
+        failure_policy: FailurePolicy,
+    ) -> Result<RootReceipt> {
         scope.validate()?;
         ensure!(
             !request_id.is_empty() && request_id.len() <= 256,
@@ -125,7 +198,7 @@ impl AgentPool {
             .iter()
             .map(|(k, v)| Ok((k.clone(), v.configuration_fingerprint()?)))
             .collect::<Result<_>>()?;
-        let immutable_hash = hash(&(&spec, &self.limits, &fingerprints))?;
+        let immutable_hash = hash(&(&spec, &self.limits, &fingerprints, &failure_policy))?;
         let root_id = hash(&("missy-subagents-v1", &scope, request_id))?;
         let _lock = registry.lock_root(&root_id)?;
         let mut receipt = if let Some(mut r) = registry.receipt(&scope, &root_id)? {
@@ -290,20 +363,39 @@ impl AgentPool {
                     continue;
                 }
                 let deps = dependencies(a);
-                if deps.iter().any(|d| {
-                    !matches!(
-                        receipt.children[*d].status.as_str(),
-                        "planned" | "running" | "completed"
-                    )
-                }) {
+                if failure_policy == FailurePolicy::Abort
+                    && receipt
+                        .children
+                        .values()
+                        .any(|c| !["planned", "running", "completed"].contains(&c.status.as_str()))
+                {
+                    receipt.children.get_mut(&a.id).unwrap().status = "blocked".into();
+                    for (rt, scope, turn) in guard.active.values() {
+                        let _ = rt.cancel(scope, turn);
+                    }
+                    registry.save(&receipt)?;
+                    continue;
+                }
+                if failure_policy != FailurePolicy::Continue
+                    && deps.iter().any(|d| {
+                        !matches!(
+                            receipt.children[*d].status.as_str(),
+                            "planned" | "running" | "completed"
+                        )
+                    })
+                {
                     receipt.children.get_mut(&a.id).unwrap().status = "blocked".into();
                     registry.save(&receipt)?;
                     continue;
                 }
-                if !deps
-                    .iter()
-                    .all(|d| receipt.children[*d].status == "completed")
-                    || guard.active.len() >= self.limits.max_workers
+                if !deps.iter().all(|d| {
+                    receipt.children[*d].status == "completed"
+                        || (failure_policy == FailurePolicy::Continue
+                            && !matches!(
+                                receipt.children[*d].status.as_str(),
+                                "planned" | "running"
+                            ))
+                }) || guard.active.len() >= self.limits.max_workers
                 {
                     continue;
                 }
@@ -381,6 +473,21 @@ impl AgentPool {
                 }
             }
             if guard.active.is_empty() {
+                // A Continue dependency may have become terminal after its
+                // dependent was visited (operator arrays need not be ordered).
+                if failure_policy == FailurePolicy::Continue
+                    && spec.agents.iter().any(|a| {
+                        receipt.children[&a.id].status == "planned"
+                            && dependencies(a).iter().all(|d| {
+                                !matches!(
+                                    receipt.children[*d].status.as_str(),
+                                    "planned" | "running"
+                                )
+                            })
+                    })
+                {
+                    continue;
+                }
                 // Block transitive dependents until a fixed point, independent
                 // of operator array ordering.
                 loop {
@@ -423,12 +530,7 @@ impl AgentPool {
             .ok_or_else(|| anyhow!("missing agent"))?;
         let outputs: BTreeMap<_, _> = dependencies(a)
             .into_iter()
-            .filter_map(|d| {
-                receipt.children[d]
-                    .result
-                    .as_ref()
-                    .map(|r| (d, serde_json::json!({"untrusted":true,"content":r.content})))
-            })
+            .map(|d| (d,serde_json::json!({"untrusted":true,"status":receipt.children[d].status,"error":receipt.children[d].error,"content":receipt.children[d].result.as_ref().map(|r|&r.content)})))
             .collect();
         if outputs.is_empty() {
             return Ok(a.prompt.clone());

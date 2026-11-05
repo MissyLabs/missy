@@ -436,7 +436,7 @@ impl VideoRequest {
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).into()).collect()
 }
-fn common() -> Vec<String> {
+pub(crate) fn common() -> Vec<String> {
     strings(&[
         "-hide_banner",
         "-loglevel",
@@ -452,7 +452,7 @@ fn common() -> Vec<String> {
         "1",
     ])
 }
-fn input_args(args: &mut Vec<String>, path: &Path, format: &str) {
+pub(crate) fn input_args(args: &mut Vec<String>, path: &Path, format: &str) {
     args.extend(strings(&[
         "-protocol_whitelist",
         "file,pipe",
@@ -480,7 +480,7 @@ fn scale(w: u32, h: u32) -> String {
         "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15,format=yuv420p,setpts=PTS-STARTPTS"
     )
 }
-async fn probe(
+pub(crate) async fn probe(
     c: &MediaConfig,
     staging: &Path,
     path: &Path,

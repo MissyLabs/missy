@@ -3,6 +3,60 @@ use missy_core::Scope;
 use std::{io::Cursor, path::Path, process::Command};
 use tokio_util::sync::CancellationToken;
 
+struct FixtureSceneGenerator;
+#[async_trait]
+impl SceneGenerator for FixtureSceneGenerator {
+    async fn generate(&self, _: &ToolContext, r: &SceneGenerationRequest) -> Result<PathBuf> {
+        let color = if r.prompt == "red" {
+            [255, 0, 0]
+        } else {
+            [0, 0, 255]
+        };
+        image::RgbImage::from_pixel(r.width, r.height, image::Rgb(color)).save(&r.output)?;
+        Ok(r.output.clone())
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "synthetic-fixture-only".into()
+    }
+}
+#[tokio::test]
+async fn generated_storyboard_invokes_scenes_and_decodes_real_mp4() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let tools = MediaTools::new(policy(root), config(root))
+        .unwrap()
+        .with_scene_generator(Arc::new(FixtureSceneGenerator));
+    let call = ToolCall {
+        id: "storyboard".into(),
+        name: "video_generate_storyboard".into(),
+        arguments: json!({"scenes":[{"prompt":"red","output":root.join("red.png")},{"prompt":"blue","output":root.join("blue.png")}],"output":root.join("story.mp4"),"seconds_per_image":1,"width":64,"height":48}),
+    };
+    let result = tools.execute(&ctx(), &call).await.unwrap();
+    assert_eq!(result["generated"], true);
+    assert_eq!(result["scenes"].as_array().unwrap().len(), 2);
+    let red = frame_at(&root.join("story.mp4"), "0.3");
+    let blue = frame_at(&root.join("story.mp4"), "1.3");
+    assert!(red.get_pixel(8, 8)[0] > 200);
+    assert!(blue.get_pixel(8, 8)[2] > 200);
+}
+
+#[tokio::test]
+async fn external_mp4_validation_requires_full_decodable_video() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = fixture(root, "external.mp4", "red");
+    let bytes = std::fs::read(&path).unwrap();
+    let tools = MediaTools::new(policy(root), config(root)).unwrap();
+    let metadata = tools.validate_mp4(&ctx(), &bytes).await.unwrap();
+    assert!(metadata.streams.iter().any(|s| s.codec_type == "video"));
+    assert!(metadata.duration_seconds.is_some());
+    let mut malformed = bytes.clone();
+    malformed.truncate(malformed.len() / 2);
+    assert!(tools.validate_mp4(&ctx(), &malformed).await.is_err());
+    let cancelled = ctx();
+    cancelled.cancellation.cancel();
+    assert!(tools.validate_mp4(&cancelled, &bytes).await.is_err());
+}
 fn ctx() -> ToolContext {
     ToolContext {
         scope: Scope {

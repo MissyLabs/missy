@@ -60,6 +60,43 @@ impl CaptureTools {
         self.output_snapshot(&r)?;
         Ok(r)
     }
+    fn burst(&self, call: &ToolCall) -> Result<(Vec<Request>, u64)> {
+        ensure!(self.config.enable_camera, "camera disabled");
+        let mut args = call.arguments.clone();
+        let obj = args
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("burst arguments must be object"))?;
+        let outputs: Vec<PathBuf> = serde_json::from_value(
+            obj.remove("outputs")
+                .ok_or_else(|| anyhow::anyhow!("outputs required"))?,
+        )?;
+        let interval = obj
+            .remove("interval_ms")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow::anyhow!("interval_ms required"))?;
+        ensure!(
+            (1..=16).contains(&outputs.len())
+                && (100..=10000).contains(&interval)
+                && (outputs.len() as u64 - 1) * interval <= 60000,
+            "burst bounds exceeded"
+        );
+        ensure!(
+            !obj.contains_key("output"),
+            "burst uses outputs, not output"
+        );
+        let mut unique = std::collections::BTreeSet::new();
+        let mut requests = Vec::new();
+        for output in outputs {
+            ensure!(unique.insert(output.clone()), "duplicate burst output");
+            let mut item = args.clone();
+            item["output"] = json!(output);
+            let r: Request = serde_json::from_value(item)?;
+            r.validate(&self.config, "camera_photo")?;
+            self.output_snapshot(&r)?;
+            requests.push(r);
+        }
+        Ok((requests, interval))
+    }
     fn output_snapshot(&self, request: &Request) -> Result<Vec<(u64, u64, u64)>> {
         let p = &request.output;
         config::safe_path(p)?;
@@ -244,6 +281,28 @@ impl ToolExecutor for CaptureTools {
             }
             out.push(ToolDefinition {name:name.into(),description:description.into(),parameters:json!({"type":"object","additionalProperties":false,"properties":properties,"required":required}),side_effect:true});
         }
+        if self.config.enable_camera {
+            let mut definition = out
+                .iter()
+                .find(|d| d.name == "camera_photo")
+                .expect("photo definition")
+                .clone();
+            definition.name = "camera_burst".into();
+            definition.description="Capture 1..16 silent PNG camera frames at bounded intervals. One exact durable human approval covers all explicit output paths; cancellation stops remaining frames. Partial captures are never retried automatically.".into();
+            let properties = definition.parameters["properties"].as_object_mut().unwrap();
+            properties.remove("output");
+            properties.insert("outputs".into(),json!({"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}}));
+            properties.insert(
+                "interval_ms".into(),
+                json!({"type":"integer","minimum":100,"maximum":10000}),
+            );
+            definition.parameters["required"] =
+                json!(["outputs", "interval_ms", "device", "consent"]);
+            out.push(definition);
+            let mut legacy = out.last().unwrap().clone();
+            legacy.name = "vision_burst".into();
+            out.push(legacy);
+        }
         out
     }
     fn configuration_fingerprint(&self) -> String {
@@ -262,12 +321,51 @@ impl ToolExecutor for CaptureTools {
             !ctx.cancellation.is_cancelled(),
             "capture cancelled before dispatch"
         );
+        if matches!(call.name.as_str(), "camera_burst" | "vision_burst") {
+            for r in self.burst(call)?.0 {
+                self.snapshot(&r, "camera_photo")?;
+            }
+            return Ok(());
+        }
         let r = self.parse(call)?;
         self.snapshot(&r, &call.name)?;
         Ok(())
     }
     async fn execute(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
         let _slot = tokio::select! { biased; _ = ctx.cancellation.cancelled() => return Err(refused(anyhow::anyhow!("capture cancelled before dispatch"))), s = self.slots.acquire() => s? };
+        if matches!(call.name.as_str(), "camera_burst" | "vision_burst") {
+            let (requests, interval) = self.burst(call).map_err(refused)?;
+            let before = requests
+                .iter()
+                .map(|r| self.snapshot(r, "camera_photo"))
+                .collect::<Result<Vec<_>>>()
+                .map_err(refused)?;
+            tokio::select! { biased; _=ctx.cancellation.cancelled()=>return Err(refused(anyhow::anyhow!("burst cancelled before approval"))), r=self.approval.authorize(ctx,call)=>r? }
+            let after = requests
+                .iter()
+                .map(|r| self.snapshot(r, "camera_photo"))
+                .collect::<Result<Vec<_>>>()
+                .map_err(refused)?;
+            ensure!(
+                before == after,
+                "burst inputs/output changed after approval"
+            );
+            let mut frames = Vec::new();
+            for (i, r) in requests.iter().enumerate() {
+                if i > 0 {
+                    tokio::select! { _=ctx.cancellation.cancelled()=>anyhow::bail!("burst cancelled; partial capture may exist; never retry"), _=tokio::time::sleep(std::time::Duration::from_millis(interval))=>{} }
+                }
+                ensure!(
+                    self.snapshot(r, "camera_photo")? == before[i],
+                    "burst resource changed; partial capture may exist"
+                );
+                frames.push(
+                    capture::execute(&self.policy, &self.config, ctx, r, "camera_photo", None)
+                        .await?,
+                );
+            }
+            return Ok(json!({"frames":frames,"audio":false,"capture":true}));
+        }
         let r = self.parse(call).map_err(refused)?;
         let before = self.snapshot(&r, &call.name).map_err(refused)?;
         tokio::select! {

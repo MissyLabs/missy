@@ -85,6 +85,7 @@ async fn privacy_and_mutation_always_gated_without_network() {
     )
     .unwrap();
     for (name, args) in [
+        ("desktop_status", json!({})),
         ("browser_screenshot", json!({})),
         ("browser_click", json!({"selector":"button"})),
         ("browser_fill", json!({"selector":"input","value":"x"})),
@@ -113,7 +114,7 @@ async fn privacy_and_mutation_always_gated_without_network() {
                 .side_effect
         );
     }
-    assert_eq!(approval.0.load(Ordering::SeqCst), 5);
+    assert_eq!(approval.0.load(Ordering::SeqCst), 6);
 }
 #[tokio::test]
 async fn unknown_fields_and_urls_fail_before_approval() {
@@ -129,6 +130,7 @@ async fn unknown_fields_and_urls_fail_before_approval() {
     )
     .unwrap();
     for (name, args) in [
+        ("desktop_status", json!({"display": ":0"})),
         ("browser_read", json!({"expression":"arbitrary"})),
         (
             "browser_evaluate",

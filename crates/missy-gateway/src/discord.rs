@@ -1,4 +1,5 @@
 //! Opt-in Discord transport. Every outbound path is policy-bound.
+mod attachments;
 mod journal;
 mod voice;
 pub use voice::{DiscordGatewayVoice, DiscordVoiceGatewayHook, discord_voice_bridge};
@@ -7,7 +8,9 @@ mod tests;
 use anyhow::{Result, bail, ensure};
 use futures_util::{SinkExt, StreamExt};
 use journal::Journal;
+pub use journal::OutboxReview;
 use missy_core::{DiscordConfig, PolicyConfig, Scope};
+use missy_discord_tools::DiscordRestGovernor;
 use missy_policy::PolicyHttpClient;
 use missy_runtime::Runtime;
 use missy_store::TurnStatus;
@@ -16,8 +19,34 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::sync::CancellationToken;
 const REST: &str = "https://discord.com/api/v10";
 const MAX_CHUNKS: usize = 16;
+/// Offline operator reconciliation. Journal locking refuses a running transport.
+pub fn discord_outbox_inspect(state_dir: impl AsRef<Path>) -> Result<Vec<OutboxReview>> {
+    Journal::open(state_dir.as_ref())?.review_outbox()
+}
+pub fn discord_outbox_resolve(
+    state_dir: impl AsRef<Path>,
+    nonce: &str,
+    binding_sha256: &str,
+    operator: &str,
+    delivered_message_id: Option<&str>,
+    evidence: &str,
+    confirm: bool,
+) -> Result<()> {
+    ensure!(
+        confirm,
+        "outbox reconciliation requires operator confirmation"
+    );
+    Journal::open(state_dir.as_ref())?.resolve_outbox(
+        nonce,
+        binding_sha256,
+        operator,
+        delivered_message_id,
+        evidence,
+    )
+}
 
 /// No credentials, session IDs, Gateway URLs or raw JSON are returned.
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +63,74 @@ pub struct DiscordProbe {
 pub async fn probe_discord(config: DiscordConfig, policy: PolicyConfig) -> Result<DiscordProbe> {
     validate_config(&config)?;
     probe_at(&PolicyHttpClient::new(policy)?, &token(&config)?, REST).await
+}
+/// Explicit operator action. Registration never runs as a connection side effect.
+pub async fn register_discord_commands(
+    config: DiscordConfig,
+    policy: PolicyConfig,
+    confirm: bool,
+) -> Result<Value> {
+    ensure!(
+        confirm,
+        "Discord command registration requires explicit confirmation"
+    );
+    validate_config(&config)?;
+    let token = token(&config)?;
+    let http = PolicyHttpClient::new(policy)?;
+    let identity = probe_at(&http, &token, REST).await?;
+    let commands = command_definitions();
+    let mut registered = Vec::new();
+    for guild in &config.allowed_guilds {
+        let response = http
+            .request(
+                "PUT",
+                &format!(
+                    "{REST}/applications/{}/guilds/{guild}/commands",
+                    identity.bot_id
+                ),
+                vec![
+                    ("Authorization".into(), format!("Bot {token}")),
+                    ("Content-Type".into(), "application/json".into()),
+                ],
+                Some(serde_json::to_vec(&commands)?),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Discord command registration outcome unknown; inspect guild command catalog"
+                )
+            })?;
+        ensure!(
+            (200..300).contains(&response.status),
+            "Discord command registration refused"
+        );
+        registered.push(guild.clone());
+    }
+    Ok(json!({"registered_guilds":registered,"command":"missy","global_commands_changed":false}))
+}
+pub fn command_definitions() -> Value {
+    let mut options = Vec::new();
+    for (name, description, key) in [
+        ("ask", "Ask Missy a question or task", Some("prompt")),
+        ("status", "Inspect a scoped turn or channel readiness", None),
+        ("cancel", "Cancel a scoped turn", Some("turn")),
+        (
+            "resume",
+            "Explicitly resume a scoped interrupted turn",
+            Some("turn"),
+        ),
+        ("help", "Show commands and scope rules", None),
+    ] {
+        let args = if name == "status" {
+            json!([{"type":3,"name":"turn","description":"Turn ID; omit for channel readiness","required":false}])
+        } else if let Some(key) = key {
+            json!([{"type":3,"name":key,"description":if key=="prompt" {"Question or task"}else{"Turn ID"},"required":true}])
+        } else {
+            json!([])
+        };
+        options.push(json!({"type":1,"name":name,"description":description,"options":args}));
+    }
+    json!([{"name":"missy","description":"Missy native assistant","type":1,"options":options,"default_member_permissions":"0","dm_permission":false}])
 }
 async fn probe_at(http: &PolicyHttpClient, token: &str, rest: &str) -> Result<DiscordProbe> {
     let me = get_json(http, token, &format!("{rest}/users/@me")).await?;
@@ -84,7 +181,15 @@ pub async fn serve_discord_with_state_dir(
     policy: PolicyConfig,
     state_dir: impl AsRef<Path>,
 ) -> Result<()> {
-    serve_inner(runtime, config, policy, state_dir, None).await
+    serve_inner(
+        runtime,
+        config,
+        policy,
+        state_dir,
+        None,
+        ServiceControl::default(),
+    )
+    .await
 }
 pub async fn serve_discord_with_voice(
     runtime: Arc<Runtime>,
@@ -93,7 +198,64 @@ pub async fn serve_discord_with_voice(
     state_dir: impl AsRef<Path>,
     voice: DiscordVoiceGatewayHook,
 ) -> Result<()> {
-    serve_inner(runtime, config, policy, state_dir, Some(voice)).await
+    serve_inner(
+        runtime,
+        config,
+        policy,
+        state_dir,
+        Some(voice),
+        ServiceControl::default(),
+    )
+    .await
+}
+#[derive(Default)]
+struct ServiceControl {
+    cancellation: CancellationToken,
+    readiness: Option<tokio::sync::oneshot::Sender<()>>,
+}
+/// Readiness follows authenticated READY/RESUMED and the durable checkpoint.
+pub async fn serve_discord_supervised(
+    runtime: Arc<Runtime>,
+    config: DiscordConfig,
+    policy: PolicyConfig,
+    state_dir: impl AsRef<Path>,
+    cancellation: CancellationToken,
+    readiness: tokio::sync::oneshot::Sender<()>,
+) -> Result<()> {
+    serve_inner(
+        runtime,
+        config,
+        policy,
+        state_dir,
+        None,
+        ServiceControl {
+            cancellation,
+            readiness: Some(readiness),
+        },
+    )
+    .await
+}
+pub async fn serve_discord_with_voice_supervised(
+    runtime: Arc<Runtime>,
+    config: DiscordConfig,
+    policy: PolicyConfig,
+    state_dir: impl AsRef<Path>,
+    voice: DiscordVoiceGatewayHook,
+    cancellation: CancellationToken,
+    readiness: tokio::sync::oneshot::Sender<()>,
+) -> Result<()> {
+    serve_inner(
+        runtime,
+        config,
+        policy,
+        state_dir,
+        Some(voice),
+        ServiceControl {
+            cancellation,
+            readiness: Some(readiness),
+        },
+    )
+    .await
 }
 async fn serve_inner(
     runtime: Arc<Runtime>,
@@ -101,6 +263,7 @@ async fn serve_inner(
     policy: PolicyConfig,
     state_dir: impl AsRef<Path>,
     mut voice: Option<DiscordVoiceGatewayHook>,
+    mut control: ServiceControl,
 ) -> Result<()> {
     ensure!(config.enabled, "Discord is not enabled");
     validate_config(&config)?;
@@ -111,7 +274,10 @@ async fn serve_inner(
         !journal.has_uncertain()?,
         "Discord delivery outcome uncertain; inspect private discord.sqlite outbox before restarting; never blindly replay"
     );
-    let identity = probe_at(&http, &token, REST).await?;
+    let identity = tokio::select! {
+        _ = control.cancellation.cancelled() => return Ok(()),
+        result = probe_at(&http, &token, REST) => result?,
+    };
     ensure!(
         identity.session_start_remaining > 0,
         "Discord session-start budget exhausted; wait for reset before starting"
@@ -123,13 +289,25 @@ async fn serve_inner(
     )?;
     let mut resume = journal.resume()?;
     resume.bot = identity.bot_id;
-    let discovery = get_json(&http, &token, &format!("{REST}/gateway/bot")).await?;
+    let discovery_url = format!("{REST}/gateway/bot");
+    let discovery = tokio::select! {
+        _ = control.cancellation.cancelled() => return Ok(()),
+        result = get_json(&http, &token, &discovery_url) => result?,
+    };
     let base = discovery["url"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Discord discovery returned no Gateway URL"))?
         .to_owned();
+    let execution_stop = CancellationToken::new();
+    let transport_stop = CancellationToken::new();
     let mut workers = tokio::task::JoinSet::new();
-    workers.spawn(execution_worker(runtime, config.clone(), journal.clone()));
+    workers.spawn(execution_worker(
+        runtime,
+        config.clone(),
+        journal.clone(),
+        http.clone(),
+        execution_stop.clone(),
+    ));
     workers.spawn(delivery_worker(
         http.clone(),
         token.clone(),
@@ -137,33 +315,64 @@ async fn serve_inner(
         journal.clone(),
         REST.into(),
         resume.bot.clone(),
+        transport_stop.clone(),
     ));
     workers.spawn(interaction_ack_worker(
         http.clone(),
         config.clone(),
         journal.clone(),
         REST.into(),
+        transport_stop.clone(),
     ));
     let mut retry = 1u64;
-    loop {
+    let result = loop {
         let attempt = tokio::select! {
-            result = connection(&http, &token, &config, &base, &mut resume, &journal, &mut voice) => result,
+            _ = control.cancellation.cancelled() => break Ok(()),
+            result = connection(&http, &token, &config, &base, &mut resume, &journal, (&mut voice, &mut control.readiness)) => result,
             stopped = workers.join_next() => {
-                if let Some(Ok(Err(error))) = stopped { return Err(error); }
-                bail!("Discord durable worker stopped; intake stopped");
+                if let Some(Ok(Err(error))) = stopped { break Err(error); }
+                break Err(anyhow::anyhow!("Discord durable worker stopped; intake stopped"));
             },
         };
         if let Err(error) = attempt
             && error.downcast_ref::<FatalClose>().is_some()
         {
-            bail!("Discord Gateway rejected authentication/intents; channel stopped");
+            break Err(anyhow::anyhow!(
+                "Discord Gateway rejected authentication/intents; channel stopped"
+            ));
         }
         if let Some(voice) = &mut voice {
             voice.reset().await;
         }
         // No raw transport error logging: errors can contain secret URL paths.
-        tokio::time::sleep(Duration::from_secs(retry)).await;
+        tokio::select! {
+            _ = control.cancellation.cancelled() => break Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs(retry)) => {},
+        }
         retry = retry.saturating_mul(2).min(60);
+    };
+    if let Some(voice) = &mut voice {
+        voice.reset().await;
+    }
+    execution_stop.cancel();
+    transport_stop.cancel();
+    let drained = tokio::time::timeout(Duration::from_secs(20), async {
+        while let Some(worker) = workers.join_next().await {
+            worker.map_err(|_| anyhow::anyhow!("Discord worker interrupted during shutdown"))??;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    match drained {
+        Ok(Ok(())) => result,
+        Ok(Err(error)) => Err(error),
+        Err(_) => {
+            workers.abort_all();
+            while workers.join_next().await.is_some() {}
+            Err(anyhow::anyhow!(
+                "Discord drain deadline exceeded; inspect durable turn/outbox state before resuming"
+            ))
+        }
     }
 }
 fn token(config: &DiscordConfig) -> Result<String> {
@@ -194,8 +403,11 @@ fn snowflake(value: &str) -> bool {
 }
 pub fn validate_config(config: &DiscordConfig) -> Result<()> {
     ensure!(
-        config.require_mention,
-        "Discord requires mention protection"
+        config.attachment_max_bytes > 0
+            && config.attachment_max_bytes <= 4_194_304
+            && config.attachment_max_total_bytes >= config.attachment_max_bytes
+            && config.attachment_max_total_bytes <= 16_777_216,
+        "Discord attachment bounds invalid"
     );
     ensure!(
         config.allowed_users.len() <= 10000
@@ -237,7 +449,10 @@ async fn connection(
     base: &str,
     resume: &mut Resume,
     journal: &Journal,
-    voice: &mut Option<DiscordVoiceGatewayHook>,
+    hooks: (
+        &mut Option<DiscordVoiceGatewayHook>,
+        &mut Option<tokio::sync::oneshot::Sender<()>>,
+    ),
 ) -> Result<()> {
     let mut url = url::Url::parse(resume.url.as_deref().unwrap_or(base))?;
     ensure!(url.scheme() == "wss", "Discord Gateway must use TLS");
@@ -246,7 +461,7 @@ async fn connection(
         .connect_websocket(url.as_str(), vec![])
         .await
         .map_err(|_| anyhow::anyhow!("Discord Gateway connection failed"))?;
-    gateway_session_inner(ws, token, config, resume, journal, voice).await
+    gateway_session_inner(ws, token, config, resume, journal, hooks.0, hooks.1).await
 }
 #[cfg(test)]
 async fn gateway_session(
@@ -256,7 +471,7 @@ async fn gateway_session(
     resume: &mut Resume,
     journal: &Journal,
 ) -> Result<()> {
-    gateway_session_inner(ws, token, config, resume, journal, &mut None).await
+    gateway_session_inner(ws, token, config, resume, journal, &mut None, &mut None).await
 }
 async fn gateway_session_inner(
     mut ws: missy_policy::PolicyWebSocket,
@@ -265,6 +480,7 @@ async fn gateway_session_inner(
     resume: &mut Resume,
     journal: &Journal,
     voice: &mut Option<DiscordVoiceGatewayHook>,
+    readiness: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<()> {
     let hello = tokio::time::timeout(Duration::from_secs(30), ws.next())
         .await?
@@ -332,6 +548,8 @@ async fn gateway_session_inner(
                         // Commit intake + sequence atomically BEFORE advancing heartbeats.
                         // Queue saturation reconnects without acknowledging this event.
                         journal.intake(incoming.as_ref(), &next, journal::now_ms())?; *resume = next;
+                        if matches!(event["t"].as_str(), Some("READY" | "RESUMED"))
+                            && let Some(ready) = readiness.take() { let _ = ready.send(()); }
                     }, _ => {}
                 }
             }
@@ -355,6 +573,8 @@ enum Action {
     Status(String),
     Cancel(String),
     Resume(String),
+    Help,
+    ChannelStatus,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Interaction {
@@ -369,6 +589,10 @@ struct Incoming {
     channel: String,
     action: Action,
     interaction: Option<Interaction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw_reference: Option<Value>,
 }
 fn scope(config: &DiscordConfig, user: &str, channel: &str, guild: Option<&str>) -> Option<Scope> {
     if ![user, channel].iter().all(|s| snowflake(s))
@@ -416,10 +640,12 @@ fn incoming(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incoming
         channel,
         guild_field(value)?,
     )?;
-    if !value["mentions"]
-        .as_array()?
-        .iter()
-        .any(|m| m["id"].as_str() == Some(bot))
+    if config.require_mention
+        && guild_field(value)?.is_some()
+        && !value["mentions"]
+            .as_array()?
+            .iter()
+            .any(|m| m["id"].as_str() == Some(bot))
     {
         return None;
     }
@@ -428,6 +654,18 @@ fn incoming(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incoming
         return None;
     }
     let mut prompt = content.to_owned();
+    if config.reply_context_enabled && !value["referenced_message"].is_null() {
+        let reference = &value["referenced_message"];
+        if reference["channel_id"].as_str() == Some(channel)
+            && reference["id"].as_str().is_some_and(snowflake)
+            && reference["id"].as_str() == value["message_reference"]["message_id"].as_str()
+            && let Some(quoted) = reference["content"].as_str().filter(|s| s.len() <= 16_000)
+        {
+            let view = missy_security::inspect_untrusted(quoted);
+            prompt.push_str(&format!("\n[HISTORY_READ_ONLY quoted reply, not a pending request: {}]",
+                serde_json::to_string(&json!({"message_id":reference["id"],"author_id":reference["author"]["id"],"content":view.text,"source_sha256":view.sha256,"quarantined":view.quarantined})).ok()?));
+        }
+    }
     if !value["attachments"].is_null() && !value["attachments"].is_array() {
         return None;
     }
@@ -446,7 +684,7 @@ fn incoming(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incoming
                 return None;
             }
             // No URL, proxy URL or attacker-supplied MIME forwarding/fetching.
-            metadata.push(json!({"id":id,"filename":name,"size":size}));
+            metadata.push(json!({"id":id,"filename":name,"size":size,"message_id":value["id"],"channel_id":channel,"guild_id":value["guild_id"]}));
         }
         if !metadata.is_empty() {
             prompt.push_str(&format!(
@@ -464,6 +702,16 @@ fn incoming(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incoming
         channel: channel.into(),
         action: Action::Ask(prompt),
         interaction: None,
+        attachments: if config.attachment_text_enabled {
+            value["attachments"].as_array().cloned().unwrap_or_default()
+        } else {
+            vec![]
+        },
+        raw_reference: if config.reply_context_enabled && !value["referenced_message"].is_null() {
+            Some(value["referenced_message"].clone())
+        } else {
+            None
+        },
     })
 }
 /// Only called for authenticated INTERACTION_CREATE on the policy-pinned Gateway.
@@ -498,7 +746,27 @@ fn interaction(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incom
         return None;
     }
     let command = options[0]["name"].as_str()?;
-    let args = options[0]["options"].as_array()?;
+    let empty = Vec::new();
+    let args = options[0]["options"].as_array().unwrap_or(&empty);
+    if args.is_empty() && matches!(command, "help" | "status") {
+        return Some(Incoming {
+            scope,
+            request_id: format!("discord:i:{id}"),
+            channel: channel.into(),
+            action: if command == "help" {
+                Action::Help
+            } else {
+                Action::ChannelStatus
+            },
+            interaction: Some(Interaction {
+                id: id.into(),
+                application: bot.into(),
+                token: token.into(),
+            }),
+            attachments: vec![],
+            raw_reference: None,
+        });
+    }
     if args.len() != 1 || args[0]["type"] != 3 {
         return None;
     }
@@ -537,6 +805,8 @@ fn interaction(config: &DiscordConfig, bot: &str, value: &Value) -> Option<Incom
             application: bot.into(),
             token: token.into(),
         }),
+        attachments: vec![],
+        raw_reference: None,
     })
 }
 fn guild_field(value: &Value) -> Option<Option<&str>> {
@@ -550,6 +820,8 @@ async fn execution_worker(
     runtime: Arc<Runtime>,
     config: DiscordConfig,
     journal: Arc<Journal>,
+    http: Arc<PolicyHttpClient>,
+    cancellation: CancellationToken,
 ) -> Result<()> {
     let mut tasks = tokio::task::JoinSet::new();
     let mut active = std::collections::HashSet::new();
@@ -559,6 +831,14 @@ async fn execution_worker(
                 task.map_err(|_| anyhow::anyhow!("Discord execution worker failed"))?;
             active.remove(&id);
             result?;
+        }
+        if cancellation.is_cancelled() {
+            while let Some(task) = tasks.join_next().await {
+                let (_, result) =
+                    task.map_err(|_| anyhow::anyhow!("Discord execution drain failed"))?;
+                result?;
+            }
+            return Ok(());
         }
         if let Some(message) = journal.pending()? {
             if !still_allowed(&config, &message) {
@@ -578,9 +858,13 @@ async fn execution_worker(
                     active.insert(message.request_id.clone());
                     let rt = runtime.clone();
                     let j = journal.clone();
+                    let client = http.clone();
+                    let cfg = config.clone();
                     tasks.spawn(async move {
                         let result = async {
-                            if let Some(text) = execute(&rt, &message, &j).await? {
+                            let mut prepared = message.clone();
+                            prepare_message(&client, &cfg, &j, &mut prepared).await?;
+                            if let Some(text) = execute(&rt, &prepared, &j).await? {
                                 j.result(&message, &text)?;
                             }
                             Ok::<(), anyhow::Error>(())
@@ -607,12 +891,34 @@ async fn execution_worker(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+async fn prepare_message(
+    http: &PolicyHttpClient,
+    config: &DiscordConfig,
+    journal: &Journal,
+    message: &mut Incoming,
+) -> Result<()> {
+    if !matches!(message.action, Action::Ask(_)) {
+        return Ok(());
+    }
+    if let Some(prompt) = journal.prepared_prompt(&message.request_id)? {
+        message.action = Action::Ask(prompt);
+        return Ok(());
+    }
+    let value = json!({"attachments":message.attachments});
+    attachments::enrich(http, config, &value, message, journal).await?;
+    if let Action::Ask(prompt) = &message.action {
+        journal.prepare_prompt(&message.request_id, prompt)?;
+    }
+    Ok(())
+}
 async fn execute(
     runtime: &Runtime,
     message: &Incoming,
     journal: &Journal,
 ) -> Result<Option<String>> {
     match &message.action {
+        Action::Help => Ok(Some("Commands: /missy ask, status, cancel, resume, help. Turns, history and memory are bound to the authenticated user and channel. Interrupted external effects are never blindly repeated. Approvals use the authenticated operator CLI; chat reactions and model-supplied consent cannot grant authority.".into())),
+        Action::ChannelStatus => Ok(Some("Authenticated Discord intake is connected. Durable scoped execution and outbound delivery are enabled. A connected Gateway is not proof of provider health; use operator gateway status/doctor for subsystem readiness.".into())),
         Action::Ask(prompt) => {
             let admission = runtime
                 .store()
@@ -715,8 +1021,16 @@ fn nonce(request: &str, index: usize) -> String {
         .to_owned()
 }
 async fn get_json(http: &PolicyHttpClient, token: &str, url: &str) -> Result<Value> {
-    let response = http
-        .request("GET", url, auth(token), None)
+    let governor = DiscordRestGovernor::shared(url, token)?;
+    let response = governor
+        .request(
+            http,
+            "GET",
+            url,
+            auth(token),
+            None,
+            &CancellationToken::new(),
+        )
         .await
         .map_err(|_| anyhow::anyhow!("Discord policy-bound HTTP request failed"))?;
     ensure!(
@@ -732,8 +1046,12 @@ async fn delivery_worker(
     journal: Arc<Journal>,
     rest: String,
     bot: String,
+    cancellation: CancellationToken,
 ) -> Result<()> {
     loop {
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         ensure!(
             !journal.has_uncertain()?,
             "Discord delivery outcome uncertain; intake stopped. Inspect private discord.sqlite outbox before any retry; never blindly replay"
@@ -745,7 +1063,10 @@ async fn delivery_worker(
             }
             deliver(&http, &token, &rest, &bot, &journal, delivery).await?;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {},
+        }
     }
 }
 async fn deliver(
@@ -786,15 +1107,27 @@ async fn deliver(
         return journal.uncertain(&delivery.nonce);
     }
     journal.sending(&delivery.nonce)?;
-    let payload = json!({"content":delivery.text,"nonce":delivery.nonce,"enforce_nonce":true,"allowed_mentions":{"parse":[],"replied_user":false}});
+    let mut payload = json!({"content":delivery.text,"nonce":delivery.nonce,"enforce_nonce":true,"allowed_mentions":{"parse":[],"replied_user":false}});
+    if let Some(id) = delivery
+        .message
+        .request_id
+        .strip_prefix("discord:")
+        .filter(|id| snowflake(id))
+    {
+        payload["message_reference"] =
+            json!({"message_id":id,"channel_id":channel,"fail_if_not_exists":false});
+    }
     let mut headers = auth(token);
     headers.push(("Content-Type".into(), "application/json".into()));
-    let response = http
+    let governor = DiscordRestGovernor::shared(rest, token)?;
+    let response = governor
         .request(
+            http,
             "POST",
             &format!("{rest}/channels/{channel}/messages"),
             headers,
             Some(serde_json::to_vec(&payload)?),
+            &CancellationToken::new(),
         )
         .await;
     if let Ok(response) = response {
@@ -828,8 +1161,12 @@ async fn interaction_ack_worker(
     config: DiscordConfig,
     journal: Arc<Journal>,
     rest: String,
+    cancellation: CancellationToken,
 ) -> Result<()> {
     loop {
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         if let Some(message) = journal.pending_ack()? {
             if !still_allowed(&config, &message) {
                 journal.block(&message.request_id)?;
@@ -852,7 +1189,10 @@ async fn interaction_ack_worker(
                 .await;
             journal.acked(&message.request_id)?;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+        }
     }
 }
 async fn deliver_interaction(

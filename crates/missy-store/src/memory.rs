@@ -71,19 +71,148 @@ impl Store {
         tx.commit()?;
         Ok(n > 0)
     }
-    pub fn memory_search(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<Memory>> {
+    /// Newest bounded shortlist belonging to the entire exact Scope. No FTS
+    /// corpus statistics, cross-user ranking, or implicit channel/session widening.
+    pub fn memory_candidates(&self, scope: &Scope, limit: usize) -> Result<Vec<Memory>> {
         let key = scope_key(scope)?;
+        let c = self.connection()?;
+        let mut q = c.prepare("SELECT id,content,provenance,trust,created_at,updated_at FROM memories WHERE scope=?1 ORDER BY updated_at DESC,created_at DESC,id ASC LIMIT ?2")?;
+        Ok(q.query_map(params![key, limit.min(256) as i64], row)?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+    pub fn memory_search(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<Memory>> {
         ensure!(query.len() <= 4096, "memory query too long");
-        if query.trim().is_empty() {
+        let tokens = search_tokens(query);
+        if tokens.is_empty() || limit == 0 {
+            scope.validate()?;
             return Ok(vec![]);
         }
-        // Literal FTS phrase, escaped and bound. No caller operator syntax.
-        let literal = format!("\"{}\"", query.replace('"', "\"\""));
-        let c = self.connection()?;
-        let mut q=c.prepare("SELECT m.id,m.content,m.provenance,m.trust,m.created_at,m.updated_at FROM memories m JOIN memory_fts f ON f.rowid=m.rowid WHERE m.scope=?1 AND memory_fts MATCH ?2 ORDER BY bm25(memory_fts),m.rowid LIMIT ?3")?;
-        Ok(
-            q.query_map(params![key, literal, limit.min(1000) as i64], row)?
-                .collect::<rusqlite::Result<_>>()?,
-        )
+        // Literal contiguous token phrase, not FTS operator syntax. All ranking
+        // inputs are principal-local, so foreign writes cannot change results.
+        let mut matches: Vec<_> = self
+            .memory_candidates(scope, 256)?
+            .into_iter()
+            .filter_map(|memory| {
+                let content = search_tokens(&memory.content);
+                let count = content
+                    .windows(tokens.len())
+                    .filter(|part| *part == tokens)
+                    .count();
+                (count > 0).then_some((count, memory))
+            })
+            .collect();
+        // Stable sort preserves the deterministic newest-first candidate tie order.
+        matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        Ok(matches
+            .into_iter()
+            .take(limit.min(256))
+            .map(|(_, memory)| memory)
+            .collect())
+    }
+}
+
+fn search_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+#[cfg(test)]
+mod scoped_memory_tests {
+    use super::*;
+
+    fn scope() -> Scope {
+        Scope {
+            tenant: "tenant".into(),
+            user: "alice".into(),
+            channel: "channel".into(),
+            session: "session".into(),
+        }
+    }
+
+    #[test]
+    fn scoped_memory_candidates_have_explicit_recency_and_id_ties() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(dir.path().join("memory.db")).unwrap();
+        let scope = scope();
+        for id in ["b", "a", "c"] {
+            db.memory_put(&scope, id, "literal café 世界", "user", "untrusted")
+                .unwrap();
+        }
+        {
+            let c = db.connection().unwrap();
+            c.execute("UPDATE memories SET updated_at=2,created_at=1", [])
+                .unwrap();
+            c.execute("UPDATE memories SET updated_at=3 WHERE id='c'", [])
+                .unwrap();
+        }
+        assert_eq!(
+            db.memory_candidates(&scope, 2)
+                .unwrap()
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "a"]
+        );
+        assert_eq!(
+            db.memory_search(&scope, "café 世界", 3)
+                .unwrap()
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
+        );
+        assert!(
+            db.memory_search(&scope, "café OR 世界", 3)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn scoped_memory_foreign_corpus_cannot_change_rank_or_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(dir.path().join("memory.db")).unwrap();
+        let scope = scope();
+        db.memory_put(&scope, "a", "café café database", "user", "untrusted")
+            .unwrap();
+        db.memory_put(&scope, "b", "café archive", "user", "user_provided")
+            .unwrap();
+        let before = db.memory_search(&scope, "café", 20).unwrap();
+        let candidates = serde_json::to_value(db.memory_candidates(&scope, 20).unwrap()).unwrap();
+        for field in ["tenant", "user", "channel", "session"] {
+            let mut foreign = scope.clone();
+            match field {
+                "tenant" => foreign.tenant = "other".into(),
+                "user" => foreign.user = "other".into(),
+                "channel" => foreign.channel = "other".into(),
+                _ => foreign.session = "other".into(),
+            }
+            for n in 0..16 {
+                db.memory_put(
+                    &foreign,
+                    &format!("foreign-{n}"),
+                    &"café ".repeat(100),
+                    "foreign",
+                    "untrusted",
+                )
+                .unwrap();
+            }
+        }
+        assert_eq!(
+            before.iter().map(|m| &m.id).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(db.memory_search(&scope, "café", 20).unwrap()).unwrap()
+        );
+        assert_eq!(
+            candidates,
+            serde_json::to_value(db.memory_candidates(&scope, 20).unwrap()).unwrap()
+        );
+        assert_eq!(db.memory_candidates(&scope, 1).unwrap().len(), 1);
+        assert!(db.memory_candidates(&scope, 0).unwrap().is_empty());
     }
 }

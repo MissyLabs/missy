@@ -85,6 +85,7 @@ pub struct DiscordVoiceService {
 }
 struct Session {
     channel: u64,
+    text_output: mpsc::Sender<Vec<Vec<i16>>>,
     cancel: CancellationToken,
     task: JoinHandle<Result<()>>,
 }
@@ -123,6 +124,19 @@ impl DiscordVoiceService {
         format!("LEAVE DISCORD VOICE {guild}/{channel}")
     }
     pub async fn join(&self, guild: u64, channel: u64, actor: u64, approval: &str) -> Result<()> {
+        self.join_cancellable(guild, channel, actor, approval, CancellationToken::new())
+            .await
+    }
+    /// Cancels startup and active session without automatic rejoin or replay.
+    pub async fn join_cancellable(
+        &self,
+        guild: u64,
+        channel: u64,
+        actor: u64,
+        approval: &str,
+        cancellation: CancellationToken,
+    ) -> Result<()> {
+        ensure!(!cancellation.is_cancelled(), "voice startup cancelled");
         ensure!(
             approval == Self::join_approval(guild, channel),
             "exact voice join approval required"
@@ -131,7 +145,7 @@ impl DiscordVoiceService {
             self.config.binding(guild, channel, actor).is_some(),
             "actor lacks voice consent"
         );
-        let mut sessions = self.sessions.lock().await;
+        let mut sessions = tokio::select! {biased;_=cancellation.cancelled()=>bail!("voice startup cancelled"),s=self.sessions.lock()=>s};
         if let Some(s) = sessions.get(&guild) {
             ensure!(s.task.is_finished(), "guild has active voice");
         }
@@ -140,13 +154,22 @@ impl DiscordVoiceService {
             let _ = s.task.await;
         }
         ensure!(sessions.len() < 16, "too many voice sessions");
-        let credentials = timeout(
+        let negotiated = tokio::select! {biased;_=cancellation.cancelled()=>Err(anyhow::anyhow!("voice startup cancelled")),r=timeout(
             Duration::from_secs(45),
             self.gateway
                 .negotiate(guild, channel, self.config.bot_user_id),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Gateway negotiation timeout"))??;
+        )=>r.map_err(|_| anyhow::anyhow!("Gateway negotiation timeout")).and_then(|r|r)};
+        let credentials = match negotiated {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = timeout(
+                    Duration::from_secs(3),
+                    self.gateway.leave(guild, self.config.bot_user_id),
+                )
+                .await;
+                return Err(e);
+            }
+        };
         ensure!(
             credentials.guild_id == guild
                 && credentials.channel_id == channel
@@ -161,24 +184,38 @@ impl DiscordVoiceService {
             self.tts.clone(),
             self.agent.clone(),
         );
-        let cancel = CancellationToken::new();
+        let cancel = cancellation.child_token();
         let child = cancel.clone();
         let (tx, rx) = oneshot::channel();
         let bot = self.config.bot_user_id;
+        let (text_output, text_rx) = mpsc::channel(2);
         let task = tokio::spawn(async move {
-            let result = run(config, http, credentials, stt, tts, agent, child, tx).await;
-            let _ = gateway.leave(guild, bot).await;
+            let result = run(
+                config,
+                http,
+                credentials,
+                stt,
+                tts,
+                agent,
+                child,
+                tx,
+                text_rx,
+            )
+            .await;
+            let _ = timeout(Duration::from_secs(3), gateway.leave(guild, bot)).await;
             result
         });
         sessions.insert(
             guild,
             Session {
                 channel,
+                text_output,
                 cancel,
                 task,
             },
         );
-        if matches!(timeout(Duration::from_secs(20), rx).await, Ok(Ok(()))) {
+        let ready = tokio::select! {biased;_=cancellation.cancelled()=>false,r=timeout(Duration::from_secs(20),rx)=>matches!(r,Ok(Ok(())))};
+        if ready {
             Ok(())
         } else {
             if let Some(s) = sessions.remove(&guild) {
@@ -186,7 +223,7 @@ impl DiscordVoiceService {
                 s.task.abort();
                 let _ = s.task.await;
             }
-            let _ = self.gateway.leave(guild, bot).await;
+            let _ = timeout(Duration::from_secs(3), self.gateway.leave(guild, bot)).await;
             bail!("encrypted voice negotiation failed")
         }
     }
@@ -211,7 +248,12 @@ impl DiscordVoiceService {
                 let _ = task.await;
             }
         }
-        self.gateway.leave(guild, self.config.bot_user_id).await
+        timeout(
+            Duration::from_secs(3),
+            self.gateway.leave(guild, self.config.bot_user_id),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Gateway leave timeout"))?
     }
     pub async fn status(&self, guild: u64) -> Option<VoiceSessionStatus> {
         self.sessions.lock().await.get(&guild).map(|s| {
@@ -222,13 +264,54 @@ impl DiscordVoiceService {
             }
         })
     }
+    /// Queue only into an already human-approved joined session. Actor must
+    /// come from authenticated events, never model JSON. Queued is not played.
+    pub async fn speak_text(
+        &self,
+        guild: u64,
+        channel: u64,
+        actor: u64,
+        text: &str,
+        cancel: CancellationToken,
+    ) -> Result<()> {
+        ensure!(
+            self.config.binding(guild, channel, actor).is_some(),
+            "actor lacks voice consent"
+        );
+        ensure!(
+            !text.trim().is_empty() && text.len() <= 32_768,
+            "invalid voice text"
+        );
+        let (output, session_cancel) = {
+            let sessions = self.sessions.lock().await;
+            let s = sessions
+                .get(&guild)
+                .ok_or_else(|| anyhow::anyhow!("voice session not joined"))?;
+            ensure!(
+                s.channel == channel && !s.task.is_finished(),
+                "voice session unavailable"
+            );
+            (s.text_output.clone(), s.cancel.clone())
+        };
+        tokio::select! {biased;_=cancel.cancelled()=>bail!("text speech cancelled"),_=session_cancel.cancelled()=>bail!("voice session ended"),r=timeout(Duration::from_secs(45),async{let audio=self.tts.synthesize(text,cancel.child_token()).await?;output.send(audio::wav_frames(&audio.wav,self.config.max_reply_seconds)?).await.map_err(|_|anyhow::anyhow!("voice output closed"))})=>r.map_err(|_|anyhow::anyhow!("text speech timed out"))?}
+    }
     pub async fn shutdown(&self) {
-        let mut sessions = self.sessions.lock().await;
-        for (guild, s) in sessions.drain() {
+        let sessions: Vec<_> = self.sessions.lock().await.drain().collect();
+        for (_, s) in &sessions {
             s.cancel.cancel();
-            s.task.abort();
-            let _ = s.task.await;
-            let _ = self.gateway.leave(guild, self.config.bot_user_id).await;
+        }
+        for (guild, s) in sessions {
+            s.cancel.cancel();
+            let mut task = s.task;
+            if timeout(Duration::from_secs(3), &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
+            let _ = timeout(
+                Duration::from_secs(3),
+                self.gateway.leave(guild, self.config.bot_user_id),
+            )
+            .await;
         }
     }
 }
@@ -298,6 +381,29 @@ async fn resume_voice(
             bail!("voice resume refused");
         }
     }
+}
+/// Bounded transport-only retry, preserving RTP/DAVE counters and replay state.
+/// Never re-identifies, starts another turn, or replays any synthesized speech.
+async fn retry_resume(
+    http: &PolicyHttpClient,
+    url: &str,
+    c: &GatewayVoiceCredentials,
+    seq: i64,
+    cancel: &CancellationToken,
+) -> Result<(PolicyWebSocket, Heartbeat)> {
+    for attempt in 0..3 {
+        let operation = async {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(attempt * 200)).await;
+            }
+            resume_voice(http, url, c, seq).await
+        };
+        let result = tokio::select! {biased;_=cancel.cancelled()=>bail!("voice resume cancelled"),_=c.session_cancel.cancelled()=>bail!("Gateway voice session invalidated"),r=operation=>r};
+        if result.is_ok() || attempt == 2 {
+            return result;
+        }
+    }
+    unreachable!("bounded resume attempts")
 }
 async fn send(ws: &mut PolicyWebSocket, msg: Message) -> Result<()> {
     timeout(Duration::from_secs(3), ws.send(msg))
@@ -523,6 +629,7 @@ async fn run(
     agent: Arc<dyn DiscordVoiceAgent>,
     cancel: CancellationToken,
     ready: oneshot::Sender<()>,
+    text_output: mpsc::Receiver<Vec<Vec<i16>>>,
 ) -> Result<()> {
     let url = endpoint(&config, &credentials.endpoint)?;
     let ws = tokio::select! {_=cancel.cancelled()=>return Ok(()),v=http.connect_websocket(&url,vec![])=>v?};
@@ -537,6 +644,7 @@ async fn run(
         ready,
         url,
         ws,
+        Some(text_output),
     )
     .await
 }
@@ -585,6 +693,7 @@ async fn run_at_loopback_url(
         ready,
         url,
         ws,
+        None,
     )
     .await
 }
@@ -601,6 +710,7 @@ async fn run_connected(
     ready: oneshot::Sender<()>,
     url: String,
     mut ws: PolicyWebSocket,
+    mut text_output: Option<mpsc::Receiver<Vec<Vec<i16>>>>,
 ) -> Result<()> {
     send(&mut ws,message(0,json!({"server_id":credentials.guild_id.to_string(),"user_id":credentials.user_id.to_string(),"session_id":credentials.session_id,"token":credentials.token,"max_dave_protocol_version":missy_dave::DAVE_PROTOCOL_VERSION}))).await?;
     let mut heartbeat = Heartbeat::default();
@@ -647,6 +757,7 @@ async fn run_connected(
                 }
             },
             Some(frames)=out_rx.recv(),if play.is_empty()=>{play=frames.into();},
+            Some(frames)=async{match &mut text_output{Some(rx)=>rx.recv().await,None=>std::future::pending().await}},if play.is_empty()=>{play=frames.into();},
             received_frame=async{match &udp{Some(s)=>s.recv(&mut datagram).await,None=>std::future::pending().await}}=>{
                 let len=received_frame?;if rate_start.elapsed()>=Duration::from_secs(1){rate_start=Instant::now();received=0;}received+=1;if received>config.max_users as u32*100||len<12{continue;}let ssrc=u32::from_be_bytes(datagram[8..12].try_into()?);let Some(user)=senders.get(&ssrc).copied()else{continue;};let Some(c)=collectors.get_mut(&user)else{continue;};let(Some(cipher),Some(dave))=(&mut cipher,&mut dave)else{continue;};if !dave.session.is_ready(){continue;}
                 let Ok((_,transport))=cipher.decode(&datagram[..len])else{continue;};if transport==SILENCE{continue;}let Ok(opus)=dave.session.decrypt_opus(user,&transport)else{continue;};let mut pcm=[0i16;11_520];let Ok(samples)=c.decoder.decode(&opus,&mut pcm,false)else{continue;};
@@ -657,14 +768,14 @@ async fn run_connected(
             frame=ws.next()=>{
                 let frame=match frame{
                     Some(Ok(frame))=>frame,
-                    _=>{ensure!(dave.is_some(),"voice disconnected during negotiation");let(next,hb)=tokio::select!{_=cancel.cancelled()=>return Ok(()),v=resume_voice(&http,&url,&credentials,seq)=>v?};ws=next;heartbeat=hb;continue;}
+                    _=>{ensure!(dave.is_some(),"voice disconnected during negotiation");let(next,hb)=retry_resume(&http,&url,&credentials,seq,&cancel).await?;ws=next;heartbeat=hb;continue;}
                 };
                 match frame{
                     Message::Text(text)=>{handle_json(&mut ws,&text,&config,&credentials,&mut heartbeat,&mut udp,&mut cipher,&mut dave,&mut own_ssrc,&mut senders,&mut roster,&mut collectors,&mut seq).await?;},
                     Message::Binary(bytes)=>{let session=dave.as_mut().ok_or_else(||anyhow::anyhow!("DAVE before description"))?;for reply in session.binary(&bytes)?{send(&mut ws,reply).await?;}seq=session.sequence;},Message::Ping(bytes)=>send(&mut ws,Message::Pong(bytes)).await?,Message::Close(close)=>{
                         let code=close.map(|c|u16::from(c.code)).unwrap_or(1006);
                         ensure!(!matches!(code,4004|4006|4009|4011|4012|4014|4016|4017),"voice closed; fresh negotiation required");
-                        let(next,hb)=tokio::select!{_=cancel.cancelled()=>return Ok(()),v=resume_voice(&http,&url,&credentials,seq)=>v?};ws=next;heartbeat=hb;
+                        let(next,hb)=retry_resume(&http,&url,&credentials,seq,&cancel).await?;ws=next;heartbeat=hb;
                     },_=>{}
                 }
             }

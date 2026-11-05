@@ -47,7 +47,10 @@ This is not a claim of complete repository-wide legacy parity.
   synthesizer's timbre equals this WAV.
 * `document_extract`: UTF-8 `.md`, `.markdown`, `.txt` read through Policy;
   original text, ATX headings and fenced code blocks. Never executes blocks or
-  embedded instructions. Not a general CommonMark renderer, PDF extractor or OCR.
+  embedded instructions. Not a general CommonMark renderer. Optional separately
+  pinned/sandboxed `document_pdf_extract` and `document_ocr` support actual PDF text
+  extraction and image OCR; see
+  [`media-production.md`](../../docs/rust/media-production.md).
 
 Each output uses existing Policy descriptor-relative no-symlink atomic private
 file replacement and returns byte count, MIME type and SHA-256. Existing approved

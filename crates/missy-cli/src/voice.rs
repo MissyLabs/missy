@@ -23,6 +23,16 @@ pub struct DiscordVoiceApplication {
     pub server: missy_discord_voice::DiscordVoiceConfig,
     pub stt: missy_voice::CommandConfig,
     pub tts: missy_voice::CommandConfig,
+    #[serde(default)]
+    pub joins: Vec<DiscordVoiceJoin>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscordVoiceJoin {
+    pub guild: u64,
+    pub channel: u64,
+    pub actor: u64,
+    pub approval: String,
 }
 #[async_trait]
 impl missy_discord_voice::DiscordVoiceAgent for RuntimeVoice {

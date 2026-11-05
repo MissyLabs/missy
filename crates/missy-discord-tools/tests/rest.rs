@@ -143,6 +143,103 @@ fn nonce_from(req: &Request) -> String {
 }
 
 #[tokio::test]
+async fn history_is_scoped_projected_and_original_evidence_retained() {
+    let (base,_,task)=fixture(1,|req| {
+        assert!(req.head.starts_with("GET /api/v10/channels/40/messages?limit=2 "));
+        (200,json!([{"id":"61","channel_id":"40","author":{"id":"30","email":"not_returned","token_echo":TOKEN},"content":"ordinary history"}]))
+    }).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = config(base);
+    cfg.history_enabled = true;
+    let tools = DiscordTools::new(policy(&cfg, tmp.path()), cfg).unwrap();
+    let out = tools
+        .execute(
+            &ctx(),
+            &call(
+                "discord_read_messages",
+                json!({"guild_id":"20","channel_id":"40","limit":2}),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        out["model_view"]["messages"][0]["content"],
+        "ordinary history"
+    );
+    assert!(!out["model_view"].to_string().contains("not_returned"));
+    assert_eq!(
+        out["raw_evidence"]["messages"][0]["author"]["email"],
+        "not_returned"
+    );
+    assert_eq!(
+        out["raw_evidence"]["messages"][0]["author"]["token_echo"],
+        TOKEN
+    );
+    let mut foreign = ctx();
+    foreign.scope.tenant = "discord:g:20".into();
+    foreign.scope.channel = "discord:99".into();
+    assert!(
+        tools
+            .preflight(
+                &foreign,
+                &call(
+                    "discord_read_messages",
+                    json!({"guild_id":"20","channel_id":"40"})
+                )
+            )
+            .await
+            .is_err()
+    );
+    task.await.unwrap();
+}
+#[tokio::test]
+async fn download_uses_authenticated_message_binding_and_refuses_foreign_cdn() {
+    let (base,requests,task)=fixture(1,|req|{
+        assert!(req.head.starts_with("GET /api/v10/channels/40/messages/50 "));
+        (200,json!({"id":"50","channel_id":"40","attachments":[{"id":"60","size":20,"url":"https://evil.invalid/attachments/40/60/a.png"}]}))
+    }).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let output = tmp.path().join("download.png");
+    let mut cfg = config(base);
+    cfg.download_enabled = true;
+    let mut p = policy(&cfg, tmp.path());
+    p.write_roots = vec![tmp.path().into()];
+    let tools = DiscordTools::new(p, cfg).unwrap();
+    assert!(tools.execute(&ctx(),&call("discord_fetch_attachment",json!({"guild_id":"20","channel_id":"40","message_id":"50","attachment_id":"60","output":output}))).await.is_err());
+    assert!(!output.exists());
+    task.await.unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn reaction_is_encoded_single_put_without_retry() {
+    let (base, requests, task) = fixture(1, |req| {
+        assert!(
+            req.head
+                .starts_with("PUT /api/v10/channels/40/messages/50/reactions/%E2%98%85/@me ")
+        );
+        assert!(req.body.is_empty());
+        (204, json!({}))
+    })
+    .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = config(base);
+    cfg.reactions_enabled = true;
+    let tools = DiscordTools::new(policy(&cfg, tmp.path()), cfg).unwrap();
+    let out = tools
+        .execute(
+            &ctx(),
+            &call(
+                "discord_add_reaction",
+                json!({"guild_id":"20","channel_id":"40","message_id":"50","emoji":"★"}),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["added"], true);
+    task.await.unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
 async fn actual_binary_multipart_and_safe_result() {
     let data = b"\x89PNG\r\n\x1a\n\0\xffbinary\0";
     let (base, requests, task) = fixture(1, move |req| {

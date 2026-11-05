@@ -13,10 +13,15 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+mod admin;
+mod budget;
 mod checkpoint;
 mod files;
 mod journal;
 mod memory;
+mod operator;
+mod request_lookup;
+pub use budget::BudgetTotals;
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -208,6 +213,38 @@ impl Store {
         self.conn.lock().map_err(|_| anyhow!("store lock poisoned"))
     }
     pub fn admit(&self, scope: &Scope, request_id: &str, prompt: &str) -> Result<Admission> {
+        self.admit_inner(scope, request_id, prompt, None, None)
+    }
+    pub fn admit_tools(
+        &self,
+        scope: &Scope,
+        request_id: &str,
+        calls: &[ToolCall],
+    ) -> Result<Admission> {
+        let prompt = serde_json::to_string(calls)?;
+        self.admit_inner(scope, request_id, &prompt, Some(calls), None)
+    }
+    pub fn exact_tools(&self, scope: &Scope, turn_id: &str) -> Result<Option<Vec<ToolCall>>> {
+        let key = scope_key(scope)?;
+        let c = self.connection()?;
+        load_turn(&c, &key, turn_id)?;
+        let data: Option<String> = c
+            .query_row(
+                "SELECT calls FROM exact_tool_requests WHERE scope=?1 AND turn_id=?2",
+                params![key, turn_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        data.map(parse_json).transpose()
+    }
+    fn admit_inner(
+        &self,
+        scope: &Scope,
+        request_id: &str,
+        prompt: &str,
+        calls: Option<&[ToolCall]>,
+        metadata: Option<&Value>,
+    ) -> Result<Admission> {
         let key = scope_key(scope)?;
         ensure!(
             !request_id.is_empty() && request_id.len() <= 256,
@@ -224,6 +261,15 @@ impl Store {
             .optional()?;
         if let Some((id, hash)) = prior {
             ensure!(hash == hash_text(prompt), "idempotency payload mismatch");
+            let exact: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM exact_tool_requests WHERE scope=?1 AND turn_id=?2)",
+                params![key, id],
+                |r| r.get(0),
+            )?;
+            ensure!(
+                exact == calls.is_some(),
+                "idempotency execution mode mismatch"
+            );
             return Ok(Admission {
                 turn: load_turn(&tx, &key, &id)?,
                 created: false,
@@ -232,12 +278,18 @@ impl Store {
         let id = Uuid::new_v4().to_string();
         let at = now();
         tx.execute("INSERT INTO turns(id,scope,request_id,payload_hash,prompt,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'admitted',?6,?6)",params![id,key,request_id,hash_text(prompt),prompt,at])?;
+        if let Some(calls) = calls {
+            tx.execute(
+                "INSERT INTO exact_tool_requests(scope,turn_id,calls) VALUES(?1,?2,?3)",
+                params![key, id, serde_json::to_string(calls)?],
+            )?;
+        }
         record(
             &tx,
             &key,
             &id,
             "admitted",
-            &json!({"request_id":request_id,"payload_hash":hash_text(prompt)}),
+            &json!({"request_id":request_id,"payload_hash":hash_text(prompt),"metadata":metadata}),
         )?;
         let turn = load_turn(&tx, &key, &id)?;
         tx.commit()?;
@@ -269,6 +321,18 @@ impl Store {
         owner: &str,
         ttl: Duration,
     ) -> Result<Lease> {
+        self.acquire_lease_bounded(scope, turn_id, owner, ttl, usize::MAX)
+    }
+    /// Capacity and fencing are acquired atomically across connections/processes.
+    pub fn acquire_lease_bounded(
+        &self,
+        scope: &Scope,
+        turn_id: &str,
+        owner: &str,
+        ttl: Duration,
+        max_active: usize,
+    ) -> Result<Lease> {
+        ensure!(max_active > 0, "runtime capacity must be positive");
         let key = scope_key(scope)?;
         ensure!(
             !owner.is_empty() && owner.len() <= 256,
@@ -279,6 +343,15 @@ impl Store {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let turn = load_turn(&tx, &key, turn_id)?;
         ensure!(!turn.status.terminal(), "turn is terminal");
+        let active: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM leases WHERE expires_at>?1",
+            [now()],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            (active as u128) < max_active as u128,
+            "runtime capacity exhausted; admitted request requires explicit resume"
+        );
         let prior: Option<(i64, i64, String)> = tx
             .query_row(
                 "SELECT fence,expires_at,turn_id FROM leases WHERE scope=?1",
@@ -351,7 +424,7 @@ impl Store {
     pub fn history(&self, scope: &Scope, limit: usize) -> Result<Vec<Message>> {
         let key = scope_key(scope)?;
         let c = self.connection()?;
-        let mut q=c.prepare("SELECT message FROM(SELECT sequence,message FROM messages WHERE scope=?1 ORDER BY sequence DESC LIMIT ?2) ORDER BY sequence")?;
+        let mut q=c.prepare("SELECT message FROM(SELECT sequence,message FROM messages WHERE scope=?1 AND sequence>COALESCE((SELECT history_cutoff FROM session_metadata WHERE scope=?1),0) ORDER BY sequence DESC LIMIT ?2) ORDER BY sequence")?;
         q.query_map(params![key, limit.min(10000) as i64], |r| {
             r.get::<_, String>(0)
         })?
@@ -549,6 +622,16 @@ impl Store {
         })
         .collect()
     }
+    /// Read-only health probe on the already-owned SQLite connection. Never
+    /// opens another database file descriptor or leaks page contents/errors.
+    pub fn quick_check(&self) -> Result<bool> {
+        let connection = self.connection()?;
+        let mut query = connection.prepare("PRAGMA quick_check(1)")?;
+        let results = query
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(results.len() == 1 && results[0] == "ok")
+    }
     pub fn verify_audit(&self, scope: &Scope) -> Result<usize> {
         let key = scope_key(scope)?;
         let entries = self.audit_entries(scope)?;
@@ -572,15 +655,34 @@ impl Store {
     /// Retain turn tombstones and payload bindings forever to prevent old
     /// deliveries executing again. Purge content only, never audit chain rows.
     pub fn retention(&self, scope: &Scope, before: i64) -> Result<usize> {
+        self.session_cleanup(scope, before, false)
+    }
+    pub fn session_cleanup(&self, scope: &Scope, before: i64, dry_run: bool) -> Result<usize> {
         let key = scope_key(scope)?;
         let mut c = self.connection()?;
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM leases WHERE scope=?1 AND expires_at>?2) OR EXISTS(SELECT 1 FROM turns WHERE scope=?1 AND status IN('admitted','running','interrupted')) OR EXISTS(SELECT 1 FROM tools WHERE scope=?1 AND status IN('prepared','running','outcome_unknown')) OR EXISTS(SELECT 1 FROM budget_reservations WHERE scope=?1 AND uncertain=1)",params![key,now()],|r|r.get(0))?;
+        ensure!(
+            !blocked,
+            "cleanup refused: session has active, nonterminal or uncertain work"
+        );
+        if dry_run {
+            let count:i64=tx.query_row("SELECT (SELECT COUNT(*) FROM memories WHERE scope=?1 AND updated_at<?2)+(SELECT COUNT(*) FROM turns WHERE scope=?1 AND updated_at<?2 AND status IN('completed','failed','cancelled') AND retained=0)",params![key,before],|r|r.get(0))?;
+            return Ok(count as usize);
+        }
         tx.execute("DELETE FROM memory_fts WHERE rowid IN(SELECT rowid FROM memories WHERE scope=?1 AND updated_at<?2)",params![key,before])?;
         let memories = tx.execute(
             "DELETE FROM memories WHERE scope=?1 AND updated_at<?2",
             params![key, before],
         )?;
-        for table in ["messages", "checkpoints", "events", "tools"] {
+        for table in [
+            "raw_tool_evidence",
+            "exact_tool_requests",
+            "messages",
+            "checkpoints",
+            "events",
+            "tools",
+        ] {
             tx.execute(&format!("DELETE FROM {table} WHERE scope=?1 AND turn_id IN(SELECT id FROM turns WHERE scope=?1 AND updated_at<?2 AND status IN('completed','failed','cancelled'))"),params![key,before])?;
         }
         let turns=tx.execute("UPDATE turns SET prompt='',response=NULL,error='content removed by retention',retained=1 WHERE scope=?1 AND updated_at<?2 AND status IN('completed','failed','cancelled') AND retained=0",params![key,before])?;

@@ -62,8 +62,8 @@ pub struct Occurrence {
 /// sweeps leases, resumes old turns, or changes the Runtime's Store.
 #[derive(Clone)]
 pub struct Scheduler {
-    db: Arc<Mutex<Connection>>,
-    runtime: Arc<Runtime>,
+    pub(crate) db: Arc<Mutex<Connection>>,
+    pub(crate) runtime: Arc<Runtime>,
 }
 
 #[derive(Clone)]
@@ -112,6 +112,11 @@ fn status_str(s: &OccurrenceStatus) -> &'static str {
 }
 
 impl Scheduler {
+    /// Shared store for independently scoped trusted collectors. Does not grant
+    /// a new principal; every Store operation still requires an explicit Scope.
+    pub fn runtime_store(&self) -> std::sync::Arc<missy_store::Store> {
+        self.runtime.store().clone()
+    }
     /// Parent directory must already exist, be canonical, owned by this account,
     /// and private (0700). Existing DBs must be regular, owned, private and not links.
     pub fn open(path: impl AsRef<Path>, runtime: Arc<Runtime>) -> Result<Self> {
@@ -235,6 +240,12 @@ impl Scheduler {
         if migrated_version != 2 {
             bail!("scheduler schema migration failed");
         }
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS automation_plans(scope TEXT NOT NULL, request_id TEXT NOT NULL, binding TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(scope,request_id));
+          CREATE TABLE IF NOT EXISTS automation_triggers(scope TEXT NOT NULL, name TEXT NOT NULL, binding TEXT NOT NULL, last_fired INTEGER NOT NULL, observation TEXT, PRIMARY KEY(scope,name));
+          CREATE TABLE IF NOT EXISTS automation_trigger_runs(scope TEXT NOT NULL,name TEXT NOT NULL,operation TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(scope,name,operation));
+          CREATE TABLE IF NOT EXISTS automation_health(scope TEXT NOT NULL,name TEXT NOT NULL,healthy INTEGER NOT NULL,failures INTEGER NOT NULL,checked INTEGER NOT NULL,audited INTEGER NOT NULL,PRIMARY KEY(scope,name));
+          CREATE TABLE IF NOT EXISTS automation_health_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,scope TEXT NOT NULL,name TEXT NOT NULL,healthy INTEGER NOT NULL,failures INTEGER NOT NULL,checked INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS automation_maintenance(scope TEXT NOT NULL,turn_id TEXT NOT NULL,binding TEXT NOT NULL,status TEXT NOT NULL,summary_id TEXT NOT NULL,learning_id TEXT,PRIMARY KEY(scope,turn_id));")?;
         tx.commit()?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),

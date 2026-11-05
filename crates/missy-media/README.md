@@ -14,10 +14,11 @@ self-approve. `vision_devices` is the only read-only tool.
   new audio operations or a required `preserve_audio: true` on speed/text/crossfade.
   Audio extraction produces mono
   16 kHz PCM16 WAV, not speaker output. Frames are PNG.
-* `video_storyboard`: assembles existing PNG/JPEG files. Files produced by a
-  separately approved Comfy integration can be consumed through the same read
-  policy. No image generation, arbitrary remote service calls, transitions,
-  music generation, or inferred/fabricated shots.
+* `video_storyboard`: assembles existing PNG/JPEG files, or generates prompted
+  scenes when `with_scene_generator` injects the governed integration adapter.
+  `video_generate_storyboard` is the explicit generation name. Each artifact is
+  decoded and dimension-checked before full-decoded MP4 assembly. No arbitrary
+  endpoint/graph, transitions, music generation or fabricated completed shots.
 * `image_edit`: PNG/JPEG copy, resize, crop, rotate (90/180/270), overlay.
   Rust `image` decoders check dimensions, pixel count and allocation limits.
 * `vision_capture`: requires explicit input **file**, not a device or desktop.
@@ -32,6 +33,9 @@ or pretend music generation. Typed public `VideoRequest`, `VideoOperation`,
 exported for native integrations.
 
 ## Explicit operator configuration
+
+See [`docs/rust/media-production.md`](../../docs/rust/media-production.md) for
+current scene-generation adapter APIs, approval contracts and acceptance evidence.
 
 `MediaConfig` has no implicit executable discovery or permissive defaults:
 

@@ -3,7 +3,13 @@
 //! Every returned value, including image bytes, is untrusted external content.
 mod atspi;
 mod browser;
+mod launch;
+mod screen;
+mod status;
 mod x11;
+pub use launch::{DesktopCommand, DesktopExecutablePin, DesktopLaunchConfig};
+pub use screen::{OcrAnchor, OcrAvailability, ScreenOcr, ScreenOcrResult, parse_tesseract_tsv};
+pub use status::{DesktopBackendStatus, DesktopStatusReport, EndpointHealth};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
@@ -26,6 +32,13 @@ pub trait DesktopApproval: Send + Sync {
     /// Bind approval policy into the executor's configuration identity.
     fn configuration_fingerprint(&self) -> String;
 }
+/// Called after capture approval. Implementations retain governed disclosure /
+/// billing approval and must not promote visual observations to verified facts.
+#[async_trait]
+pub trait ScreenInterpreter: Send + Sync {
+    async fn interpret(&self, ctx: &ToolContext, png: Vec<u8>, question: &str) -> Result<Value>;
+    fn configuration_fingerprint(&self) -> String;
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,6 +46,7 @@ pub struct DesktopConfig {
     pub x11: Option<X11Config>,
     pub atspi: Option<AtspiConfig>,
     pub browser: Option<BrowserConfig>,
+    pub launch: Option<DesktopLaunchConfig>,
     /// Extra operator opt-in, independent of per-call approval.
     pub enable_screenshots: bool,
     /// Enables XTest, AT-SPI actions, browser click/fill/navigation.
@@ -48,6 +62,7 @@ impl Default for DesktopConfig {
             x11: None,
             atspi: None,
             browser: None,
+            launch: None,
             enable_screenshots: false,
             enable_input: false,
             approve_all: true,
@@ -62,6 +77,9 @@ pub struct DesktopTools {
     http: PolicyHttpClient,
     approval: Arc<dyn DesktopApproval>,
     x11_slots: Arc<tokio::sync::Semaphore>,
+    launch_state: launch::LaunchState,
+    screen_interpreter: Option<Arc<dyn ScreenInterpreter>>,
+    screen_ocr: Option<Arc<dyn ScreenOcr>>,
 }
 impl DesktopTools {
     /// Validates only. No desktop connection or discovery occurs here.
@@ -84,12 +102,26 @@ impl DesktopTools {
         if let Some(c) = &config.browser {
             c.validate()?;
         }
+        if let Some(c) = &config.launch {
+            c.validate()?;
+        }
         Ok(Self {
             config,
             http,
             approval,
             x11_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            launch_state: Default::default(),
+            screen_interpreter: None,
+            screen_ocr: None,
         })
+    }
+    pub fn with_screen_interpreter(mut self, interpreter: Arc<dyn ScreenInterpreter>) -> Self {
+        self.screen_interpreter = Some(interpreter);
+        self
+    }
+    pub fn with_screen_ocr(mut self, ocr: Arc<dyn ScreenOcr>) -> Self {
+        self.screen_ocr = Some(ocr);
+        self
     }
     fn validate_call(&self, call: &ToolCall) -> Result<()> {
         let names: BTreeSet<_> = self.definitions().into_iter().map(|d| d.name).collect();
@@ -104,10 +136,19 @@ impl DesktopTools {
         }
         // Validate every argument before requesting approval or opening a connection.
         match call.name.as_str() {
-            "desktop_windows" => {
+            "x11_read_screen" => {
+                let a: x11::ReadScreenArgs = parse(call)?;
+                if a.window == 0 || a.question.trim().is_empty() || a.question.len() > 4096 {
+                    bail!("invalid read-screen arguments");
+                }
+            }
+            "desktop_launch_app" | "x11_launch" | "install_software_confirmed" => {
+                launch::validate_call(self.config.launch.as_ref().expect("catalog checked"), call)?
+            }
+            "desktop_windows" | "desktop_status" => {
                 parse::<Empty>(call)?;
             }
-            "desktop_screenshot" => {
+            "desktop_screenshot" | "desktop_focus_window" => {
                 parse::<x11::WindowArgs>(call)?;
             }
             "desktop_input" => {
@@ -129,9 +170,22 @@ impl DesktopTools {
         }
         Ok(())
     }
-    async fn dispatch(&self, call: &ToolCall) -> Result<Value> {
+    async fn dispatch(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
         let value = match call.name.as_str() {
-            "desktop_windows" | "desktop_screenshot" | "desktop_input" => {
+            "desktop_status" => serde_json::to_value(self.status_report().await?)?,
+            "desktop_launch_app" | "x11_launch" | "install_software_confirmed" => {
+                launch::execute(
+                    self.config.launch.as_ref().expect("validated"),
+                    &self.launch_state,
+                    call,
+                )
+                .await?
+            }
+            "desktop_windows"
+            | "desktop_screenshot"
+            | "desktop_input"
+            | "desktop_focus_window"
+            | "x11_read_screen" => {
                 let config = self.config.x11.clone().expect("validated");
                 let call = call.clone();
                 let limit = self.config.max_output_bytes;
@@ -160,27 +214,107 @@ impl DesktopTools {
                 .await?
             }
         };
+        let value = if call.name == "x11_read_screen" {
+            use base64::Engine;
+            let png = base64::engine::general_purpose::STANDARD.decode(
+                value["artifact"]["data"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("screen PNG missing"))?,
+            )?;
+            let a: x11::ReadScreenArgs = parse(call)?;
+            let width = value["window"]["width"].as_u64().expect("X11 dimensions") as u32;
+            let height = value["window"]["height"].as_u64().expect("X11 dimensions") as u32;
+            let ocr = if let Some(backend) = &self.screen_ocr {
+                match backend.recognize_tsv(ctx, png.clone()).await {
+                    Ok(tsv) => parse_tesseract_tsv(&tsv, width, height)
+                        .unwrap_or_else(|_| ScreenOcrResult::absent(width, height, true)),
+                    Err(_) => ScreenOcrResult::absent(width, height, true),
+                }
+            } else {
+                ScreenOcrResult::absent(width, height, false)
+            };
+            if ctx.cancellation.is_cancelled() {
+                bail!("screen read cancelled before vision interpretation");
+            }
+            let analysis = if let Some(interpreter) = &self.screen_interpreter {
+                Some(interpreter.interpret(ctx, png, &a.question).await?)
+            } else {
+                None
+            };
+            json!({"window":value["window"],"analysis":analysis,"ocr":ocr,"trust":"untrusted_visual_observation"})
+        } else {
+            value
+        };
         let value = json!({"trust":"untrusted", "data":value});
         if serde_json::to_vec(&value)?.len() > self.config.max_output_bytes {
             bail!("desktop output exceeds configured byte limit");
         }
         Ok(value)
     }
+    async fn status_report(&self) -> Result<DesktopStatusReport> {
+        let mut x11 =
+            DesktopBackendStatus::configured(self.config.x11.as_ref().map(|c| c.isolated_session));
+        if let Some(config) = self.config.x11.clone() {
+            let slot = self.x11_slots.clone().acquire_owned().await?;
+            let healthy = tokio::task::spawn_blocking(move || {
+                let _slot = slot;
+                x11::probe(&config).is_ok()
+            })
+            .await?;
+            x11.endpoint_health = if healthy {
+                EndpointHealth::Reachable
+            } else {
+                EndpointHealth::Unavailable
+            };
+            x11.diagnostic = (!healthy).then(|| "configured_x11_endpoint_unavailable".into());
+        }
+        Ok(DesktopStatusReport {
+            x11,
+            accessibility: DesktopBackendStatus::configured(
+                self.config.atspi.as_ref().map(|c| c.isolated_session),
+            ),
+            browser: DesktopBackendStatus::configured(
+                self.config
+                    .browser
+                    .as_ref()
+                    .map(|c| c.isolated_browser_network),
+            ),
+            launch_configured: self.config.launch.is_some(),
+            screenshots_enabled: self.config.enable_screenshots,
+            input_enabled: self.config.enable_input,
+            vision_configured: self.screen_interpreter.is_some(),
+            ocr_configured: self.screen_ocr.is_some(),
+            read_screen_enabled: self.config.x11.is_some()
+                && self.config.enable_screenshots
+                && (self.screen_interpreter.is_some() || self.screen_ocr.is_some()),
+            approval_required: true,
+            ambient_discovery: false,
+            input_dispatched: false,
+        })
+    }
 }
 
 fn screenshot(name: &str) -> bool {
-    matches!(name, "desktop_screenshot" | "browser_screenshot")
+    matches!(
+        name,
+        "desktop_screenshot" | "browser_screenshot" | "x11_read_screen"
+    )
 }
 fn input(name: &str) -> bool {
     matches!(
         name,
         "desktop_input"
+            | "desktop_focus_window"
+            | "desktop_launch_app"
+            | "x11_launch"
+            | "install_software_confirmed"
             | "desktop_accessibility_action"
             | "desktop_accessibility_set_value"
             | "browser_close"
             | "browser_navigate"
             | "browser_click"
             | "browser_fill"
+            | "browser_fill_many"
     )
 }
 pub(crate) fn parse<T: serde::de::DeserializeOwned>(call: &ToolCall) -> Result<T> {
@@ -194,6 +328,11 @@ struct Empty {}
 impl ToolExecutor for DesktopTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = Vec::new();
+        if self.config.enable_input
+            && let Some(c) = &self.config.launch
+        {
+            definitions.extend(launch::definitions(c));
+        }
         let mut add = |name: &str,
                        description: &str,
                        properties: Value,
@@ -202,7 +341,40 @@ impl ToolExecutor for DesktopTools {
             definitions.push(ToolDefinition { name: name.into(), description: description.into(),
                 parameters: json!({"type":"object","properties":properties,"required":required,"additionalProperties":false}), side_effect });
         };
+        if self.config.x11.is_some()
+            || self.config.atspi.is_some()
+            || self.config.browser.is_some()
+            || self.config.launch.is_some()
+        {
+            add(
+                "desktop_status",
+                "Approval-gated configured capabilities/isolation diagnostics. Probes only the configured isolated X11 endpoint; no ambient discovery, capture, enumeration or input. Isolation is operator-attested.",
+                json!({}),
+                &[],
+                true,
+            );
+        }
         if self.config.x11.is_some() {
+            if self.config.enable_screenshots
+                && (self.screen_interpreter.is_some() || self.screen_ocr.is_some())
+            {
+                add(
+                    "x11_read_screen",
+                    "Capture an approved isolated allowlisted X11 window; reject blank frames before OCR/vision. Returns governed analysis and/or actual native-window-pixel OCR word anchors from an explicit backend, never inferred coordinates.",
+                    json!({"window":{"type":"integer","minimum":1},"question":{"type":"string","minLength":1,"maxLength":4096}}),
+                    &["window", "question"],
+                    true,
+                );
+            }
+            if self.config.enable_input {
+                add(
+                    "desktop_focus_window",
+                    "Approval-gated native X11 focus and raise of an exact allowlisted top-level window in the explicitly isolated session. Never ambient DISPLAY.",
+                    json!({"window":{"type":"integer","minimum":1}}),
+                    &["window"],
+                    true,
+                );
+            }
             add(
                 "desktop_windows",
                 "List explicitly allowlisted X11 windows; untrusted metadata.",
@@ -263,6 +435,22 @@ impl ToolExecutor for DesktopTools {
             );
         }
         if self.config.browser.is_some() {
+            add(
+                "browser_extract",
+                "Typed bounded text, links, table or form-metadata extraction on the isolated pinned page. No JavaScript input or field secrets.",
+                json!({"selector":{"type":"string"},"mode":{"enum":["text","links","table","form"]}}),
+                &["selector", "mode"],
+                false,
+            );
+            if self.config.enable_input {
+                add(
+                    "browser_fill_many",
+                    "Approval-gated multi-field form fill and optional submit in one renderer turn. Values are data, never scripts.",
+                    json!({"fields":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","additionalProperties":false,"properties":{"selector":{"type":"string"},"value":{"type":"string","maxLength":8192}},"required":["selector","value"]}},"submit_selector":{"type":"string"}}),
+                    &["fields"],
+                    true,
+                );
+            }
             add(
                 "browser_get_url",
                 "Read URL of the exact configured isolated page.",
@@ -334,7 +522,7 @@ impl ToolExecutor for DesktopTools {
         definitions
     }
     fn configuration_fingerprint(&self) -> String {
-        serde_json::to_string(&json!({"desktop":self.config,"approval":self.approval.configuration_fingerprint(),"network":self.http.config()})).expect("serializable config")
+        serde_json::to_string(&json!({"desktop":self.config,"approval":self.approval.configuration_fingerprint(),"network":self.http.config(),"screen_interpreter":self.screen_interpreter.as_ref().map(|i|i.configuration_fingerprint()),"screen_ocr":self.screen_ocr.as_ref().map(|i|i.configuration_fingerprint())})).expect("serializable config")
     }
     async fn preflight(&self, ctx: &ToolContext, call: &ToolCall) -> Result<()> {
         if ctx.cancellation.is_cancelled() {
@@ -347,7 +535,11 @@ impl ToolExecutor for DesktopTools {
                 reason: e.to_string()
             })
         })?;
-        if self.config.approve_all || screenshot(&call.name) || input(&call.name) {
+        if self.config.approve_all
+            || call.name == "desktop_status"
+            || screenshot(&call.name)
+            || input(&call.name)
+        {
             self.approval.authorize(ctx, call).await?;
         }
         Ok(())
@@ -359,7 +551,7 @@ impl ToolExecutor for DesktopTools {
         tokio::select! {
             biased;
             _ = ctx.cancellation.cancelled() => bail!("desktop operation cancelled; effects may already have occurred"),
-            result = tokio::time::timeout(Duration::from_secs(self.config.timeout_seconds), self.dispatch(call)) => result.map_err(|_| anyhow::anyhow!("desktop operation timed out; effects may already have occurred"))?,
+            result = tokio::time::timeout(Duration::from_secs(self.config.timeout_seconds), self.dispatch(ctx,call)) => result.map_err(|_| anyhow::anyhow!("desktop operation timed out; effects may already have occurred"))?,
         }
     }
 }

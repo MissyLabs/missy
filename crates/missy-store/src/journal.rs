@@ -1,5 +1,34 @@
 use super::*;
 impl Store {
+    /// Atomically bind metadata to a new request. Dedup retains original metadata.
+    pub fn admit_with_metadata(
+        &self,
+        scope: &Scope,
+        request_id: &str,
+        prompt: &str,
+        metadata: &Value,
+    ) -> Result<Admission> {
+        self.admit_inner(scope, request_id, prompt, None, Some(metadata))
+    }
+    pub fn admit_tools_with_metadata(
+        &self,
+        scope: &Scope,
+        request_id: &str,
+        calls: &[ToolCall],
+        metadata: &Value,
+    ) -> Result<Admission> {
+        let prompt = serde_json::to_string(calls)?;
+        self.admit_inner(scope, request_id, &prompt, Some(calls), Some(metadata))
+    }
+    /// Read only the original admission record in exactly the supplied scope.
+    pub fn admission_metadata(&self, scope: &Scope, turn_id: &str) -> Result<Option<Value>> {
+        let key = scope_key(scope)?;
+        let c = self.connection()?;
+        load_turn(&c, &key, turn_id)?;
+        let raw: String = c.query_row("SELECT payload FROM events WHERE scope=?1 AND turn_id=?2 AND kind='admitted' ORDER BY sequence LIMIT 1", params![key, turn_id], |r| r.get(0))?;
+        let payload: Value = parse_json(raw)?;
+        Ok(payload.get("metadata").filter(|v| !v.is_null()).cloned())
+    }
     /// All tools are conservatively effect-capable. Persist running before dispatch.
     pub fn tool_begin(&self, scope: &Scope, lease: &Lease, call: &ToolCall) -> Result<ToolBegin> {
         ensure!(
@@ -85,6 +114,58 @@ impl Store {
         result: Option<&Value>,
         error: Option<&str>,
     ) -> Result<()> {
+        self.settle_inner(scope, lease, call_id, status, (result, error, None))
+    }
+    /// Atomically persist complete bounded raw evidence and its model receipt.
+    pub fn tool_succeed_with_evidence(
+        &self,
+        scope: &Scope,
+        lease: &Lease,
+        call_id: &str,
+        result: &Value,
+        raw: &Value,
+    ) -> Result<()> {
+        let encoded = serde_json::to_string(raw)?;
+        ensure!(
+            encoded.len() <= 4 * 1024 * 1024,
+            "raw tool evidence exceeds storage bound"
+        );
+        self.settle_inner(
+            scope,
+            lease,
+            call_id,
+            ToolStatus::Succeeded,
+            (Some(result), None, Some(&encoded)),
+        )
+    }
+    pub fn tool_evidence(
+        &self,
+        scope: &Scope,
+        turn_id: &str,
+        call_id: &str,
+    ) -> Result<Option<Value>> {
+        let key = scope_key(scope)?;
+        let c = self.connection()?;
+        load_turn(&c, &key, turn_id)?;
+        let raw: Option<(String,String)> = c.query_row("SELECT data,sha256 FROM raw_tool_evidence WHERE scope=?1 AND turn_id=?2 AND call_id=?3",params![key,turn_id,call_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        raw.map(|(data, hash)| {
+            ensure!(
+                hash_text(&data) == hash,
+                "raw tool evidence integrity mismatch"
+            );
+            parse_json(data)
+        })
+        .transpose()
+    }
+    fn settle_inner(
+        &self,
+        scope: &Scope,
+        lease: &Lease,
+        call_id: &str,
+        status: ToolStatus,
+        data: (Option<&Value>, Option<&str>, Option<&str>),
+    ) -> Result<()> {
+        let (result, error, evidence) = data;
         ensure!(
             matches!(
                 status,
@@ -102,6 +183,9 @@ impl Store {
         check_fence(&tx, &key, lease)?;
         let n=tx.execute("UPDATE tools SET status=?1,result=?2,error=?3 WHERE scope=?4 AND turn_id=?5 AND call_id=?6 AND status='running' AND fence=?7",params![status.text(),result.map(serde_json::to_string).transpose()?,error,key,lease.turn_id,call_id,lease.fence])?;
         ensure!(n == 1, "tool not running under current fence");
+        if let Some(raw) = evidence {
+            tx.execute("INSERT INTO raw_tool_evidence(scope,turn_id,call_id,data,sha256) VALUES(?1,?2,?3,?4,?5)",params![key,lease.turn_id,call_id,raw,hash_text(raw)])?;
+        }
         record(
             &tx,
             &key,

@@ -1,6 +1,16 @@
 //! Explicit, isolated Rust entrypoint. Never auto-imports legacy ~/.missy.
+mod admin;
+mod config_ops;
+mod desktop_ocr;
 mod extensions;
+mod operator;
+mod production;
+mod prompt_resolver;
+mod provider_ops;
+mod screencast_adapter;
+mod skills_ops;
 mod voice;
+mod watchdog;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use missy_core::{Config, Scope};
@@ -15,6 +25,32 @@ use std::{
 };
 static TELEMETRY_HANDLES: std::sync::Mutex<Vec<missy_operations::TelemetryRuntime>> =
     std::sync::Mutex::new(Vec::new());
+static RUNTIME_HANDLES: std::sync::Mutex<Vec<std::sync::Weak<Runtime>>> =
+    std::sync::Mutex::new(Vec::new());
+/// Dedicated operator-selected worker profiles do not participate in ambient
+/// task/tier routing. Preserve budgets, pricing, weights and circuit settings.
+fn explicit_profile(mut profile: missy_core::ProviderConfig) -> missy_core::ProviderConfig {
+    profile.routing.tiers.clear();
+    profile.routing.tasks.clear();
+    profile
+}
+
+async fn shutdown_runtimes(bound: std::time::Duration) -> Result<()> {
+    let runtimes: Vec<_> = RUNTIME_HANDLES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("runtime lifecycle lock poisoned"))?
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    let mut drains = tokio::task::JoinSet::new();
+    for runtime in runtimes {
+        drains.spawn(async move { runtime.shutdown(bound).await });
+    }
+    while let Some(result) = drains.join_next().await {
+        result??;
+    }
+    Ok(())
+}
 
 #[derive(Parser)]
 #[command(
@@ -30,10 +66,48 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    Operator {
+        #[command(subcommand)]
+        command: operator::OperatorCommand,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Admin {
+        #[command(subcommand)]
+        command: admin::AdminCommand,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Screencast {
+        #[command(subcommand)]
+        command: screencast_adapter::ScreencastCommand,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Skills {
+        #[command(subcommand)]
+        command: skills_ops::SkillsCommand,
+    },
+    Triggers {
+        #[command(subcommand)]
+        command: TriggerCommand,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
     /// Write a private, default-deny configuration without touching legacy Missy.
     Init,
     /// Validate the configuration and policy without connecting to providers.
     ConfigCheck,
+    /// Explicit native provider profiles, credential checks and OAuth refresh.
+    Providers {
+        #[command(subcommand)]
+        command: provider_ops::ProviderCommand,
+    },
+    /// Offline private snapshots and redacted change plans. Never reloads a service.
+    Config {
+        #[command(subcommand)]
+        command: config_ops::ConfigCommand,
+    },
     /// Copy-only offline legacy migration. Always inspect a plan before apply.
     Migrate {
         #[command(subcommand)]
@@ -84,6 +158,11 @@ enum Command {
     },
     /// Authenticated loopback API and browser console.
     Serve,
+    /// Unified native service supervisor. Separate from the Python gateway.
+    Gateway {
+        #[command(subcommand)]
+        command: production::GatewayCommand,
+    },
     /// Run the explicitly enabled Discord gateway with strict allowlists.
     Discord,
     /// Explicit consented Discord voice, sharing the authenticated text Gateway.
@@ -96,6 +175,16 @@ enum Command {
     },
     /// Read-only authenticated Discord preflight. Does not connect a Gateway or send.
     DiscordProbe,
+    /// Offline reconciliation. Never resends uncertain Discord effects.
+    DiscordOutbox {
+        #[command(subcommand)]
+        command: OutboxCommand,
+    },
+    /// Register native guild slash commands with explicit operator confirmation.
+    DiscordRegisterCommands {
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Edge audio service and explicit operator-managed device pairing.
     Voice {
         #[command(subcommand)]
@@ -179,7 +268,31 @@ enum Command {
     },
 }
 #[derive(Subcommand)]
+enum TriggerCommand {
+    /// Inspect exact child scope and uncertain/paused occurrences without execution.
+    Receipts {
+        #[arg(long)]
+        name: String,
+    },
+    /// Explicit reset only after terminal turns and reconciliation of effects.
+    Reset {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+#[derive(Subcommand)]
 enum MigrationCommand {
+    Verify {
+        destination: PathBuf,
+    },
+    Rollback {
+        destination: PathBuf,
+        retired: PathBuf,
+        #[arg(long)]
+        confirm: bool,
+    },
     Plan {
         #[command(flatten)]
         inputs: MigrationArgs,
@@ -201,6 +314,8 @@ struct MigrationArgs {
     legacy_database: Option<PathBuf>,
     #[arg(long)]
     scope_mapping: Option<PathBuf>,
+    #[arg(long)]
+    backup_root: Option<PathBuf>,
 }
 impl MigrationArgs {
     fn input(self) -> missy_migrate::MigrationInput {
@@ -208,6 +323,7 @@ impl MigrationArgs {
             config_path: self.legacy_config,
             database_path: self.legacy_database,
             mapping_path: self.scope_mapping,
+            backup_root: self.backup_root,
             ..Default::default()
         }
     }
@@ -249,6 +365,38 @@ enum RetrievalCommand {
 }
 #[derive(Subcommand)]
 enum PluginCommand {
+    /// Propose private Rust source as data. Does not compile or execute it.
+    SourcePropose {
+        source: PathBuf,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    SourceShow {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    SourceReview {
+        id: String,
+        #[arg(long)]
+        hash: String,
+        #[arg(long)]
+        approve: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    /// Offline pinned compiler build. Result still requires separate binary review and enable.
+    SourceBuild {
+        id: String,
+        #[arg(long)]
+        hash: String,
+        #[arg(long)]
+        build_config: PathBuf,
+        #[arg(long)]
+        confirm: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
     Propose {
         manifest: PathBuf,
         #[command(flatten)]
@@ -269,6 +417,23 @@ enum PluginCommand {
         hash: String,
         #[command(flatten)]
         scope: ScopeArgs,
+    },
+}
+#[derive(Subcommand)]
+enum OutboxCommand {
+    Inspect,
+    Resolve {
+        nonce: String,
+        #[arg(long)]
+        binding: String,
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        receipt: Option<String>,
+        #[arg(long)]
+        evidence: String,
+        #[arg(long)]
+        confirm: bool,
     },
 }
 #[derive(Subcommand)]
@@ -409,6 +574,11 @@ enum PersonalCommand {
 }
 #[derive(Subcommand)]
 enum ApprovalCommand {
+    Review {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
     List {
         #[command(flatten)]
         scope: ScopeArgs,
@@ -625,6 +795,13 @@ fn load_config(path: &Path) -> Result<Config> {
     if cfg.state_dir.is_relative() {
         cfg.state_dir = base.join(&cfg.state_dir);
     }
+    for provider in &mut cfg.providers {
+        if let Some(oauth) = &mut provider.oauth
+            && oauth.token_vault.is_relative()
+        {
+            oauth.token_vault = base.join(&oauth.token_vault);
+        }
+    }
     for root in cfg
         .policy
         .read_roots
@@ -657,6 +834,15 @@ fn load_config(path: &Path) -> Result<Config> {
         &mut cfg.extensions.history_config,
         &mut cfg.extensions.discord_tools_config,
         &mut cfg.extensions.plugins_config,
+        &mut cfg.extensions.audio_devices_config,
+        &mut cfg.extensions.automation_config,
+        &mut cfg.extensions.subagents_config,
+        &mut cfg.extensions.workloads_config,
+        &mut cfg.extensions.triggers_config,
+        &mut cfg.extensions.watchdog_config,
+        &mut cfg.extensions.screencast_config,
+        &mut cfg.extensions.scene_generation_config,
+        &mut cfg.extensions.evolution_repo,
     ]
     .into_iter()
     .flatten()
@@ -754,8 +940,51 @@ fn open_store(cfg: &Config) -> Result<Arc<Store>> {
     )?))
 }
 async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
+    build_runtime_with_voice(cfg, None).await
+}
+async fn build_runtime_with_voice(
+    cfg: &Config,
+    voice_tools: Option<Arc<missy_discord_voice::DiscordVoiceSayTools>>,
+) -> Result<Arc<Runtime>> {
+    build_runtime_with_services(cfg, voice_tools, None).await
+}
+async fn build_runtime_with_services(
+    cfg: &Config,
+    voice_tools: Option<Arc<missy_discord_voice::DiscordVoiceSayTools>>,
+    workloads: Option<Arc<missy_workloads::WorkloadTools>>,
+) -> Result<Arc<Runtime>> {
+    let configuration_fingerprint = production::fingerprint(cfg)?;
+    if (cfg.extensions.automation_config.is_some() || cfg.extensions.subagents_config.is_some())
+        && cfg.runtime.max_concurrent_turns < 2
+    {
+        bail!(
+            "orchestration requires max_concurrent_turns >= 2 so a parent cannot hold the only child turn lease"
+        );
+    }
+    if cfg.extensions.scene_generation_config.is_some()
+        && (cfg.extensions.media_config.is_none() || cfg.extensions.integrations_config.is_none())
+    {
+        bail!("scene_generation_config requires media_config and integrations_config");
+    }
+    if cfg.extensions.embedding_config.is_some() && !cfg.extensions.retrieval_enabled {
+        bail!("embedding_config requires retrieval_enabled");
+    }
     let store = open_store(cfg)?;
     if let Some(path) = &cfg.extensions.cli_provider_config {
+        let mut configured = serde_json::to_value(&cfg.extensions)?;
+        let extensions = configured
+            .as_object_mut()
+            .context("extension map invalid")?;
+        extensions.remove("cli_provider_config");
+        extensions.remove("telemetry_config");
+        if extensions
+            .values()
+            .any(|v| !v.is_null() && v != &serde_json::Value::Bool(false))
+        {
+            bail!(
+                "CLI provider is explicitly no-tools; configured capability extensions would be ignored"
+            );
+        }
         let provider = missy_provider_process::CliProvider::new(load_extension(path)?)?;
         return make_runtime(
             cfg,
@@ -764,7 +993,11 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
             Arc::new(extensions::NoTools),
         );
     }
-    let providers = ProviderPool::new(cfg.providers.clone(), cfg.policy.clone())?;
+    let providers = ProviderPool::with_routing(
+        cfg.providers.clone(),
+        cfg.policy.clone(),
+        cfg.routing.clone(),
+    )?;
     if cfg.runtime.max_cost_microusd > 0 {
         providers.require_known_prices()?;
     }
@@ -784,6 +1017,49 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         }));
     }
     let mut integration_mutations = std::collections::BTreeSet::new();
+    if let Some(path) = &cfg.extensions.discord_voice_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("Discord voice tools require exact durable approvals");
+        }
+        let tools = if let Some(tools) = voice_tools {
+            tools
+        } else {
+            let app: voice::DiscordVoiceApplication = load_extension(path)?;
+            Arc::new(missy_discord_voice::DiscordVoiceSayTools::pending(
+                app.server,
+                Arc::new(extensions::OuterGuardVerified),
+            )?)
+        };
+        integration_mutations.extend(
+            tools
+                .definitions()
+                .into_iter()
+                .filter(|d| d.side_effect)
+                .map(|d| d.name),
+        );
+        executors.push(tools);
+    }
+    let audio = if let Some(path) = &cfg.extensions.audio_devices_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("audio devices require exact durable approvals");
+        }
+        let mut audio = missy_voice::AudioDeviceTools::new(load_extension(path)?)?
+            .with_approval(Arc::new(extensions::OuterGuardVerified));
+        if let Some(path) = &cfg.extensions.voice_config {
+            let voice: voice::VoiceApplication = load_extension(path)?;
+            audio = audio
+                .with_tts(Arc::new(missy_voice::CommandTts::new(voice.tts)?))
+                .with_stt(Arc::new(missy_voice::CommandStt::new(voice.stt)?));
+        }
+        integration_mutations.extend(audio.definitions().into_iter().map(|d| d.name));
+        let audio = Arc::new(audio);
+        executors.push(audio.clone());
+        Some(audio)
+    } else {
+        None
+    };
     if let Some(path) = &cfg.extensions.history_config {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -819,7 +1095,7 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
                 .context("summary output pricing required")?;
             history = history.with_summary_backend(missy_history::SummaryBackend::new(
                 Arc::new(ProviderPool::new(
-                    vec![summary.provider],
+                    vec![explicit_profile(summary.provider)],
                     cfg.policy.clone(),
                 )?),
                 summary.policy,
@@ -888,12 +1164,20 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         integration_mutations.extend(mcp.definitions().into_iter().map(|d| d.name));
         executors.push(Arc::new(mcp));
     }
+    let mut scene_integrations = None;
     if let Some(path) = &cfg.extensions.integrations_config {
         use missy_core::ToolExecutor;
         let mut integrations = missy_integrations::IntegrationTools::new(
             missy_policy::PolicyHttpClient::new(cfg.policy.clone())?,
             load_extension(path)?,
         )?;
+        if let (Some(audio), Some(path)) = (&audio, &cfg.extensions.voice_config) {
+            let voice: voice::VoiceApplication = load_extension(path)?;
+            integrations = integrations.with_speech(
+                Arc::new(missy_voice::CommandTts::new(voice.tts)?),
+                audio.clone(),
+            );
+        }
         let mutations: std::collections::BTreeSet<_> = integrations
             .definitions()
             .into_iter()
@@ -907,18 +1191,40 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
             integrations = integrations.with_approval(Arc::new(extensions::OuterGuardVerified));
         }
         integration_mutations.extend(mutations);
-        executors.push(Arc::new(integrations));
+        if let Some(path) = &cfg.extensions.media_config {
+            integrations = integrations.with_artifact_validator(Arc::new(
+                extensions::NativeArtifactValidator(missy_media::MediaTools::new(
+                    cfg.policy.clone(),
+                    load_extension(path)?,
+                )?),
+            ));
+        }
+        let integrations = Arc::new(integrations);
+        scene_integrations = Some(integrations.clone());
+        executors.push(integrations);
     }
     if let Some(path) = &cfg.extensions.desktop_config {
         use missy_core::ToolExecutor;
         if cfg.extensions.approvals_config.is_none() {
             bail!("desktop capabilities require exact durable approval configuration");
         }
-        let desktop = missy_desktop::DesktopTools::new(
+        let mut desktop = missy_desktop::DesktopTools::new(
             load_extension(path)?,
             missy_policy::PolicyHttpClient::new(cfg.policy.clone())?,
             Arc::new(extensions::OuterGuardVerified),
         )?;
+        if let Some(path) = &cfg.extensions.vision_config {
+            let mut vision: missy_vision::VisionConfig = load_extension(path)?;
+            vision.ledger_path = cfg.state_dir.join("vision-budget.sqlite3");
+            desktop = desktop.with_screen_interpreter(Arc::new(extensions::VisionInterpreter(
+                Arc::new(missy_vision::VisionTools::new(cfg.policy.clone(), vision)?),
+            )));
+        }
+        if let Some(path) = &cfg.extensions.specialty_config
+            && let Some(ocr) = desktop_ocr::build(cfg.policy.clone(), load_extension(path)?)?
+        {
+            desktop = desktop.with_screen_ocr(ocr);
+        }
         integration_mutations.extend(desktop.definitions().into_iter().map(|d| d.name));
         executors.push(Arc::new(desktop));
     }
@@ -927,7 +1233,16 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         if cfg.extensions.approvals_config.is_none() {
             bail!("media capabilities require exact durable approval configuration");
         }
-        let media = missy_media::MediaTools::new(cfg.policy.clone(), load_extension(path)?)?;
+        let mut media = missy_media::MediaTools::new(cfg.policy.clone(), load_extension(path)?)?;
+        if let Some(path) = &cfg.extensions.scene_generation_config {
+            let integrations = scene_integrations
+                .clone()
+                .context("scene generation requires integrations_config")?;
+            media = media.with_scene_generator(Arc::new(extensions::SceneAdapter {
+                integrations,
+                grant: load_extension(path)?,
+            }));
+        }
         integration_mutations.extend(
             media
                 .definitions()
@@ -977,6 +1292,28 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         integration_mutations.extend(mutations);
         executors.push(Arc::new(specialty));
     }
+    if let Some(path) = &cfg.extensions.workloads_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("workload dispatch requires exact durable approval configuration");
+        }
+        let workloads = match workloads {
+            Some(workloads) => workloads,
+            None => Arc::new(missy_workloads::WorkloadTools::open(
+                cfg.policy.clone(),
+                load_extension(path)?,
+                cfg.state_dir.join("workloads"),
+            )?),
+        };
+        integration_mutations.extend(
+            workloads
+                .definitions()
+                .into_iter()
+                .filter(|d| d.side_effect)
+                .map(|d| d.name),
+        );
+        executors.push(workloads);
+    }
     let mut tools: Arc<dyn missy_core::ToolExecutor> =
         Arc::new(extensions::CompositeTools::new(executors)?);
     if let Some(path) = &cfg.extensions.sandbox_config {
@@ -986,20 +1323,138 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
             load_extension(path)?,
         )?);
     }
+    if let Some(repo) = &cfg.extensions.evolution_repo {
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("evolution proposals require durable approval configuration");
+        }
+        let policy = load_extension(
+            cfg.extensions
+                .evolution_config
+                .as_deref()
+                .context("evolution_repo requires evolution_config")?,
+        )?;
+        tools = Arc::new(missy_evolution::EvolutionTools::new(
+            tools,
+            missy_evolution::EvolutionRegistry::open(cfg.state_dir.join("evolution.sqlite3"))?,
+            policy,
+            repo.clone(),
+        )?);
+        integration_mutations.insert("code_evolve".into());
+    }
+    let unguarded_tools = tools.clone();
     if let Some(path) = &cfg.extensions.approvals_config {
         let mut guard: missy_governance::GuardConfig = load_extension(path)?;
         if !integration_mutations.is_subset(&guard.sensitive_tool_names) {
             bail!("every integration mutation must be in sensitive_tool_names");
         }
-        use sha2::Digest;
-        guard.context_fingerprint = hex::encode(sha2::Sha256::digest(serde_json::to_vec(cfg)?));
+        guard.context_fingerprint = configuration_fingerprint.clone();
         tools = Arc::new(missy_governance::GuardedTools::new(
             tools,
             missy_governance::ApprovalRegistry::open(cfg.state_dir.join("governance.sqlite3"))?,
             guard,
         )?);
     }
-    make_runtime(cfg, store, Arc::new(providers), tools)
+    let provider: Arc<dyn missy_core::Provider> = Arc::new(providers);
+    let guarded_base_tools = tools.clone();
+    if cfg.extensions.automation_config.is_some() || cfg.extensions.subagents_config.is_some() {
+        tools = unguarded_tools;
+    }
+    if let Some(path) = &cfg.extensions.automation_config {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AutomationApplication {
+            enabled: bool,
+        }
+        let application: AutomationApplication = load_extension(path)?;
+        if application.enabled {
+            let base = make_runtime(
+                cfg,
+                store.clone(),
+                provider.clone(),
+                guarded_base_tools.clone(),
+            )?;
+            let scheduler =
+                missy_automation::Scheduler::open(cfg.state_dir.join("scheduler.sqlite3"), base)?;
+            tools = Arc::new(missy_automation::AutomationTools::new(tools, scheduler)?);
+        }
+    }
+    if let Some(path) = &cfg.extensions.subagents_config {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DelegationApplication {
+            policy: missy_subagents::DelegationPolicy,
+            limits: missy_subagents::Limits,
+        }
+        let application: DelegationApplication = load_extension(path)?;
+        // Each operator-allowed identity resolves its own configured native
+        // provider. Never alias distinct provider names to the fallback pool.
+        let mut children = std::collections::BTreeMap::new();
+        for name in application
+            .policy
+            .allowed_providers
+            .iter()
+            .chain(std::iter::once(&application.policy.provider))
+        {
+            if children.contains_key(name) {
+                continue;
+            }
+            let selected = cfg
+                .providers
+                .iter()
+                .find(|p| &p.name == name)
+                .context("delegation provider must name an explicitly configured provider")?;
+            let pool =
+                ProviderPool::new(vec![explicit_profile(selected.clone())], cfg.policy.clone())?;
+            if cfg.runtime.max_cost_microusd > 0 {
+                pool.require_known_prices()?;
+            }
+            let child = make_runtime(
+                cfg,
+                store.clone(),
+                Arc::new(pool),
+                Arc::new(extensions::NoTools),
+            )?;
+            children.insert(name.clone(), child);
+        }
+        let pool = missy_subagents::AgentPool::new(children, application.limits)?;
+        tools = Arc::new(missy_subagents::DelegationTools::new(
+            tools,
+            Arc::new(pool),
+            Arc::new(missy_subagents::AgentRegistry::open(
+                cfg.state_dir.join("agents.sqlite3"),
+            )?),
+            application.policy,
+        )?);
+    }
+    // The base runtime above has guarded tools but no recursive orchestration.
+    // The outer guard also protects newly composed automation/delegation mutations.
+    if cfg.extensions.automation_config.is_some() || cfg.extensions.subagents_config.is_some() {
+        let path = cfg
+            .extensions
+            .approvals_config
+            .as_deref()
+            .context("orchestration requires durable approvals")?;
+        let mut guard: missy_governance::GuardConfig = load_extension(path)?;
+        guard.sensitive_tool_names.extend(
+            tools
+                .definitions()
+                .into_iter()
+                .filter(|d| d.side_effect)
+                .map(|d| d.name),
+        );
+        guard.context_fingerprint = configuration_fingerprint.clone();
+        tools = Arc::new(missy_governance::GuardedTools::new(
+            tools,
+            missy_governance::ApprovalRegistry::open(cfg.state_dir.join("governance.sqlite3"))?,
+            guard,
+        )?);
+    }
+    if production::fingerprint(cfg)? != configuration_fingerprint {
+        bail!(
+            "extension configuration changed during composition; restart with stable private configuration"
+        );
+    }
+    make_runtime(cfg, store, provider, tools)
 }
 
 fn make_runtime(
@@ -1035,7 +1490,17 @@ fn make_runtime(
             cfg.runtime.clone(),
         )?
     };
-    Ok(Arc::new(runtime))
+    let identity = cfg.state_dir.join("governance.sqlite3");
+    let runtime = runtime.with_prompt_resolver(Arc::new(prompt_resolver::GovernancePrompts {
+        registry: missy_governance::ApprovalRegistry::open(&identity)?,
+        identity,
+    }))?;
+    let runtime = Arc::new(runtime);
+    RUNTIME_HANDLES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("runtime lifecycle lock poisoned"))?
+        .push(Arc::downgrade(&runtime));
+    Ok(runtime)
 }
 
 fn build_safe_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
@@ -1045,7 +1510,11 @@ fn build_safe_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
                 path,
             )?)?)
         } else {
-            let providers = ProviderPool::new(cfg.providers.clone(), cfg.policy.clone())?;
+            let providers = ProviderPool::with_routing(
+                cfg.providers.clone(),
+                cfg.policy.clone(),
+                cfg.routing.clone(),
+            )?;
             if cfg.runtime.max_cost_microusd > 0 {
                 providers.require_known_prices()?;
             }
@@ -1060,35 +1529,14 @@ fn build_safe_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
 }
 
 async fn build_scoped_runtime(cfg: &Config, scope: &Scope) -> Result<Arc<Runtime>> {
-    open_store(cfg)?;
-    let registry =
-        missy_governance::ApprovalRegistry::open(cfg.state_dir.join("governance.sqlite3"))?;
-    let snapshot = registry.prompt_snapshot(scope)?;
-    let mut scoped = cfg.clone();
-    let revision_hash = snapshot.prompt_hash.clone();
-    let has_revision = snapshot.system_prompt.is_some() || snapshot.persona.is_some();
-    if let Some(system) = snapshot.system_prompt {
-        scoped.system_prompt = system.content;
-    }
-    if let Some(persona) = snapshot.persona {
-        scoped
-            .system_prompt
-            .push_str("\n\nOperator-approved scoped persona:\n");
-        scoped.system_prompt.push_str(&persona.content);
-    }
-    if has_revision {
-        scoped
-            .system_prompt
-            .push_str("\n\n[Operator prompt revision fingerprint: ");
-        scoped.system_prompt.push_str(&revision_hash);
-        scoped.system_prompt.push(']');
-    }
-    build_runtime(&scoped).await
+    scope.validate()?;
+    build_runtime(cfg).await
 }
 
 #[tokio::main]
 async fn main() {
     let result = execute(Cli::parse()).await;
+    let _ = shutdown_runtimes(std::time::Duration::from_secs(5)).await;
     let telemetry = TELEMETRY_HANDLES
         .lock()
         .map(|mut handles| std::mem::take(&mut *handles))
@@ -1105,11 +1553,29 @@ async fn main() {
     }
 }
 async fn execute(cli: Cli) -> Result<()> {
+    if let Command::Providers { command } = cli.command {
+        return provider_ops::execute(&cli.config, command).await;
+    }
+    if let Command::Config { command } = cli.command {
+        return config_ops::execute(&cli.config, command);
+    }
     if matches!(cli.command, Command::Init) {
         return initialize(&cli.config);
     }
     if let Command::Migrate { command } = cli.command {
         match command {
+            MigrationCommand::Verify { destination } => println!(
+                "{}",
+                serde_json::to_string_pretty(&missy_migrate::verify(destination)?)?
+            ),
+            MigrationCommand::Rollback {
+                destination,
+                retired,
+                confirm,
+            } => {
+                missy_migrate::rollback(destination, retired, confirm)?;
+                println!("Migration destination retired; source backups unchanged.");
+            }
             MigrationCommand::Plan { inputs } => println!(
                 "{}",
                 serde_json::to_string_pretty(&missy_migrate::plan(inputs.input())?)?
@@ -1143,6 +1609,40 @@ async fn execute(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Init => unreachable!(),
         Command::Migrate { .. } => unreachable!(),
+        Command::Providers { .. } => unreachable!(),
+        Command::Config { .. } => unreachable!(),
+        Command::Operator { command, scope } => {
+            operator::execute(&cfg, command, scope.scope()?).await?
+        }
+        Command::Admin { command, scope } => {
+            admin::execute(&cfg, &cli.config, command, scope.scope()?)?
+        }
+        Command::Screencast { command, scope } => {
+            screencast_adapter::execute(&cfg, command, scope.scope()?).await?
+        }
+        Command::Skills { command } => skills_ops::execute(&cfg, command)?,
+        Command::Triggers { command, scope } => {
+            let scheduler = missy_automation::Scheduler::open(
+                cfg.state_dir.join("scheduler.sqlite3"),
+                build_runtime(&cfg).await?,
+            )?;
+            match command {
+                TriggerCommand::Receipts { name } => println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &scheduler.trigger_receipts(&scope.scope()?, &name)?
+                    )?
+                ),
+                TriggerCommand::Reset { name, confirm } => {
+                    if !confirm {
+                        bail!("trigger reset requires --confirm after occurrence reconciliation");
+                    }
+                    scheduler.reset_trigger(&scope.scope()?, &name)?;
+                    println!("Trigger state reset; no turn executed.");
+                }
+            }
+        }
+        Command::Gateway { command } => production::execute(command, &cli.config, &cfg).await?,
         Command::ConfigCheck => println!(
             "Configuration version {} and explicit policy are valid.",
             cfg.version
@@ -1239,19 +1739,10 @@ async fn execute(cli: Cli) -> Result<()> {
         }
         Command::Serve => missy_gateway::serve(build_runtime(&cfg).await?, cfg.api.clone()).await?,
         Command::Discord => {
-            use std::os::unix::fs::DirBuilderExt;
-            open_store(&cfg)?;
-            let dir = cfg.state_dir.join("discord");
-            if !dir.exists() {
-                std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+            if !cfg.discord.enabled {
+                bail!("Discord service requires discord.enabled");
             }
-            missy_gateway::serve_discord_with_state_dir(
-                build_runtime(&cfg).await?,
-                cfg.discord.clone(),
-                cfg.policy.clone(),
-                dir,
-            )
-            .await?
+            production::execute(production::GatewayCommand::Start, &cli.config, &cfg).await?;
         }
         Command::DiscordVoice {
             guild,
@@ -1274,49 +1765,17 @@ async fn execute(cli: Cli) -> Result<()> {
             }) {
                 bail!("actor has no explicit consented voice binding");
             }
-            let full = build_runtime(&cfg).await?;
-            let safe = build_safe_runtime(&cfg)?;
-            let adapter = Arc::new(voice::RuntimeVoice {
-                full: full.clone(),
-                safe,
-            });
-            let (gateway, hook) = missy_gateway::discord_voice_bridge();
-            let service = Arc::new(missy_discord_voice::DiscordVoiceService::new(
-                application.server,
-                Arc::new(missy_policy::PolicyHttpClient::new(cfg.policy.clone())?),
-                gateway,
-                Arc::new(missy_voice::CommandStt::new(application.stt)?),
-                Arc::new(missy_voice::CommandTts::new(application.tts)?),
-                adapter,
-            )?);
-            open_store(&cfg)?;
-            let dir = cfg.state_dir.join("discord");
-            if !dir.exists() {
-                use std::os::unix::fs::DirBuilderExt;
-                std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-            }
-            let config = cfg.discord.clone();
-            let policy = cfg.policy.clone();
-            let task = tokio::spawn(async move {
-                missy_gateway::serve_discord_with_voice(full, config, policy, dir, hook).await
-            });
-            let mut task = task;
-            let result = async {
-                tokio::select! {
-                    result=service.join(guild,channel,actor,&approval)=>result?,
-                    stopped=&mut task=>return stopped.context("Discord Gateway task failed")?,
-                }
-                tokio::select! {
-                    result=tokio::signal::ctrl_c()=>result?,
-                    stopped=&mut task=>return stopped.context("Discord Gateway task failed")?,
-                }
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            service.shutdown().await;
-            task.abort();
-            let _ = task.await;
-            result?;
+            production::start_discord_voice(
+                &cli.config,
+                &cfg,
+                voice::DiscordVoiceJoin {
+                    guild,
+                    channel,
+                    actor,
+                    approval,
+                },
+            )
+            .await?;
         }
         Command::DiscordProbe => println!(
             "{}",
@@ -1324,7 +1783,39 @@ async fn execute(cli: Cli) -> Result<()> {
                 &missy_gateway::probe_discord(cfg.discord.clone(), cfg.policy.clone()).await?
             )?
         ),
+        Command::DiscordOutbox { command } => {
+            let dir = cfg.state_dir.join("discord");
+            match command {
+                OutboxCommand::Inspect => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&missy_gateway::discord_outbox_inspect(&dir)?)?
+                ),
+                OutboxCommand::Resolve {
+                    nonce,
+                    binding,
+                    operator,
+                    receipt,
+                    evidence,
+                    confirm,
+                } => {
+                    missy_gateway::discord_outbox_resolve(
+                        &dir,
+                        &nonce,
+                        &binding,
+                        &operator,
+                        receipt.as_deref(),
+                        &evidence,
+                        confirm,
+                    )?;
+                    println!(
+                        "{}",
+                        serde_json::json!({"reconciled":true,"replayed":false})
+                    );
+                }
+            }
+        }
         Command::Voice { command } => {
+            // Pairing commands do not start a listener or inference runtime.
             open_store(&cfg)?;
             let registry = Arc::new(missy_voice::DeviceRegistry::open(
                 cfg.state_dir.join("voice-devices.json"),
@@ -1376,28 +1867,12 @@ async fn execute(cli: Cli) -> Result<()> {
                 }
                 VoiceCommand::Revoke { node_id } => registry.revoke(&node_id)?,
                 VoiceCommand::Serve => {
-                    let application: voice::VoiceApplication = load_extension(
-                        cfg.extensions
-                            .voice_config
-                            .as_deref()
-                            .context("extensions.voice_config required")?,
-                    )?;
-                    let full = build_runtime(&cfg).await?;
-                    let safe = build_safe_runtime(&cfg)?;
-                    let server = Arc::new(missy_voice::VoiceServer::new(
-                        application.server,
-                        registry,
-                        Arc::new(missy_voice::CommandStt::new(application.stt)?),
-                        Arc::new(missy_voice::CommandTts::new(application.tts)?),
-                        Arc::new(voice::RuntimeVoice { full, safe }),
-                    )?);
-                    let cancellation = tokio_util::sync::CancellationToken::new();
-                    let stop = cancellation.clone();
-                    tokio::spawn(async move {
-                        let _ = tokio::signal::ctrl_c().await;
-                        stop.cancel();
-                    });
-                    server.bind_and_serve(cancellation).await?;
+                    if cfg.extensions.voice_config.is_none() {
+                        bail!("extensions.voice_config required");
+                    }
+                    drop(registry);
+                    production::execute(production::GatewayCommand::Start, &cli.config, &cfg)
+                        .await?;
                 }
             }
         }
@@ -1436,6 +1911,10 @@ async fn execute(cli: Cli) -> Result<()> {
             let registry =
                 missy_governance::ApprovalRegistry::open(cfg.state_dir.join("governance.sqlite3"))?;
             match command {
+                ApprovalCommand::Review { id, scope } => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&registry.review(&scope.scope()?, &id, None)?)?
+                ),
                 ApprovalCommand::List { scope } => println!(
                     "{}",
                     serde_json::to_string_pretty(&registry.list(&scope.scope()?, 100)?)?
@@ -1714,7 +2193,7 @@ async fn execute(cli: Cli) -> Result<()> {
                     provider.name.clone(),
                     missy_plugins::BenchmarkTarget {
                         provider: Arc::new(ProviderPool::new(
-                            vec![provider.clone()],
+                            vec![explicit_profile(provider.clone())],
                             cfg.policy.clone(),
                         )?),
                         max_output_tokens: provider.max_output_tokens,
@@ -1740,6 +2219,55 @@ async fn execute(cli: Cli) -> Result<()> {
             open_store(&cfg)?;
             let registry = missy_plugins::ToolRegistry::open(cfg.state_dir.join("plugins"))?;
             match command {
+                PluginCommand::SourcePropose { source, scope } => println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &registry.propose_rust_source(&scope.scope()?, load_extension(&source)?)?
+                    )?
+                ),
+                PluginCommand::SourceShow { id, scope } => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&registry.rust_source(&scope.scope()?, &id)?)?
+                ),
+                PluginCommand::SourceReview {
+                    id,
+                    hash,
+                    approve,
+                    scope,
+                } => {
+                    registry.review_rust_source(&scope.scope()?, &id, &hash, approve)?;
+                    println!(
+                        "{}",
+                        serde_json::json!({"reviewed":approve,"compiled":false,"enabled":false})
+                    );
+                }
+                PluginCommand::SourceBuild {
+                    id,
+                    hash,
+                    build_config,
+                    confirm,
+                    scope,
+                } => {
+                    let build = load_extension(&build_config)?;
+                    let scope = scope.scope()?;
+                    let stop = tokio_util::sync::CancellationToken::new();
+                    let signal = production::shutdown_signal();
+                    tokio::pin!(signal);
+                    let compile = registry.build_rust_source(
+                        &scope,
+                        &id,
+                        &hash,
+                        &build,
+                        confirm,
+                        stop.clone(),
+                    );
+                    tokio::pin!(compile);
+                    let result = tokio::select! {
+                        result=&mut compile=>result,
+                        _=&mut signal=> {stop.cancel();compile.await}
+                    }?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
                 PluginCommand::Propose { manifest, scope } => {
                     let manifest = load_extension(&manifest)?;
                     println!(
@@ -1872,7 +2400,8 @@ async fn execute(cli: Cli) -> Result<()> {
             let mut runtimes = std::collections::BTreeMap::new();
             for provider in &cfg.providers {
                 let mut selected = cfg.clone();
-                selected.providers = vec![provider.clone()];
+                selected.providers = vec![explicit_profile(provider.clone())];
+                selected.routing = Default::default();
                 runtimes.insert(
                     provider.name.clone(),
                     build_scoped_runtime(&selected, &scope).await?,
@@ -2027,6 +2556,17 @@ async fn execute(cli: Cli) -> Result<()> {
             operations.replay_db = cfg.state_dir.join("operations.sqlite3");
             missy_operations::serve(build_runtime(&cfg).await?, operations).await?;
         }
+        Command::DiscordRegisterCommands { confirm } => println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &missy_gateway::register_discord_commands(
+                    cfg.discord.clone(),
+                    cfg.policy.clone(),
+                    confirm
+                )
+                .await?
+            )?
+        ),
         Command::Doctor => {
             open_store(&cfg)?;
             let prices_known = cfg.providers.iter().all(|p| {

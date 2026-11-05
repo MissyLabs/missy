@@ -1,12 +1,15 @@
-//! Data-only, exact-hash approved native plugins. No interpreter or compiler.
+//! Exact-hash approved native plugins. Source builds require separate operator
+//! review and explicitly pinned offline child-confined Rust compilation.
 #![cfg(target_os = "linux")]
 mod benchmark;
 mod proposal;
 mod registry;
 mod sandbox;
 mod schema;
+mod source;
 pub use benchmark::*;
 pub use registry::*;
+pub use source::*;
 
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
@@ -301,7 +304,14 @@ impl ToolExecutor for PluginTools {
                 !ctx.cancellation.is_cancelled(),
                 "plugin proposal cancelled before write"
             );
-            let pending = self.registry.propose(&ctx.scope, manifest)?;
+            let pending = match manifest {
+                proposal::Proposed::Manifest(manifest) => {
+                    serde_json::to_value(self.registry.propose(&ctx.scope, manifest)?)?
+                }
+                proposal::Proposed::Source(source) => {
+                    serde_json::to_value(self.registry.propose_rust_source(&ctx.scope, source)?)?
+                }
+            };
             return Ok(serde_json::json!({
                 "trust":"untrusted", "status":"pending_operator_review",
                 "proposal":pending,"approved":false,"enabled":false,

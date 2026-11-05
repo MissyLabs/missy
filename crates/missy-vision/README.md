@@ -9,13 +9,21 @@ unknown-field-denying, and **disabled by default**. `VisionKind` serializes as
 
 * `vision_analyze`: exactly one of `imagepath` (absolute string) or `imagepaths`
   (1–4 absolute strings), and a nonempty bounded `question`.
-* `vision_scene`: one absolute `imagepath` and integer `max_objects` (1–100).
+* `vision_scene`: persistent scope-bound session actions create/add_observation/
+  update_state/summarize/close. SQLite observations are append-only untrusted
+  caller assertions; state is never automatically inferred from provider output.
+  Without action, accepts one absolute `imagepath` and integer `max_objects` (1–100).
   Prompts for `{"description":"...","objects":[{"label":"...","confidence":0.5}]}`.
   Rejects extra keys, malformed JSON, markdown fences, oversized strings, invalid
   confidences and too many objects. Invalid output returns `scene: null`; never
   invents or repairs entities. An empty object list is valid.
 
-Both tools have **`side_effect: true`**, because images leave the host and provider
+* `vision_monitor`: bounded interval polling of one explicit image file, normalized
+  pixel-change threshold and cooldown; calls the billable backend only on change.
+  Never silently opens camera/display. See the complete contracts and fixture
+  evidence in [`media-production.md`](../../docs/rust/media-production.md).
+
+These tools have **`side_effect: true`**, because state is persisted or images leave the host and provider
 calls may incur charges. The embedding caller **must enforce operator approval**
 before invoking them. `ToolContext` cannot attest approval, so this crate cannot
 enforce the outer approval mechanism itself. Do not expose the executor directly

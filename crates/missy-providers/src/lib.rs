@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
+mod oauth;
+mod router;
+mod stream;
 
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
@@ -23,9 +26,35 @@ pub struct HttpProvider {
     config: ProviderConfig,
     client: PolicyHttpClient,
     endpoint: String,
+    accounts: Mutex<AccountState>,
+    credentials: std::sync::Arc<dyn CredentialResolver>,
+}
+/// Explicit injectable resolution, never discovery of OAuth files or accounts.
+pub trait CredentialResolver: Send + Sync {
+    fn resolve(&self, reference: &str) -> Result<String>;
+}
+pub struct EnvironmentCredentials;
+impl CredentialResolver for EnvironmentCredentials {
+    fn resolve(&self, reference: &str) -> Result<String> {
+        std::env::var(reference).map_err(|_| {
+            anyhow::anyhow!("provider credential environment reference is unavailable")
+        })
+    }
+}
+#[derive(Default)]
+struct AccountState {
+    next: usize,
+    retry_at: Vec<Option<Instant>>,
 }
 impl HttpProvider {
     pub fn new(config: ProviderConfig, client: PolicyHttpClient) -> Result<Self> {
+        Self::with_credentials(config, client, std::sync::Arc::new(EnvironmentCredentials))
+    }
+    pub fn with_credentials(
+        config: ProviderConfig,
+        client: PolicyHttpClient,
+        credentials: std::sync::Arc<dyn CredentialResolver>,
+    ) -> Result<Self> {
         ensure!(
             !config.name.is_empty() && !config.model.is_empty(),
             "provider name and model required"
@@ -53,6 +82,7 @@ impl HttpProvider {
         );
         let suffix = match config.kind.as_str() {
             "openai" => "/chat/completions",
+            "openai_responses" => "/responses",
             "anthropic" => "/messages",
             "ollama" => "/api/chat",
             _ => bail!("unsupported provider kind"),
@@ -62,29 +92,81 @@ impl HttpProvider {
         if let Some(key) = &config.api_key_env {
             validate_env_name(key)?;
         }
+        ensure!(
+            config.api_key_env.is_none() || config.api_key_envs.is_empty(),
+            "use api_key_env or api_key_envs, not both"
+        );
+        if let Some(oauth) = &config.oauth {
+            oauth::validate(oauth)?;
+            ensure!(
+                config.api_key_env.is_none() && config.api_key_envs.is_empty(),
+                "OAuth and API credential references cannot be combined"
+            );
+        }
+        ensure!(
+            config.api_key_envs.len() <= 32,
+            "too many provider credential references"
+        );
+        let mut references = HashSet::new();
+        for key in &config.api_key_envs {
+            validate_env_name(key)?;
+            ensure!(
+                references.insert(key),
+                "duplicate provider credential reference"
+            );
+        }
+        let account_count = config.api_key_envs.len().max(1);
         let client = client.with_timeout(Duration::from_secs(config.timeout_seconds))?;
         Ok(Self {
             config,
             client,
             endpoint: url.into(),
+            accounts: Mutex::new(AccountState {
+                next: 0,
+                retry_at: vec![None; account_count],
+            }),
+            credentials,
         })
     }
     pub fn config(&self) -> &ProviderConfig {
         &self.config
     }
+    /// Explicit operator refresh, without inference or returning secrets.
+    pub async fn refresh_oauth(&self, cancellation: CancellationToken) -> Result<()> {
+        let oauth = self
+            .config
+            .oauth
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("provider has no OAuth profile"))?;
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => bail!("OAuth refresh cancelled"),
+            result = tokio::time::timeout(Duration::from_secs(oauth.timeout_seconds),
+                oauth::credential(oauth, &self.config.name, &self.client, self.credentials.as_ref(), true)) => {
+                result.map_err(|_| anyhow::anyhow!("OAuth refresh timed out"))??;
+            }
+        }
+        Ok(())
+    }
     pub fn costs_known(&self) -> bool {
         self.config.input_microusd_per_million.is_some()
             && self.config.output_microusd_per_million.is_some()
     }
-    fn headers(&self) -> Result<Vec<(String, String)>> {
+    fn headers(&self, account: usize) -> Result<Vec<(String, String)>> {
         let mut headers = vec![("content-type".into(), "application/json".into())];
         if self.config.kind == "anthropic" {
             headers.push(("anthropic-version".into(), "2023-06-01".into()));
         }
-        if let Some(env) = &self.config.api_key_env {
-            let key = std::env::var(env).map_err(|_| {
-                anyhow::anyhow!("provider credential environment reference is unavailable")
-            })?;
+        if let Some(env) = self
+            .config
+            .api_key_envs
+            .get(account)
+            .or(self.config.api_key_env.as_ref())
+        {
+            let key = self
+                .credentials
+                .resolve(env)
+                .map_err(|_| anyhow::anyhow!("provider credential reference is unavailable"))?;
             ensure!(
                 !key.is_empty() && key.len() <= 16_384 && key.bytes().all(|b| b.is_ascii_graphic()),
                 "provider credential is empty, oversized or contains forbidden bytes"
@@ -101,6 +183,26 @@ impl HttpProvider {
         validate_input(messages, tools)?;
         let tool_values: Vec<Value> = tools.iter().map(|t| json!({"type":"function", "function":{"name":t.name,"description":t.description,"parameters":t.parameters}})).collect();
         match self.config.kind.as_str() {
+            "openai_responses" => {
+                let mut input = Vec::new();
+                for m in messages {
+                    if m.role == "tool" {
+                        input.push(json!({"type":"function_call_output","call_id":m.tool_call_id,"output":m.content}));
+                    } else {
+                        if !m.content.is_empty() {
+                            input.push(json!({"role":m.role,"content":m.content}));
+                        }
+                        for call in &m.tool_calls {
+                            input.push(json!({"type":"function_call","call_id":call.id,"name":call.name,"arguments":call.arguments.to_string()}));
+                        }
+                    }
+                }
+                // Only gateway-managed custom functions are exposed. Never add
+                // hosted shell, browsing, computer-use or implicit CLI tools.
+                Ok(
+                    json!({"model":self.config.model,"input":input,"max_output_tokens":self.config.max_output_tokens,"stream":false,"store":false,"parallel_tool_calls":false,"tools":tools.iter().map(|t|json!({"type":"function","name":t.name,"description":t.description,"parameters":t.parameters})).collect::<Vec<_>>(),"tool_choice":if tools.is_empty(){"none"}else{"auto"}}),
+                )
+            }
             "openai" => {
                 let rows: Vec<Value> = messages.iter().map(|m| {
                     let mut row = json!({"role":m.role,"content":m.content});
@@ -178,6 +280,54 @@ impl HttpProvider {
     }
     fn decode(&self, value: Value, tools: &[ToolDefinition]) -> Result<Completion> {
         let (content, calls, input, output, finish) = match self.config.kind.as_str() {
+            "openai_responses" => {
+                ensure!(
+                    value.get("error").is_none_or(Value::is_null),
+                    "Responses API returned error"
+                );
+                let finish = match string(&value, "status")? {
+                    "completed" => "stop",
+                    "incomplete"
+                        if value["incomplete_details"]["reason"] == "max_output_tokens" =>
+                    {
+                        "length"
+                    }
+                    _ => bail!("Responses API did not finish"),
+                };
+                let mut text = String::new();
+                let mut calls = Vec::new();
+                for item in array(&value, "output")? {
+                    match string(item, "type")? {
+                        "message" => {
+                            ensure!(
+                                string(item, "role")? == "assistant",
+                                "Responses API returned non-assistant message"
+                            );
+                            for block in array(item, "content")? {
+                                ensure!(
+                                    string(block, "type")? == "output_text",
+                                    "Responses API refused or returned unsupported content"
+                                );
+                                text.push_str(string(block, "text")?);
+                            }
+                        }
+                        "function_call" => calls.push(ToolCall {
+                            id: string(item, "call_id")?.into(),
+                            name: string(item, "name")?.into(),
+                            arguments: strict_json(string(item, "arguments")?.as_bytes())?,
+                        }),
+                        "reasoning" => {}
+                        _ => bail!("Responses API returned unsupported native tool or output"),
+                    }
+                }
+                (
+                    text,
+                    calls,
+                    number(&value["usage"], "input_tokens")?,
+                    number(&value["usage"], "output_tokens")?,
+                    finish.into(),
+                )
+            }
             "openai" => {
                 let choices = array(&value, "choices")?;
                 ensure!(
@@ -389,22 +539,123 @@ impl Provider for HttpProvider {
         cancellation: CancellationToken,
     ) -> Result<Completion> {
         ensure!(!cancellation.is_cancelled(), "provider request cancelled");
-        let payload = serde_json::to_vec(&self.payload(messages, tools)?)?;
+        let mut value = self.payload(messages, tools)?;
+        value["stream"] = json!(self.config.stream);
+        if self.config.stream && self.config.kind == "openai" {
+            value["stream_options"] = json!({"include_usage":true});
+        }
+        let payload = serde_json::to_vec(&value)?;
         ensure!(
             payload.len() <= MAX_REQUEST_BYTES,
             "provider request exceeds byte limit"
         );
-        let headers = self.headers()?;
-        let request = self
-            .client
-            .request("POST", &self.endpoint, headers, Some(payload));
-        let response = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => bail!("provider request cancelled"),
-            result = tokio::time::timeout(Duration::from_secs(self.config.timeout_seconds),request) => {
-                result.map_err(|_| anyhow::anyhow!("provider request timed out"))?.map_err(|_| anyhow::anyhow!("provider HTTP transport or policy failure"))?
+        let count = self.config.api_key_envs.len().max(1);
+        let start = {
+            let mut state = self
+                .accounts
+                .lock()
+                .map_err(|_| anyhow::anyhow!("provider account lock poisoned"))?;
+            let start = state.next;
+            if self.config.account_rotation {
+                state.next = (start + 1) % count;
             }
+            start
         };
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(self.config.timeout_seconds);
+        let mut response = None;
+        let mut uncertain_billing = false;
+        for offset in 0..count {
+            ensure!(!cancellation.is_cancelled(), "provider request cancelled");
+            let account = (start + offset) % count;
+            if self
+                .accounts
+                .lock()
+                .map_err(|_| anyhow::anyhow!("provider account lock poisoned"))?
+                .retry_at[account]
+                .is_some_and(|at| at > Instant::now())
+            {
+                continue;
+            }
+            let headers = match self.headers(account) {
+                Ok(headers) => headers,
+                Err(_) => continue,
+            };
+            let mut oauth_access = None;
+            let headers = if let Some(oauth) = &self.config.oauth {
+                let credential = tokio::select! {
+                    biased;
+                    _=cancellation.cancelled()=>bail!("provider request cancelled"),
+                    value=tokio::time::timeout_at(deadline,oauth::credential(oauth,&self.config.name,&self.client,self.credentials.as_ref(),false))=>value.map_err(|_|anyhow::anyhow!("provider OAuth timed out"))??,
+                };
+                oauth_access = Some(credential.clone());
+                let mut headers = headers;
+                headers.push((
+                    if self.config.kind == "anthropic" {
+                        "x-api-key"
+                    } else {
+                        "authorization"
+                    }
+                    .into(),
+                    if self.config.kind == "anthropic" {
+                        credential
+                    } else {
+                        format!("Bearer {credential}")
+                    },
+                ));
+                headers
+            } else {
+                headers
+            };
+            let request = async {
+                if self.config.stream {
+                    let response = self
+                        .client
+                        .request_stream("POST", &self.endpoint, headers, Some(payload.clone()))
+                        .await?;
+                    stream::collect(response, &self.config.kind).await
+                } else {
+                    self.client
+                        .request("POST", &self.endpoint, headers, Some(payload.clone()))
+                        .await
+                }
+            };
+            let current = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => bail!("provider request cancelled"),
+                result = tokio::time::timeout_at(deadline,request) => {
+                    result.map_err(|_| anyhow::anyhow!("provider request timed out"))?.map_err(|_| anyhow::anyhow!("provider HTTP transport or policy failure"))?
+                }
+            };
+            if matches!(current.status, 401 | 403 | 429) {
+                if current.status == 401
+                    && let (Some(oauth), Some(rejected)) =
+                        (&self.config.oauth, oauth_access.as_deref())
+                {
+                    tokio::select! {
+                        biased;
+                        _ = cancellation.cancelled() => bail!("provider request cancelled"),
+                        result = tokio::time::timeout_at(deadline, oauth::invalidate(oauth, &self.config.name, rejected)) => {
+                            result.map_err(|_| anyhow::anyhow!("OAuth invalidation timed out"))??;
+                        }
+                    }
+                }
+                uncertain_billing = true;
+                self.accounts
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("provider account lock poisoned"))?
+                    .retry_at[account] = Some(
+                    Instant::now()
+                        + Duration::from_secs(if current.status == 429 { 30 } else { 60 }),
+                );
+                continue;
+            }
+            response = Some(current);
+            break;
+        }
+        let response = response.ok_or_else(|| {
+            anyhow::anyhow!("provider accounts unavailable, rejected or cooling down")
+        })?;
         ensure!(
             (200..300).contains(&response.status),
             "provider HTTP status {}",
@@ -412,7 +663,10 @@ impl Provider for HttpProvider {
         );
         let value = strict_json(&response.body)
             .map_err(|_| anyhow::anyhow!("provider response is invalid or ambiguous JSON"))?;
-        let completion = self.decode(value, tools)?;
+        let mut completion = self.decode(value, tools)?;
+        if uncertain_billing {
+            completion.usage.cost_known = false;
+        }
         let historical_ids: HashSet<_> = messages
             .iter()
             .flat_map(|m| &m.tool_calls)
@@ -470,17 +724,33 @@ struct Circuit {
 pub struct ProviderPool {
     providers: Vec<HttpProvider>,
     circuits: Mutex<Vec<Circuit>>,
+    router: router::Router,
 }
 impl ProviderPool {
     pub fn new(configs: Vec<ProviderConfig>, policy: PolicyConfig) -> Result<Self> {
         Self::with_client(configs, PolicyHttpClient::new(policy)?)
     }
     pub fn with_client(configs: Vec<ProviderConfig>, client: PolicyHttpClient) -> Result<Self> {
+        Self::with_client_and_routing(configs, client, missy_core::RoutingConfig::default())
+    }
+    pub fn with_routing(
+        configs: Vec<ProviderConfig>,
+        policy: PolicyConfig,
+        routing: missy_core::RoutingConfig,
+    ) -> Result<Self> {
+        Self::with_client_and_routing(configs, PolicyHttpClient::new(policy)?, routing)
+    }
+    pub fn with_client_and_routing(
+        configs: Vec<ProviderConfig>,
+        client: PolicyHttpClient,
+        routing: missy_core::RoutingConfig,
+    ) -> Result<Self> {
         ensure!(
             !configs.is_empty() && configs.len() <= 16,
             "provider pool requires 1..16 providers"
         );
         let mut names = HashSet::new();
+        let router = router::Router::new(&configs, routing)?;
         let mut providers = vec![];
         for config in configs {
             ensure!(names.insert(config.name.clone()), "duplicate provider name");
@@ -490,6 +760,7 @@ impl ProviderPool {
         Ok(Self {
             providers,
             circuits,
+            router,
         })
     }
     pub fn costs_known(&self) -> bool {
@@ -502,24 +773,11 @@ impl ProviderPool {
         );
         Ok(())
     }
-}
-#[async_trait]
-impl Provider for ProviderPool {
-    fn name(&self) -> &str {
-        "provider-pool"
-    }
-    fn configuration_fingerprint(&self) -> String {
-        fingerprint(
-            &self
-                .providers
-                .iter()
-                .map(|p| p.config.clone())
-                .collect::<Vec<_>>(),
-            self.providers[0].client.config(),
-        )
-    }
-    async fn complete(
+    /// Task and tier are trusted operator/caller metadata, never parsed from model output.
+    pub async fn complete_for(
         &self,
+        task: Option<&str>,
+        tier: Option<&str>,
         messages: &[Message],
         tools: &[ToolDefinition],
         cancellation: CancellationToken,
@@ -528,7 +786,12 @@ impl Provider for ProviderPool {
         // A failed remote attempt may have been billed. The eventual successful
         // response cannot make the TOTAL call cost known again.
         let mut uncertain_billing = false;
-        for (i, provider) in self.providers.iter().enumerate() {
+        let order = self.router.plan(task, tier, messages, tools)?;
+        // One shared, bounded limiter wait budget for the whole failover chain.
+        let wait_deadline =
+            tokio::time::Instant::now() + Duration::from_millis(self.router.config.max_wait_ms);
+        for i in order {
+            let provider = &self.providers[i];
             ensure!(!cancellation.is_cancelled(), "provider request cancelled");
             let retry = {
                 self.circuits
@@ -539,6 +802,26 @@ impl Provider for ProviderPool {
             if retry.is_some_and(|at| at > Instant::now()) {
                 continue;
             }
+            // Reserve conservatively for every possible account attempt. UTF-8
+            // payload bytes bound input tokens without silently assuming 4 chars/token.
+            // Never refund on errors/cancel: a remote request may already be billed.
+            let mut payload = provider.payload(messages, tools)?;
+            payload["stream"] = json!(provider.config.stream);
+            if provider.config.stream && provider.config.kind == "openai" {
+                payload["stream_options"] = json!({"include_usage":true});
+            }
+            let input_bound = serde_json::to_vec(&payload)?.len() as u64;
+            let accounts = provider.config.api_key_envs.len().max(1) as u64;
+            let token_bound = input_bound
+                .saturating_add(u64::from(provider.config.max_output_tokens))
+                .saturating_mul(accounts);
+            let Some(_reservation) = self
+                .router
+                .reserve(i, token_bound, accounts, wait_deadline, &cancellation)
+                .await?
+            else {
+                continue;
+            };
             match provider
                 .complete(messages, tools, cancellation.clone())
                 .await
@@ -562,12 +845,48 @@ impl Provider for ProviderPool {
                         .map_err(|_| anyhow::anyhow!("provider circuit lock poisoned"))?;
                     let c = &mut circuits[i];
                     c.failures = c.failures.saturating_add(1);
-                    let backoff = Duration::from_millis((250u64 << c.failures.min(7)).min(30_000));
-                    c.retry_at = Some(Instant::now() + backoff);
+                    let r = &provider.config.routing;
+                    if c.failures >= r.circuit_failure_threshold {
+                        let exponent = c
+                            .failures
+                            .saturating_sub(r.circuit_failure_threshold)
+                            .min(7);
+                        let backoff =
+                            Duration::from_millis((r.circuit_cooldown_ms << exponent).min(30_000));
+                        c.retry_at = Some(Instant::now() + backoff);
+                    }
                 }
             }
         }
         bail!("all configured providers failed or have open circuits; no completion produced")
+    }
+}
+#[async_trait]
+impl Provider for ProviderPool {
+    fn name(&self) -> &str {
+        "provider-pool"
+    }
+    fn configuration_fingerprint(&self) -> String {
+        let base = fingerprint(
+            &self
+                .providers
+                .iter()
+                .map(|p| p.config.clone())
+                .collect::<Vec<_>>(),
+            self.providers[0].client.config(),
+        );
+        let encoded = serde_json::to_vec(&(base, &self.router.config))
+            .expect("routing configuration is serializable");
+        format!("routing-v1:{}", hex::encode(Sha256::digest(encoded)))
+    }
+    async fn complete(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        cancellation: CancellationToken,
+    ) -> Result<Completion> {
+        self.complete_for(None, None, messages, tools, cancellation)
+            .await
     }
 }
 

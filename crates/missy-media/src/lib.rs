@@ -4,9 +4,12 @@
 mod config;
 mod image_ops;
 mod process;
+mod storyboard;
+mod validation;
 mod video;
 pub use config::{ExecutablePin, MediaConfig};
 pub use image_ops::{ImageOperation, ImageRequest, Rotation};
+pub use storyboard::{SceneGenerationRequest, SceneGenerator};
 pub use video::{
     CaptionColor, MediaMetadata, StreamMetadata, TextPosition, VideoOperation, VideoRequest,
 };
@@ -23,6 +26,7 @@ use std::{path::PathBuf, sync::Arc};
 pub struct MediaTools {
     policy: Policy,
     config: Arc<MediaConfig>,
+    scene_generator: Option<Arc<dyn SceneGenerator>>,
 }
 impl MediaTools {
     pub fn new(policy: PolicyConfig, config: MediaConfig) -> Result<Self> {
@@ -34,12 +38,22 @@ impl MediaTools {
         Ok(Self {
             policy: Policy::new(policy)?,
             config: Arc::new(config),
+            scene_generator: None,
         })
+    }
+    /// Generator must dispatch through durable integration approval/journaling.
+    pub fn with_scene_generator(mut self, generator: Arc<dyn SceneGenerator>) -> Self {
+        self.scene_generator = Some(generator);
+        self
     }
     /// Typed API. Caller remains responsible for approval/journaling.
     pub async fn edit_video(&self, ctx: &ToolContext, request: VideoRequest) -> Result<Value> {
         request.validate(&self.config)?;
         video::execute(&self.policy, &self.config, ctx, request).await
+    }
+    /// Pinned sandboxed FFprobe plus full FFmpeg decode. Never publishes/plays.
+    pub async fn validate_mp4(&self, ctx: &ToolContext, bytes: &[u8]) -> Result<MediaMetadata> {
+        validation::validate_mp4(&self.config, ctx, bytes).await
     }
     pub fn edit_image(&self, request: ImageRequest) -> Result<Value> {
         image_ops::execute(&self.policy, &self.config, request)
@@ -50,6 +64,15 @@ impl MediaTools {
                 let r: VideoRequest = serde_json::from_value(call.arguments.clone())?;
                 r.validate(&self.config)?;
                 Ok(Request::Video(r))
+            }
+            "video_generate_storyboard" | "video_storyboard"
+                if self.scene_generator.is_some() && call.arguments.get("scenes").is_some() =>
+            {
+                let r: storyboard::GenerateStoryboard =
+                    serde_json::from_value(call.arguments.clone())?;
+                r.validate(&self.config)?;
+                r.validate_policy(&self.policy)?;
+                Ok(Request::Generate(r))
             }
             "video_storyboard" => {
                 let r: StoryboardRequest = serde_json::from_value(call.arguments.clone())?;
@@ -92,6 +115,7 @@ impl MediaTools {
     }
 }
 enum Request {
+    Generate(storyboard::GenerateStoryboard),
     Video(VideoRequest),
     Image(ImageRequest),
     Devices,
@@ -134,7 +158,7 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
 #[async_trait]
 impl ToolExecutor for MediaTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        vec![
+        let mut definitions = vec![
             definition(
                 "video_edit",
                 "Native bounded file-only FFmpeg editing. Existing edits stay silent; audio_mux/audio_mix explicitly add AAC, speed/text/crossfade require preserve_audio. Text requires a policy-readable font_file. No arbitrary filters or URLs.",
@@ -171,13 +195,28 @@ impl ToolExecutor for MediaTools {
                 object_schema(json!({}), &[]),
                 false,
             ),
-        ]
+        ];
+        if self.scene_generator.is_some() {
+            let generated = storyboard::definition();
+            if let Some(existing) = definitions
+                .iter_mut()
+                .find(|d| d.name == "video_storyboard")
+            {
+                existing.description="Assemble supplied images OR generate prompted scenes through the approved integration then assemble a fully decoded MP4. Scene generation is real billable external work, not an images-only substitution.".into();
+                existing.parameters = json!({"oneOf":[existing.parameters,generated.parameters]});
+            }
+            definitions.push(generated);
+        }
+        definitions
     }
     fn configuration_fingerprint(&self) -> String {
         let bytes = serde_json::to_vec(&(
             self.policy.config(),
             self.config.as_ref(),
             self.definitions(),
+            self.scene_generator
+                .as_ref()
+                .map(|g| g.configuration_fingerprint()),
         ))
         .expect("serializable config");
         hex::encode(Sha256::digest(bytes))
@@ -190,6 +229,7 @@ impl ToolExecutor for MediaTools {
     async fn execute(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
         ensure!(!ctx.cancellation.is_cancelled(), "media cancelled");
         match self.parse(call)? {
+            Request::Generate(r) => storyboard::execute(self, ctx, r).await,
             Request::Video(r) => self.edit_video(ctx, r).await,
             Request::Image(r) => self.edit_image(r),
             Request::Devices => discover_cameras(),

@@ -1,9 +1,9 @@
-//! Operator-only code evolution and inert persona experiments.
-//! No ToolExecutor implementation, automatic source changes, restart or deployment.
+//! Reviewed evolution. Model tools may propose, never apply/restart/deploy.
 #![cfg(target_os = "linux")]
 mod patch;
 mod persona;
 mod repository;
+mod tools;
 use anyhow::{Context, Result, ensure};
 use missy_core::Scope;
 pub use persona::*;
@@ -17,6 +17,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+pub use tools::*;
 
 pub(crate) fn hash(bytes: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(bytes.as_ref()))

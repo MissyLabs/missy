@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+missy-security = { path = "../missy-security" }
 anyhow.workspace = true
 async-trait.workspace = true
 missy-core = { path = "../missy-core" }
@@ -21,3 +22,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+tempfile.workspace = true

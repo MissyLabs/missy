@@ -1,9 +1,12 @@
 //! Opt-in native integrations. All HTTP and WS through PolicyHttpClient.
 mod comfy;
+mod scene;
+pub use scene::{SceneGenerationGrant, SceneImageRequest};
 mod config;
 mod desktop_ws;
 mod incus_ops;
 mod infra;
+mod speech;
 mod transport;
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
@@ -32,6 +35,11 @@ pub trait ApprovalGate: Send + Sync {
 }
 struct DenyMutations;
 #[async_trait]
+pub trait ArtifactValidator: Send + Sync {
+    fn configuration_fingerprint(&self) -> String;
+    async fn validate_mp4(&self, ctx: &ToolContext, bytes: &[u8]) -> Result<Value>;
+}
+#[async_trait]
 impl ApprovalGate for DenyMutations {
     async fn approve(&self, _: &ToolContext, _: &ToolCall) -> Result<bool> {
         Ok(false)
@@ -44,8 +52,13 @@ pub struct IntegrationTools {
     comfy: Option<Comfy>,
     obs: Option<Obs>,
     vtube: Option<Vtube>,
+    speech: Option<(
+        Arc<dyn missy_voice::Tts>,
+        Arc<dyn missy_voice::SpeechOutput>,
+    )>,
     approval: Arc<dyn ApprovalGate>,
     fingerprint: String,
+    artifact_validator: Option<Arc<dyn ArtifactValidator>>,
 }
 impl IntegrationTools {
     /// Resolves named credential environment vars once, validates config, no network.
@@ -64,10 +77,10 @@ impl IntegrationTools {
             .filter(|c| c.connection.enabled)
             .map(|cfg| -> Result<_> {
                 Nomad::validate(&cfg)?;
-                Ok(Nomad {
-                    conn: Connection::new(&http, cfg.connection.clone(), false)?,
+                Ok(Nomad::new(
+                    Connection::new(&http, cfg.connection.clone(), false)?,
                     cfg,
-                })
+                ))
             })
             .transpose()?;
         let incus = config
@@ -122,8 +135,10 @@ impl IntegrationTools {
             comfy,
             obs,
             vtube,
+            speech: None,
             approval: Arc::new(DenyMutations),
             fingerprint,
+            artifact_validator: None,
         })
     }
     /// Privileged host setup, not a tool argument or dynamic configuration operation.
@@ -131,7 +146,21 @@ impl IntegrationTools {
         self.approval = approval;
         self
     }
+    /// Full decoder required before external MP4 publication.
+    pub fn with_artifact_validator(mut self, validator: Arc<dyn ArtifactValidator>) -> Self {
+        self.fingerprint = format!(
+            "{:x}",
+            Sha256::digest(format!(
+                "{}:{}",
+                self.fingerprint,
+                validator.configuration_fingerprint()
+            ))
+        );
+        self.artifact_validator = Some(validator);
+        self
+    }
     fn connection(&self, name: &str) -> Option<&Connection> {
+        // Output adapters enforce durable approval for synchronized speech.
         match name {
             "nomad_read" | "nomad_mutate" => self.nomad.as_ref().map(|s| &s.conn),
             "incus_read" | "incus_mutate" | "incus_discover" | "incus_file_read"
@@ -140,7 +169,7 @@ impl IntegrationTools {
                 self.comfy.as_ref().map(|s| &s.conn)
             }
             "obs_read" | "obs_mutate" => self.obs.as_ref().map(|s| &s.conn),
-            "vtube_read" | "vtube_mutate" => self.vtube.as_ref().map(|s| &s.conn),
+            "vtube_read" | "vtube_mutate" | "vtube_speak" => self.vtube.as_ref().map(|s| &s.conn),
             _ => None,
         }
     }
@@ -158,6 +187,15 @@ impl IntegrationTools {
             bail!("integration mutations disabled by operator");
         }
         match call.name.as_str() {
+            "vtube_speak" => {
+                let a: speech::Speak = parse(call)?;
+                self.vtube.as_ref().unwrap().validate_speech(&a)?;
+                let (_, output) = self
+                    .speech
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("speech output not configured"))?;
+                output.validate_output(&a.sink, a.volume_pct)?;
+            }
             "nomad_read" => {
                 let cfg = &self.nomad.as_ref().unwrap().cfg;
                 match parse(call)? {
@@ -180,18 +218,26 @@ impl IntegrationTools {
             "nomad_mutate" => {
                 let cfg = &self.nomad.as_ref().unwrap().cfg;
                 match parse(call)? {
-                    infra::NomadMutate::Deploy { job } | infra::NomadMutate::Plan { job } => {
-                        if !cfg.jobs.contains(&job) || !cfg.deployments.contains_key(&job) {
+                    infra::NomadMutate::Deploy { job, .. }
+                    | infra::NomadMutate::Plan { job }
+                    | infra::NomadMutate::Restart { job, .. }
+                    | infra::NomadMutate::PlanRestart { job }
+                    | infra::NomadMutate::Stop { job, .. }
+                    | infra::NomadMutate::PlanStop { job } => {
+                        if !cfg.jobs.contains(&job)
+                            || !cfg.deployments.contains_key(&job)
+                            || !cfg.services.contains_key(&job)
+                        {
                             bail!("Nomad deployment denied");
                         }
                     }
-                    infra::NomadMutate::Stop { job } => {
-                        if !cfg.jobs.contains(&job) {
-                            bail!("Nomad job denied");
-                        }
-                    }
-                    infra::NomadMutate::Scale { grant } => {
-                        if !cfg.scales.contains_key(&grant) {
+                    infra::NomadMutate::Scale { grant, .. }
+                    | infra::NomadMutate::PlanScale { grant } => {
+                        if !cfg
+                            .scales
+                            .get(&grant)
+                            .is_some_and(|s| cfg.services.contains_key(&s.job))
+                        {
                             bail!("Nomad scale denied");
                         }
                     }
@@ -261,10 +307,10 @@ impl IntegrationTools {
                     .get(&a.workflow)
                     .ok_or_else(|| anyhow!("ComfyUI workflow not approved"))?;
                 if let Some(name) = &a.conditioning
-                    && !cfg
+                    && cfg
                         .conditioning
                         .get(name)
-                        .is_some_and(|input| input.workflow == a.workflow)
+                        .is_none_or(|input| input.workflow != a.workflow)
                 {
                     bail!("ComfyUI conditioning grant denied");
                 }
@@ -299,6 +345,15 @@ impl IntegrationTools {
             "obs_mutate" => {
                 let cfg = &self.obs.as_ref().unwrap().cfg;
                 let action = match parse(call)? {
+                    desktop_ws::ObsMutate::SetSourceText { source, text } => {
+                        if !cfg.text_sources.contains(&source)
+                            || text.len() > 8192
+                            || text.contains('\0')
+                        {
+                            bail!("OBS text source/content denied");
+                        }
+                        ObsAction::SetSourceText
+                    }
                     desktop_ws::ObsMutate::SwitchScene { scene } => {
                         if !cfg.scenes.contains(&scene) {
                             bail!("OBS scene denied");
@@ -355,6 +410,17 @@ impl IntegrationTools {
     }
     async fn dispatch(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
         match call.name.as_str() {
+            "vtube_speak" => {
+                let (tts, output) = self
+                    .speech
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("speech not configured"))?;
+                self.vtube
+                    .as_ref()
+                    .unwrap()
+                    .speak(ctx, call, parse(call)?, tts.as_ref(), output.as_ref())
+                    .await
+            }
             "nomad_read" => self.nomad.as_ref().unwrap().read(parse(call)?).await,
             "nomad_mutate" => self.nomad.as_ref().unwrap().mutate(parse(call)?).await,
             "incus_read" => self.incus.as_ref().unwrap().read(parse(call)?).await,
@@ -366,7 +432,7 @@ impl IntegrationTools {
                 self.comfy
                     .as_ref()
                     .unwrap()
-                    .download(&ctx.scope, parse(call)?)
+                    .download(ctx, parse(call)?, self.artifact_validator.as_deref())
                     .await
             }
             "comfyui_submit" => {
@@ -455,7 +521,7 @@ fn mutation(name: &str) -> bool {
     name.ends_with("_mutate")
         || matches!(
             name,
-            "comfyui_submit" | "comfyui_artifact" | "incus_operation"
+            "comfyui_submit" | "comfyui_artifact" | "incus_operation" | "vtube_speak"
         )
 }
 #[async_trait]
@@ -474,6 +540,9 @@ impl ToolExecutor for IntegrationTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         let mut defs = vec![];
         for (name, description, parameters) in schemas() {
+            if name == "vtube_speak" && self.speech.is_none() {
+                continue;
+            }
             if let Some(conn) = self.connection(name)
                 && (!mutation(name) || conn.cfg.allow_mutations)
             {
@@ -497,7 +566,7 @@ impl ToolExecutor for IntegrationTools {
             bail!("integration argument bound exceeded");
         }
         let future = async {
-            if mutation(&call.name) {
+            if mutation(&call.name) && call.name != "vtube_speak" {
                 if !conn.cfg.allow_mutations {
                     return Err(missy_core::ToolDispatchRefused {
                         reason: "integration mutations disabled by operator".into(),
@@ -535,6 +604,11 @@ impl ToolExecutor for IntegrationTools {
             }
             Ok(wrapped)
         };
+        // Speech owns cancellation and a bounded mouth reset. An outer select
+        // would drop its cleanup future and leave stale avatar state.
+        if call.name == "vtube_speak" {
+            return future.await;
+        }
         tokio::select! {
             biased;
             _ = ctx.cancellation.cancelled() => bail!("integration cancelled; mutations may have uncertain outcome, do not replay"),
@@ -573,12 +647,16 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
         ),
         (
             "nomad_mutate",
-            "Deploy an operator-authored job or stop an allowed job. Requires human approval.",
+            "Plan and submit owned pinned SERVICE lifecycle changes with one-use reviewed plans and optimistic CAS. Requires human approval.",
             choice(vec![
-                variant("deploy", &[("job", s.clone())]),
-                variant("stop", &[("job", s.clone())]),
+                variant("deploy", &[("job", s.clone()), ("plan", s.clone())]),
+                variant("stop", &[("job", s.clone()), ("plan", s.clone())]),
+                variant("plan_stop", &[("job", s.clone())]),
                 variant("plan", &[("job", s.clone())]),
-                variant("scale", &[("grant", s.clone())]),
+                variant("scale", &[("grant", s.clone()), ("plan", s.clone())]),
+                variant("plan_scale", &[("grant", s.clone())]),
+                variant("plan_restart", &[("job", s.clone())]),
+                variant("restart", &[("job", s.clone()), ("plan", s.clone())]),
             ]),
         ),
         (
@@ -670,6 +748,13 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
             choice(vec![
                 variant("switch_scene", &[("scene", s.clone())]),
                 variant(
+                    "set_source_text",
+                    &[
+                        ("source", s.clone()),
+                        ("text", json!({"type":"string","maxLength":8192})),
+                    ],
+                ),
+                variant(
                     "set_visibility",
                     &[
                         ("scene", s.clone()),
@@ -682,6 +767,22 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
                 variant("start_streaming", &[]),
                 variant("stop_streaming", &[]),
             ]),
+        ),
+        (
+            "vtube_speak",
+            "Approved routed speech synchronized with a bounded avatar mouth parameter.",
+            object(
+                &[
+                    (
+                        "text",
+                        json!({"type":"string","minLength":1,"maxLength":8192}),
+                    ),
+                    ("sink", s.clone()),
+                    ("volume_pct", json!({"type":"integer","minimum":0})),
+                    ("parameter", s.clone()),
+                ],
+                &["text", "sink", "volume_pct", "parameter"],
+            ),
         ),
         (
             "vtube_read",

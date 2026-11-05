@@ -1,5 +1,10 @@
 # Rust compatibility ledger
 
+**Current detailed source inventory:**
+[production-replacement-matrix.md](production-replacement-matrix.md).
+**Current integrated acceptance:** [production-validation.md](production-validation.md).
+This earlier broad ledger remains useful context, not the final conversion audit.
+
 This ledger separates implemented native capabilities from retained Python
 features. Existing Python tests and its README are not Rust coverage evidence.
 Per-task validation results belong in `docs/rust/validation.md`.

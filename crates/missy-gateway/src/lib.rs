@@ -26,6 +26,9 @@ pub use discord::{
     DiscordGatewayVoice, DiscordVoiceGatewayHook, discord_voice_bridge, serve_discord_with_voice,
 };
 pub use discord::{DiscordProbe, probe_discord, serve_discord, serve_discord_with_state_dir};
+pub use discord::{OutboxReview, discord_outbox_inspect, discord_outbox_resolve};
+pub use discord::{command_definitions, register_discord_commands};
+pub use discord::{serve_discord_supervised, serve_discord_with_voice_supervised};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_PROMPT_BYTES: usize = 32 * 1024;
@@ -117,6 +120,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/sessions", get(sessions))
         .route("/sessions/{session}/history", get(history))
         .route("/turns/{id}", get(status))
+        .route("/turns/{id}/evidence/{call}", get(evidence))
         .route("/turns/{id}/cancel", post(cancel))
         .route("/turns/{id}/resume", post(resume))
         .layer(middleware::from_fn_with_state(state.clone(), authenticate));
@@ -320,7 +324,9 @@ fn validate_id(id: &str) -> Result<(), ApiError> {
     }
 }
 async fn health() -> Json<Value> {
-    Json(json!({"status":"ok","api_version":1,"discord":"separate_opt_in_process"}))
+    Json(
+        json!({"status":"ok","api_version":1,"discord":"optional_supervised_transport","provider_inference_verified":false}),
+    )
 }
 async fn chat(
     State(state): State<ApiState>,
@@ -362,7 +368,11 @@ async fn sessions(
         .store()
         .list_turns(&scope, limit)
         .map_err(store_error)?;
-    Ok(Json(json!({"session":scope.session,"turns":turns})))
+    let turns =
+        serde_json::to_value(turns).map_err(|_| store_error(anyhow::anyhow!("invalid turns")))?;
+    Ok(Json(
+        json!({"session":scope.session,"turns":redact_view(turns)}),
+    ))
 }
 async fn history(
     State(state): State<ApiState>,
@@ -376,7 +386,11 @@ async fn history(
         .store()
         .history(&scope, bounded_limit(query.limit)?)
         .map_err(store_error)?;
-    Ok(Json(json!({"session":scope.session,"messages":messages})))
+    let messages = serde_json::to_value(messages)
+        .map_err(|_| store_error(anyhow::anyhow!("invalid messages")))?;
+    Ok(Json(
+        json!({"session":scope.session,"messages":redact_view(messages)}),
+    ))
 }
 async fn status(
     State(state): State<ApiState>,
@@ -390,7 +404,77 @@ async fn status(
         .runtime
         .status(&scope, &id)
         .map_err(|_| ApiError(StatusCode::NOT_FOUND, "turn not found"))?;
-    Ok(Json(json!({"turn":turn})))
+    let turn =
+        serde_json::to_value(turn).map_err(|_| store_error(anyhow::anyhow!("invalid turn")))?;
+    Ok(Json(json!({"turn":redact_view(turn)})))
+}
+fn redact_view(mut value: Value) -> Value {
+    match &mut value {
+        Value::String(text) => *text = missy_security::redact_output(text),
+        Value::Array(values) => {
+            for value in values {
+                *value = redact_view(value.take());
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                *value = redact_view(value.take());
+            }
+        }
+        _ => {}
+    }
+    value
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceQuery {
+    session: String,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "evidence_limit")]
+    limit: usize,
+}
+fn evidence_limit() -> usize {
+    4000
+}
+async fn evidence(
+    State(state): State<ApiState>,
+    Path((id, call)): Path<(String, String)>,
+    Query(query): Query<EvidenceQuery>,
+) -> Result<Json<Value>, ApiError> {
+    validate_id(&id)?;
+    validate_id(&call)?;
+    if !(4..=8000).contains(&query.limit) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "evidence limit must be 4..8000",
+        ));
+    }
+    let scope = state.scope(query.session)?;
+    let source = state
+        .0
+        .runtime
+        .store()
+        .tool_evidence(&scope, &id, &call)
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "evidence not found"))?
+        .ok_or(ApiError(StatusCode::NOT_FOUND, "evidence not found"))?;
+    // The operator HTTP view is redacted. Exact immutable raw evidence remains
+    // local scoped store evidence, never accidentally echoed through a browser.
+    let source = serde_json::to_string(&redact_view(source))
+        .map_err(|_| store_error(anyhow::anyhow!("invalid evidence")))?;
+    if query.offset > source.len() || !source.is_char_boundary(query.offset) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "invalid UTF-8 evidence offset",
+        ));
+    }
+    let mut end = query.offset.saturating_add(query.limit).min(source.len());
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok(Json(
+        json!({"turn_id":id,"call_id":call,"redacted":true,"offset":query.offset,"end":end,"total_bytes":source.len(),"sha256":format!("{:x}",Sha256::digest(source.as_bytes())),"content":source[query.offset..end],"truncated":end<source.len(),"next_offset":if end<source.len(){Some(end)}else{None}}),
+    ))
 }
 async fn cancel(
     State(state): State<ApiState>,

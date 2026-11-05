@@ -1,82 +1,70 @@
 #!/usr/bin/env bash
-# install.sh — One-line installer for Missy
-# Usage: curl -fsSL https://raw.githubusercontent.com/MissyLabs/missy/master/install.sh | bash
+# Native Rust installation. Never reads legacy state or starts a service.
 set -euo pipefail
-
-REPO="https://github.com/MissyLabs/missy.git"
-INSTALL_DIR="$HOME/.local/share/missy"
-VENV_DIR="$INSTALL_DIR/.venv"
-BIN_DIR="$HOME/.local/bin"
-
-echo "=== Installing Missy ==="
-echo
-
-# ── Check Python ──
-PYTHON=""
-for py in python3.12 python3.11 python3; do
-    if command -v "$py" &>/dev/null; then
-        ver="$("$py" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")"
-        major="${ver%%.*}"
-        minor="${ver##*.}"
-        if (( major >= 3 && minor >= 11 )); then
-            PYTHON="$py"
-            break
-        fi
-    fi
+umask 077
+prefix="${HOME:?}/.local/share/missy-native"
+bin_dir="$HOME/.local/bin"
+ref=rewrite/rust-runtime
+jobs=2
+source_dir=
+upgrade=0
+usage() { printf '%s\n' 'install.sh [--ref BRANCH_OR_COMMIT] [--source CHECKOUT] [--prefix ABSOLUTE_PATH] [--bin-dir ABSOLUTE_PATH] [--jobs N] [--upgrade]' >&2; exit 2; }
+while (($#)); do
+  case "$1" in
+    --ref) (($#>=2)) || usage; ref=$2; shift 2;;
+    --source) (($#>=2)) || usage; source_dir=$2; shift 2;;
+    --prefix) (($#>=2)) || usage; prefix=$2; shift 2;;
+    --bin-dir) (($#>=2)) || usage; bin_dir=$2; shift 2;;
+    --jobs) (($#>=2)) || usage; jobs=$2; shift 2;;
+    --upgrade) upgrade=1; shift;;
+    --help|-h) usage;;
+    *) usage;;
+  esac
 done
-
-if [[ -z "$PYTHON" ]]; then
-    echo "Error: Python 3.11+ is required." >&2
-    echo "Install it with: sudo apt install python3.11  (or your package manager)" >&2
-    exit 1
+[[ "$prefix" = /* && "$bin_dir" = /* && "$prefix" != / && "$bin_dir" != / && "$jobs" =~ ^[1-9][0-9]?$ ]] || usage
+[[ "$prefix" != *'/../'* && "$prefix" != */.. && "$bin_dir" != *'/../'* && "$bin_dir" != */.. ]] || usage
+[[ ! -L "$prefix" && ! -L "$bin_dir" ]] || { echo 'Refusing symlink installation directories.' >&2; exit 1; }
+[[ -n "$ref" && "$ref" != -* && "$ref" != *$'\n'* ]] || usage
+for command in cargo rustc git sha256sum flock install; do
+  command -v "$command" >/dev/null || { printf 'Missing dependency: %s\n' "$command" >&2; exit 1; }
+done
+if ! pkg-config --exists opus 2>/dev/null; then
+  echo 'Build requires pkg-config and libopus development files (Debian/Ubuntu: libopus-dev pkg-config).' >&2; exit 1
 fi
-echo "Using $PYTHON ($($PYTHON --version))"
-
-# ── Check git ──
-if ! command -v git &>/dev/null; then
-    echo "Error: git is required." >&2
-    echo "Install it with: sudo apt install git" >&2
-    exit 1
+mkdir -p "$prefix" "$bin_dir"
+prefix=$(realpath -e "$prefix")
+bin_dir=$(realpath -e "$bin_dir")
+destination="$bin_dir/missy-rs"
+if [[ -e "$destination" || -L "$destination" ]]; then
+  [[ "$upgrade" = 1 && -L "$destination" && $(readlink "$destination") = "$prefix/current/missy-rs" ]] || {
+    echo 'Existing command is not replaced. --upgrade only accepts this native installation.' >&2; exit 1;
+  }
 fi
-
-# ── Clone or update ──
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-    echo "Updating existing install at $INSTALL_DIR..."
-    git -C "$INSTALL_DIR" pull --ff-only
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+if [[ -n "$source_dir" ]]; then
+  source_dir=$(realpath -e "$source_dir")
+  [[ -z $(git -C "$source_dir" status --porcelain) ]] || { echo 'Local source must be a clean committed checkout.' >&2; exit 1; }
+  git clone --no-hardlinks --no-checkout "$source_dir" "$work/source"
+  revision=$(git -C "$source_dir" rev-parse HEAD)
 else
-    echo "Cloning missy to $INSTALL_DIR..."
-    git clone "$REPO" "$INSTALL_DIR"
+  git clone --filter=blob:none --no-checkout https://github.com/MissyLabs/missy.git "$work/source"
+  # A no-checkout clone creates only the default local branch. Resolve selected
+  # branches through origin, then tags/commits. Never silently build master.
+  if git -C "$work/source" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+    revision=$(git -C "$work/source" rev-parse --verify "refs/remotes/origin/$ref^{commit}")
+  else
+    revision=$(git -C "$work/source" rev-parse --verify "$ref^{commit}")
+  fi
 fi
-
-# ── Create venv and install ──
-echo "Setting up virtual environment..."
-"$PYTHON" -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install --upgrade pip -q
-"$VENV_DIR/bin/pip" install -e "$INSTALL_DIR" -q
-
-# ── Symlink binary ──
-mkdir -p "$BIN_DIR"
-ln -sf "$VENV_DIR/bin/missy" "$BIN_DIR/missy"
-
-# ── Check PATH ──
-if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo
-    echo "Add this to your shell profile (~/.bashrc or ~/.zshrc):"
-    echo "  export PATH=\"$BIN_DIR:\$PATH\""
-    echo
-fi
-
-# ── Run setup ──
-echo
-echo "=== Missy installed ==="
-echo
-echo "Run the setup wizard:"
-echo "  missy setup"
-echo
-echo "Or jump straight in:"
-echo "  export ANTHROPIC_API_KEY=\"sk-ant-...\""
-echo "  missy ask \"Hello\""
-echo
-echo "Optional extras:"
-echo "  $VENV_DIR/bin/pip install -e \"$INSTALL_DIR[voice]\"   # voice channel"
-echo "  $VENV_DIR/bin/pip install -e \"$INSTALL_DIR[otel]\"    # OpenTelemetry"
+git -C "$work/source" checkout --detach "$revision"
+[[ -f "$work/source/Cargo.lock" && -f "$work/source/packaging/rust/release.sh" ]] || { echo 'Selected revision is not a native release.' >&2; exit 1; }
+(cd "$work/source" && CARGO_BUILD_JOBS="$jobs" cargo build --release --locked -p missy-cli)
+binary="$work/source/target/release/missy-rs"
+digest=$(sha256sum "$binary" | cut -d' ' -f1)
+version="$(date -u +%Y%m%dT%H%M%SZ)-${revision:0:12}"
+bash "$work/source/packaging/rust/release.sh" stage "$prefix" "$version" "$binary" "$digest"
+bash "$work/source/packaging/rust/release.sh" activate "$prefix" "$version"
+if [[ ! -L "$destination" ]]; then ln -s "$prefix/current/missy-rs" "$destination"; fi
+printf '\nNative executable: %s\nSource revision: %s\nSHA-256: %s\n' "$destination" "$revision" "$digest"
+printf '%s\n' 'No account, config, legacy state or running process was changed.' 'Next: missy-rs --config /your/private/config.yaml init' 'Read README-RUST.md before enabling services.'

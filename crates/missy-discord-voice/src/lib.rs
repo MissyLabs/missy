@@ -4,6 +4,8 @@
 mod audio;
 mod protocol;
 mod service;
+mod tools;
+pub use tools::{DiscordVoiceSayTools, VoiceApprovalGate};
 #[cfg(test)]
 mod tests;
 pub use service::*;

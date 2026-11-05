@@ -33,7 +33,7 @@ pub struct ToolRegistry {
     path: PathBuf,
 }
 impl ToolRegistry {
-    fn lock(&self) -> Result<File> {
+    pub(crate) fn lock(&self) -> Result<File> {
         // A fresh open-file description is essential: flock on a duplicate of
         // self.dir would not serialize concurrent calls on the same registry.
         let lock = OpenOptions::new()

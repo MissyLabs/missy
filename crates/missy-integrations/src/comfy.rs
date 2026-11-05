@@ -389,7 +389,13 @@ impl Comfy {
         }
         Ok(())
     }
-    pub(crate) async fn download(&self, scope: &Scope, a: Download) -> Result<Value> {
+    pub(crate) async fn download(
+        &self,
+        ctx: &missy_core::ToolContext,
+        a: Download,
+        validator: Option<&dyn crate::ArtifactValidator>,
+    ) -> Result<Value> {
+        let scope = &ctx.scope;
         self.validate_download(scope, &a)?;
         let history = self
             .history(
@@ -431,10 +437,13 @@ impl Comfy {
             .bytes("GET", &path, None, self.cfg.max_artifact_bytes)
             .await?;
         // Decode images under explicit allocation and dimension bounds, not extension sniffing.
-        // MP4 validation is bounded container structure, not a claim of codec/frame decoding.
+        // A valid container header is not a decoded video.
         let media = if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
             validate_mp4(&bytes)?;
-            json!({"format":"mp4","validation":"container_structure","decoded":false})
+            let validator = validator
+                .ok_or_else(|| anyhow!("external MP4 requires configured native media decoder"))?;
+            let metadata = validator.validate_mp4(ctx, &bytes).await?;
+            json!({"format":"mp4","validation":"full_bounded_decode","decoded":true,"metadata":metadata})
         } else {
             let format = image::guess_format(&bytes)
                 .map_err(|_| anyhow!("artifact is not a supported media file"))?;

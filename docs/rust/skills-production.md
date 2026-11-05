@@ -1,0 +1,9 @@
+# Native skill document discovery
+
+`missy-rs --config /absolute/config.yaml skills scan --root /absolute/read-root` scans exactly one explicitly configured `policy.read_roots` directory. The path must be absolute, normalized, and match a configured root exactly. No default home directory, path expansion, or implicit grant exists. Configure a dedicated read-only directory where possible; a broad read root means a broad scan.
+
+The JSON result contains sorted paths, exact document bytes decoded as UTF-8, SHA-256 of those bytes, root provenance, and `trusted: false`. This is untrusted inert operator-visible content, not a model instruction, registered executable, permission grant, import, or promotion. No shell, scripts, imports, automatic scan, network, or execution is performed. Do not paste its contents into a privileged prompt without separate review. Scan output is a snapshot, not a durable registry or proof of file identity after the scan.
+
+Descriptor-relative no-follow traversal refuses symlinks, including in the root path. Concurrent changes may make a scan fail or produce a non-atomic snapshot; use immutable/read-only roots for reproducibility. Errors fail the whole scan without partial JSON. Limits: 512 directories, 1024 entries per directory, 8192 entries total, depth 8, 128 documents, 64 KiB per document, 1 MiB total document bytes. Documents must be UTF-8. Non-Unix systems fail closed.
+
+Unlike the legacy Python `skills scan --path`, the native command has no implicit `~/.missy/skills` and does not parse YAML metadata into claims of authority. Legacy `skills list` represented an isolated empty process-local registry; this scan is not a replacement for a live registry. Legacy playbook promotion, automatic model hints, and execution remain separate unsupported surfaces, not silently enabled by discovery.

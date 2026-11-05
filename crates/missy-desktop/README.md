@@ -42,7 +42,12 @@ depth, byte order, bits-per-pixel, padding and visual masks, not mislabelled PNG
 Root screenshots are forbidden. XTest accepts `key`/`button` press or release,
 window-relative `move` (`x`,`y`), `drag` (`x`,`y`,`to_x`,`to_y`,`code` button 1..3),
 and `type_text` (`text`, 1..256 printable ASCII bytes). All require an already-focused
-allowlisted client or its focused descendant; the executor never steals focus.
+allowlisted client or its focused descendant; input never steals focus. The
+separate always-approved `desktop_focus_window` explicitly raises/focuses an
+allowlisted window in the isolated session. Optional pinned fixed-argv launch /
+install bindings, typed browser multi-field/extract and actual `x11_read_screen`
+interpretation are documented in
+[`media-production.md`](../../docs/rust/media-production.md).
 Coordinates are geometry-bounded and translated to the configured screen root,
 not caller-selected root coordinates. Occluded pointer endpoints are denied.
 Focus/allowlist/geometry checks and dispatch occur under a short server grab on the

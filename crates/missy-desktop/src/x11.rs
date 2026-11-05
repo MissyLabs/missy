@@ -55,6 +55,12 @@ pub(crate) struct WindowArgs {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ReadScreenArgs {
+    pub window: u32,
+    pub question: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct InputArgs {
     pub window: u32,
     pub kind: String,
@@ -159,6 +165,14 @@ fn connection(config: &X11Config) -> Result<(RustConnection, mpsc::Sender<()>)> 
     )?;
     Ok((connection, tx))
 }
+/// Handshake only; no enumeration, capture, focus query, or input.
+pub(crate) fn probe(config: &X11Config) -> Result<()> {
+    let (c, _deadline) = connection(config)?;
+    if c.setup().roots.get(config.screen).is_none() {
+        bail!("configured X11 screen missing");
+    }
+    Ok(())
+}
 fn property(c: &RustConnection, w: u32, atom: Atom, ty: Atom) -> Result<Vec<u8>> {
     let reply = c.get_property(false, w, atom, ty, 0, 512)?.reply()?;
     if reply.bytes_after != 0 {
@@ -249,8 +263,37 @@ pub(crate) fn execute(
                 json!({"windows":candidates.into_iter().filter_map(|w| metadata(&c,config,w).ok()).take(256).collect::<Vec<_>>() }),
             )
         }
-        "desktop_screenshot" => {
+        "desktop_focus_window" => {
             let a: WindowArgs = parse(call)?;
+            c.grab_server()?.check()?;
+            let result = (|| -> Result<Value> {
+                let meta = allowed(&c, config, a.window)?;
+                if cancellation.is_cancelled() {
+                    bail!("focus cancelled");
+                }
+                c.configure_window(
+                    a.window,
+                    &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                )?
+                .check()?;
+                c.set_input_focus(InputFocus::PARENT, a.window, x11rb::CURRENT_TIME)?
+                    .check()?;
+                c.flush()?;
+                if c.get_input_focus()?.reply()?.focus != a.window {
+                    bail!("window manager refused focus");
+                }
+                Ok(json!({"focused":true,"window":meta}))
+            })();
+            c.ungrab_server()?.check()?;
+            c.flush()?;
+            result
+        }
+        "desktop_screenshot" | "x11_read_screen" => {
+            let window_call = ToolCall {
+                arguments: json!({"window":call.arguments["window"]}),
+                ..call.clone()
+            };
+            let a: WindowArgs = parse(&window_call)?;
             let meta = allowed(&c, config, a.window)?;
             let g = c.get_geometry(a.window)?.reply()?;
             if g.width as usize * g.height as usize * 4 > limit / 2 {
@@ -284,6 +327,21 @@ pub(crate) fn execute(
                 .iter()
                 .flat_map(|d| &d.visuals)
                 .find(|v| v.visual_id == image.visual);
+            if call.name == "x11_read_screen" {
+                let v = visual.ok_or_else(|| anyhow::anyhow!("screen visual missing"))?;
+                let png = encode_png(
+                    &image.data,
+                    g.width as usize,
+                    g.height as usize,
+                    format.bits_per_pixel,
+                    format.scanline_pad,
+                    u8::from(c.setup().image_byte_order),
+                    [v.red_mask, v.green_mask, v.blue_mask],
+                )?;
+                return Ok(
+                    json!({"window":meta,"artifact":{"media_type":"image/png","encoding":"base64","data":STANDARD.encode(png)}}),
+                );
+            }
             Ok(
                 json!({"window":meta,"artifact":{"media_type":"application/x-x11-zpixmap","encoding":"base64","data":STANDARD.encode(image.data),"depth":image.depth,"bits_per_pixel":format.bits_per_pixel,"scanline_pad":format.scanline_pad,"image_byte_order":u8::from(c.setup().image_byte_order),"red_mask":visual.map(|v|v.red_mask),"green_mask":visual.map(|v|v.green_mask),"blue_mask":visual.map(|v|v.blue_mask)}}),
             )
@@ -302,6 +360,51 @@ pub(crate) fn execute(
         }
         _ => bail!("unknown X11 operation"),
     }
+}
+
+fn encode_png(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    bpp: u8,
+    pad: u8,
+    order: u8,
+    masks: [u32; 3],
+) -> Result<Vec<u8>> {
+    if !matches!(bpp, 16 | 24 | 32)
+        || !matches!(pad, 8 | 16 | 32)
+        || width == 0
+        || height == 0
+        || width * height > 4_000_000
+    {
+        bail!("unsupported X11 pixel format");
+    }
+    let stride = (width * bpp as usize).div_ceil(pad as usize) * (pad as usize / 8);
+    if data.len() != stride * height || masks.contains(&0) {
+        bail!("invalid X11 image/masks");
+    }
+    let mut pixels = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        for x in 0..width {
+            let bytes = &data[y * stride + x * (bpp as usize / 8)..][..bpp as usize / 8];
+            let mut value = 0u32;
+            for (i, b) in bytes.iter().enumerate() {
+                let shift = if order == 0 { i } else { bytes.len() - 1 - i };
+                value |= (*b as u32) << (shift * 8);
+            }
+            for mask in masks {
+                let shift = mask.trailing_zeros();
+                let max = mask >> shift;
+                pixels.push((((value & mask) >> shift) as u64 * 255 / max as u64) as u8);
+            }
+        }
+    }
+    crate::screen::reject_blank_rgb(&pixels)?;
+    let image = image::RgbImage::from_raw(width as u32, height as u32, pixels)
+        .ok_or_else(|| anyhow::anyhow!("invalid image dimensions"))?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(image).write_to(&mut out, image::ImageFormat::Png)?;
+    Ok(out.into_inner())
 }
 
 fn native_input(

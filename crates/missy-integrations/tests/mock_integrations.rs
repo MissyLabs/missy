@@ -27,6 +27,159 @@ use tokio_tungstenite::{WebSocketStream, accept_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
 struct Permit;
+#[tokio::test]
+async fn approved_obs_text_is_overlay_only_and_no_settings_passthrough() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ws_send(&mut ws, json!({"op":0,"d":{"rpcVersion":1}})).await;
+        let _ = ws_recv(&mut ws).await;
+        ws_send(&mut ws, json!({"op":2,"d":{"negotiatedRpcVersion":1}})).await;
+        let req = ws_recv(&mut ws).await;
+        assert_eq!(req["d"]["requestType"], "SetInputSettings");
+        assert_eq!(
+            req["d"]["requestData"],
+            json!({"inputName":"Caption","inputSettings":{"text":"literal caption"},"overlay":true})
+        );
+        ws_send(&mut ws,json!({"op":7,"d":{"requestType":req["d"]["requestType"],"requestId":req["d"]["requestId"],"requestStatus":{"result":true,"code":100}}})).await;
+    });
+    let mut cfg = obs(&endpoint, false);
+    cfg.obs
+        .as_mut()
+        .unwrap()
+        .actions
+        .insert(ObsAction::SetSourceText);
+    let tools = IntegrationTools::new(client(&endpoint, true), cfg)
+        .unwrap()
+        .with_approval(Arc::new(Permit));
+    assert!(
+        tools
+            .preflight(
+                &ctx(),
+                &call(
+                    "obs_mutate",
+                    json!({"action":"set_source_text","source":"Hidden","text":"x"})
+                )
+            )
+            .await
+            .is_err()
+    );
+    assert!(tools.preflight(&ctx(),&call("obs_mutate",json!({"action":"set_source_text","source":"Caption","text":"x","inputSettings":{}}))).await.is_err());
+    tools
+        .execute(
+            &ctx(),
+            &call(
+                "obs_mutate",
+                json!({"action":"set_source_text","source":"Caption","text":"literal caption"}),
+            ),
+        )
+        .await
+        .unwrap();
+    task.await.unwrap();
+}
+#[tokio::test]
+async fn vtube_synthetic_envelope_and_cancel_reset_mouth() {
+    for cancel_midway in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let context = ctx();
+        let cancellation = context.cancellation.clone();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let auth = ws_recv(&mut ws).await;
+            ws_send(&mut ws,json!({"apiName":"VTubeStudioPublicAPI","apiVersion":"1.0","requestID":auth["requestID"],"messageType":"AuthenticationResponse","data":{"authenticated":true}})).await;
+            let mut frames = 0;
+            loop {
+                let req = ws_recv(&mut ws).await;
+                assert_eq!(req["messageType"], "InjectParameterDataRequest");
+                let value = req["data"]["parameterValues"][0]["value"].as_f64().unwrap();
+                assert!(value <= 0.85);
+                assert_eq!(req["data"]["parameterValues"][0]["id"], "MouthOpen");
+                ws_send(&mut ws,json!({"apiName":"VTubeStudioPublicAPI","apiVersion":"1.0","requestID":req["requestID"],"messageType":"InjectParameterDataResponse","data":{}})).await;
+                if value == 0.0 {
+                    assert!(frames >= 1);
+                    break;
+                }
+                frames += 1;
+                if cancel_midway {
+                    cancellation.cancel();
+                }
+            }
+        });
+        let mut connection = conn(&endpoint);
+        connection.token_env = Some("USER".into());
+        connection.allow_mutations = true;
+        let config = IntegrationConfig {
+            vtube: Some(VtubeConfig {
+                connection,
+                plugin_name: "Fixture".into(),
+                plugin_developer: "Fixture".into(),
+                models: BTreeSet::new(),
+                hotkeys: BTreeSet::new(),
+                parameters: BTreeMap::from([(
+                    "MouthOpen".into(),
+                    ParameterRange { min: 0.0, max: 1.0 },
+                )]),
+            }),
+            ..Default::default()
+        };
+        let tools = IntegrationTools::new(client(&endpoint, true), config)
+            .unwrap()
+            .with_speech(Arc::new(SyntheticSpeech), Arc::new(SyntheticSpeech));
+        let result=tools.execute(&context,&call("vtube_speak",json!({"text":"synthetic","sink":"virtual","volume_pct":20,"parameter":"MouthOpen"}))).await;
+        assert_eq!(result.is_err(), cancel_midway);
+        tokio::time::timeout(std::time::Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+struct SyntheticSpeech;
+#[async_trait]
+impl missy_voice::Tts for SyntheticSpeech {
+    async fn synthesize(&self, _: &str, _: CancellationToken) -> Result<missy_voice::SpeechAudio> {
+        let mut b = b"RIFF".to_vec();
+        b.extend_from_slice(&3236u32.to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
+        b.extend_from_slice(&16000u32.to_le_bytes());
+        b.extend_from_slice(&32000u32.to_le_bytes());
+        b.extend_from_slice(b"\x02\0\x10\0data");
+        b.extend_from_slice(&3200u32.to_le_bytes());
+        b.extend_from_slice(&[0xff, 0x7f].repeat(1600));
+        Ok(missy_voice::SpeechAudio {
+            wav: b,
+            sample_rate: 16000,
+        })
+    }
+}
+#[async_trait]
+impl missy_voice::SpeechOutput for SyntheticSpeech {
+    fn configuration_fingerprint(&self) -> String {
+        "fixture-synthetic".into()
+    }
+    fn validate_output(&self, sink: &str, volume: u8) -> Result<()> {
+        anyhow::ensure!(sink == "virtual" && volume <= 40, "fixture route denied");
+        Ok(())
+    }
+    async fn play(
+        &self,
+        _: &ToolContext,
+        _: &ToolCall,
+        sink: &str,
+        volume: u8,
+        audio: &missy_voice::SpeechAudio,
+        cancel: CancellationToken,
+        started: tokio::sync::oneshot::Sender<tokio::time::Instant>,
+    ) -> Result<()> {
+        self.validate_output(sink, volume)?;
+        let duration = missy_voice::speech::decode_pcm_wav(&audio.wav)?.duration();
+        let _ = started.send(tokio::time::Instant::now());
+        tokio::select! {_=cancel.cancelled()=>anyhow::bail!("fixture cancelled"),_=tokio::time::sleep(duration)=>Ok(())}
+    }
+}
 #[async_trait]
 impl ApprovalGate for Permit {
     async fn approve(&self, _: &ToolContext, _: &ToolCall) -> Result<bool> {
@@ -227,31 +380,31 @@ async fn nomad_http_auth_projection_routes_approval() {
                 &call("nomad_mutate", json!({"action":"stop","job":"worker"}))
             )
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("approval")
+            .is_err()
     );
     let tools = tools.with_approval(Arc::new(Permit));
     *state.response.lock().unwrap() = json!({"EvalID":"evaluation","EvalCreateIndex":3});
-    tools
-        .execute(
-            &ctx(),
-            &call("nomad_mutate", json!({"action":"deploy","job":"worker"})),
-        )
-        .await
-        .unwrap();
-    tools
-        .execute(
-            &ctx(),
-            &call("nomad_mutate", json!({"action":"stop","job":"worker"})),
-        )
-        .await
-        .unwrap();
+    assert!(
+        tools
+            .execute(
+                &ctx(),
+                &call("nomad_mutate", json!({"action":"deploy","job":"worker"})),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        tools
+            .execute(
+                &ctx(),
+                &call("nomad_mutate", json!({"action":"stop","job":"worker"})),
+            )
+            .await
+            .is_err()
+    );
     let seen = state.seen.lock().unwrap();
-    assert_eq!(seen[1].0, "POST");
-    assert_eq!(seen[1].3["Job"]["ID"], "worker");
-    assert_eq!(seen[2].0, "DELETE");
-    assert_eq!(seen[2].1, "/v1/job/worker?namespace=lab&purge=false");
+    // Old read-only allowlists do not acquire ownership by enabling approval.
+    assert_eq!(seen.len(), 1);
 }
 #[tokio::test]
 async fn denied_resources_strict_arguments_and_routes_never_network() {
@@ -535,6 +688,7 @@ fn obs(endpoint: &str, auth: bool) -> IntegrationConfig {
             connection: c,
             scenes: BTreeSet::from(["Studio".into()]),
             scene_items: BTreeSet::from(["Studio:12".into()]),
+            text_sources: BTreeSet::from(["Caption".into()]),
             actions: BTreeSet::from([ObsAction::SwitchScene]),
         }),
         ..Default::default()

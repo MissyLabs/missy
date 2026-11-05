@@ -1,12 +1,17 @@
 # Missy, native Rust rewrite
 
-This workspace is a new Rust implementation, not Python called through a Rust
-launcher. It deliberately leaves the existing Python tree, installer and live
-gateway alone while correctness, parity and migration are evaluated.
+This workspace is the native Rust implementation, not Python called through a
+Rust launcher. The old Python tree remains as a migration and behavior reference.
+The branch installer builds native Rust into a separate installation. It never
+changes legacy configuration/state or starts/replaces a running process.
 
-**This is a reviewable rewrite, not a claim of complete feature parity or an
-authorization to replace the running bot.** The exact parity ledger is
-[docs/rust/parity.md](docs/rust/parity.md).
+**This branch contains the production replacement implementation, not authorization
+to connect accounts or replace any running process.** The exact 106-tool and
+non-tool source-conversion inventory, intentional API/security differences and
+external acceptance boundaries are in
+[the production replacement matrix](docs/rust/production-replacement-matrix.md).
+The earlier [compatibility ledger](docs/rust/parity.md) remains historical context;
+fixture acceptance is not a claim that Robby's actual host has been exercised.
 
 ## Build and run
 
@@ -88,6 +93,8 @@ compatibility.
 | `missy-evolution` | Operator-reviewed Git patch apply/rollback and crash reconciliation |
 | `missy-specialty` | ACE-Step adapter, real score-to-WAV/MIDI and scoped Foundry workflows |
 | `missy-plugins` | Model proposals, exact-hash operator review, native plugin sandbox and no-replay provider probes |
+| `missy-workloads` | Durable governed Nomad offloads, benchmarks, artifacts, placement and finite schedules |
+| `missy-screencast` | Explicitly paired browser screen-sharing HTTP/WS, scoped sessions and governed bounded vision |
 
 The optional `scripts/test-rust-console.py` acceptance harness uses Python
 Playwright solely to drive Chromium against an isolated compiled Rust server
@@ -170,8 +177,11 @@ Build and test in a fresh checkout with temporary state. Run a side-by-side
 instance with a distinct config, state path, port and bot credential. Review the
 parity ledger and recovery behavior before enabling tools. Never point this
 build at a production Python `.missy` or reuse a live bot token concurrently.
-There is no automatic service restart, installer replacement or destructive
-configuration migration in this branch.
+There is no automatic service restart or destructive configuration migration.
+`install.sh --ref rewrite/rust-runtime` builds a selected committed native revision
+into a separate install prefix and exposes `missy-rs`, never overwriting `missy`.
+It does not install a service. The historical Python installer is preserved at
+`packaging/legacy/install-python.sh` for reference, not used by native startup.
 
 ## Native extension commands
 

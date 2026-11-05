@@ -70,6 +70,52 @@ impl Fixture {
     }
 }
 struct Deny(AtomicUsize);
+#[tokio::test]
+async fn burst_exact_outputs_bounds_and_synthetic_frames() {
+    let f = Fixture::new();
+    let tools = CaptureTools::new(
+        f.p.clone(),
+        f.c.clone(),
+        Arc::new(Deny(AtomicUsize::new(0))),
+    )
+    .unwrap();
+    let mut call = f.call("camera_photo");
+    call.name = "camera_burst".into();
+    call.arguments.as_object_mut().unwrap().remove("output");
+    call.arguments["outputs"] =
+        json!([f.root.path().join("one.png"), f.root.path().join("two.png")]);
+    call.arguments["interval_ms"] = json!(100);
+    let (requests, _) = tools.burst(&call).unwrap();
+    assert_eq!(requests.len(), 2);
+    let p = Policy::new(f.p.clone()).unwrap();
+    for r in &requests {
+        let output = capture::execute(
+            &p,
+            &f.c,
+            &context(),
+            r,
+            "camera_photo",
+            Some(capture::InternalSource::Synthetic),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output["frames"], 1);
+    }
+    call.arguments["outputs"] = json!([
+        f.root.path().join("same.png"),
+        f.root.path().join("same.png")
+    ]);
+    assert!(tools.burst(&call).is_err());
+    call.arguments["outputs"] = json!([f.root.path().join("out.png")]);
+    call.arguments["interval_ms"] = json!(0);
+    assert!(tools.burst(&call).is_err());
+    assert!(
+        tools
+            .definitions()
+            .iter()
+            .any(|d| d.name == "camera_burst" && d.side_effect)
+    );
+}
 #[async_trait]
 impl CaptureApproval for Deny {
     async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {

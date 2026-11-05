@@ -89,6 +89,57 @@ pub struct ApprovalRecord {
     /// authoritative; consume clears the token in the same transaction.
     pub token_id: Option<String>,
 }
+/// Safe operator-facing review. Deliberately excludes the consumable token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalReview {
+    pub id: String,
+    pub binding: ApprovalBinding,
+    pub binding_hash: String,
+    pub status: ApprovalStatus,
+    pub expires_at: i64,
+    /// Exact supplied tool arguments verified against the request hash, then
+    /// sensitive-key redacted. None means operator has not supplied the call.
+    pub arguments: Option<serde_json::Value>,
+    pub decision_requires: String,
+}
+fn review_redact(value: &serde_json::Value, depth: usize) -> serde_json::Value {
+    use serde_json::Value;
+    if depth > 32 {
+        return Value::String("[depth limit]".into());
+    }
+    match value {
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, v)| {
+                    let lower = k.to_ascii_lowercase();
+                    let sensitive = [
+                        "password",
+                        "secret",
+                        "token",
+                        "authorization",
+                        "cookie",
+                        "api_key",
+                        "apikey",
+                        "private_key",
+                        "credential",
+                    ]
+                    .iter()
+                    .any(|s| lower.contains(s));
+                    (
+                        k.clone(),
+                        if sensitive {
+                            Value::String("[REDACTED]".into())
+                        } else {
+                            review_redact(v, depth + 1)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|v| review_redact(v, depth + 1)).collect()),
+        _ => value.clone(),
+    }
+}
 /// The core error is the runtime-recognized definite pre-dispatch pause signal.
 pub type ApprovalRequiredError = missy_core::ApprovalRequired;
 #[derive(Debug, Clone, thiserror::Error)]
@@ -168,6 +219,42 @@ fn expire(
     Ok(())
 }
 impl ApprovalRegistry {
+    /// Authenticated operator surface. The supplied exact call comes from the
+    /// paused Runtime, never from a claimed model summary. No decision is made.
+    pub fn review(
+        &self,
+        scope: &Scope,
+        id: &str,
+        call: Option<&ToolCall>,
+    ) -> Result<ApprovalReview> {
+        let record = self
+            .get(scope, id)?
+            .ok_or_else(|| anyhow::anyhow!("approval not found in scope"))?;
+        let arguments = call
+            .map(|call| -> Result<serde_json::Value> {
+                ensure!(
+                    call.id == record.binding.call_id
+                        && call.name == record.binding.tool_name
+                        && fingerprint(&call.arguments)? == record.binding.arguments_hash,
+                    "reviewed tool call differs from approval binding"
+                );
+                ensure!(
+                    serde_json::to_vec(&call.arguments)?.len() <= 1_048_576,
+                    "review arguments exceed byte bound"
+                );
+                Ok(review_redact(&call.arguments, 0))
+            })
+            .transpose()?;
+        Ok(ApprovalReview{id:record.id,binding:record.binding,binding_hash:record.binding_hash,status:record.status,expires_at:record.expires_at,arguments,decision_requires:"Authenticated operator identity, exact binding_hash, explicit approve or deny; approval does not resume or execute the turn.".into()})
+    }
+    pub fn pending_reviews(&self, scope: &Scope, limit: usize) -> Result<Vec<ApprovalReview>> {
+        ensure!((1..=1000).contains(&limit), "review limit must be 1..1000");
+        // Filter in SQL before limiting so terminal history cannot hide pending work.
+        let key = scope_key(scope)?;
+        let conn = self.connect()?;
+        let ids=conn.prepare("SELECT id FROM approval WHERE scope_key=?1 AND status='pending' AND expires_at>?2 ORDER BY created_at,id LIMIT ?3")?.query_map(params![key,now()?,limit as i64],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.iter().map(|id| self.review(scope, id, None)).collect()
+    }
     /// Idempotent entire binding. Never silently reissue terminal decisions.
     pub fn request(&self, binding: &ApprovalBinding, ttl_seconds: u64) -> Result<ApprovalRecord> {
         self.request_at(binding, ttl_seconds, now()?)
@@ -390,6 +477,44 @@ impl ApprovalRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operator_review_checks_exact_call_and_excludes_token() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let a = ApprovalRegistry::open(dir.path().join("db"))?;
+        let call = ToolCall {
+            id: "call".into(),
+            name: "shell".into(),
+            arguments: serde_json::json!({"path":"/safe","api_token":"do-not-print","nested":{"password":"nor-this"}}),
+        };
+        let mut b = binding();
+        b.arguments_hash = fingerprint(&call.arguments)?;
+        let p = a.request(&b, 60)?;
+        let review = a.review(&b.scope, &p.id, Some(&call))?;
+        let text = serde_json::to_string(&review)?;
+        assert!(
+            !text.contains("do-not-print")
+                && !text.contains("nor-this")
+                && !text.contains("token_id")
+        );
+        assert_eq!(review.arguments.as_ref().unwrap()["path"], "/safe");
+        assert_eq!(a.pending_reviews(&b.scope, 10)?.len(), 1);
+        let mut wrong = call.clone();
+        wrong.arguments["path"] = serde_json::json!("changed");
+        assert!(a.review(&b.scope, &p.id, Some(&wrong)).is_err());
+        a.decide(
+            &b.scope,
+            &p.id,
+            &p.binding_hash,
+            Decision::Approve,
+            "operator",
+        )?;
+        assert!(a.pending_reviews(&b.scope, 10)?.is_empty());
+        assert!(!serde_json::to_string(&a.review(&b.scope, &p.id, None)?)?.contains("token_id"));
+        let mut other = b.scope.clone();
+        other.user = "other".into();
+        assert!(a.review(&other, &p.id, None).is_err());
+        Ok(())
+    }
     fn binding() -> ApprovalBinding {
         ApprovalBinding {
             scope: Scope {

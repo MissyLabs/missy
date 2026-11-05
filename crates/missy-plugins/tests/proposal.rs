@@ -153,6 +153,24 @@ async fn model_proposes_only_pending_gated_scope_bound_data() {
     reg.enable(&scope(), "printer", &pending.hash, &active)
         .unwrap();
     assert_eq!(tools.definitions().len(), 1, "no hotload");
+    let source_call = ToolCall {
+        id: "original-proposal-id".into(),
+        name: "self_create_tool".into(),
+        arguments: json!({"rust_source":{"id":"generated","source":"fn main(){println!(\"not executed\");}",
+            "definition":{"name":"plugin__generated","description":"generated fixture",
+                "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false},"side_effect":true},
+            "args":[],"capabilities":{"read_roots":[]}}}),
+    };
+    let pending_source = tools.execute(&context(), &source_call).await.unwrap();
+    assert_eq!(pending_source["approved"], false);
+    assert_eq!(pending_source["proposal"]["reviewed"], false);
+    assert!(
+        ToolRegistry::open(&path)
+            .unwrap()
+            .get(&scope(), "generated")
+            .is_err()
+    );
+    assert_eq!(tools.definitions().len(), 1, "Rust proposal never hotloads");
     let next = PluginTools::new(reg, active, policy.clone(), Arc::new(Gate(true))).unwrap();
     assert_eq!(next.definitions().len(), 2);
     let exec = ToolCall {

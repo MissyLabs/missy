@@ -1,11 +1,16 @@
 //! Durable bounded agent runtime.
 mod context;
+mod guards;
+mod memory_context;
 #[cfg(test)]
 #[path = "tests/observability.rs"]
 mod observability_tests;
 mod observer;
+mod prompts;
 use observer::Span;
 pub use observer::{RuntimeEvent, RuntimeEventKind, RuntimeObserver};
+pub use prompts::ScopedPromptResolver;
+use prompts::{MemorySnapshot, PromptSnapshot};
 #[cfg(test)]
 mod tests;
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -20,7 +25,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -53,7 +61,9 @@ struct Inner {
     schemas: HashMap<String, jsonschema::Validator>,
     permits: Arc<Semaphore>,
     active: Mutex<HashMap<String, CancellationToken>>,
+    closing: AtomicBool,
     observer: Option<Arc<dyn RuntimeObserver>>,
+    prompt_resolver: Option<Arc<dyn ScopedPromptResolver>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +83,13 @@ struct State {
     final_content: Option<String>,
     provider_pending: bool,
     #[serde(default)]
+    guard_retries: u32,
+    #[serde(default)]
     waiting_tools: Option<WaitingTools>,
+    #[serde(default)]
+    prompt_snapshot: Option<PromptSnapshot>,
+    #[serde(default)]
+    memory_snapshot: Option<MemorySnapshot>,
 }
 /// The only journal-free tool batch eligible for explicit resume. Original calls,
 /// IDs and arguments are retained, never reconstructed by another provider call.
@@ -165,28 +181,135 @@ impl Runtime {
                 schemas,
                 permits,
                 active: Mutex::new(HashMap::new()),
+                closing: AtomicBool::new(false),
                 observer,
+                prompt_resolver: None,
             }),
         })
     }
     pub fn store(&self) -> &Arc<Store> {
         &self.inner.store
     }
+    /// Attach before cloning. Scopes share provider, store and capacity paths.
+    pub fn with_prompt_resolver(mut self, resolver: Arc<dyn ScopedPromptResolver>) -> Result<Self> {
+        let inner = Arc::get_mut(&mut self.inner)
+            .context("attach prompt resolver before cloning runtime")?;
+        inner.prompt_resolver = Some(resolver);
+        let hash = self.current_configuration_hash()?;
+        Arc::get_mut(&mut self.inner)
+            .context("runtime unexpectedly shared")?
+            .context_hash = hash;
+        Ok(self)
+    }
+    pub fn tool_definitions(&self) -> &[ToolDefinition] {
+        &self.inner.definitions
+    }
+    /// Separate immutable NoTools runtime sharing provider, state and budgets.
+    pub fn no_tools(&self) -> Result<Self> {
+        self.check_configuration()?;
+        let runtime = Self::construct(
+            self.inner.store.clone(),
+            self.inner.provider.clone(),
+            Arc::new(NoTools),
+            self.inner.system.clone(),
+            self.inner.config.clone(),
+            self.inner.observer.clone(),
+        )?;
+        match &self.inner.prompt_resolver {
+            Some(resolver) => runtime.with_prompt_resolver(resolver.clone()),
+            None => Ok(runtime),
+        }
+    }
+    /// Close admissions before cancelling/draining. Uncertain effects stay journaled.
+    pub async fn shutdown(&self, timeout: Duration) -> Result<()> {
+        self.inner.closing.store(true, Ordering::SeqCst);
+        self.inner.permits.close();
+        {
+            let active = self
+                .inner
+                .active
+                .lock()
+                .map_err(|_| anyhow!("active map poisoned"))?;
+            for cancellation in active.values() {
+                cancellation.cancel();
+            }
+        }
+        tokio::time::timeout(timeout, async {
+            loop {
+                if self
+                    .inner
+                    .active
+                    .lock()
+                    .map_err(|_| anyhow!("active map poisoned"))?
+                    .is_empty()
+                {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("runtime shutdown drain timed out")?
+    }
+    /// Literal durable dispatch, never a provider prompt imitating exact calls.
+    pub async fn run_tools(
+        &self,
+        scope: Scope,
+        calls: Vec<ToolCall>,
+        request_id: String,
+    ) -> Result<RunResult> {
+        ensure!(
+            !self.inner.closing.load(Ordering::SeqCst),
+            "runtime shutting down"
+        );
+        ensure!(
+            !calls.is_empty() && calls.len() <= 32,
+            "exact tools require 1..32 calls"
+        );
+        ensure!(
+            serde_json::to_vec(&calls)?.len() <= self.inner.config.max_input_bytes,
+            "exact tool request exceeds input bound"
+        );
+        let metadata = self.admission_context(&scope, &serde_json::to_string(&calls)?)?;
+        let a = self
+            .store()
+            .admit_tools_with_metadata(&scope, &request_id, &calls, &metadata)?;
+        if !a.created {
+            return self.result(&scope, &a.turn, true);
+        }
+        match self.launch(scope.clone(), a.turn.clone()) {
+            Ok(task) => task.await.context("runtime task failed")?,
+            Err(e)
+                if e.to_string().contains("capacity exhausted")
+                    || e.to_string().contains("session already leased") =>
+            {
+                self.result(&scope, &a.turn, false)
+            }
+            Err(e) => Err(e),
+        }
+    }
     /// A cached construction hash is not proof that a shared executor/provider
     /// has remained unchanged. Refuse observed drift; never rebind an old turn.
     fn check_configuration(&self) -> Result<()> {
-        let current = digest(&serde_json::to_string(&json!({
-            "system": self.inner.system,
-            "config": self.inner.config,
-            "provider": self.inner.provider.configuration_fingerprint(),
-            "tools": self.inner.tools.definitions(),
-            "tool_configuration": self.inner.tools.configuration_fingerprint(),
-        }))?);
+        let current = self.current_configuration_hash()?;
         ensure!(
             current == self.inner.context_hash,
             "runtime configuration changed; rebuild runtime before execution"
         );
         Ok(())
+    }
+    fn current_configuration_hash(&self) -> Result<String> {
+        let mut value = json!({
+            "system": self.inner.system,
+            "config": self.inner.config,
+            "provider": self.inner.provider.configuration_fingerprint(),
+            "tools": self.inner.tools.definitions(),
+            "tool_configuration": self.inner.tools.configuration_fingerprint(),
+        });
+        if let Some(resolver) = &self.inner.prompt_resolver {
+            value["prompt_resolver"] = json!(resolver.configuration_fingerprint());
+        }
+        Ok(digest(&serde_json::to_string(&value)?))
     }
     /// Immutable local bounds for admission adapters; never exposes credentials.
     pub fn configuration(&self) -> &RuntimeConfig {
@@ -248,12 +371,19 @@ impl Runtime {
             .context("runtime task failed")?
     }
     fn admit_task(&self, scope: Scope, prompt: String, request_id: String) -> Result<AdmittedTask> {
+        ensure!(
+            !self.inner.closing.load(Ordering::SeqCst),
+            "runtime shutting down"
+        );
         scope.validate()?;
         ensure!(
             !prompt.trim().is_empty() && prompt.len() <= self.inner.config.max_input_bytes,
             "prompt empty or exceeds input bound"
         );
-        let a = self.store().admit(&scope, &request_id, &prompt)?;
+        let metadata = self.admission_context(&scope, &prompt)?;
+        let a = self
+            .store()
+            .admit_with_metadata(&scope, &request_id, &prompt, &metadata)?;
         if !a.created {
             return Ok(AdmittedTask {
                 result: self.result(&scope, &a.turn, true)?,
@@ -286,6 +416,22 @@ impl Runtime {
         }
     }
     fn fresh_state(&self, scope: &Scope, turn: &Turn) -> Result<State> {
+        let snapshot = self.admitted_prompt(scope, &turn.id)?;
+        ensure!(
+            snapshot.is_some() || self.inner.prompt_resolver.is_none(),
+            "missing admission prompt snapshot; cannot safely resolve an old turn"
+        );
+        let memory_snapshot = self.admitted_memory(scope, &turn.id)?;
+        ensure!(
+            memory_snapshot.is_some() || !self.inner.config.memory_context_enabled,
+            "missing admission memory snapshot"
+        );
+        let mut transcript = vec![Message::text("user", turn.prompt.clone())];
+        if let Some(memory) = &memory_snapshot
+            && !memory.data.is_empty()
+        {
+            transcript.push(Message::text("user", memory.data.clone()));
+        }
         Ok(State {
             version: 1,
             current_turn_start: 1,
@@ -301,7 +447,7 @@ impl Runtime {
                 &self.store().history(scope, 100)?,
                 self.inner.config.max_context_chars / 4,
             )?,
-            transcript: vec![Message::text("user", turn.prompt.clone())],
+            transcript,
             steps: 0,
             continuations: 0,
             usage: Usage::default(),
@@ -310,10 +456,23 @@ impl Runtime {
             partial: String::new(),
             final_content: None,
             provider_pending: false,
+            guard_retries: 0,
             waiting_tools: None,
+            prompt_snapshot: snapshot,
+            memory_snapshot,
         })
     }
     fn launch(&self, scope: Scope, turn: Turn) -> Result<JoinHandle<Result<RunResult>>> {
+        // Serialize registration against shutdown's empty-map drain.
+        let mut active = self
+            .inner
+            .active
+            .lock()
+            .map_err(|_| anyhow!("active map poisoned"))?;
+        ensure!(
+            !self.inner.closing.load(Ordering::SeqCst),
+            "runtime shutting down"
+        );
         self.check_configuration()?;
         let permit = self
             .inner
@@ -321,13 +480,26 @@ impl Runtime {
             .clone()
             .try_acquire_owned()
             .context("runtime capacity exhausted; admitted request requires explicit resume")?;
-        let lease = self.store().acquire_lease(
+        let lease = self.store().acquire_lease_bounded(
             &scope,
             &turn.id,
             &uuid::Uuid::new_v4().to_string(),
             Duration::from_secs(self.inner.config.lease_seconds),
+            self.inner.config.max_concurrent_turns,
         )?;
         let initialize = (|| -> Result<State> {
+            self.store().reserve_turn_budget(
+                &scope,
+                &lease,
+                Usage {
+                    input_tokens: self.inner.config.max_tokens,
+                    output_tokens: 0,
+                    cost_microusd: self.inner.config.max_cost_microusd,
+                    cost_known: true,
+                },
+                self.inner.config.global_max_cost_microusd,
+                self.inner.config.global_max_tokens,
+            )?;
             ensure!(
                 self.store().unresolved_tools(&scope, &turn.id)?.is_empty(),
                 "unresolved tool outcome blocks resume under new fence"
@@ -357,11 +529,8 @@ impl Runtime {
             }
         };
         let token = CancellationToken::new();
-        self.inner
-            .active
-            .lock()
-            .map_err(|_| anyhow!("active map poisoned"))?
-            .insert(turn.id.clone(), token.clone());
+        active.insert(turn.id.clone(), token.clone());
+        drop(active);
         let runtime = self.clone();
         Ok(tokio::spawn(async move {
             observer::observe_run(
@@ -372,7 +541,16 @@ impl Runtime {
         }))
     }
     fn save(&self, scope: &Scope, lease: &Lease, state: &State) -> Result<()> {
-        let mut transcript = vec![Message::text("system", self.inner.system.clone())];
+        let mut reserved_usage = state.usage;
+        reserved_usage.cost_known &= !state.provider_pending;
+        self.store()
+            .update_turn_budget(scope, lease, reserved_usage, false)?;
+        let system = state
+            .prompt_snapshot
+            .as_ref()
+            .map(|p| p.text.as_str())
+            .unwrap_or(&self.inner.system);
+        let mut transcript = vec![Message::text("system", system)];
         transcript.extend_from_slice(&state.transcript);
         self.store().save_checkpoint(
             scope,
@@ -383,7 +561,7 @@ impl Runtime {
                 usage: state.usage,
                 provider_context: serde_json::to_value(state)?,
                 context_hash: self.inner.context_hash.clone(),
-                system_prompt_hash: digest(&self.inner.system),
+                system_prompt_hash: digest(system),
             },
         )
     }
@@ -393,11 +571,48 @@ impl Runtime {
             .store()
             .checkpoint(scope, &turn.id, &self.inner.context_hash)?
             .context("no checkpoint: cannot safely resume")?;
+        let mut state: State = serde_json::from_value(cp.provider_context)?;
+        let memory = self.admitted_memory(scope, &turn.id)?;
         ensure!(
-            cp.system_prompt_hash == digest(&self.inner.system),
+            state.memory_snapshot == memory,
+            "checkpoint memory differs from admission snapshot"
+        );
+        if let Some(memory) = &memory {
+            memory.validate(scope)?;
+            if !memory.data.is_empty() {
+                ensure!(
+                    state.transcript.get(1) == Some(&Message::text("user", memory.data.clone())),
+                    "checkpoint memory transcript mismatch"
+                );
+            }
+        } else {
+            ensure!(
+                !self.inner.config.memory_context_enabled,
+                "missing checkpoint memory snapshot"
+            );
+        }
+        let admitted = self.admitted_prompt(scope, &turn.id)?;
+        if let Some(snapshot) = &state.prompt_snapshot {
+            snapshot.validate(scope, &self.inner.context_hash)?;
+            ensure!(
+                Some(snapshot) == admitted.as_ref(),
+                "checkpoint prompt differs from admission snapshot"
+            );
+        } else {
+            ensure!(
+                self.inner.prompt_resolver.is_none() && admitted.is_none(),
+                "missing checkpoint prompt snapshot"
+            );
+        }
+        let system = state
+            .prompt_snapshot
+            .as_ref()
+            .map(|p| p.text.as_str())
+            .unwrap_or(&self.inner.system);
+        ensure!(
+            cp.system_prompt_hash == digest(system),
             "system prompt integrity mismatch"
         );
-        let mut state: State = serde_json::from_value(cp.provider_context)?;
         ensure!(
             state.version == 1
                 && state.current_turn_start == 1
@@ -408,7 +623,7 @@ impl Runtime {
             state.transcript.first() == Some(&Message::text("user", turn.prompt.clone())),
             "original current request changed"
         );
-        let mut expected = vec![Message::text("system", self.inner.system.clone())];
+        let mut expected = vec![Message::text("system", system)];
         expected.extend_from_slice(&state.transcript);
         ensure!(
             cp.transcript == expected && cp.steps == state.steps && cp.usage == state.usage,
@@ -462,7 +677,7 @@ impl Runtime {
                 .as_str()
                 .unwrap_or("unknown")
                 .into(),
-            content: turn.response.clone().unwrap_or_default(),
+            content: missy_security::redact_output(&turn.response.clone().unwrap_or_default()),
             usage,
             resumable,
             deduplicated,
@@ -471,6 +686,16 @@ impl Runtime {
 }
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+struct NoTools;
+#[async_trait::async_trait]
+impl ToolExecutor for NoTools {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        vec![]
+    }
+    async fn execute(&self, _: &ToolContext, _: &ToolCall) -> Result<Value> {
+        bail!("NoTools runtime cannot execute tools")
+    }
 }
 impl Runtime {
     fn hydrate(&self, scope: &Scope, turn: &Turn, state: &mut State) -> Result<()> {
@@ -678,16 +903,12 @@ impl Runtime {
             let settlement_span = Span::child(RuntimeEventKind::Settlement);
             match result {
                 Ok(value) => {
-                    let bounded =
-                        bound_tool_result(&value, self.inner.config.max_tool_output_bytes)?;
-                    self.store().tool_settle(
-                        scope,
-                        lease,
-                        &call.id,
-                        ToolStatus::Succeeded,
-                        Some(&bounded),
-                        None,
+                    let bounded = bound_tool_result(
+                        &context::project_json(&value),
+                        self.inner.config.max_tool_output_bytes,
                     )?;
+                    self.store()
+                        .tool_succeed_with_evidence(scope, lease, &call.id, &bounded, &value)?;
                     settlement_span.finish(true);
                     state
                         .transcript
@@ -695,7 +916,7 @@ impl Runtime {
                     self.save(scope, lease, state)?;
                 }
                 Err(e) => {
-                    let error = format!("{e:#}");
+                    let error = missy_security::redact_output(&format!("{e:#}"));
                     if e.downcast_ref::<ToolDispatchRefused>().is_some() {
                         let receipt = json!({"untrusted":true,"refused":true,"executed":false});
                         self.store().tool_settle(
@@ -762,6 +983,53 @@ impl Runtime {
             self.dispatch(scope, lease, state, token, &calls, monotonic_deadline)
                 .await?;
         }
+        if let Some(calls) = self.store().exact_tools(scope, &lease.turn_id)? {
+            let initial_messages = 1 + usize::from(
+                state
+                    .memory_snapshot
+                    .as_ref()
+                    .is_some_and(|m| !m.data.is_empty()),
+            );
+            if state.transcript.len() == initial_messages {
+                self.budget(state)?;
+                self.validate_calls(&calls, state)?;
+                state.steps = state.steps.saturating_add(1);
+                state.transcript.push(Message {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_calls: calls.clone(),
+                    tool_call_id: None,
+                });
+                state.waiting_tools = Some(WaitingTools {
+                    calls: calls.clone(),
+                    approval_request_id: None,
+                });
+                self.save(scope, lease, state)?;
+                self.dispatch(scope, lease, state, token, &calls, monotonic_deadline)
+                    .await?;
+            }
+            let records = self.store().tools(scope, &lease.turn_id)?;
+            let mut results = Vec::new();
+            for call in &calls {
+                let record = records
+                    .iter()
+                    .find(|r| r.call.id == call.id)
+                    .context("missing exact tool receipt")?;
+                ensure!(
+                    record.status == ToolStatus::Succeeded,
+                    "exact tool did not succeed; no automatic retry"
+                );
+                results.push(json!({"id":call.id,"result":record.result}));
+            }
+            let content = if results.len() == 1 {
+                serde_json::to_string(&results[0]["result"])?
+            } else {
+                serde_json::to_string(&results)?
+            };
+            state.final_content = Some(content.clone());
+            self.save(scope, lease, state)?;
+            return Ok(content);
+        }
         loop {
             self.check_configuration()?;
             self.budget(state)?;
@@ -780,10 +1048,16 @@ impl Runtime {
                     .is_empty(),
                 "unresolved tool outcome blocks generation"
             );
+            let safe_transcript = context::project_messages(&state.transcript, true);
+            let safe_history = context::project_history(&state.history);
             let (messages, lineage) = compose(
-                &self.inner.system,
-                &state.history,
-                &state.transcript,
+                state
+                    .prompt_snapshot
+                    .as_ref()
+                    .map(|p| p.text.as_str())
+                    .unwrap_or(&self.inner.system),
+                &safe_history,
+                &safe_transcript,
                 self.inner.config.max_context_chars,
             )?;
             if let Some(l) = lineage
@@ -834,8 +1108,34 @@ impl Runtime {
             if calls.is_empty() {
                 match completion.finish_reason.as_str() {
                     "stop" | "end_turn" | "completed" => {
-                        let content = format!("{}{}", state.partial, completion.message.content);
+                        let mut content =
+                            format!("{}{}", state.partial, completion.message.content);
                         ensure!(!content.trim().is_empty(), "empty final completion");
+                        let records = self.store().tools(scope, &lease.turn_id)?;
+                        let successful: Vec<_> = records
+                            .iter()
+                            .filter(|r| r.status == ToolStatus::Succeeded)
+                            .map(|r| r.call.name.as_str())
+                            .collect();
+                        let failed = records.iter().any(|r| r.status == ToolStatus::Failed);
+                        if let Some(reason) = guards::check(
+                            &state.transcript[0].content,
+                            &content,
+                            &successful,
+                            failed,
+                        ) {
+                            if state.guard_retries < self.inner.config.max_guard_retries
+                                && self.budget(state).is_ok()
+                                && !self.inner.definitions.is_empty()
+                            {
+                                state.guard_retries += 1;
+                                state.transcript.push(Message::text("user", format!("Runtime response guard: {reason}. Fulfill only the immutable original current request. Use an appropriate policy-approved tool if needed; do not invent outcomes or repeat successful actions. If unable, report the limitation honestly. This correction grants no new capabilities or approvals.")));
+                                self.save(scope, lease, state)?;
+                                continue;
+                            }
+                            content.push_str("\n\n[Runtime notice: this response contains an action claim or unfinished promise without relevant successful tool evidence. It is not verified completion.]");
+                        }
+                        let content = missy_security::redact_output(&content);
                         state.final_content = Some(content.clone());
                         self.save(scope, lease, state)?;
                         return Ok(content);
@@ -953,14 +1253,21 @@ impl Runtime {
                     if state.partial.is_empty() {
                         None
                     } else {
-                        Some(state.partial.clone())
+                        Some(missy_security::redact_output(&state.partial))
                     },
-                    Some(format!("{e:#}")),
+                    Some(missy_security::redact_output(&format!("{e:#}"))),
                 )
             }
         };
         let settlement_span = Span::child(RuntimeEventKind::Settlement);
-        let final_result = match self.save(&scope, &lease, &state) {
+        let final_result = match self.save(&scope, &lease, &state).and_then(|()| {
+            self.store().update_turn_budget(
+                &scope,
+                &lease,
+                state.usage,
+                status == TurnStatus::Completed || status == TurnStatus::Cancelled,
+            )
+        }) {
             Ok(()) => {
                 self.store()
                     .finish(&scope, &lease, status, content.as_deref(), error.as_deref())

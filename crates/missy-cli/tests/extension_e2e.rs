@@ -113,12 +113,17 @@ fn result(request: &Value, id: &str) -> Value {
     let envelope: Value = serde_json::from_str(m["content"].as_str().unwrap()).unwrap();
     assert_eq!(envelope["untrusted"], true);
     assert_eq!(envelope["truncated"], false);
-    let data = envelope["data"].as_str().unwrap();
-    assert_eq!(
-        envelope["sha256"],
-        hex::encode(Sha256::digest(data.as_bytes()))
-    );
-    serde_json::from_str(data).unwrap()
+    if let Some(data) = envelope["data"].as_str() {
+        assert_eq!(
+            envelope["sha256"],
+            hex::encode(Sha256::digest(data.as_bytes()))
+        );
+        serde_json::from_str(data).unwrap()
+    } else {
+        // Runtime projects structured model views; raw evidence keeps its own
+        // durable hash and must not be reconstructed from the censored view.
+        envelope["data"].clone()
+    }
 }
 fn invoke(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_missy-rs"))
@@ -172,7 +177,7 @@ fn guard(root: &Path, c: &mut Config) {
     let names = if c.policy.allow_file_delete {
         vec!["file_delete"]
     } else {
-        vec!["vision_analyze", "vision_scene"]
+        vec!["vision_analyze", "vision_scene", "vision_monitor"]
     };
     private(
         &p,

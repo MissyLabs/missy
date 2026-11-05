@@ -3,7 +3,9 @@
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use missy_core::{PolicyConfig, Scope, ToolCall, ToolContext, ToolExecutor};
-use missy_desktop::{DesktopApproval, DesktopConfig, DesktopTools, X11Config};
+use missy_desktop::{
+    DesktopApproval, DesktopConfig, DesktopTools, ScreenInterpreter, ScreenOcr, X11Config,
+};
 use missy_policy::PolicyHttpClient;
 use serde_json::json;
 use std::{
@@ -30,6 +32,43 @@ impl Drop for ChildGuard {
     }
 }
 struct Approval(AtomicUsize);
+struct FixtureInterpreter(AtomicUsize);
+struct FixtureOcr(AtomicUsize);
+#[async_trait]
+impl ScreenOcr for FixtureOcr {
+    async fn recognize_tsv(&self, _: &ToolContext, png: Vec<u8>) -> Result<String> {
+        if self.0.fetch_add(1, Ordering::SeqCst) > 0 {
+            bail!("{}", "sensitive-unbounded-backend-error".repeat(10000));
+        }
+        assert_eq!(
+            image::load_from_memory(&png)?.to_rgb8().dimensions(),
+            (32, 24)
+        );
+        Ok("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n5\t1\t1\t1\t1\t1\t2\t3\t10\t8\t95\tOpen\n".into())
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "fixture-literal-tsv".into()
+    }
+}
+#[async_trait]
+impl ScreenInterpreter for FixtureInterpreter {
+    async fn interpret(
+        &self,
+        _: &ToolContext,
+        png: Vec<u8>,
+        question: &str,
+    ) -> Result<serde_json::Value> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(question, "pixel color?");
+        let img = image::load_from_memory(&png)?.to_rgb8();
+        assert_eq!(img.dimensions(), (32, 24));
+        assert_eq!(img.get_pixel(1, 1).0, [0x33, 0x66, 0x99]);
+        Ok(json!({"description":"synthetic blue test window","untrusted":true}))
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "fixture-no-model".into()
+    }
+}
 #[async_trait]
 impl DesktopApproval for Approval {
     async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {
@@ -155,11 +194,15 @@ async fn authenticated_isolated_xvfb_reads_and_inputs_only_focused_allowed_windo
         ..Default::default()
     };
     let approval = Arc::new(Approval(AtomicUsize::new(0)));
+    let interpreter = Arc::new(FixtureInterpreter(AtomicUsize::new(0)));
+    let ocr = Arc::new(FixtureOcr(AtomicUsize::new(0)));
     let tools = DesktopTools::new(
-        config,
+        config.clone(),
         PolicyHttpClient::new(PolicyConfig::default())?,
         approval.clone(),
-    )?;
+    )?
+    .with_screen_interpreter(interpreter.clone())
+    .with_screen_ocr(ocr.clone());
     let ctx = ToolContext {
         scope: Scope {
             tenant: "t".into(),
@@ -199,6 +242,110 @@ async fn authenticated_isolated_xvfb_reads_and_inputs_only_focused_allowed_windo
     assert_eq!(image["data"]["window"]["width"], 32);
     assert!(image["data"]["artifact"]["data"].as_str().unwrap().len() > 100);
     assert_eq!(approval.0.load(Ordering::SeqCst), 1);
+    let blank = tools
+        .execute(
+            &ctx,
+            &ToolCall {
+                id: "blank".into(),
+                name: "x11_read_screen".into(),
+                arguments: json!({"window":window,"question":"pixel color?"}),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(blank.to_string().contains("blank_capture"));
+    assert_eq!(interpreter.0.load(Ordering::SeqCst), 0);
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 0);
+    // Draw variation in this fresh isolated window only. No existing session.
+    let gc = c.generate_id()?;
+    c.create_gc(gc, window, &CreateGCAux::new().foreground(0xffffff))?
+        .check()?;
+    c.poly_fill_rectangle(
+        window,
+        gc,
+        &[Rectangle {
+            x: 16,
+            y: 0,
+            width: 16,
+            height: 24,
+        }],
+    )?
+    .check()?;
+    c.flush()?;
+    let read = tools
+        .execute(
+            &ctx,
+            &ToolCall {
+                id: "read-screen".into(),
+                name: "x11_read_screen".into(),
+                arguments: json!({"window":window,"question":"pixel color?"}),
+            },
+        )
+        .await?;
+    assert_eq!(
+        read["data"]["analysis"]["description"],
+        "synthetic blue test window"
+    );
+    assert_eq!(interpreter.0.load(Ordering::SeqCst), 1);
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
+    assert_eq!(read["data"]["ocr"]["availability"], "available");
+    assert_eq!(
+        read["data"]["ocr"]["coordinate_space"],
+        "native_window_pixels"
+    );
+    assert_eq!(read["data"]["ocr"]["anchors"][0]["text"], "Open");
+    assert_eq!(read["data"]["ocr"]["anchors"][0]["center_x"], 7);
+    assert_eq!(read["data"]["ocr"]["anchors"][0]["center_y"], 7);
+    let status = tools
+        .execute(
+            &ctx,
+            &ToolCall {
+                id: "status".into(),
+                name: "desktop_status".into(),
+                arguments: json!({}),
+            },
+        )
+        .await?;
+    assert_eq!(status["data"]["x11"]["endpoint_health"], "reachable");
+    assert_eq!(status["data"]["x11"]["isolation_attested"], true);
+    assert_eq!(status["data"]["ambient_discovery"], false);
+    assert_eq!(status["data"]["input_dispatched"], false);
+    // OCR-only errors remain unknown, not made-up labels or raw exception text.
+    let ocr_only = DesktopTools::new(
+        config,
+        PolicyHttpClient::new(PolicyConfig::default())?,
+        approval.clone(),
+    )?
+    .with_screen_ocr(ocr.clone());
+    let unknown = ocr_only
+        .execute(
+            &ctx,
+            &ToolCall {
+                id: "unknown-ocr".into(),
+                name: "x11_read_screen".into(),
+                arguments: json!({"window":window,"question":"labels?"}),
+            },
+        )
+        .await?;
+    assert!(unknown["data"]["analysis"].is_null());
+    assert_eq!(unknown["data"]["ocr"]["availability"], "unavailable");
+    assert_eq!(unknown["data"]["ocr"]["anchors"], json!([]));
+    assert_eq!(
+        unknown["data"]["ocr"]["diagnostic"],
+        "ocr_backend_failed_or_invalid_tsv"
+    );
+    assert!(!unknown.to_string().contains("sensitive-unbounded"));
+    tools
+        .execute(
+            &ctx,
+            &ToolCall {
+                id: "focus".into(),
+                name: "desktop_focus_window".into(),
+                arguments: json!({"window":window}),
+            },
+        )
+        .await?;
+    assert_eq!(c.get_input_focus()?.reply()?.focus, window);
     let input = |args| ToolCall {
         id: "input".into(),
         name: "desktop_input".into(),

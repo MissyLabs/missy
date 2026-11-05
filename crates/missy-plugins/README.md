@@ -1,21 +1,21 @@
 # missy-plugins
 
-Safe native replacement for dynamic Python `self_create_tool` behavior: a data-only
-declarative registry plus approved operator-supplied ELF binaries. The model does
-not install arbitrary code, compile Rust, evaluate Python, invoke a shell, grant
-itself policy capabilities, or load changed source into a running runtime.
+Native replacement for dynamic Python `self_create_tool`: pending declarative
+manifests or Rust source, separately operator-reviewed offline builds, then
+separately reviewed/activated ELF binaries. Models cannot compile, execute,
+approve, expand policy, invoke Python/shell or hotload proposed code.
 
 ## Control plane and integration
 
 When plugins are enabled, `PluginTools` advertises the model-callable
-`self_create_tool` tool with a typed `{ "manifest": PluginManifest }` argument.
+`self_create_tool` tool with exactly one typed `manifest` or `rust_source` argument.
 It is side-effecting and requires the same durable exact-call `PluginApproval`
 gate as execution. Authenticated scope, cancellation, closed fields, schema,
 capability policy and a 64KiB argument limit are checked before persistence.
 Its only effect is creating a pending scope-bound proposal. The response contains
 the exact review hash and explicitly reports `approved=false`, `enabled=false`
 and `requires_new_runtime=true`. The model cannot approve itself, add allowed IDs,
-change policy, write executable source, compile code, execute the proposal or
+change policy, make source executable, compile code, execute the proposal or
 change the current tool catalog/fingerprint. Proposal creation is available with
 an empty execution-ID allowlist, so an operator need not pre-activate a nonexistent
 plugin merely to permit proposing it. Duplicate IDs are never overwritten.
@@ -59,7 +59,7 @@ never shell syntax. Every expanded vector must already appear in the owned
 policy's `allowed_commands` and `shell_enabled` must be true. A template does not
 expand the host's command authority.
 
-Only operator-provided native 64-bit ELF is executed. Shebangs and known shell,
+Only operator-reviewed native 64-bit ELF is executed. Shebangs and known shell,
 interpreter, compiler and loader executable names are rejected. Name checks are
 defense in depth, not a malware classifier: exact binary-hash human review remains
 essential, and renamed interpreters are not made trustworthy by their filename.
@@ -105,9 +105,65 @@ rejection, closed schemas, inert shell-looking strings, exact argv policy,
 no PATH/HOME inheritance, filesystem/network denial, hash drift and timeout.
 The fixture compiler is used only by tests, never plugin execution.
 
-No source-generation/autocompilation service, WASM runtime, dynamic Python,
-in-process native library loading or automatic external MCP installation is
-provided. Existing approved external MCP registration remains a separate facility.
-If an outer workflow writes a proposed Rust source artifact, it must use existing
-policy-write roots and durable approval, and it must not silently compile or run
-that artifact. This crate's functional installation path is reviewed native ELF.
+No automatic source compilation, WASM runtime, dynamic Python, in-process native
+library loading or automatic external MCP installation exists. External MCP
+registration remains separate.
+
+## Reviewed source build lifecycle
+
+`RustSource { id, source, definition, args, capabilities }` is a single-file,
+48KiB-bounded proposal. `propose_rust_source(scope,source)` persists it as private
+data with a scope-bound exact SHA; `rust_source(scope,id)` retrieves it for review.
+`self_create_tool` can propose this data but never invoke the build API. Unknown
+fields, extra definition keys, unsupported schemas and widened read capabilities
+fail closed before persistence. Source can contain unsafe code; syntax scanning
+is not treated as a security boundary.
+
+1. Operator reviews the complete source, parameter schema, argv template and
+   requested read roots, then `review_rust_source(scope,id,exact_hash,true)`.
+2. Operator supplies a trusted `RustBuildConfig` and explicit confirmation to
+   async `build_rust_source(scope,id,hash,config,true,cancellation)`.
+3. Build emits native ELF and a source/compiler/config/artifact-hash receipt,
+   then creates an ordinary **pending** binary manifest. It does not execute,
+   test, approve or enable the artifact. A source review is not binary review.
+4. Review the resulting binary hash/manifest with normal `review`, explicitly
+   allow the ID and expanded exact argv in policy, then `enable`. New-runtime
+   construction and per-call durable approvals remain mandatory.
+
+Build config explicitly pins real rustc and GNU-flavor LLD native ELF paths and
+SHA-256, sysroot, toolchain read roots, native library roots, literal linker
+arguments, timeout (1..120000ms) and joint output limit (1..1MiB). It is trusted
+operator configuration, never model arguments. Compiler/linker are read into
+sealed memfd images. The linker image is copied into the private build temp
+directory; compiler uses that image rather than PATH lookup. Compiler environment
+is cleared except TMPDIR/HOME set to temp and LD_LIBRARY_PATH set to explicit
+sysroot/lib. No cargo, registry fetch, build.rs, procedural macro dependency,
+shell script or third-party crate installation occurs. Standard library is the
+operator-selected sysroot. Use a trusted read-only toolchain; shared libraries,
+startup objects and sysroot dependencies are not individually digest-pinned.
+
+Compiler runs in a new process group under child-only Landlock plus seccomp:
+network/socket access denied, reads limited to explicit toolchain roots and
+temporary build tree, writes only to that tree. No unconfined fallback. Limits
+include no core dump, 64MiB per output file, 2GiB address space, 120 CPU seconds,
+256 descriptors and bounded wall time/output. Process group cleanup keeps leader
+PID reserved until kill/reap, including future cancellation. Compiler diagnostics
+are withheld because source strings and include_str! contents are untrusted and
+potentially sensitive. Failing compilation publishes no pending binary manifest.
+Source approval is rechecked after compilation to reject mid-build revocation.
+
+Link setup varies by host. The verified x86_64 GNU/Linux fixture selects sysroot
+`bin/rustc`, sysroot `lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`, explicit
+system native library dirs and GNU startup objects/dynamic-loader link args.
+Other hosts must provide their equivalent explicit paths; no arbitrary compiler
+fallback or automatic dependency installation is attempted. Confinement is not a
+VM, prevents no compiler/kernel vulnerability, and does not make broad read roots
+safe: never grant credential/home/workspace trees. A compiler can read files
+inside configured roots at compile time; operator exact-source review matters.
+
+`tests/source.rs` actually compiles a fixed harmless Rust echo in the child
+sandbox, verifies independent binary review and ELF output, and tests unreviewed
+source, hash drift, cancellation, missing confirmation and denied include_str!
+outside toolchain roots. It never runs generated model input or deploys artifacts.
+`tests/proposal.rs` additionally checks model-facing source remains pending data
+without a prebuilt record or hotloaded tool.

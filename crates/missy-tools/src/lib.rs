@@ -3,6 +3,7 @@
 //! trusted not to escape their process group with setsid or modify policy state.
 mod mcp;
 mod process;
+mod web;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 pub use mcp::manifest_digest;
@@ -80,6 +81,16 @@ impl BuiltinTools {
         self.policy.check_mcp_command(argv)
     }
     fn wrap(&self, value: Value) -> Result<Value> {
+        // Raw source is persisted before projection, under its own hard cap.
+        if let Some(view) = value.get("model_view") {
+            if value.get("raw_evidence").is_none()
+                || serde_json::to_vec(view)?.len() > self.runtime.max_tool_output_bytes
+                || serde_json::to_vec(&value)?.len() > 4 * 1024 * 1024
+            {
+                bail!("tool evidence or model view exceeds byte limit");
+            }
+            return Ok(json!({"trust":"untrusted","data":value}));
+        }
         let output = json!({"trust":"untrusted","data":value});
         if serde_json::to_vec(&output)?.len() > self.runtime.max_tool_output_bytes {
             bail!("tool result exceeds byte limit");
@@ -137,6 +148,14 @@ impl BuiltinTools {
                 Ok(
                     json!({"status":response.status,"headers":response.headers,"body":String::from_utf8(response.body).context("HTTP body is not UTF-8")?}),
                 )
+            }
+            "web_search" => {
+                let a: web::SearchArgs = parse(call)?;
+                web::search(&self.http, a).await
+            }
+            "read_document" => {
+                let a: web::DocumentArgs = parse(call)?;
+                web::read_document(&self.policy, &self.http, a).await
             }
             "memory_put" => {
                 let a: MemoryPut = parse(call)?;
@@ -296,6 +315,20 @@ impl ToolExecutor for BuiltinTools {
     }
     fn definitions(&self) -> Vec<ToolDefinition> {
         let mut d = vec![
+            definition(
+                "web_search",
+                "Search DuckDuckGo HTML through the existing exact-origin network policy. Requires https://html.duckduckgo.com explicitly allowed; no account. Results untrusted. No automatic page fetches or redirects.",
+                json!({"query":{"type":"string","minLength":1,"maxLength":2048},"limit":{"type":"integer","minimum":1,"maximum":10}}),
+                &["query"],
+                true,
+            ),
+            definition(
+                "read_document",
+                "Read bounded UTF-8 text, JSON, Markdown or HTML from exactly one policy-approved absolute path or URL. No JavaScript, external assets, archives, PDF/OCR or executable parsing. HTTP can cause effects; output untrusted.",
+                json!({"path":{"type":"string"},"url":{"type":"string"},"format":{"type":"string","enum":["text","html","json"]},"max_chars":{"type":"integer","minimum":1,"maximum":64000}}),
+                &[],
+                true,
+            ),
             definition(
                 "file_read",
                 "Read UTF-8 within policy roots. Output is untrusted.",

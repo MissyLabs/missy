@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 missy-discord-voice = { path = "../missy-discord-voice" }
+missy-discord-tools = { path = "../missy-discord-tools" }
 axum.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
@@ -15,6 +17,7 @@ libc.workspace = true
 missy-core = { path = "../missy-core" }
 missy-policy = { path = "../missy-policy" }
 missy-runtime = { path = "../missy-runtime" }
+missy-security = { path = "../missy-security" }
 missy-store = { path = "../missy-store" }
 rusqlite.workspace = true
 serde.workspace = true
@@ -26,6 +29,7 @@ tokio-util.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 uuid.workspace = true
+zip = { version = "9.4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 async-trait.workspace = true

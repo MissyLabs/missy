@@ -74,6 +74,60 @@ fn parent(path: &Path) -> Result<File> {
     }
     Ok(dir)
 }
+/// Traverse explicit backup directories without following any symlink.
+pub(crate) fn directory(path: &Path) -> Result<File> {
+    let dir = parent(path)?;
+    let child = openat(
+        &dir,
+        path.file_name()
+            .ok_or_else(|| anyhow!("directory name required"))?,
+        libc::O_RDONLY | libc::O_DIRECTORY,
+    )?;
+    trusted_dir(&child)?;
+    ensure!(
+        child.metadata()?.mode() & 0o077 == 0,
+        "backup directories must be private"
+    );
+    Ok(child)
+}
+
+/// Record a protected credential reference without reading its contents.
+pub(crate) fn reference(path: &Path) -> Result<SourceDigest> {
+    let dir = parent(path)?;
+    let f = openat(
+        &dir,
+        path.file_name()
+            .ok_or_else(|| anyhow!("filename required"))?,
+        libc::O_RDONLY | libc::O_NONBLOCK,
+    )?;
+    let m = f.metadata()?;
+    ensure!(
+        m.is_file()
+            && m.nlink() == 1
+            && (m.uid() == 0 || m.uid() == unsafe { libc::geteuid() })
+            && m.mode() & 0o177 == 0,
+        "credential reference must be a private regular single-link file"
+    );
+    Ok(SourceDigest {
+        kind: "secret_reference_metadata_only".into(),
+        path: path.into(),
+        sha256: digest(
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                m.dev(),
+                m.ino(),
+                m.len(),
+                m.mtime(),
+                m.mtime_nsec(),
+                m.ctime(),
+                m.ctime_nsec()
+            )
+            .as_bytes(),
+        ),
+        bytes: m.len(),
+    })
+}
+
 pub(crate) struct PinnedSource {
     pub file: File,
     dir: File,
@@ -133,7 +187,9 @@ pub(crate) fn pin(path: &Path, kind: &str, max: usize) -> Result<PinnedSource> {
         bytes.len() <= max
             && before.len() == after.len()
             && before.mtime() == after.mtime()
-            && before.mtime_nsec() == after.mtime_nsec(),
+            && before.mtime_nsec() == after.mtime_nsec()
+            && before.ctime() == after.ctime()
+            && before.ctime_nsec() == after.ctime_nsec(),
         "source changed during read"
     );
     let source = SourceDigest {

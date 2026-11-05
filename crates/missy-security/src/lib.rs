@@ -17,11 +17,17 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     },
     path::Path,
 };
 use zeroize::{Zeroize, Zeroizing};
+
+mod content;
+pub use content::{
+    PromptDriftDetector, SecurityFinding, SecurityView, inspect_untrusted, preprocess_input,
+    redact_output, redact_with_literals,
+};
 
 const LIMIT: u64 = 4 * 1024 * 1024;
 const FORMAT: &str = "missy-rust-vault-v1";
@@ -67,7 +73,14 @@ struct Envelope {
 
 impl Vault {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
+        Self::open_inner(path.as_ref(), false)?.context("vault lock unavailable")
+    }
+    /// Async callers must use bounded nonblocking acquisition rather than leave
+    /// an uncancellable blocking worker waiting on another process's flock.
+    pub fn try_open(path: impl AsRef<Path>) -> Result<Option<Self>> {
+        Self::open_inner(path.as_ref(), true)
+    }
+    fn open_inner(path: &Path, nonblocking: bool) -> Result<Option<Self>> {
         match std::fs::symlink_metadata(path) {
             Ok(m) => {
                 if m.file_type().is_symlink() || !m.is_dir() {
@@ -76,8 +89,17 @@ impl Vault {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Parent is operator-selected state; never recursively chmod an existing tree.
-                std::fs::create_dir(path).context("vault parent must exist")?;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(path)
+                    .or_else(|error| {
+                        if error.kind() == std::io::ErrorKind::AlreadyExists {
+                            Ok(())
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .context("vault parent must exist")?;
             }
             Err(_) => bail!("vault directory unavailable"),
         }
@@ -89,7 +111,18 @@ impl Vault {
         let lock = openat(&dir, "vault.lock", libc::O_RDWR | libc::O_CREAT)?;
         check_private(&lock, false)?;
         // Lock held throughout decrypt/read/modify/encrypt/write, not merely on final rename.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        if unsafe {
+            libc::flock(
+                lock.as_raw_fd(),
+                libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 },
+            )
+        } != 0
+        {
+            if nonblocking
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
+            {
+                return Ok(None);
+            }
             bail!("vault lock unavailable");
         }
         let key = match readat(&dir, "vault.key", 32) {
@@ -123,12 +156,12 @@ impl Vault {
             }
             Err(_) => bail!("vault key unavailable or insecure"),
         };
-        Ok(Self {
+        Ok(Some(Self {
             dir,
             _lock: lock,
             key,
             mutation: std::sync::Mutex::new(()),
-        })
+        }))
     }
     pub fn set(&self, name: &str, secret: &[u8]) -> Result<()> {
         let _guard = self
@@ -238,6 +271,10 @@ impl Vault {
     }
     /// Sign a supplied audit export. Signatures authenticate this export, not every live event.
     pub fn sign_export(&self, data: &[u8]) -> Result<SignedExport> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| anyhow::anyhow!("vault mutation lock unavailable"))?;
         if data.len() > LIMIT as usize {
             bail!("export exceeds 4MiB");
         }
@@ -405,6 +442,43 @@ fn atomic_write(dir: &File, name: &str, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn try_open_is_nonblocking_and_preserves_existing_ciphertext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault");
+        let first = Vault::try_open(&path).unwrap().unwrap();
+        first.set("fixture", b"retained").unwrap();
+        let start = std::time::Instant::now();
+        assert!(Vault::try_open(&path).unwrap().is_none());
+        assert!(start.elapsed() < std::time::Duration::from_millis(100));
+        drop(first);
+        let second = Vault::try_open(&path).unwrap().unwrap();
+        assert_eq!(
+            second.get("fixture").unwrap().unwrap().as_slice(),
+            b"retained"
+        );
+    }
+    #[test]
+    fn parallel_first_export_signing_creates_one_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::open(temp.path().join("vault")).unwrap();
+        let exports = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| vault.sign_export(b"synthetic audit").unwrap()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for export in &exports {
+            assert_eq!(export.public_key, exports[0].public_key);
+            export
+                .verify(b"synthetic audit", &exports[0].public_key)
+                .unwrap();
+        }
+    }
     #[test]
     fn roundtrip_private_ciphertext_and_persistence() {
         let temp = tempfile::tempdir().unwrap();

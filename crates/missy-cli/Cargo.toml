@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
 missy-core = { path = "../missy-core" }
 missy-policy = { path = "../missy-policy" }
@@ -44,6 +45,9 @@ missy-vision = { path = "../missy-vision" }
 missy-history = { path = "../missy-history" }
 missy-discord-tools = { path = "../missy-discord-tools" }
 missy-plugins = { path = "../missy-plugins" }
+missy-workloads = { path = "../missy-workloads" }
+missy-screencast = {path="../missy-screencast"}
+rusqlite.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 sha2.workspace = true
@@ -60,4 +64,3 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-rusqlite.workspace = true

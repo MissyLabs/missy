@@ -19,8 +19,12 @@ use std::{
 };
 
 mod config;
+mod inventory;
+mod portable;
 mod source;
 mod sqlite;
+
+pub use inventory::{InventoryEntry, Resolution, StateDisposition};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MigrationLimits {
@@ -41,6 +45,8 @@ impl Default for MigrationLimits {
 }
 #[derive(Clone, Debug, Default)]
 pub struct MigrationInput {
+    /// Explicit exported backup directory, never a live .missy tree.
+    pub backup_root: Option<PathBuf>,
     pub config_path: Option<PathBuf>,
     pub database_path: Option<PathBuf>,
     pub mapping_path: Option<PathBuf>,
@@ -59,13 +65,13 @@ pub struct MigrationIssue {
     pub location: String,
     pub message: String,
 }
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct MigrationCounts {
     pub imported_memories: usize,
     pub quarantined_records: usize,
     pub sessions: usize,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct SourceDigest {
     pub kind: String,
     pub path: PathBuf,
@@ -85,13 +91,21 @@ struct ImportedRow {
 pub struct MigrationPlan {
     pub offline: bool,
     pub converted_config: Option<Config>,
+    /// Inert metadata-only templates. Never read by the native runtime.
+    pub config_templates: Vec<Value>,
     pub issues: Vec<MigrationIssue>,
     pub counts: MigrationCounts,
     pub sources: Vec<SourceDigest>,
+    pub inventory: Vec<InventoryEntry>,
+    pub resolutions: Vec<Resolution>,
     #[serde(skip)]
     input: MigrationInput,
     #[serde(skip)]
     rows: Vec<ImportedRow>,
+    #[serde(skip)]
+    archives: BTreeMap<String, Vec<u8>>,
+    #[serde(skip)]
+    mappings: BTreeMap<String, Scope>,
     #[serde(skip)]
     sealed_fingerprint: String,
 }
@@ -113,8 +127,14 @@ impl MigrationPlan {
     }
     pub fn fingerprint(&self) -> String {
         // Include captured data, mappings and bounds without publishing them.
-        let data = serde_json::to_vec(&(self, &self.rows, &self.input.limits))
-            .expect("serializable migration plan");
+        let data = serde_json::to_vec(&(
+            self,
+            &self.rows,
+            &self.archives,
+            &self.mappings,
+            &self.input.limits,
+        ))
+        .expect("serializable migration plan");
         digest(&data)
     }
     fn issue(&mut self, severity: IssueSeverity, code: &str, location: &str, message: &str) {
@@ -140,7 +160,7 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
 pub fn plan(input: MigrationInput) -> Result<MigrationPlan> {
     let hard = MigrationLimits::default();
     ensure!(
-        input.config_path.is_some() || input.database_path.is_some(),
+        input.backup_root.is_some() || input.config_path.is_some() || input.database_path.is_some(),
         "explicit offline config and/or backup database required"
     );
     ensure!(
@@ -157,11 +177,16 @@ pub fn plan(input: MigrationInput) -> Result<MigrationPlan> {
     let mut p = MigrationPlan {
         offline: true,
         converted_config: None,
+        config_templates: vec![],
         issues: vec![],
         counts: MigrationCounts::default(),
         sources: vec![],
+        inventory: vec![],
+        resolutions: vec![],
         input: input.clone(),
         rows: vec![],
+        archives: BTreeMap::new(),
+        mappings: BTreeMap::new(),
         sealed_fingerprint: String::new(),
     };
     if let Some(path) = &input.config_path {
@@ -184,31 +209,38 @@ pub fn plan(input: MigrationInput) -> Result<MigrationPlan> {
         let mut targets = std::collections::HashSet::new();
         ensure!(
             mappings
-                .values()
-                .all(|s| targets.insert(serde_json::to_string(s).unwrap())),
+                .iter()
+                .filter(|(name, _)| !name.starts_with("state:"))
+                .all(|(_, s)| targets.insert(serde_json::to_string(s).unwrap())),
             "scope mapping must be one-to-one; refusing merged legacy sessions"
         );
     }
     if let Some(path) = &input.database_path {
         sqlite::read_backup(path, &mappings, &mut p)?;
     }
+    if let Some(root) = &input.backup_root {
+        inventory::capture(root, &mappings, &mut p)?;
+    }
+    p.mappings = mappings;
     p.sealed_fingerprint = p.fingerprint();
     Ok(p)
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct ArtifactDigest {
     pub path: String,
     pub sha256: String,
     pub bytes: u64,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct MigrationManifest {
     pub format_version: u32,
     pub offline: bool,
     pub plan_sha256: String,
     pub sources: Vec<SourceDigest>,
     pub counts: MigrationCounts,
+    pub inventory: Vec<InventoryEntry>,
+    pub resolutions: Vec<Resolution>,
     pub artifacts: Vec<ArtifactDigest>,
     pub notes: Vec<String>,
 }
@@ -254,16 +286,15 @@ pub fn apply(
         fs::Permissions::from_mode(0o700),
     )?;
     let store = Store::open(&store_path)?;
-    let database_hash = plan
-        .sources
-        .iter()
-        .find(|s| s.kind == "database")
-        .map(|s| s.sha256.as_str())
-        .unwrap_or("none");
     let mut quarantine = vec![];
     let mut scopes = BTreeMap::new();
     let mut expected = vec![];
     for row in &plan.rows {
+        let database_hash = row
+            .row
+            .get("_migration_source_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or("none");
         if let Some(scope) = &row.scope {
             // All original roles, tool calls, metadata and instructions remain JSON
             // data. No legacy role becomes a system/user/assistant protocol message.
@@ -336,25 +367,48 @@ pub fn apply(
         &stage.path().join("plan.json"),
         &serde_json::to_vec_pretty(plan)?,
     )?;
+    private_write(
+        &stage.path().join("operator-resolution.json"),
+        &serde_json::to_vec_pretty(&plan.resolutions)?,
+    )?;
+    private_write(
+        &stage.path().join("config-review.json"),
+        &serde_json::to_vec_pretty(&plan.config_templates)?,
+    )?;
+    fs::create_dir(stage.path().join("archive"))?;
+    fs::set_permissions(
+        stage.path().join("archive"),
+        fs::Permissions::from_mode(0o700),
+    )?;
+    for (hash, bytes) in &plan.archives {
+        private_write(&stage.path().join("archive").join(hash), bytes)?;
+    }
+    let portable_artifacts = portable::write(plan, stage.path())?;
     let mut artifacts = vec![];
-    for name in [
-        "state/runtime.sqlite3",
-        "config.yaml",
-        "quarantine.json",
-        "plan.json",
-    ] {
-        let path = stage.path().join(name);
+    let mut names = vec![
+        "state/runtime.sqlite3".to_owned(),
+        "config.yaml".into(),
+        "quarantine.json".into(),
+        "plan.json".into(),
+        "operator-resolution.json".into(),
+        "config-review.json".into(),
+    ];
+    names.extend(plan.archives.keys().map(|hash| format!("archive/{hash}")));
+    names.extend(portable_artifacts);
+    for name in names {
+        let path = stage.path().join(&name);
         if path.exists() {
             let bytes = fs::read(&path)?;
             File::open(&path)?.sync_all()?;
             artifacts.push(ArtifactDigest {
-                path: name.into(),
+                path: name,
                 sha256: digest(&bytes),
                 bytes: bytes.len() as u64,
             });
         }
     }
-    let manifest = MigrationManifest { format_version: 1, offline: true, plan_sha256: plan.fingerprint(), sources: plan.sources.clone(),
+    let manifest = MigrationManifest { format_version: 2, offline: true, plan_sha256: plan.fingerprint(), sources: plan.sources.clone(),
+        inventory: plan.inventory.clone(), resolutions: plan.resolutions.clone(),
         counts: plan.counts.clone(), artifacts,
         notes: vec!["No source writes, provider calls, tool calls, runnable turns, automatic activation or live-state discovery.".into(),
             "Raw turns/summaries/large content are untrusted scoped memories, not native conversation turns.".into(),
@@ -365,6 +419,7 @@ pub fn apply(
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
     File::open(stage.path().join("state"))?.sync_all()?;
+    File::open(stage.path().join("archive"))?.sync_all()?;
     File::open(stage.path())?.sync_all()?;
     // Check hashes once more immediately before publication.
     ensure!(
@@ -376,6 +431,122 @@ pub fn apply(
     File::open(parent)?.sync_all()?;
     Ok(manifest)
 }
+/// Verify an OFFLINE published import, not an activated/mutating service tree.
+/// Checksums detect corruption, not malicious replacement of both manifest/data.
+pub fn verify(destination: impl AsRef<Path>) -> Result<MigrationManifest> {
+    let destination = destination.as_ref();
+    source::directory(destination)?;
+    let (bytes, _) = source::read(
+        &destination.join("manifest.json"),
+        "manifest",
+        16 * 1024 * 1024,
+    )?;
+    let manifest: MigrationManifest = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow!("invalid migration manifest; details suppressed"))?;
+    ensure!(
+        manifest.offline && manifest.format_version == 2 && manifest.artifacts.len() <= 50_010,
+        "unsupported migration manifest"
+    );
+    let mut paths = std::collections::BTreeSet::new();
+    for artifact in &manifest.artifacts {
+        let path = Path::new(&artifact.path);
+        ensure!(
+            !path.is_absolute()
+                && path
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+                && paths.insert(artifact.path.clone()),
+            "unsafe or duplicate manifest artifact path"
+        );
+        let (_, actual) = source::read(
+            &destination.join(path),
+            "artifact",
+            MigrationLimits::default().max_file_bytes,
+        )?;
+        ensure!(
+            actual.bytes == artifact.bytes && actual.sha256 == artifact.sha256,
+            "migration artifact checksum verification failed"
+        );
+    }
+    for required in [
+        "state/runtime.sqlite3",
+        "config.yaml",
+        "quarantine.json",
+        "plan.json",
+        "operator-resolution.json",
+    ] {
+        ensure!(
+            paths.contains(required),
+            "required migration artifact missing from manifest"
+        );
+    }
+    paths.insert("manifest.json".into());
+    verify_tree(destination, destination, &paths)?;
+    for artifact in &manifest.artifacts {
+        if artifact.path.starts_with("state/") && artifact.path.ends_with(".sqlite3") {
+            sqlite::validate_backup(
+                &destination.join(&artifact.path),
+                MigrationLimits::default().max_file_bytes,
+            )?;
+        }
+    }
+    Ok(manifest)
+}
+
+fn verify_tree(
+    root: &Path,
+    dir: &Path,
+    expected: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    source::directory(dir)?;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ty = entry.file_type()?;
+        let relative = path
+            .strip_prefix(root)?
+            .to_str()
+            .ok_or_else(|| anyhow!("invalid artifact filename"))?;
+        if ty.is_dir() {
+            ensure!(
+                matches!(relative, "state" | "archive"),
+                "unexpected artifact directory"
+            );
+            verify_tree(root, &path, expected)?;
+        } else {
+            ensure!(
+                ty.is_file() && expected.contains(relative),
+                "unexpected artifact, symlink or active runtime journal"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Offline non-destructive rollback: atomically retire the entire new import to
+/// a fresh sibling path. Legacy source files are never touched or restored over.
+pub fn rollback(
+    destination: impl AsRef<Path>,
+    retired: impl AsRef<Path>,
+    confirm: bool,
+) -> Result<()> {
+    ensure!(
+        confirm,
+        "offline rollback requires explicit confirmation and stopped native runtime"
+    );
+    let destination = destination.as_ref();
+    verify(destination)?;
+    source::publish(destination, retired.as_ref())?;
+    File::open(
+        retired
+            .as_ref()
+            .parent()
+            .ok_or_else(|| anyhow!("parent required"))?,
+    )?
+    .sync_all()?;
+    Ok(())
+}
+
 fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = OpenOptions::new()
         .create_new(true)

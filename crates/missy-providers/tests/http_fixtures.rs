@@ -4,7 +4,7 @@ use axum::{
 };
 use missy_core::{Message, PolicyConfig, Provider, ProviderConfig, ToolDefinition};
 use missy_policy::PolicyHttpClient;
-use missy_providers::{HttpProvider, ProviderPool, cost_microusd};
+use missy_providers::{CredentialResolver, HttpProvider, ProviderPool, cost_microusd};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -18,6 +18,7 @@ struct Reply {
     status: StatusCode,
     body: String,
     delay: Duration,
+    stream: bool,
 }
 impl Reply {
     fn json(v: Value) -> Self {
@@ -25,6 +26,7 @@ impl Reply {
             status: StatusCode::OK,
             body: v.to_string(),
             delay: Duration::ZERO,
+            stream: false,
         }
     }
     fn raw(status: StatusCode, body: &str) -> Self {
@@ -32,6 +34,7 @@ impl Reply {
             status,
             body: body.into(),
             delay: Duration::ZERO,
+            stream: false,
         }
     }
 }
@@ -69,7 +72,14 @@ impl Fixture {
             tokio::time::sleep(reply.delay).await;
             (
                 reply.status,
-                [("content-type", "application/json")],
+                [(
+                    "content-type",
+                    if reply.stream {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                )],
                 reply.body,
             )
         }
@@ -79,6 +89,7 @@ impl Fixture {
         };
         let app = Router::new()
             .route("/v1/chat/completions", post(handler))
+            .route("/v1/responses", post(handler))
             .route("/v1/messages", post(handler))
             .route("/api/chat", post(handler))
             .with_state(state.clone());
@@ -148,6 +159,187 @@ fn calls(c: Value) -> Value {
 }
 fn call(id: &str, args: &str) -> Value {
     json!({"id":id,"type":"function","function":{"name":"lookup","arguments":args}})
+}
+
+#[derive(Default)]
+struct FixtureCredentials(Mutex<Vec<String>>);
+impl CredentialResolver for FixtureCredentials {
+    fn resolve(&self, reference: &str) -> anyhow::Result<String> {
+        self.0.lock().unwrap().push(reference.into());
+        if reference == "MISSING" {
+            anyhow::bail!("secret diagnostic must not escape");
+        }
+        Ok(format!("fixture-{reference}"))
+    }
+}
+#[tokio::test]
+async fn account_round_robin_and_rejection_cooldown_are_bounded() {
+    let f = Fixture::start(vec![
+        Reply::raw(StatusCode::UNAUTHORIZED, "secret"),
+        Reply::json(text()),
+        Reply::json(text()),
+        Reply::json(text()),
+    ])
+    .await;
+    let mut config = f.config("openai");
+    config.api_key_envs = vec!["ACCOUNT_A".into(), "ACCOUNT_B".into()];
+    let credentials = Arc::new(FixtureCredentials::default());
+    let p = HttpProvider::with_credentials(
+        config,
+        PolicyHttpClient::new(f.policy()).unwrap(),
+        credentials.clone(),
+    )
+    .unwrap();
+    let first = p
+        .complete(&user(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(!first.usage.cost_known);
+    for _ in 0..2 {
+        p.complete(&user(), &[], CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        *credentials.0.lock().unwrap(),
+        vec!["ACCOUNT_A", "ACCOUNT_B", "ACCOUNT_B", "ACCOUNT_B"]
+    );
+    assert_eq!(f.requests().len(), 4);
+}
+#[tokio::test]
+async fn healthy_accounts_rotate_and_missing_reference_never_dispatches() {
+    let f = Fixture::start(vec![
+        Reply::json(text()),
+        Reply::json(text()),
+        Reply::json(text()),
+    ])
+    .await;
+    let mut config = f.config("openai");
+    config.api_key_envs = vec!["MISSING".into(), "ACCOUNT_B".into(), "ACCOUNT_C".into()];
+    let credentials = Arc::new(FixtureCredentials::default());
+    let p = HttpProvider::with_credentials(
+        config,
+        PolicyHttpClient::new(f.policy()).unwrap(),
+        credentials.clone(),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        assert!(
+            p.complete(&user(), &[], CancellationToken::new())
+                .await
+                .unwrap()
+                .usage
+                .cost_known
+        );
+    }
+    assert_eq!(
+        *credentials.0.lock().unwrap(),
+        vec!["MISSING", "ACCOUNT_B", "ACCOUNT_B", "ACCOUNT_C"]
+    );
+    assert_eq!(f.requests().len(), 3);
+}
+fn responses(output: Value) -> Value {
+    json!({"status":"completed","output":output,"usage":{"input_tokens":10,"output_tokens":3}})
+}
+
+#[tokio::test]
+async fn openai_sse_tools_and_final_usage() {
+    let events = [
+        json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"é","tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"look","arguments":"{\"q\":"}}]},"finish_reason":null}]}),
+        json!({"choices":[{"index":0,"delta":{"content":"𐐀","tool_calls":[{"index":0,"function":{"name":"up","arguments":"\"rust\"}"}}]},"finish_reason":"tool_calls"}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}),
+    ];
+    let body = events
+        .iter()
+        .map(|v| format!("data: {v}\r\n\r\n"))
+        .collect::<String>()
+        + "data: [DONE]\r\n\r\n";
+    let mut reply = Reply::raw(StatusCode::OK, &body);
+    reply.stream = true;
+    let f = Fixture::start(vec![reply]).await;
+    let mut config = f.config("openai");
+    config.stream = true;
+    let p = HttpProvider::new(config, PolicyHttpClient::new(f.policy()).unwrap()).unwrap();
+    let c = p
+        .complete(&user(), &tools(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(c.message.content, "é𐐀");
+    assert_eq!(c.message.tool_calls[0].arguments, json!({"q":"rust"}));
+    assert_eq!(c.usage.input_tokens, 10);
+    assert_eq!(f.requests()[0]["stream_options"]["include_usage"], true);
+}
+#[tokio::test]
+async fn stream_partial_missing_usage_and_error_fail_closed() {
+    for body in [
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"text\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"error\":{\"message\":\"secret-never-echo\"}}\n\n",
+    ] {
+        let mut reply = Reply::raw(StatusCode::OK, body);
+        reply.stream = true;
+        let f = Fixture::start(vec![reply]).await;
+        let mut config = f.config("openai");
+        config.stream = true;
+        let p = HttpProvider::new(config, PolicyHttpClient::new(f.policy()).unwrap()).unwrap();
+        let e = p
+            .complete(&user(), &[], CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(!format!("{e:#}").contains("secret-never-echo"));
+    }
+}
+#[tokio::test]
+async fn native_responses_no_tools_and_gateway_functions_roundtrip() {
+    let f = Fixture::start(vec![
+        Reply::json(responses(json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"native text"}]}]))),
+        Reply::json(responses(json!([{"type":"function_call","call_id":"r1","name":"lookup","arguments":"{\"q\":\"rust\"}"}]))),
+        Reply::json(responses(json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"finished"}]}]))),
+    ]).await;
+    let p = f.provider("openai_responses");
+    let c = p
+        .complete(&user(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(c.message.content, "native text");
+    let c = p
+        .complete(&user(), &tools(), CancellationToken::new())
+        .await
+        .unwrap();
+    let mut history = user();
+    history.push(c.message);
+    history.push(Message::tool("r1", "evidence"));
+    p.complete(&history, &tools(), CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = f.requests();
+    assert_eq!(requests[0]["tool_choice"], "none");
+    assert_eq!(requests[0]["tools"], json!([]));
+    assert_eq!(requests[0]["store"], false);
+    assert_eq!(requests[1]["tools"][0]["type"], "function");
+    assert!(
+        requests[2]["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["type"] == "function_call_output" && v["call_id"] == "r1")
+    );
+}
+#[tokio::test]
+async fn responses_rejects_native_tools_unadvertised_calls_and_ambiguous_arguments() {
+    for output in [
+        json!([{"type":"web_search_call","id":"native"}]),
+        json!([{"type":"function_call","call_id":"r1","name":"lookup","arguments":"{\"q\":\"a\",\"q\":\"b\"}"}]),
+        json!([{"type":"function_call","call_id":"r1","name":"lookup","arguments":"{}"}]),
+    ] {
+        let f = Fixture::start(vec![Reply::json(responses(output))]).await;
+        assert!(
+            f.provider("openai_responses")
+                .complete(&user(), &[], CancellationToken::new())
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]
@@ -253,6 +445,118 @@ async fn fallback_and_circuit_mark_uncertain_billing() {
         .unwrap();
     assert_eq!(bad.requests().len(), 1);
     assert_eq!(good.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn weighted_task_routing_and_capacity_fallback() {
+    use missy_core::{RoutingConfig, RoutingMode};
+    let a = Fixture::start((0..8).map(|_| Reply::json(text())).collect()).await;
+    let b = Fixture::start((0..8).map(|_| Reply::json(text())).collect()).await;
+    let mut first = a.config("openai");
+    first.name = "a".into();
+    let mut second = b.config("openai");
+    second.name = "b".into();
+    second.routing.weight = 3;
+    let policy = PolicyConfig {
+        allowed_origins: vec![a.origin.clone(), b.origin.clone()],
+        allow_private_network: true,
+        ..Default::default()
+    };
+    let weighted = ProviderPool::with_routing(
+        vec![first.clone(), second.clone()],
+        policy.clone(),
+        RoutingConfig {
+            mode: RoutingMode::Weighted,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for _ in 0..8 {
+        weighted
+            .complete(&user(), &[], CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(a.requests().len(), 2);
+    assert_eq!(b.requests().len(), 6);
+    first.routing.tiers = vec!["fast".into()];
+    second.routing.tiers = vec!["premium".into()];
+    let routed = ProviderPool::with_routing(
+        vec![first.clone(), second.clone()],
+        policy.clone(),
+        RoutingConfig {
+            default_tier: Some("fast".into()),
+            task_tiers: [("worker".into(), "premium".into())].into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    routed
+        .complete_for(Some("worker"), None, &user(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(b.requests().len(), 7);
+    first.routing.tiers.clear();
+    second.routing.tiers.clear();
+    first.routing.tokens_per_minute = Some(1);
+    let capped = ProviderPool::new(vec![first, second], policy).unwrap();
+    let result = capped
+        .complete(&user(), &[], CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(result.usage.cost_known);
+    assert_eq!(a.requests().len(), 2);
+    assert_eq!(b.requests().len(), 8);
+}
+
+#[tokio::test]
+async fn last_eligible_fallback_preserves_unknown_prices_and_fingerprint() {
+    use missy_core::{RoutingConfig, RoutingMode};
+    let bad = Fixture::start(vec![Reply::raw(StatusCode::SERVICE_UNAVAILABLE, "hidden")]).await;
+    let good = Fixture::start(vec![Reply::json(text()), Reply::json(text())]).await;
+    let mut first = bad.config("openai");
+    first.name = "bad".into();
+    let mut last = good.config("openai");
+    last.name = "last".into();
+    last.input_microusd_per_million = None;
+    let policy = PolicyConfig {
+        allowed_origins: vec![bad.origin.clone(), good.origin.clone()],
+        allow_private_network: true,
+        ..Default::default()
+    };
+    let pool = ProviderPool::new(vec![first.clone(), last.clone()], policy.clone()).unwrap();
+    assert!(pool.require_known_prices().is_err());
+    assert!(
+        !pool
+            .complete(&user(), &[], CancellationToken::new())
+            .await
+            .unwrap()
+            .usage
+            .cost_known
+    );
+    assert!(
+        !pool
+            .complete(&user(), &[], CancellationToken::new())
+            .await
+            .unwrap()
+            .usage
+            .cost_known
+    );
+    assert_eq!(bad.requests().len(), 1);
+    assert_eq!(good.requests().len(), 2);
+    let weighted = ProviderPool::with_routing(
+        vec![first, last],
+        policy,
+        RoutingConfig {
+            mode: RoutingMode::Weighted,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_ne!(
+        pool.configuration_fingerprint(),
+        weighted.configuration_fingerprint()
+    );
 }
 
 #[tokio::test]
@@ -588,6 +892,72 @@ async fn cached_pricing_not_silently_assumed() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn native_anthropic_ollama_and_responses_stream_http_roundtrip() {
+    let cases = [
+        (
+            "anthropic",
+            vec![
+                json!({"type":"message_start","message":{"role":"assistant","usage":{"input_tokens":10,"output_tokens":0}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a1","name":"lookup","input":{}}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"rust\"}"}}),
+                json!({"type":"content_block_stop","index":0}),
+                json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}),
+                json!({"type":"message_stop"}),
+            ],
+        ),
+        (
+            "ollama",
+            vec![
+                json!({"done":false,"message":{"role":"assistant","content":""}}),
+                json!({"done":true,"done_reason":"stop","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"lookup","arguments":{"q":"rust"}}}]},"prompt_eval_count":10,"eval_count":3}),
+            ],
+        ),
+        (
+            "openai_responses",
+            vec![
+                json!({"type":"response.function_call_arguments.delta","delta":"{\"q\":"}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"r1","name":"lookup","arguments":"{\"q\":\"rust\"}"}],"usage":{"input_tokens":10,"output_tokens":3}}}),
+            ],
+        ),
+    ];
+    for (kind, events) in cases {
+        let body = events
+            .iter()
+            .map(|v| {
+                if kind == "ollama" {
+                    format!("{v}\n")
+                } else {
+                    format!("data: {v}\n\n")
+                }
+            })
+            .collect::<String>();
+        let reply = Reply {
+            status: StatusCode::OK,
+            body,
+            delay: Duration::ZERO,
+            stream: kind != "ollama",
+        };
+        let f = Fixture::start(vec![reply]).await;
+        let mut config = f.config(kind);
+        config.stream = true;
+        let p = HttpProvider::new(config, PolicyHttpClient::new(f.policy()).unwrap()).unwrap();
+        let completion = p
+            .complete(&user(), &tools(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(completion.message.tool_calls.len(), 1, "{kind}");
+        assert_eq!(
+            completion.message.tool_calls[0].arguments,
+            json!({"q":"rust"})
+        );
+        assert_eq!(completion.usage.input_tokens, 10);
+        assert_eq!(completion.usage.output_tokens, 3);
+        assert_eq!(f.requests()[0]["stream"], true);
+    }
 }
 
 #[tokio::test]

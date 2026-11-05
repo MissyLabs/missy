@@ -46,6 +46,47 @@ fn default_denies_everything() {
     assert!(p.check_mcp_command(&["/bin/true".into()]).is_err());
 }
 #[test]
+fn private_recovery_journals_cannot_be_read_overwritten_or_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = fs_policy(tmp.path());
+    for name in [".missy-delete-disposable", ".missy-write-disposable"] {
+        let journal = tmp.path().join(name);
+        std::fs::create_dir(&journal).unwrap();
+        let entry = journal.join("entry");
+        std::fs::write(&entry, b"preserved evidence").unwrap();
+        assert!(p.read_file(&entry).is_err());
+        assert!(p.write_file(&entry, b"corrupt").is_err());
+        assert!(p.list_files(&journal).is_err());
+        assert_eq!(std::fs::read(&entry).unwrap(), b"preserved evidence");
+    }
+    assert!(p.list_files(tmp.path()).unwrap().is_empty());
+}
+#[test]
+fn argv_nul_and_equivalent_ungranted_spellings_never_match() {
+    assert!(
+        Policy::new(PolicyConfig {
+            shell_enabled: true,
+            allowed_commands: vec![vec!["/bin/echo".into(), "a\0b".into()]],
+            ..Default::default()
+        })
+        .is_err()
+    );
+    let p = Policy::new(PolicyConfig {
+        shell_enabled: true,
+        allowed_commands: vec![vec!["/usr/bin/true".into()]],
+        ..Default::default()
+    })
+    .unwrap();
+    for argv in [
+        vec![],
+        vec!["/usr/bin/true".into(), "".into()],
+        vec!["/usr/bin/../bin/true".into()],
+        vec!["/bin/sh".into(), "-c".into(), "/usr/bin/true".into()],
+    ] {
+        assert!(p.check_command(&argv).is_err());
+    }
+}
+#[test]
 fn exact_argv_capabilities_independent() {
     let mut c = PolicyConfig {
         allowed_commands: vec![vec!["/usr/bin/printf".into(), "hello".into()]],

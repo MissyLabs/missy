@@ -22,6 +22,9 @@ use std::{
 use url::Url;
 
 const API: &str = "https://discord.com/api/v10";
+mod governor;
+mod inbound;
+pub use governor::DiscordRestGovernor;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -29,6 +32,9 @@ pub struct DiscordToolsConfig {
     pub enabled: bool,
     pub lookup_enabled: bool,
     pub upload_enabled: bool,
+    pub download_enabled: bool,
+    pub history_enabled: bool,
+    pub reactions_enabled: bool,
     /// Trusted local configuration only. Never sourced from tool arguments.
     pub token_env: String,
     pub bot_user_id: String,
@@ -47,6 +53,9 @@ impl Default for DiscordToolsConfig {
             enabled: false,
             lookup_enabled: false,
             upload_enabled: false,
+            download_enabled: false,
+            history_enabled: false,
+            reactions_enabled: false,
             token_env: "MISSY_DISCORD_TOOLS_TOKEN".into(),
             bot_user_id: String::new(),
             allowed_guilds: vec![],
@@ -246,10 +255,19 @@ impl DiscordTools {
                 if self.config.allowed_channels.get(&a.channel_id) != Some(&a.guild_id) {
                     return Err(refused("Discord channel/guild denied"));
                 }
+                if ctx.scope.tenant.starts_with("discord:")
+                    && (ctx.scope.tenant != format!("discord:g:{}", a.guild_id)
+                        || ctx.scope.channel != format!("discord:{}", a.channel_id))
+                {
+                    return Err(refused("Discord cross-conversation upload denied"));
+                }
                 if a.caption.chars().count() > 2000 || a.caption.len() > 8000 {
                     return Err(refused("Discord caption exceeds 2000 characters"));
                 }
                 a.guild_id
+            }
+            "discord_fetch_attachment" | "discord_read_messages" | "discord_add_reaction" => {
+                inbound::check(self, ctx, call)?
             }
             _ => return Err(refused("Discord capability disabled or unknown")),
         };
@@ -260,10 +278,23 @@ impl DiscordTools {
     }
     async fn get(&self, ctx: &ToolContext, path: &str, token: &str) -> Result<HttpResponse> {
         let url = format!("{}{path}", self.config.api_base);
-        tokio::select! { biased;
-            _ = ctx.cancellation.cancelled() => bail!("Discord read cancelled"),
-            r = self.http.request("GET", &url, vec![("authorization".into(), format!("Bot {token}"))], None) => r.map_err(|_| anyhow!("Discord read transport failed"))
+        let governor = DiscordRestGovernor::shared(&self.config.api_base, token)?;
+        for attempt in 0..3 {
+            let response = governor
+                .request(
+                    &self.http,
+                    "GET",
+                    &url,
+                    vec![("authorization".into(), format!("Bot {token}"))],
+                    None,
+                    &ctx.cancellation,
+                )
+                .await?;
+            if response.status != 429 || attempt == 2 {
+                return Ok(response);
+            }
         }
+        unreachable!()
     }
     async fn lookup(&self, ctx: &ToolContext, call: &ToolCall, token: &str) -> Result<Value> {
         let a: LookupArgs = serde_json::from_value(call.arguments.clone())?;
@@ -350,7 +381,9 @@ impl DiscordTools {
             self.config.api_base, a.channel_id
         );
         let started = AtomicBool::new(false);
-        let request = self.http.request(
+        let governor = DiscordRestGovernor::shared(&self.config.api_base, token)?;
+        let request = governor.request(
+            &self.http,
             "POST",
             &url,
             vec![
@@ -361,6 +394,7 @@ impl DiscordTools {
                 ),
             ],
             Some(body),
+            &ctx.cancellation,
         );
         tokio::pin!(request);
         let response = tokio::select! { biased;
@@ -537,6 +571,7 @@ impl ToolExecutor for DiscordTools {
             out.push(ToolDefinition {name:"discord_upload_file".into(),description:"Upload one policy-readable binary to an explicitly allowed guild/channel. Requires durable scoped approval. UNKNOWN must never be replayed.".into(),side_effect:true,
             parameters:json!({"type":"object","additionalProperties":false,"required":["guild_id","channel_id","path"],"properties":{"guild_id":{"type":"string"},"channel_id":{"type":"string"},"path":{"type":"string"},"filename":{"type":"string"},"mime_type":{"type":"string"},"caption":{"type":"string","maxLength":2000}}})});
         }
+        out.extend(inbound::definitions(&self.config));
         out
     }
     fn configuration_fingerprint(&self) -> String {
@@ -561,6 +596,9 @@ impl ToolExecutor for DiscordTools {
         let mut output = match call.name.as_str() {
             "discord_lookup_user" => self.lookup(ctx, call, &token).await,
             "discord_upload_file" => self.upload(ctx, call, &token).await,
+            "discord_fetch_attachment" | "discord_read_messages" | "discord_add_reaction" => {
+                inbound::execute(self, ctx, call, &token).await
+            }
             _ => Err(refused("unknown Discord tool")),
         }?;
         redact(&mut output, &token);
@@ -576,6 +614,12 @@ fn redact(value: &mut Value, token: &str) {
             }
         }
         Value::Object(values) => {
+            if values.contains_key("raw_evidence") && values.contains_key("model_view") {
+                if let Some(view) = values.get_mut("model_view") {
+                    redact(view, token);
+                }
+                return;
+            }
             for v in values.values_mut() {
                 redact(v, token);
             }

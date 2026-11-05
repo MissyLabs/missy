@@ -1,6 +1,7 @@
 //! Bounded operator DAGs. Model output cannot spawn agents or grant capabilities.
 mod pool;
 mod registry;
+mod tools;
 use anyhow::{Result, ensure};
 use missy_core::{Scope, Usage};
 use missy_runtime::RunResult;
@@ -12,6 +13,15 @@ use std::{
     collections::BTreeMap,
     time::{SystemTime, UNIX_EPOCH},
 };
+pub use tools::*;
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailurePolicy {
+    #[default]
+    BlockDependents,
+    Continue,
+    Abort,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

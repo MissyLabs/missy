@@ -29,6 +29,215 @@ impl DiscordVoiceAgent for Agent {
     }
 }
 struct Gateway;
+struct WavSpeech;
+struct SayGate;
+struct DenyGate;
+#[async_trait]
+impl crate::VoiceApprovalGate for DenyGate {
+    async fn approve(&self, _: &missy_core::ToolContext, _: &missy_core::ToolCall) -> Result<bool> {
+        Ok(false)
+    }
+}
+#[tokio::test]
+async fn model_join_leave_status_require_exact_scope_and_durable_approval() {
+    use missy_core::ToolExecutor;
+    let (tx, _) = mpsc::channel(1);
+    let config = crate::tests::config();
+    let scope = config.bindings[0].scope.clone();
+    let service = Arc::new(
+        DiscordVoiceService::new(
+            config,
+            Arc::new(PolicyHttpClient::new(Default::default()).unwrap()),
+            Arc::new(Gateway),
+            Arc::new(Speech),
+            Arc::new(WavSpeech),
+            Arc::new(Agent(tx)),
+        )
+        .unwrap(),
+    );
+    let tools = crate::DiscordVoiceSayTools::new(service, Arc::new(DenyGate));
+    let mut ctx = missy_core::ToolContext {
+        scope,
+        turn_id: "fixture".into(),
+        cancellation: CancellationToken::new(),
+    };
+    for name in [
+        "discord_voice_join",
+        "discord_voice_leave",
+        "discord_voice_status",
+    ] {
+        assert!(tools.definitions().iter().any(|d| d.name == name));
+        let call = missy_core::ToolCall {
+            id: "fixture".into(),
+            name: name.into(),
+            arguments: json!({"guild_id":2,"channel_id":3}),
+        };
+        if name == "discord_voice_status" {
+            assert_eq!(
+                tools.execute(&ctx, &call).await.unwrap()["state"],
+                "not_joined"
+            );
+        } else {
+            assert!(
+                tools
+                    .execute(&ctx, &call)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("durable exact")
+            );
+        }
+        let old = ctx.scope.user.clone();
+        ctx.scope.user = "foreign".into();
+        assert!(tools.preflight(&ctx, &call).await.is_err());
+        ctx.scope.user = old;
+        let mut override_call = call;
+        override_call.arguments["actor"] = json!(4);
+        assert!(tools.preflight(&ctx, &override_call).await.is_err());
+    }
+}
+#[async_trait]
+impl crate::VoiceApprovalGate for SayGate {
+    async fn approve(&self, _: &missy_core::ToolContext, _: &missy_core::ToolCall) -> Result<bool> {
+        Ok(true)
+    }
+}
+#[tokio::test]
+async fn say_tool_requires_exact_scope_and_never_allows_actor_override() {
+    use missy_core::ToolExecutor;
+    let (tx, _) = mpsc::channel(1);
+    let config = crate::tests::config();
+    let scope = config.bindings[0].scope.clone();
+    let service = Arc::new(
+        DiscordVoiceService::new(
+            config,
+            Arc::new(PolicyHttpClient::new(Default::default()).unwrap()),
+            Arc::new(Gateway),
+            Arc::new(Speech),
+            Arc::new(WavSpeech),
+            Arc::new(Agent(tx)),
+        )
+        .unwrap(),
+    );
+    let (output, mut rx) = mpsc::channel(2);
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let task = tokio::spawn(async move {
+        child.cancelled().await;
+        Ok(())
+    });
+    service.sessions.lock().await.insert(
+        2,
+        Session {
+            channel: 3,
+            cancel: cancel.clone(),
+            task,
+            text_output: output,
+        },
+    );
+    let tools = crate::DiscordVoiceSayTools::new(service, Arc::new(SayGate));
+    let mut context = missy_core::ToolContext {
+        scope,
+        turn_id: "test".into(),
+        cancellation: CancellationToken::new(),
+    };
+    let mut call = missy_core::ToolCall {
+        id: "say".into(),
+        name: "discord_voice_say".into(),
+        arguments: json!({"guild_id":2,"channel_id":3,"text":"synthetic"}),
+    };
+    assert_eq!(
+        tools.execute(&context, &call).await.unwrap()["queued"],
+        true
+    );
+    assert!(rx.recv().await.is_some());
+    context.scope.user = "different".into();
+    assert!(tools.preflight(&context, &call).await.is_err());
+    call.arguments["actor"] = json!(4);
+    assert!(tools.preflight(&context, &call).await.is_err());
+    cancel.cancel();
+}
+#[async_trait]
+impl Tts for WavSpeech {
+    async fn synthesize(&self, _: &str, _: CancellationToken) -> Result<missy_voice::SpeechAudio> {
+        let mut b = b"RIFF".to_vec();
+        b.extend_from_slice(&1956u32.to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0");
+        b.extend_from_slice(&48000u32.to_le_bytes());
+        b.extend_from_slice(&96000u32.to_le_bytes());
+        b.extend_from_slice(b"\x02\0\x10\0data");
+        b.extend_from_slice(&1920u32.to_le_bytes());
+        b.extend_from_slice(&[0, 1].repeat(960));
+        Ok(missy_voice::SpeechAudio {
+            wav: b,
+            sample_rate: 48000,
+        })
+    }
+}
+#[tokio::test]
+async fn text_speech_is_bound_bounded_and_does_not_autojoin() {
+    let (tx, _) = mpsc::channel(1);
+    let service = DiscordVoiceService::new(
+        crate::tests::config(),
+        Arc::new(PolicyHttpClient::new(Default::default()).unwrap()),
+        Arc::new(Gateway),
+        Arc::new(Speech),
+        Arc::new(WavSpeech),
+        Arc::new(Agent(tx)),
+    )
+    .unwrap();
+    assert!(
+        service
+            .speak_text(2, 3, 4, "not joined", CancellationToken::new())
+            .await
+            .is_err()
+    );
+    let (output, mut rx) = mpsc::channel(2);
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let task = tokio::spawn(async move {
+        child.cancelled().await;
+        Ok(())
+    });
+    service.sessions.lock().await.insert(
+        2,
+        Session {
+            channel: 3,
+            cancel: cancel.clone(),
+            task,
+            text_output: output,
+        },
+    );
+    service
+        .speak_text(2, 3, 4, "synthetic speech", CancellationToken::new())
+        .await
+        .unwrap();
+    let frames = rx.recv().await.unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].len(), 1920);
+    assert!(
+        service
+            .speak_text(2, 3, 99, "bad actor", CancellationToken::new())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .speak_text(2, 99, 4, "bad channel", CancellationToken::new())
+            .await
+            .is_err()
+    );
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(
+        service
+            .speak_text(2, 3, 4, "cancel", cancelled)
+            .await
+            .is_err()
+    );
+    assert!(rx.try_recv().is_err());
+    cancel.cancel();
+}
 #[async_trait]
 impl GatewayVoiceAdapter for Gateway {
     async fn negotiate(&self, _: u64, _: u64, _: u64) -> Result<GatewayVoiceCredentials> {
@@ -51,6 +260,20 @@ async fn exact_approvals_denied_before_network() {
     )
     .unwrap();
     assert!(service.join(2, 3, 4, "yes").await.is_err());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert!(
+        service
+            .join_cancellable(2, 3, 4, &DiscordVoiceService::join_approval(2, 3), cancel)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .speak_text(2, 3, 4, "not joined", CancellationToken::new())
+            .await
+            .is_err()
+    );
     assert!(
         service
             .join(2, 3, 99, &DiscordVoiceService::join_approval(2, 3))
@@ -120,6 +343,12 @@ async fn voice_resume_websocket_fixture() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let peer = tokio::spawn(async move {
+        // First WS connection drops before Hello. Resume retries transport,
+        // preserving seq_ack rather than renegotiating or replaying speech.
+        let (first, _) = listener.accept().await.unwrap();
+        let mut first = tokio_tungstenite::accept_async(first).await.unwrap();
+        let _ = first.next().await;
+        drop(first);
         let (stream, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
         let frame = ws.next().await.unwrap().unwrap();
@@ -146,9 +375,15 @@ async fn voice_resume_websocket_fixture() {
         token: "synthetic".into(),
         session_cancel: CancellationToken::new(),
     };
-    let (_, hb) = resume_voice(&http, &format!("ws://{address}"), &c, 42)
-        .await
-        .unwrap();
+    let (_, hb) = retry_resume(
+        &http,
+        &format!("ws://{address}"),
+        &c,
+        42,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(hb.interval_ms, Some(1000));
     peer.await.unwrap();
 }
@@ -253,6 +488,7 @@ async fn service_drop_aborts_owned_session_and_closes_socket() {
         2,
         Session {
             channel: 3,
+            text_output: mpsc::channel(2).0,
             cancel: cancel.clone(),
             task,
         },

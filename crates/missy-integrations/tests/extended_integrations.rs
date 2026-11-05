@@ -17,6 +17,60 @@ use std::{
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 #[tokio::test]
+async fn approved_storyboard_scene_single_submit_poll_download_and_decode() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let png = png.into_inner();
+    let submits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = submits.clone();
+    let app=Router::new().fallback(move|req:Request|{let png=png.clone();let count=count.clone();async move{
+        let path=req.uri().to_string();
+        if path.starts_with("/view?"){return Response::new(Body::from(png));}
+        let response=if path=="/prompt" {count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);let b=to_bytes(req.into_body(),8192).await.unwrap();let v:Value=serde_json::from_slice(&b).unwrap();assert_eq!(v["prompt"]["1"]["inputs"]["text"],"scene prompt");json!({"prompt_id":"scenejob","node_errors":{}})} else {assert_eq!(path,"/history/scenejob");json!({"scenejob":{"status":{"completed":true,"status_str":"success"},"outputs":{"2":{"images":[{"filename":"scene.png","subfolder":"","type":"output"}]}}}})};
+        Response::new(Body::from(response.to_string()))
+    }});
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("scene.png");
+    let http = PolicyHttpClient::new(PolicyConfig {
+        allowed_origins: vec![endpoint.clone()],
+        allow_private_network: true,
+        write_roots: vec![dir.path().into()],
+        max_file_bytes: 4096,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut connection = conn(&endpoint);
+    connection.allow_mutations = true;
+    let tools=IntegrationTools::new(http,IntegrationConfig{comfyui:Some(ComfyConfig{connection,max_artifact_bytes:4096,max_tracked_jobs:10,allowed_classes:BTreeSet::from(["CLIPTextEncode".into(),"SaveImage".into()]),workflows:BTreeMap::from([("scene".into(),Workflow{graph:json!({"1":{"class_type":"CLIPTextEncode","inputs":{"text":"base"}},"2":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}),prompt_node:Some("1".into())})]),..Default::default()}),..Default::default()}).unwrap();
+    let path = tools
+        .approved_scene(
+            &ctx(),
+            &SceneGenerationGrant {
+                workflow: "scene".into(),
+                output_node: "2".into(),
+                width: 2,
+                height: 2,
+            },
+            SceneImageRequest {
+                prompt: "scene prompt".into(),
+                output: output.clone(),
+                width: 2,
+                height: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(path, output);
+    assert_eq!(image::open(path).unwrap().width(), 2);
+    assert_eq!(submits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    task.abort();
+}
+#[tokio::test]
 async fn comfy_operator_pinned_conditioning_multipart_and_graph_binding() {
     let seen: Seen = Default::default();
     let s = seen.clone();
@@ -712,6 +766,7 @@ async fn nomad_nodes_plan_scale_allocations_exact_namespace_and_pins() {
                     count: 2,
                 },
             )]),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -741,20 +796,19 @@ async fn nomad_nodes_plan_scale_allocations_exact_namespace_and_pins() {
         )
         .await
         .unwrap();
-    tools
-        .execute(
-            &ctx(),
-            &call("nomad_mutate", json!({"action":"scale","grant":"two"})),
-        )
-        .await
-        .unwrap();
+    assert!(
+        tools
+            .execute(
+                &ctx(),
+                &call("nomad_mutate", json!({"action":"scale","grant":"two"})),
+            )
+            .await
+            .is_err()
+    );
     {
         let requests = seen.lock().unwrap();
         assert_eq!(requests[2].1, "/v1/job/worker/plan?namespace=lab");
-        assert_eq!(requests[3].1, "/v1/job/worker/scale?namespace=lab");
-        let body: Value = serde_json::from_slice(&requests[3].2).unwrap();
-        assert_eq!(body["Count"], 2);
-        assert_eq!(body["Target"]["Group"], "group");
+        assert_eq!(requests.len(), 3); // no unfenced /scale shortcut
     }
     *response.lock().unwrap() = json!([{"ID":"a","JobID":"worker","Namespace":"lab","TaskStates":{"t":{"State":"dead","Failed":false}}},{"JobID":"private","Namespace":"lab"}]);
     let r = tools
@@ -764,7 +818,8 @@ async fn nomad_nodes_plan_scale_allocations_exact_namespace_and_pins() {
         )
         .await
         .unwrap();
-    assert_eq!(r["data"].as_array().unwrap().len(), 1);
+    assert_eq!(r["data"]["kind"], "allocation_metadata");
+    assert_eq!(r["data"]["allocations"].as_array().unwrap().len(), 1);
     let n = seen.lock().unwrap().len();
     assert!(
         tools

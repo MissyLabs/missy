@@ -75,6 +75,66 @@ impl missy_plugins::PluginApproval for OuterGuardVerified {
     }
 }
 pub struct NoTools;
+pub struct NativeArtifactValidator(pub missy_media::MediaTools);
+#[async_trait]
+impl missy_integrations::ArtifactValidator for NativeArtifactValidator {
+    fn configuration_fingerprint(&self) -> String {
+        self.0.configuration_fingerprint()
+    }
+    async fn validate_mp4(&self, ctx: &ToolContext, bytes: &[u8]) -> Result<Value> {
+        Ok(serde_json::to_value(
+            self.0.validate_mp4(ctx, bytes).await?,
+        )?)
+    }
+}
+pub struct VisionInterpreter(pub Arc<missy_vision::VisionTools>);
+#[async_trait]
+impl missy_desktop::ScreenInterpreter for VisionInterpreter {
+    async fn interpret(&self, ctx: &ToolContext, png: Vec<u8>, question: &str) -> Result<Value> {
+        self.0.analyze_png(ctx, &png, question).await
+    }
+    fn configuration_fingerprint(&self) -> String {
+        self.0.configuration_fingerprint()
+    }
+}
+pub struct SceneAdapter {
+    pub integrations: Arc<missy_integrations::IntegrationTools>,
+    pub grant: missy_integrations::SceneGenerationGrant,
+}
+#[async_trait]
+impl missy_media::SceneGenerator for SceneAdapter {
+    async fn generate(
+        &self,
+        ctx: &ToolContext,
+        request: &missy_media::SceneGenerationRequest,
+    ) -> Result<std::path::PathBuf> {
+        self.integrations
+            .approved_scene(
+                ctx,
+                &self.grant,
+                missy_integrations::SceneImageRequest {
+                    prompt: request.prompt.clone(),
+                    output: request.output.clone(),
+                    width: request.width,
+                    height: request.height,
+                },
+            )
+            .await
+    }
+    fn configuration_fingerprint(&self) -> String {
+        format!(
+            "{}:{}",
+            self.integrations.configuration_fingerprint(),
+            serde_json::to_string(&self.grant).expect("scene grant serializable")
+        )
+    }
+}
+#[async_trait]
+impl missy_discord_voice::VoiceApprovalGate for OuterGuardVerified {
+    async fn approve(&self, _: &ToolContext, _: &ToolCall) -> Result<bool> {
+        Ok(true)
+    }
+}
 #[async_trait]
 impl missy_desktop::DesktopApproval for OuterGuardVerified {
     async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {
@@ -87,6 +147,12 @@ impl missy_desktop::DesktopApproval for OuterGuardVerified {
 /// Only constructed inside a composition whose outer durable guard requires
 /// approval for every integration mutation. Never exposed through tool JSON.
 pub struct OuterGuardVerified;
+#[async_trait]
+impl missy_voice::AudioApprovalGate for OuterGuardVerified {
+    async fn approve(&self, _: &ToolContext, _: &ToolCall) -> Result<bool> {
+        Ok(true)
+    }
+}
 #[async_trait]
 impl missy_integrations::ApprovalGate for OuterGuardVerified {
     async fn approve(&self, _: &ToolContext, _: &ToolCall) -> Result<bool> {

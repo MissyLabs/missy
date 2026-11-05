@@ -11,6 +11,64 @@ use tempfile::TempDir;
 
 const DIFF: &str =
     "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n";
+struct NoTools;
+#[async_trait::async_trait]
+impl missy_core::ToolExecutor for NoTools {
+    fn definitions(&self) -> Vec<missy_core::ToolDefinition> {
+        vec![]
+    }
+    async fn execute(
+        &self,
+        _: &missy_core::ToolContext,
+        _: &missy_core::ToolCall,
+    ) -> anyhow::Result<serde_json::Value> {
+        unreachable!()
+    }
+}
+#[tokio::test]
+async fn model_evolution_can_only_propose_fixed_repo() {
+    use missy_core::{ToolCall, ToolContext, ToolExecutor};
+    use std::sync::Arc;
+    let f = Fixture::new();
+    let before = git(&f.repo, &["rev-parse", "HEAD"]);
+    let tools = EvolutionTools::new(
+        Arc::new(NoTools),
+        f.store.clone(),
+        f.policy.clone(),
+        f.repo.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        tools
+            .definitions()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["code_evolve"]
+    );
+    let ctx = ToolContext {
+        scope: scope(),
+        turn_id: "turn".into(),
+        cancellation: tokio_util::sync::CancellationToken::new(),
+    };
+    let call = ToolCall {
+        id: "call".into(),
+        name: "code_evolve".into(),
+        arguments: serde_json::json!({"title":"Proposed change","diff":DIFF}),
+    };
+    tools.preflight(&ctx, &call).await.unwrap();
+    let result = tools.execute(&ctx, &call).await.unwrap();
+    assert_eq!(result["status"], "proposed");
+    assert_eq!(result["applied"], false);
+    assert_eq!(git(&f.repo, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fs::read_to_string(f.repo.join("a.txt")).unwrap(), "old\n");
+    let mut spoof = call.clone();
+    spoof.arguments["repo"] = serde_json::json!("/privileged");
+    assert!(tools.preflight(&ctx, &spoof).await.is_err());
+    let mut apply = call;
+    apply.arguments["confirm"] = serde_json::json!(true);
+    assert!(tools.execute(&ctx, &apply).await.is_err());
+}
 fn scope() -> Scope {
     Scope {
         tenant: "test".into(),

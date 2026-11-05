@@ -95,6 +95,18 @@ pub struct NomadConfig {
     pub nodes: BTreeSet<String>,
     /// Named, reviewed scale requests. Callers cannot supply a new count or group.
     pub scales: BTreeMap<String, NomadScale>,
+    /// Protected operator ownership and optimistic index pins for SERVICE jobs only.
+    pub services: BTreeMap<String, NomadService>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NomadService {
+    pub owner: String,
+    pub expected_modify_index: u64,
+    /// Additional allocations per group reserved during rolling replacement.
+    pub rollout_overlap: u32,
+    pub allow_stop: bool,
+    pub allow_restart: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -240,11 +252,14 @@ pub struct ObsConfig {
     pub scenes: BTreeSet<String>,
     /// Exact scene:item-id pairs, e.g. Studio:12, not arbitrary source names.
     pub scene_items: BTreeSet<String>,
+    /// Exact text input names allowed for SetInputSettings(text only).
+    pub text_sources: BTreeSet<String>,
     pub actions: BTreeSet<ObsAction>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObsAction {
+    SetSourceText,
     SwitchScene,
     SetVisibility,
     StartRecording,

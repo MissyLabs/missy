@@ -1,5 +1,10 @@
 # Native Rust validation evidence
 
+**Latest production-conversion acceptance:** see
+[production-validation.md](production-validation.md). The dated checkpoints below
+describe earlier commits and are retained as historical evidence, not the current
+workspace count or release certificate.
+
 Date: 2026-11-05. Local Linux x86_64 checkout, starting from Python Missy
 `d152c54e04f5daf1381c84527643a958fcb7d252`. Initial core validation used Rust
 1.96.1; the final expanded workspace was validated with Rust/Cargo 1.99.1.

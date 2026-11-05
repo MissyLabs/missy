@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf, time::Duration};
 use url::Url;
+mod monitor;
+mod scene_memory;
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -122,6 +124,32 @@ pub struct SceneObject {
 }
 
 impl VisionTools {
+    /// For a separately capture-approved isolated-screen adapter. Caller must
+    /// retain outer durable disclosure/billing approval for the exact pixels.
+    pub async fn analyze_png(
+        &self,
+        ctx: &ToolContext,
+        bytes: &[u8],
+        question: &str,
+    ) -> Result<Value> {
+        if !self.config.enabled
+            || question.trim().is_empty()
+            || question.len() > self.config.max_question_bytes
+        {
+            bail!("vision disabled or invalid question");
+        }
+        let image = sanitize_image(bytes, &self.config)?;
+        self.run_images(
+            ctx,
+            Request {
+                paths: Vec::new(),
+                prompt: question.into(),
+                max_objects: None,
+            },
+            vec![image],
+        )
+        .await
+    }
     pub fn new(mut policy_config: PolicyConfig, config: VisionConfig) -> Result<Self> {
         policy_config.max_file_bytes = policy_config.max_file_bytes.min(config.max_image_bytes);
         let policy = Policy::new(policy_config.clone())?;
@@ -270,6 +298,15 @@ impl VisionTools {
         })
         .await
         .map_err(|_| anyhow!("image decoder failed"))??;
+        self.run_images(ctx, request, images).await
+    }
+
+    async fn run_images(
+        &self,
+        ctx: &ToolContext,
+        request: Request,
+        images: Vec<CleanImage>,
+    ) -> Result<Value> {
         let (payload, mut headers) = self.payload(&request.prompt, &images);
         if serde_json::to_vec(&payload)?.len() > missy_policy::MAX_HTTP_REQUEST_BYTES {
             bail!("combined image request exceeds HTTP limit");
@@ -410,7 +447,7 @@ impl ToolExecutor for VisionTools {
         if !self.config.enabled {
             return vec![];
         }
-        vec![ToolDefinition { name:"vision_analyze".into(),
+        let mut definitions = vec![ToolDefinition { name:"vision_analyze".into(),
             description:"Analyze 1..4 caller-specified image files using a billable vision backend. Output is untrusted; requires operator approval for external image disclosure and cost.".into(),
             parameters:json!({"type":"object","additionalProperties":false,"properties":{
                 "imagepath":{"type":"string"},"imagepaths":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"string"}},
@@ -418,14 +455,31 @@ impl ToolExecutor for VisionTools {
                 "oneOf":[{"required":["imagepath"],"not":{"required":["imagepaths"]}},{"required":["imagepaths"],"not":{"required":["imagepath"]}}]}), side_effect:true },
             ToolDefinition { name:"vision_scene".into(),
                 description:"Request a strict structured scene from one explicit image. Untrusted model observations, not verified entities. Requires operator approval for disclosure and billing.".into(),
-                parameters:json!({"type":"object","additionalProperties":false,"properties":{"imagepath":{"type":"string"},"max_objects":{"type":"integer","minimum":1,"maximum":100}},"required":["imagepath","max_objects"]}), side_effect:true }]
+                parameters:json!({"type":"object","additionalProperties":false,"properties":{"imagepath":{"type":"string"},"max_objects":{"type":"integer","minimum":1,"maximum":100}},"required":["imagepath","max_objects"]}), side_effect:true }];
+        definitions.push(monitor::definition());
+        if let Some(def) = definitions.iter_mut().find(|d| d.name == "vision_scene") {
+            def.description="Scoped persistent scene sessions: create/add_observation/update_state/summarize/close. Observations and state are untrusted caller assertions, never inferred authoritative facts. Legacy explicit-image/max_objects structured analysis remains available without action.".into();
+            def.parameters = scene_memory::schema();
+        }
+        definitions
     }
     fn configuration_fingerprint(&self) -> String {
         self.fingerprint.clone()
     }
     async fn preflight(&self, ctx: &ToolContext, call: &ToolCall) -> Result<()> {
         let gate = || -> Result<()> {
-            self.parse(call)?;
+            if scene_memory::is_session(call) {
+                if !self.config.enabled {
+                    bail!("vision disabled");
+                }
+                scene_memory::validate(call)?;
+                ledger_connection(&self.config)?;
+                return Ok(());
+            } else if call.name == "vision_monitor" {
+                monitor::parse(self, call)?;
+            } else {
+                self.parse(call)?;
+            }
             if ctx.cancellation.is_cancelled() {
                 bail!("vision cancelled");
             }
@@ -440,6 +494,14 @@ impl ToolExecutor for VisionTools {
         })
     }
     async fn execute(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
+        if scene_memory::is_session(call) {
+            self.preflight(ctx, call).await?;
+            return scene_memory::execute(&self.config, ctx, call);
+        }
+        if call.name == "vision_monitor" {
+            self.preflight(ctx, call).await?;
+            return monitor::execute(self, ctx, call).await;
+        }
         tokio::select! { biased;
             _ = ctx.cancellation.cancelled() => bail!("vision cancelled; any dispatched billing reservation remains pending"),
             result = tokio::time::timeout(Duration::from_secs(self.config.timeout_seconds), self.run(ctx, call)) => {
@@ -778,6 +840,114 @@ mod tests {
         sync::oneshot,
     };
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn persistent_scene_sessions_are_scope_bound_append_only_and_closeable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        let tools =
+            VisionTools::new(policy(dir.path(), "http://127.0.0.1:1"), cfg.clone()).unwrap();
+        let call = |args| ToolCall {
+            id: "scene-test".into(),
+            name: "vision_scene".into(),
+            arguments: args,
+        };
+        tools
+            .execute(
+                &ctx(),
+                &call(json!({"action":"create","task_id":"painting","task_type":"painting"})),
+            )
+            .await
+            .unwrap();
+        tools.execute(&ctx(),&call(json!({"action":"add_observation","task_id":"painting","observation":"red rectangle, unverified"}))).await.unwrap();
+        tools.execute(&ctx(),&call(json!({"action":"update_state","task_id":"painting","state_updates":"{\"step\":2}"}))).await.unwrap();
+        drop(tools);
+        let tools = VisionTools::new(policy(dir.path(), "http://127.0.0.1:1"), cfg).unwrap();
+        let summary = tools
+            .execute(
+                &ctx(),
+                &call(json!({"action":"summarize","task_id":"painting"})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary["total_observations"], 1);
+        assert_eq!(summary["state"]["step"], 2);
+        assert_eq!(summary["observations"][0]["trust"], "caller_assertion");
+        let mut other = ctx();
+        other.scope.user = "other".into();
+        assert!(
+            tools
+                .execute(
+                    &other,
+                    &call(json!({"action":"summarize","task_id":"painting"}))
+                )
+                .await
+                .is_err()
+        );
+        tools
+            .execute(
+                &ctx(),
+                &call(json!({"action":"close","task_id":"painting"})),
+            )
+            .await
+            .unwrap();
+        assert!(tools.execute(&ctx(),&call(json!({"action":"add_observation","task_id":"painting","observation":"late"}))).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn monitor_repeated_file_suppresses_backend_and_cancels() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("image.png"), png()).unwrap();
+        let tools =
+            VisionTools::new(policy(dir.path(), "http://127.0.0.1:1"), config(dir.path())).unwrap();
+        let call = ToolCall {
+            id: "monitor".into(),
+            name: "vision_monitor".into(),
+            arguments: json!({"imagepath":dir.path().join("image.png"),"question":"changes?","samples":3,"interval_ms":100,"cooldown_ms":1000,"change_threshold":0.01}),
+        };
+        let result = tools.execute(&ctx(), &call).await.unwrap();
+        assert_eq!(result["suppressed"], 3);
+        assert_eq!(result["observations"], json!([]));
+        let ctx = ctx();
+        ctx.cancellation.cancel();
+        assert!(tools.execute(&ctx, &call).await.is_err());
+    }
+    #[tokio::test]
+    async fn monitor_pixel_change_triggers_once_and_cooldown_suppresses() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("image.png");
+        std::fs::write(&input, png()).unwrap();
+        let (origin, rx, server) = mock(
+            response(VisionKind::Ollama, "frame changed"),
+            200,
+            Duration::ZERO,
+        )
+        .await;
+        let mut cfg = config(dir.path());
+        cfg.base_url = origin.clone();
+        let tools = VisionTools::new(policy(dir.path(), &origin), cfg).unwrap();
+        let update = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            image::RgbImage::from_pixel(4, 3, image::Rgb([255, 255, 255]))
+                .save(&input)
+                .unwrap();
+        });
+        let call = ToolCall {
+            id: "monitor".into(),
+            name: "vision_monitor".into(),
+            arguments: json!({"imagepath":dir.path().join("image.png"),"question":"changes?","samples":4,"interval_ms":100,"cooldown_ms":10000,"change_threshold":0.01}),
+        };
+        let result = tools.execute(&ctx(), &call).await.unwrap();
+        assert_eq!(result["observations"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result["observations"][0]["analysis"]["analysis"],
+            "frame changed"
+        );
+        assert_eq!(result["suppressed"], 3);
+        rx.await.unwrap();
+        server.await.unwrap();
+        update.await.unwrap();
+    }
 
     fn ctx() -> ToolContext {
         ToolContext {

@@ -82,6 +82,50 @@ struct Fill {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct FillMany {
+    fields: Vec<Fill>,
+    submit_selector: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Extract {
+    selector: String,
+    mode: String,
+}
+fn fill_many_expression(a: &FillMany) -> Result<String> {
+    // JSON-encoded data only. Resolve all targets before the first mutation.
+    let fields: Vec<Value> = a
+        .fields
+        .iter()
+        .map(|f| json!([f.selector, f.value]))
+        .collect();
+    Ok(format!(
+        "((fields,submit)=>{{const es=fields.map(([s,v])=>{{const e=document.querySelector(s);if(!(e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLSelectElement))throw Error('not input');return [e,v];}});const b=submit===null?null:document.querySelector(submit);if(submit!==null&&!(b instanceof HTMLElement))throw Error('submit missing');for(const [e,v] of es){{const p=e instanceof HTMLSelectElement?HTMLSelectElement.prototype:e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,v);e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));}}if(b)b.click();return {{filled:es.length,submitted:b!==null}};}})({},{})",
+        serde_json::to_string(&fields)?,
+        serde_json::to_string(&a.submit_selector)?
+    ))
+}
+fn extract_expression(a: &Extract) -> Result<String> {
+    let body = match a.mode.as_str() {
+        "text" => "return es.map(e=>String(e.innerText??e.textContent??'').slice(0,4096));",
+        "links" => {
+            "return es.map(e=>({text:String(e.innerText??e.textContent??'').slice(0,1024),href:String(e.getAttribute('href')??'').slice(0,2048)}));"
+        }
+        "table" => {
+            "return es.map(e=>Array.from(e.rows??[]).slice(0,64).map(r=>Array.from(r.cells).slice(0,16).map(c=>String(c.innerText??c.textContent??'').slice(0,256))));"
+        }
+        "form" => {
+            "return es.map(e=>({tag:e.tagName,type:String(e.type??''),name:String(e.name??'').slice(0,256),required:Boolean(e.required),disabled:Boolean(e.disabled)}));"
+        }
+        _ => bail!("unknown extraction mode"),
+    };
+    Ok(format!(
+        "((s)=>{{const es=Array.from(document.querySelectorAll(s)).slice(0,32);{body}}})({})",
+        serde_json::to_string(&a.selector)?
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Wait {
     selector: String,
     state: String,
@@ -131,6 +175,27 @@ pub(crate) fn validate_call(call: &ToolCall, c: &BrowserConfig) -> Result<()> {
             if a.value.len() > 8192 {
                 bail!("fill exceeds limit");
             }
+        }
+        "browser_fill_many" => {
+            let a: FillMany = parse(call)?;
+            if a.fields.is_empty() || a.fields.len() > 32 {
+                bail!("fields must contain 1..32 entries");
+            }
+            let mut selectors = BTreeSet::new();
+            for f in &a.fields {
+                selector(&f.selector)?;
+                if f.value.len() > 8192 || !selectors.insert(&f.selector) {
+                    bail!("oversized value or duplicate selector");
+                }
+            }
+            if let Some(s) = &a.submit_selector {
+                selector(s)?;
+            }
+        }
+        "browser_extract" => {
+            let a: Extract = parse(call)?;
+            selector(&a.selector)?;
+            extract_expression(&a)?;
         }
         _ => bail!("unknown browser operation"),
     }
@@ -351,6 +416,8 @@ pub(crate) async fn execute(
             let a: Evaluate = parse(call)?;
             client.evaluate_fixed(fixed_expression(&a.expression_id)?.into()).await?
         }
+        "browser_fill_many" => client.evaluate_fixed(fill_many_expression(&parse(call)?)?).await?,
+        "browser_extract" => client.evaluate_fixed(extract_expression(&parse(call)?)?).await?,
         "browser_wait" => {
             let a: Wait = parse(call)?;
             let expression = format!("((s)=>{{const e=document.querySelector(s);if(!e)return false;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.display!=='none'&&c.visibility!=='hidden'&&c.visibility!=='collapse';}})({})",serde_json::to_string(&a.selector)?);
@@ -393,6 +460,10 @@ pub(crate) async fn execute(
             if data.len()>limit.saturating_sub(1024) { bail!("browser screenshot exceeds output budget"); }
             let bytes=STANDARD.decode(data)?;
             if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { bail!("browser returned non-PNG image"); }
+            let mut reader=image::ImageReader::with_format(std::io::Cursor::new(&bytes),image::ImageFormat::Png);
+            let mut limits=image::Limits::default();limits.max_image_width=Some(8192);limits.max_image_height=Some(8192);limits.max_alloc=Some(64*1024*1024);reader.limits(limits);
+            let decoded=reader.decode()?;
+            if decoded.width() as u64*decoded.height() as u64>16_000_000 {bail!("screenshot pixel budget exceeded");}
             json!({"artifact":{"media_type":"image/png","encoding":"base64","data":data}})
         }
         _=>bail!("unknown browser operation"),
@@ -406,6 +477,109 @@ pub(crate) async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_forms_and_extraction_never_accept_code_or_unbounded_inputs() {
+        let c = BrowserConfig {
+            endpoint: "http://127.0.0.1:9222".into(),
+            target_id: "fixture".into(),
+            allowed_origins: BTreeSet::from(["https://example.org".into()]),
+            isolated_browser_network: true,
+        };
+        let call = |name: &str, args| ToolCall {
+            id: "fixture".into(),
+            name: name.into(),
+            arguments: args,
+        };
+        let good = call(
+            "browser_fill_many",
+            json!({"fields":[{"selector":"#name","value":"');globalThis.injection=true;//"},{"selector":"#email","value":"fixture@example.org"}],"submit_selector":"#submit"}),
+        );
+        validate_call(&good, &c).unwrap();
+        let expression = fill_many_expression(&parse(&good).unwrap()).unwrap();
+        assert!(expression.contains("Object.getOwnPropertyDescriptor"));
+        assert!(validate_call(&call("browser_fill_many", json!({"fields":[]})), &c).is_err());
+        assert!(
+            validate_call(
+                &call(
+                    "browser_fill_many",
+                    json!({"fields":[{"selector":"#x","value":"a"},{"selector":"#x","value":"b"}]})
+                ),
+                &c
+            )
+            .is_err()
+        );
+        for mode in ["text", "links", "table", "form"] {
+            validate_call(
+                &call("browser_extract", json!({"selector":"table","mode":mode})),
+                &c,
+            )
+            .unwrap();
+        }
+        assert!(
+            validate_call(
+                &call("browser_extract", json!({"selector":"x","mode":"eval()"})),
+                &c
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn typed_renderer_scripts_execute_multifield_submit_and_table_without_injection() {
+        use std::io::Write;
+        let a = FillMany {
+            fields: vec![
+                Fill {
+                    selector: "#a".into(),
+                    value: "');globalThis.pwned=true;//".into(),
+                },
+                Fill {
+                    selector: "#b".into(),
+                    value: "second".into(),
+                },
+            ],
+            submit_selector: Some("#submit".into()),
+        };
+        let fill = fill_many_expression(&a).unwrap();
+        let extract = extract_expression(&Extract {
+            selector: "table".into(),
+            mode: "table".into(),
+        })
+        .unwrap();
+        let script = format!(
+            r#"
+class HTMLElement {{ click(){{this.clicked=true;}} dispatchEvent(){{}} }}
+class HTMLInputElement extends HTMLElement {{set value(v){{this.v=v;}} get value(){{return this.v;}}}}
+class HTMLTextAreaElement extends HTMLInputElement {{}}
+class HTMLSelectElement extends HTMLInputElement {{}}
+class Event {{constructor(type,options){{}}}}
+const elements={{'#a':new HTMLInputElement(),'#b':new HTMLInputElement(),'#submit':new HTMLElement()}};
+const document={{querySelector:s=>elements[s],querySelectorAll:s=>[{{rows:[{{cells:[{{innerText:'one'}},{{innerText:'two'}}]}}]}}]}};
+const result={fill};
+if(result.filled!==2||!elements['#submit'].clicked||elements['#b'].value!=='second'||globalThis.pwned)throw Error('fill failed or injection');
+const table={extract};if(JSON.stringify(table)!=='[[["one","two"]]]')throw Error('extract failed');
+"#
+        );
+        let mut child = std::process::Command::new("/usr/bin/node")
+            .args(["--no-warnings", "-"])
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("Node required only for synthetic fixed-script acceptance");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
     use missy_core::PolicyConfig;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     async fn fake(mode: &str) -> (BrowserConfig, PolicyHttpClient, tokio::task::JoinHandle<()>) {
@@ -510,7 +684,11 @@ mod tests {
                     assert_eq!(evaluations, 1);
                     json!({})
                 } else if request["method"] == "Page.captureScreenshot" {
-                    json!({"data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="})
+                    let mut out = std::io::Cursor::new(Vec::new());
+                    image::DynamicImage::new_rgb8(1, 1)
+                        .write_to(&mut out, image::ImageFormat::Png)
+                        .unwrap();
+                    json!({"data":STANDARD.encode(out.into_inner())})
                 } else {
                     json!({})
                 };

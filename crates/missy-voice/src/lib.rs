@@ -4,13 +4,17 @@
 //! registry. The embedding application MUST dispatch `SafeChat` to a separately
 //! constructed no-tools runtime with its own capability fingerprint. The trait
 //! makes that choice explicit; it does not grant voice clients a runtime handle.
+pub mod audio_device;
 mod command;
 mod registry;
 mod server;
+pub mod speech;
 
+pub use audio_device::{AudioApprovalGate, AudioDeviceConfig, AudioDeviceTools};
 pub use command::{CommandConfig, CommandStt, CommandTts};
 pub use registry::{Device, DeviceRegistry, PolicyMode};
 pub use server::{VoiceConfig, VoiceServer};
+pub use speech::SpeechOutput;
 
 use anyhow::Result;
 use async_trait::async_trait;

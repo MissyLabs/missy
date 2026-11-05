@@ -75,6 +75,11 @@ fn check_path(path: &Path) -> Result<()> {
         bail!("filesystem path must be absolute without dot components");
     }
     cstr(path.as_os_str())?;
+    // Recovery evidence and in-flight private writes are not model-addressable.
+    if path.components().any(|part| matches!(part, Component::Normal(name)
+        if name.as_bytes().starts_with(b".missy-delete-") || name.as_bytes().starts_with(b".missy-write-"))) {
+        bail!("private filesystem journals are protected");
+    }
     Ok(())
 }
 fn roots(paths: &[PathBuf]) -> Result<Vec<Root>> {
@@ -384,6 +389,11 @@ impl Policy {
             if matches!(name.to_bytes(), b"." | b"..") {
                 continue;
             }
+            if name.to_bytes().starts_with(b".missy-delete-")
+                || name.to_bytes().starts_with(b".missy-write-")
+            {
+                continue;
+            }
             let name = name
                 .to_str()
                 .map_err(|_| anyhow!("directory contains non-UTF8 name"))?
@@ -665,6 +675,8 @@ fn public_v4(ip: Ipv4Addr) -> bool {
         || (a == 100 && (64..=127).contains(&b))
         || (a == 169 && b == 254)
         || (a == 172 && (16..=31).contains(&b))
+        // Conservatively deny all IETF protocol-assignment /24, including
+        // dummy/NAT64-discovery addresses; do not guess global exceptions.
         || (a == 192 && (b == 168 || (b == 0 && (c == 0 || c == 2)) || (b == 88 && c == 99)))
         || (a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100)))
         || (a == 203 && b == 0 && c == 113))

@@ -1,11 +1,13 @@
 //! Native bounded specialties. Embedders own durable approval and journaling.
 #![cfg(target_os = "linux")]
 mod calculator;
+mod documents;
 mod foundry;
 mod music;
 mod singing;
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
+pub use documents::{DocumentBackendConfig, DocumentExecutablePin};
 pub use foundry::FoundryConfig;
 use missy_core::{PolicyConfig, ToolCall, ToolContext, ToolDefinition, ToolExecutor};
 use missy_policy::{Policy, PolicyHttpClient};
@@ -24,6 +26,7 @@ pub struct SpecialtyConfig {
     pub foundry: Option<FoundryConfig>,
     pub enable_music: bool,
     pub enable_documents: bool,
+    pub document_backend: Option<DocumentBackendConfig>,
     // Zero selects conservative defaults.
     pub max_document_bytes: usize,
     pub max_audio_seconds: u32,
@@ -53,6 +56,9 @@ impl SpecialtyTools {
         if let Some(c) = &config.foundry {
             c.validate()?;
         }
+        if let Some(c) = &config.document_backend {
+            c.validate()?;
+        }
         let policy = Policy::new(policy)?;
         let http = PolicyHttpClient::from_policy(policy.clone());
         Ok(Self {
@@ -61,6 +67,29 @@ impl SpecialtyTools {
             config,
             foundry_state: tokio::sync::Mutex::new(foundry::FoundryState::default()),
         })
+    }
+    /// Native byte-input OCR. Caller must enforce durable capture approval.
+    /// No screen/file discovery; private staging obeys configured file policy.
+    pub async fn ocr_png(&self, ctx: &ToolContext, png: &[u8]) -> Result<String> {
+        ensure!(
+            self.config.enabled && self.config.enable_documents,
+            "OCR disabled"
+        );
+        let c = self
+            .config
+            .document_backend
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OCR backend not configured"))?;
+        documents::ocr_png(&self.policy, c, self.config.max_document_bytes, ctx, png).await
+    }
+    pub fn screen_ocr_configured(&self) -> bool {
+        self.config.enabled
+            && self.config.enable_documents
+            && self
+                .config
+                .document_backend
+                .as_ref()
+                .is_some_and(|c| c.tesseract.is_some())
     }
     fn parse(&self, call: &ToolCall) -> Result<Request> {
         ensure!(self.config.enabled, "specialty tools disabled");
@@ -92,6 +121,13 @@ impl SpecialtyTools {
             "document_extract" if self.config.enable_documents => {
                 Request::Document(serde_json::from_value(call.arguments.clone())?)
             }
+            "document_pdf_extract" | "document_ocr"
+                if self.config.enable_documents && self.config.document_backend.is_some() =>
+            {
+                let r: documents::DocumentRequest = serde_json::from_value(call.arguments.clone())?;
+                r.validate(&call.name, self.config.document_backend.as_ref().unwrap())?;
+                Request::NativeDocument(call.name.clone(), r)
+            }
             _ => bail!("unknown or disabled specialty tool"),
         })
     }
@@ -114,6 +150,7 @@ struct DocumentRequest {
     input: PathBuf,
 }
 enum Request {
+    NativeDocument(String, documents::DocumentRequest),
     Calculator(Calculation),
     Singing(singing::SingingRequest),
     Foundry(foundry::FoundryRequest),
@@ -161,6 +198,9 @@ impl ToolExecutor for SpecialtyTools {
         }
         if self.config.enable_documents {
             defs.push(def("document_extract", "Read policy-authorized UTF-8 Markdown/text file and extract headings/fenced blocks without executing content. PDF/OCR not supported.", schema(json!({"input":{"type":"string"}}), &["input"]), false));
+            if let Some(c) = &self.config.document_backend {
+                defs.extend(documents::definitions(c));
+            }
         }
         defs
     }
@@ -192,6 +232,17 @@ impl ToolExecutor for SpecialtyTools {
     async fn execute(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
         ensure!(!ctx.cancellation.is_cancelled(), "specialty cancelled");
         match self.parse(call)? {
+            Request::NativeDocument(name, r) => {
+                documents::execute(
+                    &self.policy,
+                    self.config.document_backend.as_ref().unwrap(),
+                    self.config.max_document_bytes,
+                    ctx,
+                    &name,
+                    r,
+                )
+                .await
+            }
             Request::Calculator(r) => Ok(json!({"result":calculator::calculate(&r.expression)?})),
             Request::Singing(r) => {
                 singing::execute(

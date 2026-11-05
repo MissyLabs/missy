@@ -1,0 +1,37 @@
+# Owned config mode 0600. Never point this at legacy ~/.missy.
+version: 1
+state_dir: /var/lib/missy-native
+providers:
+  - name: local
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+    model: SET_YOUR_INSTALLED_MODEL
+    input_microusd_per_million: 0
+    output_microusd_per_million: 0
+policy:
+  allowed_origins: ['http://127.0.0.1:11434']
+  allow_private_network: true
+  read_roots: []
+  write_roots: []
+  shell_enabled: false
+  allowed_commands: []
+  mcp_enabled: false
+api:
+  bind: 127.0.0.1:8766
+  token_env: MISSY_API_TOKEN
+  tenant: local
+  user: operator
+discord:
+  enabled: false
+gateway:
+  http_enabled: true
+  startup_timeout_seconds: 60
+  shutdown_timeout_seconds: 30
+  scheduler:
+    enabled: true
+    poll_seconds: 5
+    workers: 2
+    scopes:
+      - {tenant: local, user: operator, channel: cli, session: default}
+# extensions.voice_config and operations_config start under gateway.
+# Scheduler scopes are trusted service grants, not payload-selected scope.

@@ -1,5 +1,5 @@
 //! Model-facing data-only proposal tool. No approval or activation authority.
-use crate::{PluginManifest, PluginTools};
+use crate::{PluginManifest, PluginTools, RustSource};
 use anyhow::{Result, ensure};
 use missy_core::{ToolCall, ToolContext, ToolDefinition};
 use serde::Deserialize;
@@ -10,7 +10,13 @@ pub(crate) const NAME: &str = "self_create_tool";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
-    manifest: PluginManifest,
+    manifest: Option<PluginManifest>,
+    rust_source: Option<RustSource>,
+}
+
+pub(crate) enum Proposed {
+    Manifest(PluginManifest),
+    Source(RustSource),
 }
 
 pub(crate) fn definition() -> ToolDefinition {
@@ -25,7 +31,7 @@ pub(crate) fn definition() -> ToolDefinition {
             "minimum":{"type":"number"},"maximum":{"type":"number"}
         }, "required":["type"]
     });
-    ToolDefinition {
+    let mut definition = ToolDefinition {
         name: NAME.into(),
         description: "Propose a data-only native plugin manifest for exact-hash human review. Creates a pending proposal only: never approves, enables, compiles, installs code, executes a program, or changes the running catalog. Only operator-provided SHA256-pinned native ELF is supported. Execution after separate operator activation still requires exact argv policy and per-call human approval.".into(),
         parameters: json!({
@@ -71,15 +77,28 @@ pub(crate) fn definition() -> ToolDefinition {
             }}
         }),
         side_effect: true,
-    }
+    };
+    definition.description = "Propose a pending native plugin manifest OR single-file Rust source. No compilation, execution, approval, activation or grants. Operator must review source exact hash before a separately configured offline confined build, then review resulting ELF manifest and separately enable it. Runtime exact-argv policy and per-call approval remain mandatory.".into();
+    let manifest = definition.parameters["properties"]["manifest"].clone();
+    definition.parameters["properties"]["rust_source"] = json!({
+        "type":"object","additionalProperties":false,
+        "required":["id","source","definition","args","capabilities"],
+        "properties":{
+            "id":manifest["properties"]["id"],
+            "source":{"type":"string","minLength":1,"maxLength":49152},
+            "definition":manifest["properties"]["definition"],
+            "args":manifest["properties"]["command"]["properties"]["args"],
+            "capabilities":manifest["properties"]["capabilities"]
+        }
+    });
+    definition.parameters["required"] = json!([]);
+    definition.parameters["oneOf"] =
+        json!([{"required":["manifest"]},{"required":["rust_source"]}]);
+    definition
 }
 
 impl PluginTools {
-    pub(crate) fn proposal_manifest(
-        &self,
-        ctx: &ToolContext,
-        call: &ToolCall,
-    ) -> Result<PluginManifest> {
+    pub(crate) fn proposal_manifest(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Proposed> {
         ensure!(
             self.config.enabled && ctx.scope == self.config.scope,
             "plugin proposal scope denied"
@@ -100,15 +119,34 @@ impl PluginTools {
         );
         // ToolDefinition is shared protocol without deny_unknown_fields, so
         // enforce its closed shape before typed deserialization.
+        let source = call.arguments.get("rust_source").is_some();
         let definition = call
             .arguments
-            .pointer("/manifest/definition")
+            .pointer(if source {
+                "/rust_source/definition"
+            } else {
+                "/manifest/definition"
+            })
             .and_then(Value::as_object)
             .ok_or_else(|| anyhow::anyhow!("manifest definition required"))?;
         ensure!(definition.keys().all(|k|["name","description","parameters","side_effect"].contains(&k.as_str())), "unknown tool definition field");
         let args: Arguments = serde_json::from_value(call.arguments.clone())?;
-        args.manifest.validate()?;
-        for root in &args.manifest.capabilities.read_roots {
+        let proposed = match (args.manifest, args.rust_source) {
+            (Some(manifest), None) => {
+                manifest.validate()?;
+                Proposed::Manifest(manifest)
+            }
+            (None, Some(source)) => {
+                source.validate()?;
+                Proposed::Source(source)
+            }
+            _ => anyhow::bail!("exactly one manifest or rust_source required"),
+        };
+        let capabilities = match &proposed {
+            Proposed::Manifest(m) => &m.capabilities,
+            Proposed::Source(s) => &s.capabilities,
+        };
+        for root in &capabilities.read_roots {
             ensure!(
                 self.policy
                     .config()
@@ -118,6 +156,6 @@ impl PluginTools {
                 "proposed read capability exceeds policy"
             );
         }
-        Ok(args.manifest)
+        Ok(proposed)
     }
 }
