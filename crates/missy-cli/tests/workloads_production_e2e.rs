@@ -127,6 +127,23 @@ fn private_write(path: &Path, v: &impl serde::Serialize) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 fn http(port: u16, method: &str, path: &str, body: Value) -> Value {
+    let (status, value) = http_response(port, method, path, body);
+    if status != 200 && status != 202 {
+        let scoped_status = path.strip_suffix("/resume").map(|turn_path| {
+            http_response(
+                port,
+                "GET",
+                &format!("{turn_path}?session=fixture"),
+                Value::Null,
+            )
+        });
+        panic!(
+            "{method} {path}: HTTP {status}: {value}; scoped turn after refusal: {scoped_status:?}"
+        );
+    }
+    value
+}
+fn http_response(port: u16, method: &str, path: &str, body: Value) -> (u16, Value) {
     let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(10)))
@@ -135,11 +152,9 @@ fn http(port: u16, method: &str, path: &str, body: Value) -> Value {
     write!(socket,"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer DisposableGatewayFixtureToken0123456789abcdef\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
     let mut bytes = String::new();
     socket.read_to_string(&mut bytes).unwrap();
-    assert!(
-        bytes.starts_with("HTTP/1.1 200") || bytes.starts_with("HTTP/1.1 202"),
-        "{bytes}"
-    );
-    serde_json::from_str(bytes.split_once("\r\n\r\n").unwrap().1).unwrap()
+    let status = bytes.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let value = serde_json::from_str(bytes.split_once("\r\n\r\n").unwrap().1).unwrap();
+    (status, value)
 }
 fn wait(mut ready: impl FnMut() -> bool, label: &str) {
     let start = Instant::now();
@@ -247,6 +262,38 @@ async fn gateway_shared_workloads_model_approval_resume_due_tick_shutdown_restar
         .into_iter()
         .find(|r| r.status == ApprovalStatus::Pending)
         .unwrap();
+    assert_eq!(pending.binding.turn_id, turn);
+    // Publishing the approval request is only preflight. The worker still has
+    // to checkpoint the waiting call and settle its running lease. Store::finish
+    // publishes interrupted and expires that lease atomically. Wait for this
+    // authenticated, exact-session barrier before one (and only one) resume.
+    let turn_path = format!("/api/v1/turns/{turn}?session=fixture");
+    let start = Instant::now();
+    loop {
+        let status = http(port, "GET", &turn_path, Value::Null);
+        assert_eq!(status["turn"]["id"], turn, "{status}");
+        match status["turn"]["status"].as_str().unwrap() {
+            "interrupted" => {
+                assert!(
+                    status["turn"]["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&format!("operator approval required: {}", pending.id)),
+                    "turn interrupted for something other than this approval: {status}"
+                );
+                break;
+            }
+            "admitted" | "running" => {}
+            _ => panic!("unexpected turn state before approval resume: {status}"),
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(25),
+            "timed out waiting for durable approval pause: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert_eq!(fixture.submits.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 1);
     registry
         .decide(
             &scope,
@@ -256,12 +303,14 @@ async fn gateway_shared_workloads_model_approval_resume_due_tick_shutdown_restar
             "fixture-operator",
         )
         .unwrap();
-    http(
+    let resumed = http(
         port,
         "POST",
         &format!("/api/v1/turns/{turn}/resume"),
         json!({"session":"fixture"}),
     );
+    assert_eq!(resumed["turn_id"], turn, "{resumed}");
+    assert_eq!(resumed["status"], "completed", "{resumed}");
     wait(
         || fixture.submits.load(Ordering::SeqCst) == 1,
         "supervisor workload tick",

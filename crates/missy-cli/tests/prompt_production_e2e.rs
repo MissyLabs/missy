@@ -50,12 +50,15 @@ fn private_write(path: &Path, data: &impl serde::Serialize) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 fn http(port: u16, path: &str, body: Value) -> Value {
+    request(port, "POST", path, body)
+}
+fn request(port: u16, method: &str, path: &str, body: Value) -> Value {
     let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(15)))
         .unwrap();
     let body = body.to_string();
-    write!(socket, "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {KEY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    write!(socket, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {KEY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     let mut response = String::new();
     socket.read_to_string(&mut response).unwrap();
     assert!(
@@ -218,6 +221,20 @@ async fn daemon_reads_latest_exact_scoped_persona_and_pins_paused_turn() {
             "fixture-operator",
         )
         .unwrap();
+    // Registry publication precedes the durable interrupted checkpoint. Wait for
+    // the runtime's actual pause before requesting resume, never retry effects.
+    wait(
+        || {
+            request(
+                port,
+                "GET",
+                &format!("/api/v1/turns/{turn}?session=approved"),
+                json!({}),
+            )["turn"]["status"]
+                == "interrupted"
+        },
+        "durable approval pause",
+    );
     http(
         port,
         &format!("/api/v1/turns/{turn}/resume"),
