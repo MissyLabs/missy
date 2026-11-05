@@ -1101,6 +1101,21 @@ async fn execute(cli: Cli) -> Result<()> {
             }
         }
         Command::Schedule { command } => {
+            // Calendar preview is pure and must not require inference credentials,
+            // open a database, connect MCP, or instantiate effect-capable tools.
+            if let ScheduleCommand::Next {
+                expression,
+                timezone,
+            } = &command
+            {
+                let now = chrono::Utc::now();
+                let spec = missy_schedule_text::ScheduleSpec::parse_at(expression, timezone, now)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"spec":spec,"next":spec.next_after(now)?})
+                );
+                return Ok(());
+            }
             let scheduler = missy_automation::Scheduler::open(
                 cfg.state_dir.join("scheduler.sqlite3"),
                 build_runtime(&cfg).await?,
@@ -1126,17 +1141,8 @@ async fn execute(cli: Cli) -> Result<()> {
                         )?)?
                     );
                 }
-                ScheduleCommand::Next {
-                    expression,
-                    timezone,
-                } => {
-                    let now = chrono::Utc::now();
-                    let spec =
-                        missy_schedule_text::ScheduleSpec::parse_at(&expression, &timezone, now)?;
-                    println!(
-                        "{}",
-                        serde_json::json!({"spec":spec,"next":spec.next_after(now)?})
-                    );
+                ScheduleCommand::Next { .. } => {
+                    unreachable!("pure preview returned before runtime construction")
                 }
                 ScheduleCommand::Add {
                     prompt,

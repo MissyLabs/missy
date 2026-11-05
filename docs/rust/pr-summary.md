@@ -38,8 +38,8 @@ Draft intentionally: a broad implementation is not permission to replace the bot
 
 ### Local validation on Rust 1.99.1
 
-- **349 passing native test entries**, 47 result groups, no failures. Includes
-  subprocess fixture entrypoints, not 349 independent end-to-end scenarios.
+- **350 passing native test entries**, 47 result groups, no failures. Includes
+  subprocess fixture entrypoints, not 350 independent end-to-end scenarios.
 - Full-workspace formatting and Clippy `-D warnings` pass.
 - Release executable built. Chromium against release: **15 assertions pass**.
 - Strict dependency audit passes, 354 dependencies and 1,409 loaded advisories.

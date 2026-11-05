@@ -121,6 +121,32 @@ fn ok(output: Output) -> Value {
 }
 
 #[test]
+fn actual_binary_schedule_preview_needs_no_provider_and_opens_no_state() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = Config {
+        state_dir: root.path().join("must-not-exist"),
+        ..Config::default()
+    };
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let preview = ok(invoke(
+        root.path(),
+        &[
+            "schedule",
+            "next",
+            "daily at 09:00",
+            "--timezone",
+            "America/New_York",
+        ],
+    ));
+    assert!(preview["next"].is_string());
+    assert!(!cfg.state_dir.exists());
+}
+
+#[test]
 fn actual_binary_human_schedule_and_literal_workflow_restart() {
     let root = tempfile::tempdir().unwrap();
     let mock = Mock::start(vec![

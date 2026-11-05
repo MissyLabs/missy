@@ -11,7 +11,7 @@ This report concerns the new Rust workspace, not the production Python bot.
 |---|---|
 | `cargo fmt --all -- --check` | Pass |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Pass |
-| `cargo test --workspace --all-targets --locked` | Final expanded workspace: 349 passing native test entries across 47 result groups, 0 failed |
+| `cargo test --workspace --all-targets --locked` | Final expanded workspace: 350 passing native test entries across 47 result groups, 0 failed |
 | `cargo build --release -p missy-cli --locked` | Pass, native Linux executable |
 | `scripts/test-rust-console.py --binary target/release/missy-rs` | 15 Chromium/HTTP acceptance assertions passed |
 | `cargo audit --deny warnings` | Pass against 1,409 loaded RustSec advisories and 354 locked dependencies; no advisory suppressions |
@@ -19,7 +19,7 @@ This report concerns the new Rust workspace, not the production Python bot.
 
 The native total includes subprocess-fixture entrypoints which intentionally
 return without doing work in the ordinary runner and are driven separately by
-their parent crash/lock tests. It is not 349 independent end-to-end scenarios.
+their parent crash/lock tests. It is not 350 independent end-to-end scenarios.
 The optional browser harness is test tooling, not a runtime Python dependency.
 
 ### Initial core test breakdown (248 entries, before the final expansion)
@@ -129,7 +129,7 @@ The optional browser harness is test tooling, not a runtime Python dependency.
 ## Final expansion and focused correction evidence
 
 The workspace now contains 24 native crates. The final locked all-target suite
-passes 349 entries, including the retained 248-entry core and new regression,
+passes 350 entries, including the retained 248-entry core and new regression,
 native extension and executable acceptance entries. Formatting and full-workspace
 Clippy with warnings denied pass on the same final dependency set.
 
@@ -150,6 +150,10 @@ Clippy with warnings denied pass on the same final dependency set.
   returns the original turns without further inference. This exposed a Clap
   argument-ID collision between a positional extension `config` and the global
   `--config`; positional fields were renamed, not worked around in the test.
+  A final default-deny smoke check also exposed calendar preview unnecessarily
+  constructing a provider/tool runtime. Pure preview now returns before any
+  database/provider/tool initialization, with an executable no-provider/no-state
+  regression test.
 - **HTTP MCP:** real loopback Streamable HTTP and never-EOF SSE, persistent legacy
   SSE correlation, same-origin credential routing, initialized-session manifest
   checks, changed pins and uncertain outcomes. No live MCP server was used.
