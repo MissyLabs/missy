@@ -1,0 +1,66 @@
+[package]
+name = "missy-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "missy-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+missy-providers = { path = "../missy-providers" }
+missy-runtime = { path = "../missy-runtime" }
+missy-store = { path = "../missy-store" }
+missy-tools = { path = "../missy-tools" }
+missy-gateway = { path = "../missy-gateway" }
+missy-automation = { path = "../missy-automation" }
+missy-security = { path = "../missy-security" }
+missy-migrate = { path = "../missy-migrate" }
+missy-retrieval = { path = "../missy-retrieval" }
+missy-integrations = { path = "../missy-integrations" }
+missy-governance = { path = "../missy-governance" }
+missy-provider-process = { path = "../missy-provider-process" }
+missy-voice = { path = "../missy-voice" }
+missy-sandbox = { path = "../missy-sandbox" }
+missy-mcp-http = { path = "../missy-mcp-http" }
+missy-desktop = { path = "../missy-desktop" }
+missy-media = { path = "../missy-media" }
+missy-embedding = { path = "../missy-embedding" }
+missy-mesh = { path = "../missy-mesh" }
+missy-operations = { path = "../missy-operations" }
+missy-schedule-text = { path = "../missy-schedule-text" }
+missy-personal = { path = "../missy-personal" }
+missy-capture = { path = "../missy-capture" }
+missy-specialty = { path = "../missy-specialty" }
+missy-evolution = { path = "../missy-evolution" }
+missy-subagents = { path = "../missy-subagents" }
+missy-discord-voice = { path = "../missy-discord-voice" }
+missy-vision = { path = "../missy-vision" }
+missy-history = { path = "../missy-history" }
+missy-discord-tools = { path = "../missy-discord-tools" }
+missy-plugins = { path = "../missy-plugins" }
+missy-workloads = { path = "../missy-workloads" }
+missy-screencast = {path="../missy-screencast"}
+rusqlite.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
+libc.workspace = true
+zeroize = "1"
+tokio-util.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "missy-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+ed25519-dalek = { version = "2.2", features = ["rand_core", "zeroize"] }
+hex.workspace = true
+libc.workspace = true
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+missy-runtime = { path = "../missy-runtime" }
+missy-store = { path = "../missy-store" }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+url.workspace = true
+zeroize = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+async-trait.workspace = true
+tokio-util.workspace = true

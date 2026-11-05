@@ -1,0 +1,112 @@
+name: Rust rewrite
+on:
+  push:
+    branches: [master, 'rewrite/**']
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'tests/installer_offline.sh', 'docs/rust/**', 'README-RUST.md', 'examples/rust-*.yaml', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'tests/installer_offline.sh', 'docs/rust/**', 'README-RUST.md', 'examples/rust-*.yaml', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+permissions:
+  contents: read
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    # Pin the browser-supported OS rather than inherit ubuntu-latest migrations.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 4
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Disposable native media and display test dependencies
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runner's Azure mirror delivered 94 MB over >25 minutes. Use
+          # official signed Ubuntu indexes, bounded acquisition and no extras.
+          printf '%s\n' \
+            'deb https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb https://security.ubuntu.com/ubuntu noble-security main universe' > /tmp/missy-apt.list
+          apt_options=(-o Dir::Etc::sourcelist=/tmp/missy-apt.list -o Dir::Etc::sourceparts=- -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg xvfb xauth dbus libopus-dev pkg-config nodejs poppler-utils tesseract-ocr
+      - name: Installer and release script syntax, no installation
+        run: bash -n install.sh && sh -n packaging/rust/release.sh && bash tests/installer_offline.sh
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo build --release -p missy-cli --locked
+      - name: Chromium console acceptance
+        run: |
+          python3 -m venv /tmp/missy-browser-test
+          /tmp/missy-browser-test/bin/pip install playwright==1.60.0
+          /tmp/missy-browser-test/bin/playwright install --with-deps chromium
+          /tmp/missy-browser-test/bin/python scripts/test-rust-console.py --binary target/release/missy-rs
+          MISSY_SCREENCAST_BROWSER_PYTHON=/tmp/missy-browser-test/bin/python cargo test -p missy-screencast --locked chromium_synthetic_browser_fixture
+      - name: Native executable and isolated configuration smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          export HOME="$work"
+          target/release/missy-rs --help
+          target/release/missy-rs --config "$work/config.yaml" init
+          target/release/missy-rs --config "$work/config.yaml" config-check
+          target/release/missy-rs --config "$work/config.yaml" doctor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missy-rs-linux-x86_64
+          path: target/release/missy-rs
+          retention-days: 14
+  dependency-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit --deny warnings
+  native-dave:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Native build and codec prerequisites
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'deb https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb https://security.ubuntu.com/ubuntu noble-security main universe' > /tmp/missy-native-apt.list
+          apt_options=(-o Dir::Etc::sourcelist=/tmp/missy-native-apt.list -o Dir::Etc::sourceparts=- -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends cmake ninja-build libssl-dev libopus-dev pkg-config
+      - name: Build pinned official DAVE library and run upstream suites
+        run: bash crates/missy-dave/build-native.sh "$RUNNER_TEMP/missy-native-dave"
+      - name: Native Rust MLS and media acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MISSY_TEST_LIBDAVE_PATH="$RUNNER_TEMP/missy-native-dave/artifact/libdave.so"
+          export MISSY_TEST_LIBDAVE_SHA256="$(sha256sum "$MISSY_TEST_LIBDAVE_PATH" | cut -d' ' -f1)"
+          export MISSY_TEST_LIBDAVE_HELPER="$RUNNER_TEMP/missy-native-dave/libdave-build/test/capi/libexternal_sender.so"
+          cargo test -p missy-dave -p missy-discord-voice --locked -- --include-ignored
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missy-native-dave-linux-x86_64
+          path: ${{ runner.temp }}/missy-native-dave/artifact
+          retention-days: 14

@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Missy screen sharing</title><script src="/capture.js" defer></script></head>
+<body><h1>Share a screen with Missy</h1>
+<p>Only share content you explicitly intend to disclose. Paste your privately issued pairing JSON. It is held in memory only, never in the URL or browser storage. Analysis and delivery follow your approved session policy. Closing or stopping requires a new pairing.</p>
+<label>Private pairing JSON <textarea id="pairing" autocomplete="off" spellcheck="false" rows="5" cols="60"></textarea></label>
+<p><button id="start" type="button">Start sharing</button> <button id="stop" type="button" disabled>Stop sharing</button></p>
+<p id="status" role="status">Stopped. No screen is being captured.</p>
+<video id="preview" autoplay muted playsinline></video><canvas id="frame" hidden></canvas></body></html>

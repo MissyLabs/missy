@@ -1,5 +1,11 @@
 # Missy
 
+> **Native Rust branch:** build, installation, security and operator documentation
+> are in [README-RUST.md](README-RUST.md). The branch installer and tagged release
+> workflow now build the native executable. The Python description below is a
+> retained **legacy behavior reference**, not the native command/config manual.
+> No account connection, live-state migration or process cutover happens on build.
+
 **Security-first, self-hosted AI assistant for Linux.**
 
 Missy is a production-grade agentic platform that runs entirely on your hardware. Default-deny network, filesystem sandboxing, shell whitelisting, encrypted vault, and structured audit logging — every capability is locked down until you explicitly allow it. Connect any AI provider. Deploy voice nodes throughout your home. Automate with scheduled jobs. Extend with tools, skills, and plugins.
@@ -115,15 +121,33 @@ This isn't paranoia — it's the only sane default for an AI agent that can exec
 
 ---
 
-## Install
+## Native Rust installation and operator guide
+
+Use [README-RUST.md](README-RUST.md) for this branch. Its installer builds
+`missy-rs` into an independent installation, never starts a service, and never
+replaces a running Python process. The full source-conversion inventory is
+[the production replacement matrix](docs/rust/production-replacement-matrix.md).
+
+```bash
+git clone --branch rewrite/rust-runtime https://github.com/MissyLabs/missy.git
+cd missy
+bash install.sh --source "$PWD"
+```
+
+The checkout must be clean and committed. Read the native guide before enabling
+capabilities. No account access or process cutover is part of this conversion.
+
+## Legacy Python installation reference
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MissyLabs/missy/master/install.sh | bash
 ```
 
-This clones to `~/.local/share/missy`, creates a venv, installs, and symlinks `missy` into `~/.local/bin`. Requires Python 3.11+ and git.
+This describes the **legacy master branch**, not this branch's native installer.
+It clones to `~/.local/share/missy`, creates a venv, installs, and symlinks `missy`
+into `~/.local/bin`. Requires Python 3.11+ and git.
 
-## Quick Start
+## Legacy Python quick start
 
 ```bash
 missy setup

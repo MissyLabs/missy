@@ -1,0 +1,24 @@
+[package]
+name = "missy-evolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+libc.workspace = true
+missy-core = { path = "../missy-core" }
+missy-governance = { path = "../missy-governance" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-util.workspace = true

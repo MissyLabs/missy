@@ -1,0 +1,30 @@
+[package]
+name = "missy-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+hex.workspace = true
+sha2.workspace = true
+libc.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+futures-util.workspace = true
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+serde.workspace = true
+serde_json.workspace = true
+socket2 = "0.6"
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+x11rb = { version = "0.13", features = ["xtest"] }
+zbus = { version = "6.2.1", default-features = false, features = ["tokio", "proxy", "service"] }
+
+[dev-dependencies]
+tempfile.workspace = true
