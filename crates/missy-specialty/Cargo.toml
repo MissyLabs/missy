@@ -1,0 +1,26 @@
+[package]
+name = "missy-specialty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+hound = "3.5"
+claxon = "0.4"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-util.workspace = true
+midly = "0.5"

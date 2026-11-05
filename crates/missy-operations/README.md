@@ -71,10 +71,55 @@ trace/span IDs, nanosecond timestamps, fixed service/instrumentation names and
 closed code-owned attributes. Both span count and encoded body bytes are bounded.
 Collector partial rejection is an error. All export requests use the supplied
 `PolicyHttpClient`; no direct reqwest, proxy, redirect or DNS bypass exists.
-Exporting is one-shot, never implicit or retried autonomously. This implements
+Each export is one-shot and is never retried autonomously. This implements
 traces, not a general OpenTelemetry SDK, tracing-subscriber bridge, or fake OTLP
 metrics. `export_signed_summary` optionally POSTs a signed redacted diagnostic
 summary through the same policy gateway; it is not the complete audit journal.
+
+### Automatic native runtime instrumentation
+
+`TelemetryRuntime::build_client(PolicyConfig, TelemetryConfig)` synchronously
+creates an optional bounded export worker in the current Tokio runtime. The
+default `endpoint: None` performs no I/O and spawns nothing. Opt in with an exact
+`http(s)://collector/v1/traces` endpoint **and** independently allow its origin
+through network policy. Private addresses still require explicit policy opt-in.
+Configuration denies unknown fields. Queue, batch, encoded bytes, flush interval,
+request timeout and shutdown timeout all have checked hard bounds.
+
+Pass `telemetry.observer()` as the sixth argument to `Runtime::new_observed`.
+Unlike the standalone exporter, this attaches to actual owned runtime work,
+including daemon/webhook turns using that runtime. Existing `Runtime::new`
+continues unobserved. Each execution attempt gets one fresh random trace, a root
+turn span, and root-parented provider, tool execution, and durable receipt
+settlement spans. Multiple provider/tool steps share that trace. Explicit resume
+creates a new trace; trace IDs are not persisted or derived from principals.
+No prompt, model/tool content, call/turn IDs, tool name, principal, path, URL,
+credential or arbitrary error string is present in runtime observation events.
+Receipts report successful **persistence**, not successful external tool effects:
+an unknown effect can have a failed tool span and successful settlement span.
+
+The observer callback only uses `try_reserve` on a bounded channel and atomic
+counters. It never waits, performs I/O, or changes runtime errors. Observer
+panics are isolated from execution. Overflow drops the newest span immediately.
+Memory is bounded by the configured queue plus one batch and bounded HTTP
+request/response bodies. This is **best-effort telemetry**, not durable SQLite
+spooling, an audit journal, or lossless delivery. Dropped root spans can leave
+orphan child spans; loss is counted rather than hidden. Collector failures,
+partial rejection and request timeout count the whole batch as failed and never
+retry an uncertain POST. Partial acceptance can therefore undercount delivered
+spans; no idempotent collector behavior is assumed.
+
+Keep the handle for `metrics()` and explicit `shutdown().await`; shutdown closes
+admission and drains under one overall deadline, returning an error on deadline
+or worker failure. `monitor()` provides cloneable read-only counters without
+keeping the channel alive, including post-shutdown/timeout diagnostics. Counters
+include accepted, pending, exported, failed, dropped and successful/failed batch
+totals; `TelemetryMetrics::prometheus()` uses fixed unlabelled metric names.
+Dropping the owner does **not** stop a still-live observer. Dropping the last
+sender automatically closes and drains the worker under the shutdown deadline.
+An owning process must await explicit shutdown before destroying Tokio to
+guarantee that final drain is given CPU time. No background task can survive
+runtime/process termination, and queued spans are intentionally not durable.
 
 ## Portable workflow
 
@@ -103,3 +148,8 @@ not a second grammar in this crate.
 `cargo test -p missy-operations` uses only temporary databases, mock providers,
 local isolated routers and policy-denied collector destinations. No live state,
 production listener or provider credential is used.
+Tests include actual Runtime provider/tool execution through the bounded worker
+and a local HTTP collector, trace parentage across steps, redaction, counted
+overflow, failed exports without retries, owner/observer lifetime, policy denial,
+and bounded shutdown against a stalled collector. Runtime regressions also cover
+observer panic isolation and unknown-effect versus durable-receipt semantics.

@@ -30,6 +30,51 @@ impl<'de> Deserialize<'de> for VideoRequest {
             Some("overlay") => &["output", "operation", "input", "image", "x", "y"],
             Some("extract_frame") => &["output", "operation", "input", "at_ms"],
             Some("extract_audio") => &["output", "operation", "input"],
+            Some("audio_mux") => &[
+                "output",
+                "operation",
+                "input",
+                "audio_file",
+                "gain",
+                "duration_ms",
+                "loop",
+            ],
+            Some("audio_mix") => &[
+                "output",
+                "operation",
+                "input",
+                "audio_file",
+                "gain",
+                "original_gain",
+                "duration_ms",
+                "loop",
+            ],
+            Some("speed") => &["output", "operation", "input", "factor", "preserve_audio"],
+            Some("crossfade") => &[
+                "output",
+                "operation",
+                "inputs",
+                "width",
+                "height",
+                "duration_ms",
+                "preserve_audio",
+            ],
+            Some("text") => &[
+                "output",
+                "operation",
+                "input",
+                "text",
+                "font_file",
+                "font_size",
+                "position",
+                "font_color",
+                "box_color",
+                "box_opacity",
+                "box",
+                "start_ms",
+                "end_ms",
+                "preserve_audio",
+            ],
             Some("storyboard") => &[
                 "output",
                 "operation",
@@ -80,12 +125,104 @@ pub enum VideoOperation {
     ExtractAudio {
         input: PathBuf,
     },
+    AudioMux {
+        input: PathBuf,
+        audio_file: PathBuf,
+        gain: f64,
+        duration_ms: Option<u32>,
+        #[serde(rename = "loop")]
+        loop_audio: bool,
+    },
+    AudioMix {
+        input: PathBuf,
+        audio_file: PathBuf,
+        gain: f64,
+        original_gain: f64,
+        duration_ms: Option<u32>,
+        #[serde(rename = "loop")]
+        loop_audio: bool,
+    },
+    Speed {
+        input: PathBuf,
+        factor: f64,
+        preserve_audio: bool,
+    },
+    Text {
+        input: PathBuf,
+        text: String,
+        font_file: PathBuf,
+        font_size: u32,
+        position: TextPosition,
+        font_color: CaptionColor,
+        box_color: CaptionColor,
+        box_opacity: f64,
+        #[serde(rename = "box")]
+        boxed: bool,
+        start_ms: u32,
+        end_ms: u32,
+        preserve_audio: bool,
+    },
+    Crossfade {
+        inputs: Vec<PathBuf>,
+        width: u32,
+        height: u32,
+        duration_ms: u32,
+        preserve_audio: bool,
+    },
     Storyboard {
         images: Vec<PathBuf>,
         seconds_per_image: u32,
         width: u32,
         height: u32,
     },
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TextPosition {
+    TopLeft,
+    Top,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+impl TextPosition {
+    fn coordinates(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::TopLeft => ("4", "4"),
+            Self::Top => ("(w-text_w)/2", "4"),
+            Self::TopRight => ("w-text_w-4", "4"),
+            Self::CenterLeft => ("4", "(h-text_h)/2"),
+            Self::Center => ("(w-text_w)/2", "(h-text_h)/2"),
+            Self::CenterRight => ("w-text_w-4", "(h-text_h)/2"),
+            Self::BottomLeft => ("4", "h-text_h-4"),
+            Self::Bottom => ("(w-text_w)/2", "h-text_h-4"),
+            Self::BottomRight => ("w-text_w-4", "h-text_h-4"),
+        }
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionColor {
+    White,
+    Black,
+    Red,
+    Blue,
+    Yellow,
+}
+impl CaptionColor {
+    fn filter_value(&self) -> &'static str {
+        match self {
+            Self::White => "white",
+            Self::Black => "black",
+            Self::Red => "red",
+            Self::Blue => "blue",
+            Self::Yellow => "yellow",
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StreamMetadata {
@@ -185,6 +322,92 @@ impl VideoRequest {
             }
             VideoOperation::ExtractAudio { input } => {
                 input_format(input)?;
+            }
+            VideoOperation::AudioMux {
+                input,
+                audio_file,
+                gain,
+                duration_ms,
+                ..
+            }
+            | VideoOperation::AudioMix {
+                input,
+                audio_file,
+                gain,
+                duration_ms,
+                ..
+            } => {
+                input_format(input)?;
+                input_format(audio_file)?;
+                ensure!(
+                    gain.is_finite() && (0.0..=4.0).contains(gain),
+                    "gain must be finite 0..4"
+                );
+                ensure!(
+                    duration_ms.is_none_or(|d| d > 0 && d <= c.max_duration_seconds * 1000),
+                    "audio duration outside bounds"
+                );
+                if let VideoOperation::AudioMix { original_gain, .. } = &self.operation {
+                    ensure!(
+                        original_gain.is_finite() && (0.0..=4.0).contains(original_gain),
+                        "original gain must be finite 0..4"
+                    );
+                }
+            }
+            VideoOperation::Speed { input, factor, .. } => {
+                input_format(input)?;
+                ensure!(
+                    factor.is_finite() && (0.25..=4.0).contains(factor),
+                    "speed factor must be finite 0.25..4"
+                );
+            }
+            VideoOperation::Text {
+                input,
+                text,
+                font_file,
+                font_size,
+                box_opacity,
+                start_ms,
+                end_ms,
+                ..
+            } => {
+                input_format(input)?;
+                ensure!(
+                    matches!(extension(font_file)?, "ttf" | "otf"),
+                    "explicit TTF/OTF required"
+                );
+                ensure!(
+                    !text.is_empty() && text.len() <= 4096 && !text.contains('\0'),
+                    "caption text outside bounds"
+                );
+                ensure!((8..=256).contains(font_size), "font size outside 8..256");
+                ensure!(
+                    box_opacity.is_finite() && (0.0..=1.0).contains(box_opacity),
+                    "box opacity outside 0..1"
+                );
+                ensure!(
+                    start_ms < end_ms && *end_ms <= c.max_duration_seconds * 1000,
+                    "caption time range outside bounds"
+                );
+            }
+            VideoOperation::Crossfade {
+                inputs,
+                width,
+                height,
+                duration_ms,
+                ..
+            } => {
+                ensure!(inputs.len() == 2, "crossfade requires exactly two clips");
+                for input in inputs {
+                    input_format(input)?;
+                }
+                video_dimensions(*width, *height, c)?;
+                ensure!(
+                    *duration_ms > 0
+                        && *duration_ms <= 5000
+                        && *duration_ms <= c.max_duration_seconds * 1000,
+                    "crossfade duration outside bounds"
+                );
             }
             VideoOperation::Storyboard {
                 images,
@@ -346,10 +569,50 @@ fn require_video(media: &MediaMetadata) -> Result<&StreamMetadata> {
         .ok_or_else(|| anyhow::anyhow!("video stream required"))
 }
 fn video_encoding(args: &mut Vec<String>) {
+    video_encoding_with_audio(args, false);
+}
+fn video_encoding_with_audio(args: &mut Vec<String>, audio: bool) {
     args.extend(strings(&[
-        "-an", "-sn", "-dn", "-c:v", "mpeg4", "-q:v", "4", "-pix_fmt", "yuv420p", "-threads", "1",
-        "-r", "15", "-f", "mp4",
+        "-sn", "-dn", "-c:v", "mpeg4", "-q:v", "4", "-pix_fmt", "yuv420p", "-threads", "1", "-r",
+        "15", "-f", "mp4",
     ]));
+    if audio {
+        args.extend(strings(&[
+            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000",
+        ]));
+    } else {
+        args.push("-an".into());
+    }
+}
+fn has_audio(media: &MediaMetadata) -> bool {
+    media.streams.iter().any(|s| s.codec_type == "audio")
+}
+fn atempo(mut factor: f64) -> String {
+    let mut stages = Vec::new();
+    while factor > 2.0 {
+        stages.push("atempo=2".to_owned());
+        factor /= 2.0;
+    }
+    while factor < 0.5 {
+        stages.push("atempo=0.5".to_owned());
+        factor /= 0.5;
+    }
+    stages.push(format!("atempo={factor:.9}"));
+    stages.join(",")
+}
+fn filter_path(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("UTF-8 staging path required"))?;
+    // Only private generated filenames are used. Reject unusual operator staging
+    // roots rather than attempt ambiguous multi-layer FFmpeg graph escaping.
+    ensure!(
+        value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b)),
+        "caption staging path contains filter metacharacters"
+    );
+    Ok(value.to_owned())
 }
 
 pub(crate) async fn execute(
@@ -368,6 +631,8 @@ pub(crate) async fn execute(
     let mut args = common();
     let mut output_format = "mov";
     let mut expected_codec = "mpeg4";
+    let mut expected_audio = false;
+    let mut copied_video_codec = None;
     let expected_duration;
     match &r.operation {
         VideoOperation::Trim {
@@ -524,6 +789,216 @@ pub(crate) async fn execute(
             output_format = "wav";
             expected_codec = "pcm_s16le";
         }
+        VideoOperation::AudioMux {
+            input,
+            audio_file,
+            gain,
+            duration_ms,
+            loop_audio,
+        }
+        | VideoOperation::AudioMix {
+            input,
+            audio_file,
+            gain,
+            duration_ms,
+            loop_audio,
+            ..
+        } => {
+            let (p, m) = stage_video(policy, c, dir, input, 0, ctx).await?;
+            let video = require_video(&m)?;
+            video_dimensions(video.width.unwrap_or(0), video.height.unwrap_or(0), c)?;
+            copied_video_codec = Some(video.codec_name.clone());
+            let (a, am) = stage_video(policy, c, dir, audio_file, 1, ctx).await?;
+            ensure!(has_audio(&am), "audio_file needs an audio stream");
+            let duration = duration_ms
+                .map(|d| f64::from(d) / 1000.0)
+                .unwrap_or(m.duration_seconds.unwrap());
+            ensure!(
+                duration <= m.duration_seconds.unwrap() + 0.001,
+                "audio duration exceeds video"
+            );
+            expected_duration = Some(duration);
+            expected_audio = true;
+            input_args(&mut args, &p, input_format(input)?);
+            if *loop_audio {
+                args.extend(strings(&["-stream_loop", "-1"]));
+            }
+            input_args(&mut args, &a, input_format(audio_file)?);
+            let incoming = format!(
+                "[1:a:0]asetpts=PTS-STARTPTS,volume={gain:.9},apad,atrim=duration={duration:.9}[incoming]"
+            );
+            let graph = if let VideoOperation::AudioMix { original_gain, .. } = &r.operation {
+                if has_audio(&m) {
+                    format!(
+                        "{incoming};[0:a:0]asetpts=PTS-STARTPTS,volume={original_gain:.9},apad,atrim=duration={duration:.9}[original];[original][incoming]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
+                    )
+                } else {
+                    incoming.replace("[incoming]", "[aout]")
+                }
+            } else {
+                incoming.replace("[incoming]", "[aout]")
+            };
+            args.extend(vec![
+                "-filter_complex".into(),
+                graph,
+                "-map".into(),
+                "0:v:0".into(),
+                "-map".into(),
+                "[aout]".into(),
+            ]);
+            args.extend(strings(&[
+                "-sn", "-dn", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar",
+                "48000", "-f", "mp4",
+            ]));
+        }
+        VideoOperation::Speed {
+            input,
+            factor,
+            preserve_audio,
+        } => {
+            let (p, m) = stage_video(policy, c, dir, input, 0, ctx).await?;
+            let video = require_video(&m)?;
+            video_dimensions(video.width.unwrap_or(0), video.height.unwrap_or(0), c)?;
+            let duration = m.duration_seconds.unwrap() / factor;
+            ensure!(
+                duration <= f64::from(c.max_duration_seconds),
+                "slowed duration exceeds limit"
+            );
+            expected_duration = Some(duration);
+            expected_audio = *preserve_audio && has_audio(&m);
+            input_args(&mut args, &p, input_format(input)?);
+            let mut graph = format!("[0:v:0]setpts=(PTS-STARTPTS)/{factor:.9}[vout]");
+            if expected_audio {
+                graph.push_str(&format!(
+                    ";[0:a:0]asetpts=PTS-STARTPTS,{},apad,atrim=duration={duration:.9}[aout]",
+                    atempo(*factor)
+                ));
+            }
+            args.extend(vec![
+                "-filter_complex".into(),
+                graph,
+                "-map".into(),
+                "[vout]".into(),
+            ]);
+            if expected_audio {
+                args.extend(strings(&["-map", "[aout]"]));
+            }
+            video_encoding_with_audio(&mut args, expected_audio);
+        }
+        VideoOperation::Text {
+            input,
+            text,
+            font_file,
+            font_size,
+            position,
+            font_color,
+            box_color,
+            box_opacity,
+            boxed,
+            start_ms,
+            end_ms,
+            preserve_audio,
+        } => {
+            let (p, m) = stage_video(policy, c, dir, input, 0, ctx).await?;
+            let video = require_video(&m)?;
+            video_dimensions(video.width.unwrap_or(0), video.height.unwrap_or(0), c)?;
+            ensure!(
+                f64::from(*end_ms) / 1000.0 <= m.duration_seconds.unwrap() + 0.001,
+                "caption beyond video duration"
+            );
+            let font = policy.read_file(font_file)?;
+            ensure!(
+                font.len() >= 12
+                    && font.len() <= 8 * 1024 * 1024
+                    && matches!(&font[..4], b"\x00\x01\x00\x00" | b"OTTO" | b"true"),
+                "bounded TrueType/OpenType font required"
+            );
+            let font_path = dir.join("caption-font.ttf");
+            let text_path = dir.join("caption.txt");
+            std::fs::write(&font_path, font)?;
+            std::fs::write(&text_path, text.as_bytes())?;
+            let (x, y) = position.coordinates();
+            let vf = format!(
+                "drawtext=fontfile={}:textfile={}:expansion=none:fontsize={font_size}:fontcolor={}:x={x}:y={y}:box={}:boxcolor={}@{box_opacity:.9}:boxborderw=2:enable=between(t\\,{:.3}\\,{:.3})",
+                filter_path(&font_path)?,
+                filter_path(&text_path)?,
+                font_color.filter_value(),
+                u8::from(*boxed),
+                box_color.filter_value(),
+                f64::from(*start_ms) / 1000.0,
+                f64::from(*end_ms) / 1000.0
+            );
+            expected_duration = m.duration_seconds;
+            expected_audio = *preserve_audio && has_audio(&m);
+            input_args(&mut args, &p, input_format(input)?);
+            args.extend(vec!["-map".into(), "0:v:0".into(), "-vf".into(), vf]);
+            if expected_audio {
+                args.extend(strings(&["-map", "0:a:0"]));
+            }
+            video_encoding_with_audio(&mut args, expected_audio);
+        }
+        VideoOperation::Crossfade {
+            inputs,
+            width,
+            height,
+            duration_ms,
+            preserve_audio,
+        } => {
+            let mut media = Vec::new();
+            let mut graph = String::new();
+            let fade = f64::from(*duration_ms) / 1000.0;
+            for (i, input) in inputs.iter().enumerate() {
+                let (p, m) = stage_video(policy, c, dir, input, i, ctx).await?;
+                require_video(&m)?;
+                ensure!(
+                    fade <= m.duration_seconds.unwrap(),
+                    "crossfade exceeds shorter clip"
+                );
+                input_args(&mut args, &p, input_format(input)?);
+                graph.push_str(&format!(
+                    "[{i}:v:0]{},settb=AVTB[v{i}];",
+                    scale(*width, *height)
+                ));
+                media.push(m);
+            }
+            let first = media[0].duration_seconds.unwrap();
+            let duration = first + media[1].duration_seconds.unwrap() - fade;
+            ensure!(
+                duration <= f64::from(c.max_duration_seconds),
+                "crossfade output exceeds duration limit"
+            );
+            expected_duration = Some(duration);
+            graph.push_str(&format!(
+                "[v0][v1]xfade=transition=fade:duration={fade:.9}:offset={:.9}[vout]",
+                first - fade
+            ));
+            expected_audio = *preserve_audio && media.iter().any(has_audio);
+            if expected_audio {
+                for (i, m) in media.iter().enumerate() {
+                    let d = m.duration_seconds.unwrap();
+                    if has_audio(m) {
+                        graph.push_str(&format!(";[{i}:a:0]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,apad,atrim=duration={d:.9}[a{i}]"));
+                    } else {
+                        graph.push_str(&format!(
+                            ";anullsrc=r=48000:cl=stereo,atrim=duration={d:.9}[a{i}]"
+                        ));
+                    }
+                }
+                graph.push_str(&format!(
+                    ";[a0][a1]acrossfade=d={fade:.9}:c1=tri:c2=tri[aout]"
+                ));
+            }
+            args.extend(vec![
+                "-filter_complex".into(),
+                graph,
+                "-map".into(),
+                "[vout]".into(),
+            ]);
+            if expected_audio {
+                args.extend(strings(&["-map", "[aout]"]));
+            }
+            video_encoding_with_audio(&mut args, expected_audio);
+        }
         VideoOperation::Storyboard {
             images,
             seconds_per_image,
@@ -577,7 +1052,12 @@ pub(crate) async fn execute(
     );
     let media = probe(c, dir, &output, output_format, ctx).await?;
     ensure!(
-        media.streams.len() == 1 && media.streams[0].codec_name == expected_codec,
+        media.streams.len() == if expected_audio { 2 } else { 1 }
+            && media.streams[0].codec_name
+                == copied_video_codec.as_deref().unwrap_or(expected_codec)
+            && (!expected_audio
+                || (media.streams[1].codec_type == "audio"
+                    && media.streams[1].codec_name == "aac")),
         "unexpected output codec or stream count"
     );
     if output_format != "png_pipe" {
@@ -596,7 +1076,7 @@ pub(crate) async fn execute(
     let mut check = common();
     input_args(&mut check, &output, output_format);
     check.extend(strings(&[
-        "-map", "0:0", "-threads", "1", "-f", "null", "pipe:1",
+        "-map", "0", "-threads", "1", "-f", "null", "pipe:1",
     ]));
     process::run(c, &c.ffmpeg, check, dir, ctx).await?;
     ensure!(
@@ -606,8 +1086,31 @@ pub(crate) async fn execute(
     publish(policy, r.output, &bytes, media)
 }
 pub(crate) fn schema() -> Value {
-    object_schema(
+    let mut schema = object_schema(
         json!({"output":path_schema(),"operation":{"type":"string","enum":["trim","transcode","concat","overlay","extract_frame","extract_audio","storyboard"]},"input":path_schema(),"inputs":{"type":"array","items":path_schema(),"minItems":2,"maxItems":8},"image":path_schema(),"images":{"type":"array","items":path_schema(),"minItems":1,"maxItems":8},"start_ms":{"type":"integer","minimum":0,"maximum":600000},"duration_ms":{"type":"integer","minimum":1,"maximum":600000},"at_ms":{"type":"integer","minimum":0,"maximum":600000},"width":{"type":"integer","minimum":2,"maximum":1920},"height":{"type":"integer","minimum":2,"maximum":1920},"x":{"type":"integer","minimum":0,"maximum":8192},"y":{"type":"integer","minimum":0,"maximum":8192},"seconds_per_image":{"type":"integer","minimum":1,"maximum":30}}),
         &["output", "operation"],
-    )
+    );
+    schema["properties"]["operation"]["enum"]
+        .as_array_mut()
+        .unwrap()
+        .extend(["audio_mux", "audio_mix", "speed", "text", "crossfade"].map(|s| json!(s)));
+    let extra = json!({
+        "audio_file":path_schema(), "gain":{"type":"number","minimum":0,"maximum":4},
+        "original_gain":{"type":"number","minimum":0,"maximum":4}, "loop":{"type":"boolean"},
+        "factor":{"type":"number","minimum":0.25,"maximum":4}, "preserve_audio":{"type":"boolean"},
+        "text":{"type":"string","minLength":1,"maxLength":4096}, "font_file":path_schema(),
+        "font_size":{"type":"integer","minimum":8,"maximum":256},
+        "position":{"type":"string","enum":["top-left","top","top-right","center-left","center","center-right","bottom-left","bottom","bottom-right"]},
+        "font_color":{"type":"string","enum":["white","black","red","blue","yellow"]},
+        "box_color":{"type":"string","enum":["white","black","red","blue","yellow"]},
+        "box_opacity":{"type":"number","minimum":0,"maximum":1}, "box":{"type":"boolean"},
+        "end_ms":{"type":"integer","minimum":1,"maximum":600000}
+    });
+    schema["properties"]
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    // Audio duration can be omitted/null to use the video's bounded duration.
+    schema["properties"]["duration_ms"]["type"] = json!(["integer", "null"]);
+    schema
 }

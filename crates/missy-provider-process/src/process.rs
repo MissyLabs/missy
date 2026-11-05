@@ -87,16 +87,7 @@ fn drain(
     Ok(false)
 }
 
-pub(crate) async fn run(
-    config: &CliProviderConfig,
-    args: &[String],
-    cwd: &Path,
-    input: &[u8],
-    cancellation: CancellationToken,
-) -> Result<Output> {
-    if cancellation.is_cancelled() {
-        bail!("CLI completion cancelled");
-    }
+fn command(config: &CliProviderConfig, args: &[String], cwd: &Path) -> Command {
     let mut command = Command::new(&config.executable);
     command
         .args(args)
@@ -115,6 +106,20 @@ pub(crate) async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    command
+}
+
+pub(crate) async fn run(
+    config: &CliProviderConfig,
+    args: &[String],
+    cwd: &Path,
+    input: &[u8],
+    cancellation: CancellationToken,
+) -> Result<Output> {
+    if cancellation.is_cancelled() {
+        bail!("CLI completion cancelled");
+    }
+    let mut command = command(config, args, cwd);
     let child = command
         .spawn()
         .map_err(|_| anyhow::anyhow!("cannot start approved CLI executable"))?;
@@ -203,5 +208,114 @@ pub(crate) async fn run(
             _ = cancellation.cancelled() => bail!("CLI completion cancelled"),
             _ = tokio::time::sleep(Duration::from_millis(5)) => {},
         }
+    }
+}
+
+/// Interactive bounded stdio driver. Shares the one-shot driver's cleared env,
+/// trusted executable and RAII process-group guard. No interpreter discovery.
+pub(crate) async fn run_acp(
+    config: &CliProviderConfig,
+    cwd: &Path,
+    session: &mut crate::acp::Session<'_>,
+    cancellation: CancellationToken,
+) -> Result<()> {
+    if cancellation.is_cancelled() {
+        bail!("ACP completion cancelled");
+    }
+    let pin = config.acp_adapter.as_ref().expect("validated ACP pin");
+    let args = vec![pin.entrypoint.to_string_lossy().into_owned()];
+    let child = command(config, &args, cwd)
+        .spawn()
+        .map_err(|_| anyhow::anyhow!("cannot start approved ACP executable"))?;
+    let group =
+        i32::try_from(child.id()).map_err(|_| anyhow::anyhow!("invalid ACP process group"))?;
+    let mut guard = Guard {
+        child,
+        group,
+        killed: false,
+    };
+    let mut stdin = guard.child.stdin.take().expect("piped stdin");
+    let mut stdout = guard.child.stdout.take().expect("piped stdout");
+    let mut stderr = guard.child.stderr.take().expect("piped stderr");
+    nonblocking(&stdin)?;
+    nonblocking(&stdout)?;
+    nonblocking(&stderr)?;
+    let mut pending = crate::acp::Session::initialize()?;
+    let mut written = 0;
+    let mut incoming = Vec::new();
+    let (mut out_total, mut err_total) = (0, 0);
+    let started = Instant::now();
+    loop {
+        if cancellation.is_cancelled()
+            || started.elapsed() >= Duration::from_secs(config.timeout_seconds)
+        {
+            // Best-effort protocol cancellation followed immediately by mandatory
+            // group kill/reap. Never wait indefinitely for a server acknowledgement.
+            let _ = stdin.write(&session.cancel());
+            if cancellation.is_cancelled() {
+                bail!("ACP completion cancelled");
+            }
+            bail!("ACP completion timed out");
+        }
+        if written < pending.len() {
+            match stdin.write(&pending[written..pending.len().min(written + 8192)]) {
+                Ok(0) => bail!("ACP closed input"),
+                Ok(n) => written += n,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => bail!("ACP input failed; diagnostics withheld"),
+            }
+        }
+        let eof = drain(
+            &mut stdout,
+            &mut incoming,
+            &mut out_total,
+            config.max_stdout_bytes,
+            true,
+        )?;
+        drain(
+            &mut stderr,
+            &mut Vec::new(),
+            &mut err_total,
+            config.max_stderr_bytes,
+            false,
+        )?;
+        // A peer cannot cause unbounded response queuing: process at most 64 KiB
+        // per drain and reject a request while its predecessor is still pending.
+        while let Some(end) = incoming.iter().position(|b| *b == b'\n') {
+            let line: Vec<_> = incoming.drain(..=end).collect();
+            match session.receive(&line)? {
+                Some(reply) if reply.is_empty() => {}
+                Some(reply) => {
+                    if written != pending.len() {
+                        bail!("ACP invalid request ordering");
+                    }
+                    pending = reply;
+                    written = 0;
+                }
+                None => {
+                    if !incoming.is_empty() {
+                        bail!("ACP trailing protocol data");
+                    }
+                    return Ok(()); // guard kills/reaps the long-lived adapter
+                }
+            }
+        }
+        if eof {
+            bail!("ACP closed before terminal response; diagnostics withheld");
+        }
+        if guard
+            .child
+            .try_wait()
+            .map_err(|_| anyhow::anyhow!("ACP wait failed"))?
+            .is_some()
+        {
+            bail!("ACP exited before terminal response; diagnostics withheld");
+        }
+        // Poll delay is bounded; cancellation is checked before the next slice.
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }

@@ -1,5 +1,7 @@
 //! Opt-in Discord transport. Every outbound path is policy-bound.
 mod journal;
+mod voice;
+pub use voice::{DiscordGatewayVoice, DiscordVoiceGatewayHook, discord_voice_bridge};
 #[cfg(test)]
 mod tests;
 use anyhow::{Result, bail, ensure};
@@ -82,6 +84,24 @@ pub async fn serve_discord_with_state_dir(
     policy: PolicyConfig,
     state_dir: impl AsRef<Path>,
 ) -> Result<()> {
+    serve_inner(runtime, config, policy, state_dir, None).await
+}
+pub async fn serve_discord_with_voice(
+    runtime: Arc<Runtime>,
+    config: DiscordConfig,
+    policy: PolicyConfig,
+    state_dir: impl AsRef<Path>,
+    voice: DiscordVoiceGatewayHook,
+) -> Result<()> {
+    serve_inner(runtime, config, policy, state_dir, Some(voice)).await
+}
+async fn serve_inner(
+    runtime: Arc<Runtime>,
+    config: DiscordConfig,
+    policy: PolicyConfig,
+    state_dir: impl AsRef<Path>,
+    mut voice: Option<DiscordVoiceGatewayHook>,
+) -> Result<()> {
     ensure!(config.enabled, "Discord is not enabled");
     validate_config(&config)?;
     let token = token(&config)?;
@@ -127,7 +147,7 @@ pub async fn serve_discord_with_state_dir(
     let mut retry = 1u64;
     loop {
         let attempt = tokio::select! {
-            result = connection(&http, &token, &config, &base, &mut resume, &journal) => result,
+            result = connection(&http, &token, &config, &base, &mut resume, &journal, &mut voice) => result,
             stopped = workers.join_next() => {
                 if let Some(Ok(Err(error))) = stopped { return Err(error); }
                 bail!("Discord durable worker stopped; intake stopped");
@@ -137,6 +157,9 @@ pub async fn serve_discord_with_state_dir(
             && error.downcast_ref::<FatalClose>().is_some()
         {
             bail!("Discord Gateway rejected authentication/intents; channel stopped");
+        }
+        if let Some(voice) = &mut voice {
+            voice.reset().await;
         }
         // No raw transport error logging: errors can contain secret URL paths.
         tokio::time::sleep(Duration::from_secs(retry)).await;
@@ -214,6 +237,7 @@ async fn connection(
     base: &str,
     resume: &mut Resume,
     journal: &Journal,
+    voice: &mut Option<DiscordVoiceGatewayHook>,
 ) -> Result<()> {
     let mut url = url::Url::parse(resume.url.as_deref().unwrap_or(base))?;
     ensure!(url.scheme() == "wss", "Discord Gateway must use TLS");
@@ -222,14 +246,25 @@ async fn connection(
         .connect_websocket(url.as_str(), vec![])
         .await
         .map_err(|_| anyhow::anyhow!("Discord Gateway connection failed"))?;
-    gateway_session(ws, token, config, resume, journal).await
+    gateway_session_inner(ws, token, config, resume, journal, voice).await
 }
+#[cfg(test)]
 async fn gateway_session(
+    ws: missy_policy::PolicyWebSocket,
+    token: &str,
+    config: &DiscordConfig,
+    resume: &mut Resume,
+    journal: &Journal,
+) -> Result<()> {
+    gateway_session_inner(ws, token, config, resume, journal, &mut None).await
+}
+async fn gateway_session_inner(
     mut ws: missy_policy::PolicyWebSocket,
     token: &str,
     config: &DiscordConfig,
     resume: &mut Resume,
     journal: &Journal,
+    voice: &mut Option<DiscordVoiceGatewayHook>,
 ) -> Result<()> {
     let hello = tokio::time::timeout(Duration::from_secs(30), ws.next())
         .await?
@@ -247,7 +282,7 @@ async fn gateway_session(
         json!({"op":6,"d":{"token":token,"session_id":session,"seq":sequence}})
     } else {
         journal.reserve_identify(journal::now_ms())?;
-        json!({"op":2,"d":{"token":token,"intents":37377,"properties":{"os":"linux","browser":"missy-rust","device":"missy-rust"}}})
+        json!({"op":2,"d":{"token":token,"intents":if voice.is_some() {37377 | 128} else {37377},"properties":{"os":"linux","browser":"missy-rust","device":"missy-rust"}}})
     };
     send_frame(&mut ws, Message::Text(identify.to_string().into())).await?;
     let mut timer = tokio::time::interval(Duration::from_millis(millis));
@@ -255,6 +290,10 @@ async fn gateway_session(
     let mut awaiting_ack = false;
     loop {
         tokio::select! {
+            command = async { match voice { Some(hook) => hook.commands.recv().await, None => std::future::pending().await } } => {
+                if let Some(command) = command { voice.as_mut().expect("voice hook").command(&mut ws, command).await?; }
+                else { *voice = None; }
+            }
             _ = timer.tick() => {
                 ensure!(!awaiting_ack, "Gateway heartbeat ACK deadline exceeded");
                 send_frame(&mut ws, Message::Text(json!({"op":1,"d":resume.sequence}).to_string().into())).await?; awaiting_ack = true;
@@ -279,6 +318,7 @@ async fn gateway_session(
                     Some(0) => {
                         let mut next = Resume { session: resume.session.clone(), sequence: resume.sequence, url: resume.url.clone(), bot: resume.bot.clone() };
                         if let Some(sequence) = event["s"].as_u64() { next.sequence = Some(sequence); }
+                        if let Some(voice) = voice { voice.event(&event, &resume.bot).await?; }
                         let incoming = match event["t"].as_str() {
                             Some("READY") => {
                                 ensure!(event["d"]["user"]["id"].as_str() == Some(resume.bot.as_str()), "Gateway bot identity mismatch");

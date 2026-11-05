@@ -78,6 +78,7 @@ fn nomad(endpoint: &str) -> IntegrationConfig {
                 "worker".into(),
                 json!({"ID":"worker","Namespace":"lab","TaskGroups":[]}),
             )]),
+            ..Default::default()
         }),
         ..Default::default()
     }
@@ -95,6 +96,7 @@ fn comfy(endpoint: &str) -> IntegrationConfig {
                     prompt_node: Some("1".into()),
                 },
             )]),
+            ..Default::default()
         }),
         ..Default::default()
     }
@@ -343,6 +345,7 @@ async fn incus_native_lifecycle_only() {
             project: "lab".into(),
             instances: BTreeSet::from(["vm".into()]),
             actions: BTreeSet::from([InstanceAction::Stop]),
+            ..Default::default()
         }),
         ..Default::default()
     };

@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+missy-discord-voice = { path = "../missy-discord-voice" }
 axum.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
@@ -20,6 +22,7 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 uuid.workspace = true

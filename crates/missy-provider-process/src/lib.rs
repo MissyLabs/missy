@@ -1,10 +1,11 @@
-//! Opt-in, chat-only native CLI transport. No Python, shell command construction,
+//! Opt-in, chat-only native CLI/ACP transport. No Python, shell command construction,
 //! credential import, native tools, or implicit executable/PATH discovery.
 //!
 //! Use with a NoTools executor. These adapters deliberately reject tool schemas
 //! and tool history instead of outsourcing Missy's policy to a CLI agent.
 #![cfg(unix)]
 
+mod acp;
 mod process;
 mod protocol;
 
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::Read,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
@@ -27,6 +29,9 @@ pub enum CliProviderKind {
     ClaudeCli,
     /// Recognized for migration, but unavailable: read-only is not no-tools.
     CodexCli,
+    /// Direct ACP stdio, restricted to the audited Claude adapter/version.
+    #[serde(alias = "claude_acp")]
+    Acpx,
 }
 
 /// Trusted operator configuration, never supplied by a model or a chat request.
@@ -43,6 +48,8 @@ pub struct CliProviderConfig {
     pub model: String,
     #[serde(default)]
     pub approved_executable: bool,
+    #[serde(default)]
+    pub acp_adapter: Option<AcpAdapterPin>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
     #[serde(default = "default_stdout")]
@@ -73,6 +80,14 @@ pub struct CliProvider {
     config: CliProviderConfig,
 }
 
+/// Operator-provisioned local entrypoint. No npx, downloads or PATH lookup.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcpAdapterPin {
+    pub entrypoint: PathBuf,
+    pub sha256: String,
+}
+
 pub fn create_provider(config: CliProviderConfig) -> Result<Arc<dyn Provider>> {
     Ok(Arc::new(CliProvider::new(config)?))
 }
@@ -95,6 +110,7 @@ impl CliProvider {
         match kind {
             CliProviderKind::ClaudeCli => args.extend(["auth".into(), "login".into()]),
             CliProviderKind::CodexCli => args.push("login".into()),
+            CliProviderKind::Acpx => return Vec::new(),
         }
         args
     }
@@ -106,6 +122,11 @@ impl CliProvider {
         mut config: CliProviderConfig,
         cancellation: CancellationToken,
     ) -> Result<AuthStatus> {
+        if config.kind == CliProviderKind::Acpx {
+            bail!(
+                "ACP has no non-inference authentication status command; provision the pinned adapter manually"
+            );
+        }
         validate_config(&mut config)?;
         config.timeout_seconds = config.timeout_seconds.min(20);
         let cwd = tempfile::Builder::new()
@@ -116,6 +137,7 @@ impl CliProvider {
         let args: Vec<String> = match config.kind {
             CliProviderKind::ClaudeCli => vec!["auth".into(), "status".into()],
             CliProviderKind::CodexCli => vec!["login".into(), "status".into()],
+            CliProviderKind::Acpx => unreachable!("rejected before spawning"),
         };
         let output = process::run(&config, &args, cwd.path(), &[], cancellation).await?;
         if !output.success {
@@ -186,6 +208,50 @@ fn validate_config(config: &mut CliProviderConfig) -> Result<()> {
     if !home.is_dir() || !trusted_metadata(&home) {
         bail!("CLI auth_home must be operator-owned and not group/world-writable");
     }
+    if config.kind == CliProviderKind::Acpx {
+        let mut magic = [0; 4];
+        fs::File::open(&config.executable)
+            .and_then(|mut file| file.read_exact(&mut magic))
+            .map_err(|_| anyhow::anyhow!("ACP runtime executable unavailable"))?;
+        if magic != *b"\x7fELF" {
+            bail!("ACP requires an exact native ELF runtime executable, not a script or launcher");
+        }
+        let pin = config.acp_adapter.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("ACP requires an operator-pinned local adapter entrypoint")
+        })?;
+        if !pin.entrypoint.is_absolute()
+            || pin.sha256.len() != 64
+            || !pin.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            bail!("ACP requires an absolute adapter entrypoint and SHA-256");
+        }
+        pin.entrypoint = fs::canonicalize(&pin.entrypoint)
+            .map_err(|_| anyhow::anyhow!("ACP adapter is unavailable"))?;
+        for path in pin.entrypoint.ancestors() {
+            let meta =
+                fs::metadata(path).map_err(|_| anyhow::anyhow!("ACP adapter path unavailable"))?;
+            if !(trusted_metadata(&meta) || meta.uid() == 0 && meta.mode() & 0o1000 != 0) {
+                bail!("ACP adapter has an untrusted writable path");
+            }
+        }
+        verify_adapter(pin)?;
+    } else if config.acp_adapter.is_some() {
+        bail!("ACP adapter pin is only valid for acpx");
+    }
+    Ok(())
+}
+
+fn verify_adapter(pin: &AcpAdapterPin) -> Result<()> {
+    let metadata =
+        fs::metadata(&pin.entrypoint).map_err(|_| anyhow::anyhow!("ACP adapter unavailable"))?;
+    if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+        bail!("ACP adapter must be a bounded regular file");
+    }
+    let bytes =
+        fs::read(&pin.entrypoint).map_err(|_| anyhow::anyhow!("ACP adapter unavailable"))?;
+    if !hex::encode(Sha256::digest(bytes)).eq_ignore_ascii_case(&pin.sha256) {
+        bail!("ACP adapter SHA-256 mismatch");
+    }
     Ok(())
 }
 fn trusted_metadata(meta: &fs::Metadata) -> bool {
@@ -222,6 +288,10 @@ impl Provider for CliProvider {
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
             .map_err(|_| anyhow::anyhow!("cannot create private CLI directory"))?;
+        if self.config.kind == CliProviderKind::Acpx {
+            verify_adapter(self.config.acp_adapter.as_ref().expect("validated ACP pin"))?;
+            return acp::complete(&self.config, cwd.path(), system, prompt, cancellation).await;
+        }
         let system_path = cwd.path().join("system.txt");
         let mcp_path = cwd.path().join("mcp.json");
         fs::write(&system_path, system)
@@ -260,6 +330,7 @@ fn claude_args(model: &str, system: &Path, mcp: &Path) -> Vec<String> {
         "--setting-sources",
         "",
         "--disable-slash-commands",
+        "--no-chrome",
         "--permission-mode",
         "dontAsk",
         "--no-session-persistence",

@@ -99,6 +99,15 @@ impl BuiltinTools {
                     .write_file(Path::new(&a.path), a.content.as_bytes())?;
                 Ok(json!({"written_bytes":a.content.len()}))
             }
+            "file_delete" => {
+                if !self.policy_config.allow_file_delete {
+                    bail!("file deletion disabled by operator policy");
+                }
+                let a: DeleteArgs = parse(call)?;
+                self.policy
+                    .delete_file(Path::new(&a.path), &a.expected_sha256)?;
+                Ok(json!({"deleted":true}))
+            }
             "list_files" => {
                 let a: PathArgs = parse(call)?;
                 Ok(json!({"entries":self.policy.list_files(Path::new(&a.path))?}))
@@ -211,6 +220,12 @@ struct PathArgs {
 struct WriteArgs {
     path: String,
     content: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteArgs {
+    path: String,
+    expected_sha256: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -338,6 +353,15 @@ impl ToolExecutor for BuiltinTools {
                 false,
             ),
         ];
+        if self.policy_config.allow_file_delete {
+            d.push(definition(
+                "file_delete",
+                "Delete one owned regular file within write roots only if its current bytes match expected_sha256. No recursive deletion. Errors may have uncertain effects or retain a private recovery journal.",
+                json!({"path":{"type":"string","minLength":1},"expected_sha256":{"type":"string","pattern":"^[0-9a-fA-F]{64}$","minLength":64,"maxLength":64}}),
+                &["path", "expected_sha256"],
+                true,
+            ));
+        }
         if self.policy_config.shell_enabled {
             d.push(definition(
                 "shell_exec",

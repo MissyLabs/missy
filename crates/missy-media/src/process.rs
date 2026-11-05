@@ -43,7 +43,15 @@ pub(crate) async fn run(
     // Keep this explicit check: exact argv policy is an execution requirement,
     // not merely a builder assertion. execute independently checks it again.
     sandbox.check_command(&argv)?;
-    let result = sandbox.execute(&argv, ctx).await?;
+    let result = sandbox.execute(&argv, ctx).await.map_err(|error| {
+        // A caller must reconcile an interrupted turn through its durable
+        // journal, never blindly repeat a mutation after losing its future.
+        if error.to_string().contains("timed out") || error.to_string().contains("cancelled") {
+            anyhow::anyhow!("media outcome unknown; no automatic retry: {error}")
+        } else {
+            error
+        }
+    })?;
     ensure!(
         result["success"] == true,
         "native media command failed: {}",

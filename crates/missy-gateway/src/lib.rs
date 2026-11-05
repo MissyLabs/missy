@@ -22,6 +22,9 @@ use std::{
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 mod discord;
+pub use discord::{
+    DiscordGatewayVoice, DiscordVoiceGatewayHook, discord_voice_bridge, serve_discord_with_voice,
+};
 pub use discord::{DiscordProbe, probe_discord, serve_discord, serve_discord_with_state_dir};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;

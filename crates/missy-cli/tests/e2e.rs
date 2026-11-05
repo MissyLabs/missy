@@ -121,6 +121,277 @@ fn ok(output: Output) -> Value {
 }
 
 #[test]
+fn actual_binary_benchmark_is_no_tools_and_durable_no_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let mock = Mock::start(vec![reply("measured", vec![])]);
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        providers: vec![ProviderConfig {
+            name: "fixture".into(),
+            kind: "openai".into(),
+            base_url: format!("{}/v1", mock.origin),
+            model: "fixture".into(),
+            max_output_tokens: 32,
+            input_microusd_per_million: Some(1),
+            output_microusd_per_million: Some(1),
+            ..ProviderConfig::default()
+        }],
+        ..Config::default()
+    };
+    cfg.policy.allowed_origins = vec![mock.origin.clone()];
+    cfg.policy.allow_private_network = true;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let spec = root.path().join("benchmark.yaml");
+    std::fs::write(&spec,"ledger_path: /unused/overridden\nprompt: Literal read only probe\niterations: 1\nmax_calls: 1\nmax_total_cost_microusd: 10\ntimeout_seconds: 2\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&spec, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let first = ok(invoke(
+        root.path(),
+        &[
+            "benchmark",
+            spec.to_str().unwrap(),
+            "--request-id",
+            "benchmark-one",
+        ],
+    ));
+    assert_eq!(first["status"], "completed");
+    let second = ok(invoke(
+        root.path(),
+        &[
+            "benchmark",
+            spec.to_str().unwrap(),
+            "--request-id",
+            "benchmark-one",
+        ],
+    ));
+    assert_eq!(second["deduplicated"], true);
+    assert_eq!(mock.requests.lock().unwrap().len(), 1);
+    assert!(
+        mock.requests.lock().unwrap()[0]["tools"].is_null()
+            || mock.requests.lock().unwrap()[0]["tools"]
+                .as_array()
+                .is_some_and(|v| v.is_empty())
+    );
+}
+
+#[test]
+fn actual_binary_hatching_and_experiments_never_auto_promote() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = Config {
+        state_dir: root.path().join("state"),
+        ..Config::default()
+    };
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let answers = root.path().join("answers.yaml");
+    std::fs::write(
+        &answers,
+        "name: Missy\ntone: Direct\npurpose: Useful assistance\nprovider_label: local\n",
+    )
+    .unwrap();
+    let variants = root.path().join("variants.yaml");
+    std::fs::write(
+        &variants,
+        "- name: concise\n  prompt: Be concise\n- name: detailed\n  prompt: Be detailed\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for file in [&answers, &variants] {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    let hatched = ok(invoke(root.path(), &["hatch", answers.to_str().unwrap()]));
+    assert_eq!(hatched["config_proposal"]["contains_credentials"], false);
+    assert!(!hatched["persona_proposal"].is_null());
+    let created = ok(invoke(
+        root.path(),
+        &["experiments", "create", variants.to_str().unwrap()],
+    ));
+    let id = created[0]["id"].as_str().unwrap();
+    let assignment = ok(invoke(root.path(), &["experiments", "assign", id]));
+    assert_eq!(
+        assignment,
+        ok(invoke(root.path(), &["experiments", "assign", id]))
+    );
+    ok(invoke(
+        root.path(),
+        &["experiments", "record", id, "observation", "--success"],
+    ));
+    ok(invoke(
+        root.path(),
+        &["experiments", "record", id, "observation", "--success"],
+    ));
+    let compared = ok(invoke(root.path(), &["experiments", "compare", id]));
+    let total: u64 = compared
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["observations"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 1);
+    assert!(
+        compared
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["trusted_for_promotion"] == false)
+    );
+    assert!(
+        !invoke(root.path(), &["experiments", "show", id, "--user", "other"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn actual_binary_explicit_parallel_agents_reserve_budgets_and_restart_without_inference() {
+    let root = tempfile::tempdir().unwrap();
+    let mock = Mock::start(vec![
+        reply("review one", vec![]),
+        reply("review two", vec![]),
+    ]);
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        providers: vec![ProviderConfig {
+            name: "fixture".into(),
+            kind: "openai".into(),
+            base_url: format!("{}/v1", mock.origin),
+            model: "fixture".into(),
+            input_microusd_per_million: Some(0),
+            output_microusd_per_million: Some(0),
+            ..ProviderConfig::default()
+        }],
+        ..Config::default()
+    };
+    cfg.policy.allowed_origins = vec![mock.origin.clone()];
+    cfg.policy.allow_private_network = true;
+    cfg.runtime.max_cost_microusd = 100_000;
+    cfg.runtime.max_steps = 4;
+    cfg.runtime.max_tokens = 10_000;
+    cfg.runtime.max_turn_seconds = 30;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let plan = root.path().join("agents.yaml");
+    std::fs::write(&plan,"limits:\n  max_workers: 2\nplan:\n  agents:\n    - id: architecture\n      depth: 1\n      provider: fixture\n      prompt: Review architecture\n    - id: risks\n      depth: 1\n      provider: fixture\n      prompt: Review risks\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plan, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let first = ok(invoke(
+        root.path(),
+        &[
+            "agents",
+            plan.to_str().unwrap(),
+            "--request-id",
+            "agent-acceptance",
+        ],
+    ));
+    assert_eq!(first["status"], "completed");
+    assert_eq!(first["children"].as_object().unwrap().len(), 2);
+    assert!(first["reserved"]["cost_microusd"].as_u64().unwrap() > 0);
+    let again = ok(invoke(
+        root.path(),
+        &[
+            "agents",
+            plan.to_str().unwrap(),
+            "--request-id",
+            "agent-acceptance",
+        ],
+    ));
+    assert_eq!(again["root_id"], first["root_id"]);
+    assert_eq!(again["deduplicated"], true);
+    assert_eq!(mock.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn actual_binary_personal_recall_survives_session_and_process_but_not_user_or_tenant() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        ..Config::default()
+    };
+    cfg.extensions.personal_memory_enabled = true;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let record = ok(invoke(
+        root.path(),
+        &[
+            "personal-memory",
+            "put",
+            "repair",
+            "personal-canary engine repair",
+            "--session",
+            "first",
+        ],
+    ));
+    assert_eq!(record["trust"], "untrusted_data");
+    let recalled = ok(invoke(
+        root.path(),
+        &[
+            "personal-memory",
+            "get",
+            "repair",
+            "--session",
+            "second",
+            "--channel",
+            "another",
+        ],
+    ));
+    assert_eq!(recalled["content"], "personal-canary engine repair");
+    assert_eq!(recalled["source_scope"]["session"], "first");
+    let other = ok(invoke(
+        root.path(),
+        &["personal-memory", "get", "repair", "--user", "other"],
+    ));
+    assert!(other.is_null());
+    let tenant = ok(invoke(
+        root.path(),
+        &["personal-memory", "search", "engine", "--tenant", "other"],
+    ));
+    assert!(tenant.as_array().unwrap().is_empty());
+    let found = ok(invoke(
+        root.path(),
+        &["personal-memory", "search", "engine", "--session", "third"],
+    ));
+    assert_eq!(found.as_array().unwrap().len(), 1);
+    ok(invoke(
+        root.path(),
+        &["personal-memory", "delete", "repair", "--session", "third"],
+    ));
+    assert!(ok(invoke(root.path(), &["personal-memory", "get", "repair"])).is_null());
+    cfg.extensions.personal_memory_enabled = false;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !invoke(root.path(), &["personal-memory", "get", "repair"])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn actual_binary_schedule_preview_needs_no_provider_and_opens_no_state() {
     let root = tempfile::tempdir().unwrap();
     let cfg = Config {

@@ -118,10 +118,11 @@ derive scope from `ToolContext`, not model arguments.
 
 **Judgment:** keep this stricter partition. Do not copy channel-only session
 identity or globally broaden a lookup to make recall appear helpful. A user
-changing session should not silently recall a previous session. Conversely,
-this design does **not** currently promise automatic personal memory spanning
-sessions. Shared channels or cross-session personal memory need explicit,
-authenticated sharing scopes and separate tests, not a fallback query.
+changing session should not silently recall a previous session's conversation.
+The later expansion adds an explicitly enabled **separate** tenant+user personal
+memory namespace, with four-component conversation history still isolated.
+Executable restart/cross-session and foreign-user/tenant tests cover that path;
+it is not an unfiltered history fallback or automatic personal prompt injection.
 
 ### Memory, retrieval and trust
 

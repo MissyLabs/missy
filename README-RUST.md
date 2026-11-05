@@ -14,7 +14,11 @@ Requires Linux and the stable Rust toolchain (locked dependency floor: 1.89).
 Final acceptance used 1.99.1; the floor is metadata, not a separate MSRV test.
 SQLite is bundled. Rustls handles
 HTTPS; no Python environment, OpenSSL SDK, Node runtime or cloud account is
-required to build the native executable.
+required to build the native executable. Discord voice adds native Opus: on
+Debian/Ubuntu install `libopus-dev pkg-config` for builds and `libopus0` for the
+distributed dynamically linked executable. Official DAVE is a separate explicit
+build/load with pinned source/hash and native dependencies, never downloaded at
+application startup. See `crates/missy-dave/README.md`.
 
 ```sh
 cargo test --workspace --all-targets --locked
@@ -68,11 +72,22 @@ compatibility.
 | `missy-sandbox` | Opt-in child-only Landlock and hardened container command construction |
 | `missy-mcp-http` | Pinned Streamable HTTP and persistent SSE MCP through network policy |
 | `missy-desktop` | Approval-gated native X11, AT-SPI and isolated CDP controls |
-| `missy-media` | Typed pinned FFmpeg editing, image transforms and file-based vision |
+| `missy-media` | Typed pinned FFmpeg editing, audio composition and image transforms |
 | `missy-embedding` | Explicit local neural embedding adapter with CPU model acceptance |
 | `missy-mesh` | Signed scope-bound peers, replay protection, memory and budgeted delegation |
 | `missy-operations` | Authenticated webhook, diagnostics, metrics, literal workflows and export APIs |
 | `missy-schedule-text` | Strict human/cron grammar, IANA timezones and deterministic DST rules |
+| `missy-personal` | Explicit tenant+user cross-session memory with principal-local ranking |
+| `missy-history` | Exact-scope historical recall, durable immutable receipts and bounded summary worker |
+| `missy-vision` | Sanitized actual multimodal provider requests, structured scenes and independent billing reservations |
+| `missy-capture` | Explicitly consented V4L2 photo/clip and isolated X11 screencast |
+| `missy-discord-tools` | Authorized user lookup and bounded multipart artifact delivery |
+| `missy-discord-voice` | Native policy-bound voice WebSocket/UDP, Opus, consent and speech lifecycle |
+| `missy-dave` | Pinned official native libdave C API, MLS and media protection |
+| `missy-subagents` | Bounded parallel provider-selected DAG workers and durable reservations |
+| `missy-evolution` | Operator-reviewed Git patch apply/rollback and crash reconciliation |
+| `missy-specialty` | ACE-Step adapter, real score-to-WAV/MIDI and scoped Foundry workflows |
+| `missy-plugins` | Model proposals, exact-hash operator review, native plugin sandbox and no-replay provider probes |
 
 The optional `scripts/test-rust-console.py` acceptance harness uses Python
 Playwright solely to drive Chromium against an isolated compiled Rust server
@@ -108,6 +123,9 @@ See [docs/rust/continuation-design.md](docs/rust/continuation-design.md) for the
 comparison with the original Python runtime and Odin's durability design.
 The focused final comparison and regression evidence are in
 [docs/rust/odin-comparison.md](docs/rust/odin-comparison.md).
+Session history remains four-component scoped. Separately enabled personal memory
+crosses channels/sessions only for the same authenticated tenant+user. Neither
+namespace silently falls back to another user or global records.
 
 ## Security boundaries and honest limitations
 
@@ -163,6 +181,7 @@ be private operator-owned files. Defaults remain disabled.
 ```yaml
 extensions:
   retrieval_enabled: true
+  # personal_memory_enabled: true
   approvals_config: ./approvals.yaml
   integrations_config: ./integrations.yaml
   voice_config: ./voice.yaml
@@ -174,6 +193,14 @@ extensions:
   # mesh_config: ./mesh.json
   # operations_config: ./operations.yaml
   # cli_provider_config: ./chat-only-provider.yaml
+  # history_config: ./history.yaml
+  # vision_config: ./vision.yaml
+  # capture_config: ./capture.yaml
+  # discord_tools_config: ./discord-tools.yaml
+  # discord_voice_config: ./discord-voice.yaml
+  # plugins_config: ./plugins.yaml
+  # telemetry_config: ./telemetry.yaml
+  # specialty_config: ./specialty.yaml
 ```
 
 Extension schemas are documented in the individual crate READMEs. Enabling a CLI
@@ -207,6 +234,7 @@ missy-rs schedule run-due --session maintenance
 missy-rs workflow /private/workflow.yaml --session maintenance
 missy-rs mesh status
 missy-rs operations
+missy-rs benchmark /private/benchmark.yaml --request-id explicit-probe-001
 ```
 
 `operations` is an explicitly started authenticated loopback webhook/metrics

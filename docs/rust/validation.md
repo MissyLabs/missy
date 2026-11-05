@@ -5,7 +5,80 @@ Date: 2026-11-05. Local Linux x86_64 checkout, starting from Python Missy
 1.96.1; the final expanded workspace was validated with Rust/Cargo 1.99.1.
 This report concerns the new Rust workspace, not the production Python bot.
 
+## Final expanded acceptance, 17:45 UTC
+
+The finished source tree contains **35 native crates**. All implementation
+owners were frozen before this run. The exact implementation commit and hosted
+workflow result are recorded in the final PR handoff; earlier results below
+are retained as dated evidence, not substituted for this expanded-tree run.
+
+| Final check | Actual local result |
+|---|---|
+| `cargo +1.99.1 fmt --all -- --check` | Pass |
+| `cargo +1.99.1 clippy --workspace --all-targets --locked -- -D warnings` | Pass, all 35 crates |
+| `cargo +1.99.1 test --workspace --all-targets --locked` | **521 passed, 0 failed, 3 explicitly ignored, 69 result groups** |
+| Native opt-in: `cargo test -p missy-dave -p missy-discord-voice --locked -- --include-ignored` | **22 passed**, including all 3 ignored tests; 19 overlap the ordinary suite |
+| `cargo +1.99.1 build --release -p missy-cli --locked` | Pass, native x86_64 Linux ELF |
+| `python3 scripts/test-rust-console.py --binary target/release/missy-rs` | **15/15 Chromium assertions passed** against final release binary |
+| `cargo +1.99.1 audit --deny warnings` | Pass, **388 locked dependencies, 1409 advisories**, no suppressions |
+| Legacy Python source/tests/installer | No diff from baseline `d152c54e04f5daf1381c84527643a958fcb7d252` |
+
+The three ordinary ignored cases explicitly require an operator-supplied pinned
+official native libdave library and upstream external-sender helper. They were
+actually enabled and passed separately, not silently skipped. There are **524
+distinct passing test entries** across the ordinary plus opt-in runs, not 543
+independent tests. Some entries are subprocess fixture helpers, not independent
+end-to-end scenarios. Upstream native suites previously passed 62 C++ + 9 C API
+tests; Cargo audit does not audit those C/C++ dependencies.
+
+### Executable and reproducible local evidence
+
+* Binary: `target/release/missy-rs`, ELF x86_64 GNU/Linux PIE, approximately 31 MiB.
+* SHA-256: `7168957c5f6cb8ba6875af162ca3415933e7aaa6624a206870d1e6486094751e`.
+* Dynamic dependencies observed by `ldd`: `libopus.so.0`, libc, libm, libgcc_s and
+  the ELF loader. This is not a static or universally portable Linux binary.
+* Optional official DAVE library: explicit trusted source/version/hash with native
+  provenance and linked dependencies documented in `crates/missy-dave/README.md`.
+* Logs retained locally under `/tmp/missy-rust-final-{workspace-tests,clippy,audit,
+  native-release,dave-voice,browser-acceptance}.log`; temporary logs are not durable
+  CI artifacts. GitHub workflow uploads the executable and native library bundle.
+
+### Newly exercised quality and regression repairs
+
+* Actual executable personal recall across processes/sessions, foreign-user and
+  tenant denial; principal-local FTS ranking repairs a reproduced cross-principal
+  ranking side channel. No global fallback or auto-injected personal instructions.
+* Executable history search/UTF-8 receipt expansion, exact four-component scope,
+  checkpoint/raw source coverage, persistent immutable receipt reopening, old
+  source changes and forged/corrupt/foreign receipt denial. Acceptance exposed
+  current-turn query checkpoints polluting recall; current turn/checkpoint sources
+  are now excluded and full CLI acceptance passes.
+* Exact approval then checksum-bound file deletion; duplicate delivery after
+  recreating the file does not delete it. Integration startup rejects omitted
+  newly registered sensitive tools rather than silently bypassing approval.
+* Actual vision provider image bytes, metadata stripping, approval before
+  disclosure and durable independently priced reservations across restart.
+* Real native voice loopback WS/UDP/Opus/MLS/media roundtrip using official DAVE;
+  mock STT/agent/TTS, exact consent and real NoTools binding selection. Malformed,
+  replayed, wrong-sender, plaintext/downgraded media cause zero STT; downgrade and
+  cancellation tear down owned sessions. No live Discord claim.
+* Model native-plugin proposal -> exact-hash operator review/enable -> new-runtime
+  execution under actual native sandbox, with environment/files/network/argv/hash
+  drift/timeout/drop cleanup denial tests. Proposal cannot activate itself.
+* Explicit provider probe invokes no tools and durable dedup does not replay
+  inference; uncertain billing stops subsequent probe dispatch.
+* Reviewed source apply/rollback/recovery, agent DAG reservations, telemetry flush,
+  capture on synthetic/isolated devices, audio/video composition, specialty and
+  expanded infrastructure/Discord adapters have native fixture acceptance.
+
+No production bot was replaced/restarted; no live credentials/state migration,
+active desktop, microphone, speaker or GPU workload was used. These are the
+remaining canary/quality gates, not claims of complete legacy parity.
+
 ## Results observed locally
+
+The following section is the **earlier 24-crate/350-entry snapshot**, retained
+for history. The expanded acceptance above supersedes its aggregate totals.
 
 | Check | Result |
 |---|---|

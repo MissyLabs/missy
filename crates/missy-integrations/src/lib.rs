@@ -2,6 +2,7 @@
 mod comfy;
 mod config;
 mod desktop_ws;
+mod incus_ops;
 mod infra;
 mod transport;
 use anyhow::{Result, anyhow, bail};
@@ -74,6 +75,7 @@ impl IntegrationTools {
             .filter(|c| c.connection.enabled)
             .map(|cfg| -> Result<_> {
                 Incus::validate(&cfg)?;
+                Incus::validate_operations(&cfg)?;
                 Ok(Incus {
                     conn: Connection::new(&http, cfg.connection.clone(), false)?,
                     cfg,
@@ -132,8 +134,11 @@ impl IntegrationTools {
     fn connection(&self, name: &str) -> Option<&Connection> {
         match name {
             "nomad_read" | "nomad_mutate" => self.nomad.as_ref().map(|s| &s.conn),
-            "incus_read" | "incus_mutate" => self.incus.as_ref().map(|s| &s.conn),
-            "comfyui_history" | "comfyui_submit" => self.comfy.as_ref().map(|s| &s.conn),
+            "incus_read" | "incus_mutate" | "incus_discover" | "incus_file_read"
+            | "incus_operation" => self.incus.as_ref().map(|s| &s.conn),
+            "comfyui_history" | "comfyui_submit" | "comfyui_artifact" => {
+                self.comfy.as_ref().map(|s| &s.conn)
+            }
             "obs_read" | "obs_mutate" => self.obs.as_ref().map(|s| &s.conn),
             "vtube_read" | "vtube_mutate" => self.vtube.as_ref().map(|s| &s.conn),
             _ => None,
@@ -154,16 +159,28 @@ impl IntegrationTools {
         }
         match call.name.as_str() {
             "nomad_read" => {
-                if let infra::NomadRead::Status { job } = parse(call)?
-                    && !self.nomad.as_ref().unwrap().cfg.jobs.contains(&job)
-                {
-                    bail!("Nomad job denied");
+                let cfg = &self.nomad.as_ref().unwrap().cfg;
+                match parse(call)? {
+                    infra::NomadRead::Status { job }
+                    | infra::NomadRead::Allocations { job }
+                    | infra::NomadRead::Results { job }
+                    | infra::NomadRead::Placement { job } => {
+                        if !cfg.jobs.contains(&job) {
+                            bail!("Nomad job denied");
+                        }
+                    }
+                    infra::NomadRead::Node { node } => {
+                        if !cfg.nodes.contains(&node) {
+                            bail!("Nomad node denied");
+                        }
+                    }
+                    infra::NomadRead::List | infra::NomadRead::Nodes => {}
                 }
             }
             "nomad_mutate" => {
                 let cfg = &self.nomad.as_ref().unwrap().cfg;
                 match parse(call)? {
-                    infra::NomadMutate::Deploy { job } => {
+                    infra::NomadMutate::Deploy { job } | infra::NomadMutate::Plan { job } => {
                         if !cfg.jobs.contains(&job) || !cfg.deployments.contains_key(&job) {
                             bail!("Nomad deployment denied");
                         }
@@ -173,8 +190,49 @@ impl IntegrationTools {
                             bail!("Nomad job denied");
                         }
                     }
+                    infra::NomadMutate::Scale { grant } => {
+                        if !cfg.scales.contains_key(&grant) {
+                            bail!("Nomad scale denied");
+                        }
+                    }
                 }
             }
+            "incus_discover" => self
+                .incus
+                .as_ref()
+                .unwrap()
+                .validate_discover(&parse(call)?)?,
+            "incus_file_read" => {
+                let a: incus_ops::Grant = parse(call)?;
+                if !self
+                    .incus
+                    .as_ref()
+                    .unwrap()
+                    .cfg
+                    .file_reads
+                    .contains_key(&a.grant)
+                {
+                    bail!("Incus file grant denied");
+                }
+            }
+            "incus_operation" => {
+                let a: incus_ops::Grant = parse(call)?;
+                if !self
+                    .incus
+                    .as_ref()
+                    .unwrap()
+                    .cfg
+                    .operations
+                    .contains_key(&a.grant)
+                {
+                    bail!("Incus operation grant denied");
+                }
+            }
+            "comfyui_artifact" => self
+                .comfy
+                .as_ref()
+                .unwrap()
+                .validate_download(&ctx.scope, &parse(call)?)?,
             "incus_read" => {
                 if let infra::IncusRead::Status { instance } = parse(call)?
                     && !self
@@ -202,6 +260,14 @@ impl IntegrationTools {
                     .workflows
                     .get(&a.workflow)
                     .ok_or_else(|| anyhow!("ComfyUI workflow not approved"))?;
+                if let Some(name) = &a.conditioning
+                    && !cfg
+                        .conditioning
+                        .get(name)
+                        .is_some_and(|input| input.workflow == a.workflow)
+                {
+                    bail!("ComfyUI conditioning grant denied");
+                }
                 if let Some(prompt) = a.prompt
                     && (w.prompt_node.is_none()
                         || prompt.is_empty()
@@ -293,6 +359,16 @@ impl IntegrationTools {
             "nomad_mutate" => self.nomad.as_ref().unwrap().mutate(parse(call)?).await,
             "incus_read" => self.incus.as_ref().unwrap().read(parse(call)?).await,
             "incus_mutate" => self.incus.as_ref().unwrap().mutate(parse(call)?).await,
+            "incus_discover" => self.incus.as_ref().unwrap().discover(parse(call)?).await,
+            "incus_file_read" => self.incus.as_ref().unwrap().file_read(parse(call)?).await,
+            "incus_operation" => self.incus.as_ref().unwrap().operation(parse(call)?).await,
+            "comfyui_artifact" => {
+                self.comfy
+                    .as_ref()
+                    .unwrap()
+                    .download(&ctx.scope, parse(call)?)
+                    .await
+            }
             "comfyui_submit" => {
                 self.comfy
                     .as_ref()
@@ -376,7 +452,11 @@ fn validate_schema(value: &Value, schema: &Value) -> bool {
     }
 }
 fn mutation(name: &str) -> bool {
-    name.ends_with("_mutate") || name == "comfyui_submit"
+    name.ends_with("_mutate")
+        || matches!(
+            name,
+            "comfyui_submit" | "comfyui_artifact" | "incus_operation"
+        )
 }
 #[async_trait]
 impl ToolExecutor for IntegrationTools {
@@ -484,6 +564,11 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
             choice(vec![
                 variant("list", &[]),
                 variant("status", &[("job", s.clone())]),
+                variant("nodes", &[]),
+                variant("node", &[("node", s.clone())]),
+                variant("placement", &[("job", s.clone())]),
+                variant("allocations", &[("job", s.clone())]),
+                variant("results", &[("job", s.clone())]),
             ]),
         ),
         (
@@ -492,6 +577,8 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
             choice(vec![
                 variant("deploy", &[("job", s.clone())]),
                 variant("stop", &[("job", s.clone())]),
+                variant("plan", &[("job", s.clone())]),
+                variant("scale", &[("grant", s.clone())]),
             ]),
         ),
         (
@@ -504,7 +591,7 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
         ),
         (
             "incus_mutate",
-            "Non-forced lifecycle action on an exactly allowed instance. Requires human approval; no exec/files/delete.",
+            "Non-forced lifecycle action on an exactly allowed instance. Requires human approval.",
             object(
                 &[
                     ("instance", s.clone()),
@@ -522,12 +609,49 @@ fn schemas() -> Vec<(&'static str, &'static str, Value)> {
             object(
                 &[
                     ("workflow", s.clone()),
+                    ("conditioning", s.clone()),
                     (
                         "prompt",
                         json!({"type":"string","minLength":1,"maxLength":8192}),
                     ),
                 ],
                 &["workflow"],
+            ),
+        ),
+        (
+            "incus_discover",
+            "Discover or inspect exact operator-allowed typed resources.",
+            choice(vec![
+                variant("list", &[("kind", s.clone())]),
+                variant("inspect", &[("resource", s.clone())]),
+                variant("snapshots", &[("instance", s.clone())]),
+            ]),
+        ),
+        (
+            "incus_file_read",
+            "Read an exact operator-approved guest text file. No arbitrary guest paths.",
+            object(&[("grant", s.clone())], &["grant"]),
+        ),
+        (
+            "incus_operation",
+            "Execute a named typed operator-pinned Incus operation. Human approval required. Caller cannot supply argv, bodies or routes.",
+            object(&[("grant", s.clone())], &["grant"]),
+        ),
+        (
+            "comfyui_artifact",
+            "Download an exact owned-history artifact descriptor to a policy write path with human approval. Configured ceiling at most 4 MiB; images decoded, MP4 container structure checked.",
+            object(
+                &[
+                    ("prompt_id", s.clone()),
+                    ("node", s.clone()),
+                    ("kind", s.clone()),
+                    ("output_index", json!({"type":"integer","minimum":0})),
+                    (
+                        "output_path",
+                        json!({"type":"string","minLength":1,"maxLength":4096}),
+                    ),
+                ],
+                &["prompt_id", "node", "kind", "output_index", "output_path"],
             ),
         ),
         (

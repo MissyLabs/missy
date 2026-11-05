@@ -14,6 +14,10 @@ pub enum OperationalKind {
     ExportSucceeded,
     ExportFailed,
     WorkflowCompleted,
+    RuntimeTurn,
+    RuntimeProvider,
+    RuntimeTool,
+    RuntimeSettlement,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct OperationalEvent {

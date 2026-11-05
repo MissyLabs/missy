@@ -13,6 +13,8 @@ use sha2::Sha256;
 pub struct OperationalSpan {
     pub trace_id: String,
     pub span_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_span_id: Option<String>,
     pub start_time_unix_nano: u64,
     pub end_time_unix_nano: u64,
     pub kind: OperationalKind,
@@ -26,6 +28,7 @@ impl OperationalSpan {
         Ok(Self {
             trace_id,
             span_id,
+            parent_span_id: None,
             start_time_unix_nano: start,
             end_time_unix_nano: end,
             kind,
@@ -39,6 +42,14 @@ impl OperationalSpan {
                     && id.bytes().all(|b| b.is_ascii_hexdigit())
                     && id.bytes().any(|b| b != b'0'),
                 "invalid OTLP span identity"
+            );
+        }
+        if let Some(id) = &self.parent_span_id {
+            ensure!(
+                id.len() == 16
+                    && id.bytes().all(|b| b.is_ascii_hexdigit())
+                    && id.bytes().any(|b| b != b'0'),
+                "invalid OTLP parent identity"
             );
         }
         ensure!(
@@ -85,7 +96,9 @@ impl OtlpExporter {
         );
         let spans: Vec<Value> = spans.iter().map(|s| -> Result<Value> {
             s.validate()?;
-            Ok(json!({"traceId":s.trace_id,"spanId":s.span_id,"name":"missy.operation","kind":1,"startTimeUnixNano":s.start_time_unix_nano.to_string(),"endTimeUnixNano":s.end_time_unix_nano.to_string(),"attributes":[{"key":"missy.operation.kind","value":{"stringValue":serde_json::to_value(&s.kind)?}},{"key":"missy.operation.succeeded","value":{"boolValue":s.succeeded}}],"status":{"code":if s.succeeded {1} else {2}}}))
+            let mut span = json!({"traceId":s.trace_id,"spanId":s.span_id,"name":"missy.operation","kind":1,"startTimeUnixNano":s.start_time_unix_nano.to_string(),"endTimeUnixNano":s.end_time_unix_nano.to_string(),"attributes":[{"key":"missy.operation.kind","value":{"stringValue":serde_json::to_value(&s.kind)?}},{"key":"missy.operation.succeeded","value":{"boolValue":s.succeeded}}],"status":{"code":if s.succeeded {1} else {2}}});
+            if let Some(parent) = &s.parent_span_id { span["parentSpanId"] = json!(parent); }
+            Ok(span)
         }).collect::<Result<_>>()?;
         let body = serde_json::to_vec(
             &json!({"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"missy"}}]},"scopeSpans":[{"scope":{"name":"missy-operations","version":env!("CARGO_PKG_VERSION")},"spans":spans}]}]}),

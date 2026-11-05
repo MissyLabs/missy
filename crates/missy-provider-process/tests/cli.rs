@@ -25,6 +25,7 @@ impl Fixture {
             auth_home: directory.path().to_owned(),
             model: "fixture-model".into(),
             approved_executable: true,
+            acp_adapter: None,
             timeout_seconds: 3,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024,

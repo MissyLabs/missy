@@ -58,17 +58,64 @@ pub(crate) struct WindowArgs {
 pub(crate) struct InputArgs {
     pub window: u32,
     pub kind: String,
-    pub code: u8,
-    pub pressed: bool,
+    pub code: Option<u8>,
+    pub pressed: Option<bool>,
+    pub x: Option<i16>,
+    pub y: Option<i16>,
+    pub to_x: Option<i16>,
+    pub to_y: Option<i16>,
+    pub text: Option<String>,
 }
 impl InputArgs {
     pub fn validate(&self) -> Result<()> {
-        if self.window == 0
-            || !matches!(self.kind.as_str(), "key" | "button")
-            || (self.kind == "key" && self.code < 8)
-            || (self.kind == "button" && !(1..=5).contains(&self.code))
-        {
-            bail!("invalid XTest action");
+        if self.window == 0 {
+            bail!("invalid XTest window");
+        }
+        let coords =
+            self.x.is_some() || self.y.is_some() || self.to_x.is_some() || self.to_y.is_some();
+        match self.kind.as_str() {
+            "key" | "button" => {
+                let code = self.code.ok_or_else(|| anyhow::anyhow!("code required"))?;
+                if self.pressed.is_none()
+                    || coords
+                    || self.text.is_some()
+                    || (self.kind == "key" && code < 8)
+                    || (self.kind == "button" && !(1..=5).contains(&code))
+                {
+                    bail!("invalid XTest key/button");
+                }
+            }
+            "move" | "drag" => {
+                if self.x.is_none_or(|v| v < 0)
+                    || self.y.is_none_or(|v| v < 0)
+                    || self.pressed.is_some()
+                    || self.text.is_some()
+                {
+                    bail!("window-relative x/y required");
+                }
+                if self.kind == "move" {
+                    if self.code.is_some() || self.to_x.is_some() || self.to_y.is_some() {
+                        bail!("invalid move arguments");
+                    }
+                } else if self.to_x.is_none_or(|v| v < 0)
+                    || self.to_y.is_none_or(|v| v < 0)
+                    || self.code.is_none_or(|v| !(1..=3).contains(&v))
+                {
+                    bail!("drag requires bounded endpoint and button 1..3");
+                }
+            }
+            "type_text" => {
+                if coords
+                    || self.code.is_some()
+                    || self.pressed.is_some()
+                    || self.text.as_ref().is_none_or(|v| {
+                        v.is_empty() || v.len() > 256 || !v.bytes().all(|b| (32..=126).contains(&b))
+                    })
+                {
+                    bail!("type_text requires 1..256 printable ASCII bytes only");
+                }
+            }
+            _ => bail!("invalid XTest action"),
         }
         Ok(())
     }
@@ -244,31 +291,209 @@ pub(crate) fn execute(
         "desktop_input" => {
             let a: InputArgs = parse(call)?;
             a.validate()?;
-            allowed(&c, config, a.window)?;
-            if c.get_input_focus()?.reply()?.focus != a.window {
-                bail!("input denied: window is not already focused");
-            }
-            if a.kind == "key" && (a.code < c.setup().min_keycode || a.code > c.setup().max_keycode)
-            {
-                bail!("keycode outside server range");
-            }
-            if a.kind == "button" && c.query_pointer(screen.root)?.reply()?.child != a.window {
-                bail!("pointer is outside allowed window");
-            }
-            let type_ = match (a.kind.as_str(), a.pressed) {
-                ("key", true) => KEY_PRESS_EVENT,
-                ("key", false) => KEY_RELEASE_EVENT,
-                (_, true) => BUTTON_PRESS_EVENT,
-                (_, false) => BUTTON_RELEASE_EVENT,
-            };
-            if cancellation.is_cancelled() {
-                bail!("X11 input cancelled before dispatch");
-            }
-            c.xtest_fake_input(type_, a.code, 0, screen.root, 0, 0, 0)?
-                .check()?;
+            // Keep focus, geometry, allowlist and events in one server transaction.
+            // This is bounded by the connection watchdog and never changes focus.
+            c.grab_server()?.check()?;
+            let result = native_input(&c, config, &a, screen.root, cancellation);
+            c.ungrab_server()?.check()?;
             c.flush()?;
+            result?;
             Ok(json!({"dispatched":true}))
         }
         _ => bail!("unknown X11 operation"),
     }
+}
+
+fn native_input(
+    c: &RustConnection,
+    config: &X11Config,
+    a: &InputArgs,
+    root: u32,
+    cancellation: &tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    allowed(c, config, a.window)?;
+    let mut focus = c.get_input_focus()?.reply()?.focus;
+    for _ in 0..32 {
+        if focus == a.window {
+            break;
+        }
+        if focus == 0 || focus == root || focus == 1 {
+            bail!("input denied: window is not already focused");
+        }
+        focus = c.query_tree(focus)?.reply()?.parent;
+    }
+    if focus != a.window {
+        bail!("focused descendant depth exceeded");
+    }
+    if cancellation.is_cancelled() {
+        bail!("X11 input cancelled before dispatch");
+    }
+    let send = |event, code, x, y| -> Result<()> {
+        c.xtest_fake_input(event, code, 0, root, x, y, 0)?.check()?;
+        Ok(())
+    };
+    if a.kind == "key" || a.kind == "button" {
+        let code = a.code.expect("validated");
+        if a.kind == "key" && (code < c.setup().min_keycode || code > c.setup().max_keycode) {
+            bail!("keycode outside server range");
+        }
+        if a.kind == "button" && !pointer_inside(c, a.window)? {
+            bail!("pointer outside allowed window");
+        }
+        return send(
+            match (a.kind.as_str(), a.pressed.expect("validated")) {
+                ("key", true) => KEY_PRESS_EVENT,
+                ("key", false) => KEY_RELEASE_EVENT,
+                (_, true) => BUTTON_PRESS_EVENT,
+                (_, false) => BUTTON_RELEASE_EVENT,
+            },
+            code,
+            0,
+            0,
+        );
+    }
+    if a.kind == "type_text" {
+        // Never modify the server keymap. Reject active modifiers/locks/buttons
+        // and unsupported layouts rather than synthesizing surprising shortcuts.
+        if u16::from(c.query_pointer(a.window)?.reply()?.mask) != 0 {
+            bail!("typing requires no active modifiers, locks or buttons");
+        }
+        if c.query_keymap()?.reply()?.keys.iter().any(|v| *v != 0) {
+            bail!("typing requires no physically held keys");
+        }
+        let min = c.setup().min_keycode;
+        let map = c
+            .get_keyboard_mapping(min, c.setup().max_keycode - min + 1)?
+            .reply()?;
+        let width = map.keysyms_per_keycode as usize;
+        if width < 2 {
+            bail!("typing requires explicit Latin unshifted/shifted keymap");
+        }
+        let key = |sym: u32| -> Option<(u8, bool)> {
+            map.keysyms.chunks(width).enumerate().find_map(|(i, row)| {
+                if row[0] == sym {
+                    Some((min + i as u8, false))
+                } else if row[1] == sym {
+                    Some((min + i as u8, true))
+                } else {
+                    None
+                }
+            })
+        };
+        let shift = key(0xffe1)
+            .ok_or_else(|| anyhow::anyhow!("Shift_L unavailable"))?
+            .0;
+        let keys: Vec<_> = a
+            .text
+            .as_ref()
+            .expect("validated")
+            .bytes()
+            .map(|b| {
+                key(b as u32)
+                    .ok_or_else(|| anyhow::anyhow!("character unavailable in current keymap"))
+            })
+            .collect::<Result<_>>()?;
+        for (code, shifted) in keys {
+            if cancellation.is_cancelled() {
+                bail!("typing cancelled between complete keystrokes");
+            }
+            if shifted {
+                send(KEY_PRESS_EVENT, shift, 0, 0)?;
+            }
+            let press = send(KEY_PRESS_EVENT, code, 0, 0);
+            let release = send(KEY_RELEASE_EVENT, code, 0, 0);
+            let unshift = if shifted {
+                send(KEY_RELEASE_EVENT, shift, 0, 0)
+            } else {
+                Ok(())
+            };
+            press?;
+            release?;
+            unshift?;
+        }
+        return Ok(());
+    }
+    let g = c.get_geometry(a.window)?.reply()?;
+    if a.kind == "drag" && u16::from(c.query_pointer(a.window)?.reply()?.mask) != 0 {
+        bail!("drag requires no active modifiers, locks or buttons");
+    }
+    let translated = |x: i16, y: i16| -> Result<(i16, i16)> {
+        if x < 0 || y < 0 || x as u16 >= g.width || y as u16 >= g.height {
+            bail!("coordinate outside window");
+        }
+        let t = c.translate_coordinates(a.window, root, x, y)?.reply()?;
+        if !t.same_screen {
+            bail!("cross-screen input denied");
+        }
+        let screen = &c.setup().roots[config.screen];
+        if t.dst_x < 0
+            || t.dst_y < 0
+            || t.dst_x as u16 >= screen.width_in_pixels
+            || t.dst_y as u16 >= screen.height_in_pixels
+        {
+            bail!("window coordinate is outside configured screen");
+        }
+        Ok((t.dst_x, t.dst_y))
+    };
+    let (x, y) = translated(a.x.expect("validated"), a.y.expect("validated"))?;
+    let end = if a.kind == "drag" {
+        Some(translated(
+            a.to_x.expect("validated"),
+            a.to_y.expect("validated"),
+        )?)
+    } else {
+        None
+    };
+    send(MOTION_NOTIFY_EVENT, 0, x, y)?;
+    if !pointer_inside(c, a.window)? {
+        bail!("pointer target obscured or outside allowed window");
+    }
+    if let Some((to_x, to_y)) = end {
+        let button = a.code.expect("validated");
+        // Check endpoint visibility before pressing, then restore the start.
+        send(MOTION_NOTIFY_EVENT, 0, to_x, to_y)?;
+        if !pointer_inside(c, a.window)? {
+            bail!("drag endpoint obscured");
+        }
+        send(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        send(BUTTON_PRESS_EVENT, button, 0, 0)?;
+        let motion = send(MOTION_NOTIFY_EVENT, 0, to_x, to_y);
+        let release = send(BUTTON_RELEASE_EVENT, button, 0, 0);
+        motion?;
+        release?;
+    }
+    Ok(())
+}
+fn pointer_inside(c: &RustConnection, w: u32) -> Result<bool> {
+    let p = c.query_pointer(w)?.reply()?;
+    let g = c.get_geometry(w)?.reply()?;
+    // Translate root pointer back into the selected client and require the
+    // root's top child to be this client or an ancestor (WM frame).
+    if !p.same_screen
+        || p.win_x < 0
+        || p.win_y < 0
+        || p.win_x as u16 >= g.width
+        || p.win_y as u16 >= g.height
+    {
+        return Ok(false);
+    }
+    let t = c
+        .translate_coordinates(g.root, w, p.root_x, p.root_y)?
+        .reply()?;
+    if t.dst_x != p.win_x || t.dst_y != p.win_y {
+        return Ok(false);
+    }
+    let top = c.query_pointer(g.root)?.reply()?.child;
+    let mut current = w;
+    for _ in 0..32 {
+        if current == top {
+            return Ok(true);
+        }
+        let parent = c.query_tree(current)?.reply()?.parent;
+        if parent == g.root || parent == 0 {
+            break;
+        }
+        current = parent;
+    }
+    Ok(false)
 }

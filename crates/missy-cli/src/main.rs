@@ -13,6 +13,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+static TELEMETRY_HANDLES: std::sync::Mutex<Vec<missy_operations::TelemetryRuntime>> =
+    std::sync::Mutex::new(Vec::new());
 
 #[derive(Parser)]
 #[command(
@@ -84,6 +86,14 @@ enum Command {
     Serve,
     /// Run the explicitly enabled Discord gateway with strict allowlists.
     Discord,
+    /// Explicit consented Discord voice, sharing the authenticated text Gateway.
+    DiscordVoice {
+        guild: u64,
+        channel: u64,
+        actor: u64,
+        #[arg(long)]
+        approval: String,
+    },
     /// Read-only authenticated Discord preflight. Does not connect a Gateway or send.
     DiscordProbe,
     /// Edge audio service and explicit operator-managed device pairing.
@@ -119,6 +129,43 @@ enum Command {
     Retrieval {
         #[command(subcommand)]
         command: RetrievalCommand,
+    },
+    /// Explicit tenant+user personal memory shared across that user's sessions.
+    PersonalMemory {
+        #[command(subcommand)]
+        command: PersonalCommand,
+    },
+    /// Operator-reviewed source changes with immutable plan/HEAD pins and rollback.
+    Evolve {
+        #[command(subcommand)]
+        command: EvolutionCommand,
+    },
+    /// Explicit bounded parallel agent DAG with durable root reservations.
+    Agents {
+        path: PathBuf,
+        #[arg(long)]
+        request_id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Hatch {
+        answers: PathBuf,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Experiments {
+        #[command(subcommand)]
+        command: ExperimentCommand,
+    },
+    Plugins {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+    /// Explicit read-only provider benchmark, with persistent no-replay reservations.
+    Benchmark {
+        path: PathBuf,
+        #[arg(long)]
+        request_id: String,
     },
     /// Inspect and decide exact durable tool approvals.
     Approvals {
@@ -191,6 +238,166 @@ enum RetrievalCommand {
     },
     Get {
         id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Delete {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+}
+#[derive(Subcommand)]
+enum PluginCommand {
+    Propose {
+        manifest: PathBuf,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Review {
+        id: String,
+        #[arg(long)]
+        hash: String,
+        #[arg(long)]
+        approve: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Enable {
+        id: String,
+        #[arg(long)]
+        hash: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+}
+#[derive(Subcommand)]
+enum ExperimentCommand {
+    Create {
+        variants: PathBuf,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Show {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Assign {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Record {
+        id: String,
+        event_id: String,
+        #[arg(long)]
+        success: bool,
+        #[arg(long)]
+        refused: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Compare {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Promote {
+        id: String,
+        variant: String,
+        #[arg(long)]
+        experiment_hash: String,
+        #[arg(long)]
+        base_version: i64,
+        #[arg(long)]
+        context_hash: String,
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        confirm: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+}
+#[derive(Subcommand)]
+enum EvolutionCommand {
+    Propose {
+        repo: PathBuf,
+        diff: PathBuf,
+        title: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Show {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Review {
+        id: String,
+        #[arg(long)]
+        plan_hash: String,
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        approve: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Apply {
+        id: String,
+        #[arg(long)]
+        plan_hash: String,
+        #[arg(long)]
+        head: String,
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        confirm: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Rollback {
+        id: String,
+        #[arg(long)]
+        plan_hash: String,
+        #[arg(long)]
+        head: String,
+        #[arg(long)]
+        operator: String,
+        #[arg(long)]
+        confirm: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Audit {
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Recovery {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+}
+#[derive(Subcommand)]
+enum PersonalCommand {
+    Put {
+        id: String,
+        content: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Get {
+        id: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
         #[command(flatten)]
         scope: ScopeArgs,
     },
@@ -441,6 +648,15 @@ fn load_config(path: &Path) -> Result<Config> {
         &mut cfg.extensions.embedding_config,
         &mut cfg.extensions.mesh_config,
         &mut cfg.extensions.operations_config,
+        &mut cfg.extensions.capture_config,
+        &mut cfg.extensions.specialty_config,
+        &mut cfg.extensions.evolution_config,
+        &mut cfg.extensions.discord_voice_config,
+        &mut cfg.extensions.telemetry_config,
+        &mut cfg.extensions.vision_config,
+        &mut cfg.extensions.history_config,
+        &mut cfg.extensions.discord_tools_config,
+        &mut cfg.extensions.plugins_config,
     ]
     .into_iter()
     .flatten()
@@ -495,6 +711,18 @@ fn retrieval(cfg: &Config) -> Result<Arc<missy_retrieval::Retrieval>> {
     Ok(Arc::new(db))
 }
 
+fn personal_memory(cfg: &Config) -> Result<Arc<missy_personal::PersonalMemory>> {
+    if !cfg.extensions.personal_memory_enabled {
+        bail!(
+            "cross-session personal memory disabled; enable extensions.personal_memory_enabled explicitly"
+        );
+    }
+    open_store(cfg)?;
+    Ok(Arc::new(missy_personal::PersonalMemory::open(
+        cfg.state_dir.join("personal.sqlite3"),
+    )?))
+}
+
 fn initialize(path: &Path) -> Result<()> {
     let cfg = Config {
         state_dir: PathBuf::from("missy-rust-state"),
@@ -529,13 +757,12 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
     let store = open_store(cfg)?;
     if let Some(path) = &cfg.extensions.cli_provider_config {
         let provider = missy_provider_process::CliProvider::new(load_extension(path)?)?;
-        return Ok(Arc::new(Runtime::new(
+        return make_runtime(
+            cfg,
             store,
             Arc::new(provider),
             Arc::new(extensions::NoTools),
-            cfg.system_prompt.clone(),
-            cfg.runtime.clone(),
-        )?));
+        );
     }
     let providers = ProviderPool::new(cfg.providers.clone(), cfg.policy.clone())?;
     if cfg.runtime.max_cost_microusd > 0 {
@@ -545,6 +772,11 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         .with_mcp(cfg.mcp.clone())
         .await?;
     let mut executors: Vec<Arc<dyn missy_core::ToolExecutor>> = vec![Arc::new(builtins)];
+    if cfg.extensions.personal_memory_enabled {
+        executors.push(Arc::new(missy_personal::PersonalTools::new(
+            personal_memory(cfg)?,
+        )));
+    }
     if cfg.extensions.retrieval_enabled {
         executors.push(Arc::new(extensions::RetrievalTools {
             db: retrieval(cfg)?,
@@ -552,6 +784,96 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         }));
     }
     let mut integration_mutations = std::collections::BTreeSet::new();
+    if let Some(path) = &cfg.extensions.history_config {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SummaryApplication {
+            provider: missy_core::ProviderConfig,
+            policy: missy_history::SummaryPolicy,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct HistoryApplication {
+            history: missy_history::HistoryConfig,
+            summary: Option<SummaryApplication>,
+        }
+        use missy_core::ToolExecutor;
+        let mut application: HistoryApplication = load_extension(path)?;
+        application.history.retention_path = Some(cfg.state_dir.join("history-evidence.sqlite3"));
+        let mut history = missy_history::HistoryTools::new(store.clone(), application.history)?;
+        if let Some(mut summary) = application.summary {
+            if cfg.extensions.approvals_config.is_none() {
+                bail!("history summarization requires exact durable approvals");
+            }
+            summary.policy.ledger_path = cfg.state_dir.join("history-summary.jsonl");
+            if summary.provider.max_output_tokens > summary.policy.max_output_tokens {
+                bail!("summary provider output limit exceeds the explicit summary budget");
+            }
+            summary.policy.input_microusd_per_million = summary
+                .provider
+                .input_microusd_per_million
+                .context("summary input pricing required")?;
+            summary.policy.output_microusd_per_million = summary
+                .provider
+                .output_microusd_per_million
+                .context("summary output pricing required")?;
+            history = history.with_summary_backend(missy_history::SummaryBackend::new(
+                Arc::new(ProviderPool::new(
+                    vec![summary.provider],
+                    cfg.policy.clone(),
+                )?),
+                summary.policy,
+            )?)?;
+        }
+        let mutations: std::collections::BTreeSet<_> = history
+            .definitions()
+            .into_iter()
+            .filter(|d| d.side_effect)
+            .map(|d| d.name)
+            .collect();
+        if !mutations.is_empty() && cfg.extensions.approvals_config.is_none() {
+            bail!("history context tools require exact durable approvals");
+        }
+        integration_mutations.extend(mutations);
+        executors.push(Arc::new(history));
+    }
+    if cfg.policy.allow_file_delete {
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("file deletion requires exact durable approvals");
+        }
+        integration_mutations.insert("file_delete".to_owned());
+    }
+    if let Some(path) = &cfg.extensions.discord_tools_config {
+        use missy_core::ToolExecutor;
+        let discord =
+            missy_discord_tools::DiscordTools::new(cfg.policy.clone(), load_extension(path)?)?;
+        let mutations: std::collections::BTreeSet<_> = discord
+            .definitions()
+            .into_iter()
+            .filter(|d| d.side_effect)
+            .map(|d| d.name)
+            .collect();
+        if !mutations.is_empty() && cfg.extensions.approvals_config.is_none() {
+            bail!("Discord uploads require exact durable approvals");
+        }
+        integration_mutations.extend(mutations);
+        executors.push(Arc::new(discord));
+    }
+    if let Some(path) = &cfg.extensions.plugins_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("native plugin execution requires exact durable approvals");
+        }
+        let registry = missy_plugins::ToolRegistry::open(cfg.state_dir.join("plugins"))?;
+        let tools = missy_plugins::PluginTools::new(
+            registry,
+            load_extension(path)?,
+            Arc::new(missy_policy::Policy::new(cfg.policy.clone())?),
+            Arc::new(extensions::OuterGuardVerified),
+        )?;
+        integration_mutations.extend(tools.definitions().into_iter().map(|d| d.name));
+        executors.push(Arc::new(tools));
+    }
     if let Some(path) = &cfg.extensions.http_mcp_config {
         use missy_core::ToolExecutor;
         if cfg.extensions.approvals_config.is_none() {
@@ -615,6 +937,46 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         );
         executors.push(Arc::new(media));
     }
+    if let Some(path) = &cfg.extensions.vision_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("vision provider tools require exact durable approvals");
+        }
+        let mut vision: missy_vision::VisionConfig = load_extension(path)?;
+        vision.ledger_path = cfg.state_dir.join("vision-budget.sqlite3");
+        let vision = missy_vision::VisionTools::new(cfg.policy.clone(), vision)?;
+        integration_mutations.extend(vision.definitions().into_iter().map(|d| d.name));
+        executors.push(Arc::new(vision));
+    }
+    if let Some(path) = &cfg.extensions.capture_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("live capture requires exact durable approval configuration");
+        }
+        let capture = missy_capture::CaptureTools::new(
+            cfg.policy.clone(),
+            load_extension(path)?,
+            Arc::new(extensions::OuterGuardVerified),
+        )?;
+        integration_mutations.extend(capture.definitions().into_iter().map(|d| d.name));
+        executors.push(Arc::new(capture));
+    }
+    if let Some(path) = &cfg.extensions.specialty_config {
+        use missy_core::ToolExecutor;
+        let specialty =
+            missy_specialty::SpecialtyTools::new(cfg.policy.clone(), load_extension(path)?)?;
+        let mutations: std::collections::BTreeSet<_> = specialty
+            .definitions()
+            .into_iter()
+            .filter(|d| d.side_effect)
+            .map(|d| d.name)
+            .collect();
+        if !mutations.is_empty() && cfg.extensions.approvals_config.is_none() {
+            bail!("specialty mutations require exact durable approval configuration");
+        }
+        integration_mutations.extend(mutations);
+        executors.push(Arc::new(specialty));
+    }
     let mut tools: Arc<dyn missy_core::ToolExecutor> =
         Arc::new(extensions::CompositeTools::new(executors)?);
     if let Some(path) = &cfg.extensions.sandbox_config {
@@ -637,13 +999,64 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
             guard,
         )?);
     }
-    Ok(Arc::new(Runtime::new(
-        store,
-        Arc::new(providers),
-        tools,
-        cfg.system_prompt.clone(),
-        cfg.runtime.clone(),
-    )?))
+    make_runtime(cfg, store, Arc::new(providers), tools)
+}
+
+fn make_runtime(
+    cfg: &Config,
+    store: Arc<Store>,
+    provider: Arc<dyn missy_core::Provider>,
+    tools: Arc<dyn missy_core::ToolExecutor>,
+) -> Result<Arc<Runtime>> {
+    let runtime = if let Some(path) = &cfg.extensions.telemetry_config {
+        let telemetry = missy_operations::TelemetryRuntime::build_client(
+            cfg.policy.clone(),
+            load_extension(path)?,
+        )?;
+        let runtime = Runtime::new_observed(
+            store,
+            provider,
+            tools,
+            cfg.system_prompt.clone(),
+            cfg.runtime.clone(),
+            telemetry.observer(),
+        )?;
+        TELEMETRY_HANDLES
+            .lock()
+            .map_err(|_| anyhow::anyhow!("telemetry lifecycle lock poisoned"))?
+            .push(telemetry);
+        runtime
+    } else {
+        Runtime::new(
+            store,
+            provider,
+            tools,
+            cfg.system_prompt.clone(),
+            cfg.runtime.clone(),
+        )?
+    };
+    Ok(Arc::new(runtime))
+}
+
+fn build_safe_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
+    let provider: Arc<dyn missy_core::Provider> =
+        if let Some(path) = &cfg.extensions.cli_provider_config {
+            Arc::new(missy_provider_process::CliProvider::new(load_extension(
+                path,
+            )?)?)
+        } else {
+            let providers = ProviderPool::new(cfg.providers.clone(), cfg.policy.clone())?;
+            if cfg.runtime.max_cost_microusd > 0 {
+                providers.require_known_prices()?;
+            }
+            Arc::new(providers)
+        };
+    make_runtime(
+        cfg,
+        open_store(cfg)?,
+        provider,
+        Arc::new(extensions::NoTools),
+    )
 }
 
 async fn build_scoped_runtime(cfg: &Config, scope: &Scope) -> Result<Arc<Runtime>> {
@@ -675,7 +1088,17 @@ async fn build_scoped_runtime(cfg: &Config, scope: &Scope) -> Result<Arc<Runtime
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = execute(Cli::parse()).await {
+    let result = execute(Cli::parse()).await;
+    let telemetry = TELEMETRY_HANDLES
+        .lock()
+        .map(|mut handles| std::mem::take(&mut *handles))
+        .unwrap_or_default();
+    for handle in telemetry {
+        if handle.shutdown().await.is_err() {
+            eprintln!("missy-rs: telemetry flush failed; completed operations were not retried");
+        }
+    }
+    if let Err(error) = result {
         // Never print debug chains, HTTP bodies, environment values or provider payloads.
         eprintln!("missy-rs: {error}");
         std::process::exit(1);
@@ -830,6 +1253,71 @@ async fn execute(cli: Cli) -> Result<()> {
             )
             .await?
         }
+        Command::DiscordVoice {
+            guild,
+            channel,
+            actor,
+            approval,
+        } => {
+            let application: voice::DiscordVoiceApplication = load_extension(
+                cfg.extensions
+                    .discord_voice_config
+                    .as_deref()
+                    .context("extensions.discord_voice_config required")?,
+            )?;
+            application.server.validate()?;
+            if approval != missy_discord_voice::DiscordVoiceService::join_approval(guild, channel) {
+                bail!("exact operator voice join approval required");
+            }
+            if !application.server.bindings.iter().any(|b| {
+                b.guild_id == guild && b.channel_id == channel && b.user_id == actor && b.consent
+            }) {
+                bail!("actor has no explicit consented voice binding");
+            }
+            let full = build_runtime(&cfg).await?;
+            let safe = build_safe_runtime(&cfg)?;
+            let adapter = Arc::new(voice::RuntimeVoice {
+                full: full.clone(),
+                safe,
+            });
+            let (gateway, hook) = missy_gateway::discord_voice_bridge();
+            let service = Arc::new(missy_discord_voice::DiscordVoiceService::new(
+                application.server,
+                Arc::new(missy_policy::PolicyHttpClient::new(cfg.policy.clone())?),
+                gateway,
+                Arc::new(missy_voice::CommandStt::new(application.stt)?),
+                Arc::new(missy_voice::CommandTts::new(application.tts)?),
+                adapter,
+            )?);
+            open_store(&cfg)?;
+            let dir = cfg.state_dir.join("discord");
+            if !dir.exists() {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+            }
+            let config = cfg.discord.clone();
+            let policy = cfg.policy.clone();
+            let task = tokio::spawn(async move {
+                missy_gateway::serve_discord_with_voice(full, config, policy, dir, hook).await
+            });
+            let mut task = task;
+            let result = async {
+                tokio::select! {
+                    result=service.join(guild,channel,actor,&approval)=>result?,
+                    stopped=&mut task=>return stopped.context("Discord Gateway task failed")?,
+                }
+                tokio::select! {
+                    result=tokio::signal::ctrl_c()=>result?,
+                    stopped=&mut task=>return stopped.context("Discord Gateway task failed")?,
+                }
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            service.shutdown().await;
+            task.abort();
+            let _ = task.await;
+            result?;
+        }
         Command::DiscordProbe => println!(
             "{}",
             serde_json::to_string_pretty(
@@ -895,24 +1383,7 @@ async fn execute(cli: Cli) -> Result<()> {
                             .context("extensions.voice_config required")?,
                     )?;
                     let full = build_runtime(&cfg).await?;
-                    let provider: Arc<dyn missy_core::Provider> =
-                        if let Some(path) = &cfg.extensions.cli_provider_config {
-                            Arc::new(missy_provider_process::CliProvider::new(load_extension(
-                                path,
-                            )?)?)
-                        } else {
-                            Arc::new(ProviderPool::new(
-                                cfg.providers.clone(),
-                                cfg.policy.clone(),
-                            )?)
-                        };
-                    let safe = Arc::new(Runtime::new(
-                        open_store(&cfg)?,
-                        provider,
-                        Arc::new(extensions::NoTools),
-                        cfg.system_prompt.clone(),
-                        cfg.runtime.clone(),
-                    )?);
+                    let safe = build_safe_runtime(&cfg)?;
                     let server = Arc::new(missy_voice::VoiceServer::new(
                         application.server,
                         registry,
@@ -1227,6 +1698,309 @@ async fn execute(cli: Cli) -> Result<()> {
                 }
             }
         },
+        Command::Benchmark { path, request_id } => {
+            let mut benchmark: missy_plugins::BenchmarkConfig = load_extension(&path)?;
+            open_store(&cfg)?;
+            benchmark.ledger_path = cfg.state_dir.join("provider-benchmark.jsonl");
+            let mut targets = std::collections::BTreeMap::new();
+            for provider in &cfg.providers {
+                let input = provider
+                    .input_microusd_per_million
+                    .context("benchmark input price required")?;
+                let output = provider
+                    .output_microusd_per_million
+                    .context("benchmark output price required")?;
+                targets.insert(
+                    provider.name.clone(),
+                    missy_plugins::BenchmarkTarget {
+                        provider: Arc::new(ProviderPool::new(
+                            vec![provider.clone()],
+                            cfg.policy.clone(),
+                        )?),
+                        max_output_tokens: provider.max_output_tokens,
+                        input_microusd_per_million: input,
+                        output_microusd_per_million: output,
+                    },
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &missy_plugins::benchmark_providers(
+                        targets,
+                        benchmark,
+                        &request_id,
+                        tokio_util::sync::CancellationToken::new()
+                    )
+                    .await?
+                )?
+            );
+        }
+        Command::Plugins { command } => {
+            open_store(&cfg)?;
+            let registry = missy_plugins::ToolRegistry::open(cfg.state_dir.join("plugins"))?;
+            match command {
+                PluginCommand::Propose { manifest, scope } => {
+                    let manifest = load_extension(&manifest)?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &registry.propose(&scope.scope()?, manifest)?
+                        )?
+                    );
+                }
+                PluginCommand::Review {
+                    id,
+                    hash,
+                    approve,
+                    scope,
+                } => {
+                    registry.review(&scope.scope()?, &id, &hash, approve)?;
+                    println!(
+                        "{}",
+                        serde_json::json!({"reviewed":true,"approved":approve})
+                    );
+                }
+                PluginCommand::Enable { id, hash, scope } => {
+                    let config = load_extension(
+                        cfg.extensions
+                            .plugins_config
+                            .as_deref()
+                            .context("extensions.plugins_config required")?,
+                    )?;
+                    registry.enable(&scope.scope()?, &id, &hash, &config)?;
+                    println!(
+                        "{}",
+                        serde_json::json!({"enabled":true,"requires_new_runtime":true})
+                    );
+                }
+            }
+        }
+        Command::Hatch { answers, scope } => {
+            let answers: missy_evolution::HatchingAnswers = load_extension(&answers)?;
+            let scope = scope.scope()?;
+            open_store(&cfg)?;
+            let governance =
+                missy_governance::ApprovalRegistry::open(cfg.state_dir.join("governance.sqlite3"))?;
+            use sha2::Digest;
+            let context = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&cfg)?));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&missy_evolution::propose_hatching(
+                    &scope,
+                    answers,
+                    &governance,
+                    &context
+                )?)?
+            );
+        }
+        Command::Experiments { command } => {
+            open_store(&cfg)?;
+            let registry = missy_evolution::ExperimentRegistry::new(
+                missy_evolution::EvolutionRegistry::open(cfg.state_dir.join("evolution.sqlite3"))?,
+            );
+            let value = match command {
+                ExperimentCommand::Create { variants, scope } => {
+                    let variants = load_extension(&variants)?;
+                    serde_json::to_value(registry.create(&scope.scope()?, variants)?)?
+                }
+                ExperimentCommand::Show { id, scope } => {
+                    serde_json::to_value(registry.experiment(&scope.scope()?, &id)?)?
+                }
+                ExperimentCommand::Assign { id, scope } => {
+                    serde_json::to_value(registry.assign(&scope.scope()?, &id)?)?
+                }
+                ExperimentCommand::Record {
+                    id,
+                    event_id,
+                    success,
+                    refused,
+                    scope,
+                } => {
+                    registry.record_outcome(&scope.scope()?, &id, &event_id, success, refused)?;
+                    serde_json::json!({"recorded":true,"trusted_for_promotion":false})
+                }
+                ExperimentCommand::Compare { id, scope } => {
+                    serde_json::to_value(registry.compare(&scope.scope()?, &id)?)?
+                }
+                ExperimentCommand::Promote {
+                    id,
+                    variant,
+                    experiment_hash,
+                    base_version,
+                    context_hash,
+                    operator,
+                    confirm,
+                    scope,
+                } => {
+                    let governance = missy_governance::ApprovalRegistry::open(
+                        cfg.state_dir.join("governance.sqlite3"),
+                    )?;
+                    serde_json::to_value(registry.propose_promotion(
+                        &scope.scope()?,
+                        &id,
+                        &experiment_hash,
+                        &variant,
+                        &governance,
+                        base_version,
+                        &context_hash,
+                        &operator,
+                        confirm,
+                    )?)?
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+        Command::Agents {
+            path,
+            request_id,
+            scope,
+        } => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct AgentApplication {
+                limits: missy_subagents::Limits,
+                plan: missy_subagents::DagSpec,
+            }
+            let application: AgentApplication = load_extension(&path)?;
+            let scope = scope.scope()?;
+            if cfg.extensions.cli_provider_config.is_some() {
+                bail!(
+                    "agent pools require explicitly configured native provider entries, not ambient CLI credentials"
+                );
+            }
+            let mut runtimes = std::collections::BTreeMap::new();
+            for provider in &cfg.providers {
+                let mut selected = cfg.clone();
+                selected.providers = vec![provider.clone()];
+                runtimes.insert(
+                    provider.name.clone(),
+                    build_scoped_runtime(&selected, &scope).await?,
+                );
+            }
+            open_store(&cfg)?;
+            let registry =
+                missy_subagents::AgentRegistry::open(cfg.state_dir.join("agents.sqlite3"))?;
+            let pool = missy_subagents::AgentPool::new(runtimes, application.limits)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &pool
+                        .run(
+                            &registry,
+                            scope,
+                            &request_id,
+                            application.plan,
+                            tokio_util::sync::CancellationToken::new()
+                        )
+                        .await?
+                )?
+            );
+        }
+        Command::Evolve { command } => {
+            let policy: missy_evolution::EvolutionPolicy = load_extension(
+                cfg.extensions
+                    .evolution_config
+                    .as_deref()
+                    .context("extensions.evolution_config required")?,
+            )?;
+            open_store(&cfg)?;
+            let registry =
+                missy_evolution::EvolutionRegistry::open(cfg.state_dir.join("evolution.sqlite3"))?;
+            let value = match command {
+                EvolutionCommand::Propose {
+                    repo,
+                    diff,
+                    title,
+                    scope,
+                } => {
+                    let read = missy_policy::Policy::new(cfg.policy.clone())?.read_file(&diff)?;
+                    let text = std::str::from_utf8(&read).context("patch is not UTF-8")?;
+                    serde_json::to_value(registry.propose(
+                        &scope.scope()?,
+                        &policy,
+                        repo,
+                        text,
+                        &title,
+                    )?)?
+                }
+                EvolutionCommand::Show { id, scope } => {
+                    serde_json::to_value(registry.proposal(&scope.scope()?, &id)?)?
+                }
+                EvolutionCommand::Review {
+                    id,
+                    plan_hash,
+                    operator,
+                    approve,
+                    scope,
+                } => serde_json::to_value(registry.review(
+                    &scope.scope()?,
+                    &id,
+                    &plan_hash,
+                    &operator,
+                    approve,
+                )?)?,
+                EvolutionCommand::Apply {
+                    id,
+                    plan_hash,
+                    head,
+                    operator,
+                    confirm,
+                    scope,
+                } => serde_json::to_value(registry.apply(
+                    &scope.scope()?,
+                    &id,
+                    &plan_hash,
+                    &head,
+                    &policy,
+                    &operator,
+                    confirm,
+                )?)?,
+                EvolutionCommand::Rollback {
+                    id,
+                    plan_hash,
+                    head,
+                    operator,
+                    confirm,
+                    scope,
+                } => serde_json::to_value(registry.rollback(
+                    &scope.scope()?,
+                    &id,
+                    &plan_hash,
+                    &head,
+                    &policy,
+                    &operator,
+                    confirm,
+                )?)?,
+                EvolutionCommand::Audit { scope } => {
+                    serde_json::to_value(registry.audit(&scope.scope()?)?)?
+                }
+                EvolutionCommand::Recovery { id, scope } => {
+                    serde_json::to_value(registry.recovery_journal(&scope.scope()?, &id)?)?
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
+        Command::PersonalMemory { command } => {
+            let memory = personal_memory(&cfg)?;
+            let value = match command {
+                PersonalCommand::Put { id, content, scope } => {
+                    serde_json::to_value(memory.put(&scope.scope()?, &id, &content)?)?
+                }
+                PersonalCommand::Get { id, scope } => {
+                    serde_json::to_value(memory.get(&scope.scope()?, &id)?)?
+                }
+                PersonalCommand::Search {
+                    query,
+                    limit,
+                    scope,
+                } => serde_json::to_value(memory.search(&scope.scope()?, &query, limit)?)?,
+                PersonalCommand::Delete { id, scope } => {
+                    serde_json::json!({"deleted":memory.delete(&scope.scope()?,&id)?})
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        }
         Command::Workflow { path, scope } => {
             let workflow: missy_operations::Workflow = load_extension(&path)?;
             println!(

@@ -226,6 +226,16 @@ pub struct ExtensionConfig {
     pub embedding_config: Option<PathBuf>,
     pub mesh_config: Option<PathBuf>,
     pub operations_config: Option<PathBuf>,
+    pub personal_memory_enabled: bool,
+    pub capture_config: Option<PathBuf>,
+    pub specialty_config: Option<PathBuf>,
+    pub evolution_config: Option<PathBuf>,
+    pub discord_voice_config: Option<PathBuf>,
+    pub telemetry_config: Option<PathBuf>,
+    pub vision_config: Option<PathBuf>,
+    pub history_config: Option<PathBuf>,
+    pub discord_tools_config: Option<PathBuf>,
+    pub plugins_config: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,6 +269,8 @@ impl Default for ProviderConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
+    /// Explicit destructive capability; exact hash plus durable approval required.
+    pub allow_file_delete: bool,
     pub read_roots: Vec<PathBuf>,
     pub write_roots: Vec<PathBuf>,
     /// Explicit origin allowlist, including port. No wildcard or redirect inference.

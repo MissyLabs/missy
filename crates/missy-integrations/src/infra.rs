@@ -8,12 +8,19 @@ use serde_json::{Value, json};
 pub(crate) enum NomadRead {
     List,
     Status { job: String },
+    Nodes,
+    Node { node: String },
+    Placement { job: String },
+    Allocations { job: String },
+    Results { job: String },
 }
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum NomadMutate {
     Deploy { job: String },
     Stop { job: String },
+    Plan { job: String },
+    Scale { grant: String },
 }
 pub(crate) struct Nomad {
     pub conn: Connection,
@@ -24,6 +31,23 @@ impl Nomad {
         identifier(&cfg.namespace)?;
         for job in &cfg.jobs {
             identifier(job)?;
+        }
+        for node in &cfg.nodes {
+            identifier(node)?;
+        }
+        for (name, scale) in &cfg.scales {
+            identifier(name)?;
+            identifier(&scale.group)?;
+            if !cfg.jobs.contains(&scale.job) || scale.count > 10000 {
+                bail!("Nomad scale grant invalid");
+            }
+            if !cfg.deployments.get(&scale.job).is_some_and(|job| {
+                job["TaskGroups"]
+                    .as_array()
+                    .is_some_and(|groups| groups.iter().any(|g| g["Name"] == scale.group))
+            }) {
+                bail!("Nomad scale group must occur in pinned job");
+            }
         }
         for (name, graph) in &cfg.deployments {
             if !cfg.jobs.contains(name)
@@ -48,6 +72,132 @@ impl Nomad {
     }
     pub async fn read(&self, a: NomadRead) -> Result<Value> {
         match a {
+            NomadRead::Nodes => {
+                let data = self.conn.json("GET", "/v1/nodes", None, true).await?;
+                let rows = data
+                    .as_array()
+                    .ok_or_else(|| anyhow!("invalid Nomad nodes"))?;
+                Ok(Value::Array(
+                    rows.iter()
+                        .filter(|n| {
+                            n["ID"]
+                                .as_str()
+                                .is_some_and(|id| self.cfg.nodes.contains(id))
+                        })
+                        .map(|n| {
+                            select(
+                                n,
+                                &[
+                                    "ID",
+                                    "Name",
+                                    "Datacenter",
+                                    "Status",
+                                    "SchedulingEligibility",
+                                    "Drain",
+                                    "NodeClass",
+                                    "NodePool",
+                                ],
+                            )
+                        })
+                        .collect(),
+                ))
+            }
+            NomadRead::Node { node } => {
+                if !self.cfg.nodes.contains(&node) {
+                    bail!("Nomad node denied");
+                }
+                let data = self
+                    .conn
+                    .json("GET", &format!("/v1/node/{node}"), None, true)
+                    .await?;
+                if data["ID"] != node {
+                    bail!("Nomad node mismatch");
+                }
+                Ok(select(
+                    &data,
+                    &[
+                        "ID",
+                        "Name",
+                        "Datacenter",
+                        "Status",
+                        "SchedulingEligibility",
+                        "Drain",
+                        "NodeClass",
+                        "NodePool",
+                        "NodeResources",
+                        "ReservedResources",
+                    ],
+                ))
+            }
+            NomadRead::Placement { job } => {
+                self.check(&job)?;
+                let graph = self
+                    .cfg
+                    .deployments
+                    .get(&job)
+                    .ok_or_else(|| anyhow!("no pinned job"))?;
+                let plan = self
+                    .conn
+                    .json(
+                        "POST",
+                        &format!("/v1/job/{job}/plan?namespace={}", self.cfg.namespace),
+                        Some(json!({"Job":graph,"Diff":true})),
+                        true,
+                    )
+                    .await?;
+                // Nomad itself evaluates constraints/resources; do not invent a placement from host names.
+                Ok(select(
+                    &plan,
+                    &[
+                        "JobModifyIndex",
+                        "CreatedEvals",
+                        "FailedTGAllocs",
+                        "NextPeriodicLaunch",
+                        "Warnings",
+                    ],
+                ))
+            }
+            NomadRead::Allocations { job } | NomadRead::Results { job } => {
+                self.check(&job)?;
+                let data = self
+                    .conn
+                    .json(
+                        "GET",
+                        &format!(
+                            "/v1/job/{job}/allocations?namespace={}&all=true",
+                            self.cfg.namespace
+                        ),
+                        None,
+                        true,
+                    )
+                    .await?;
+                let rows = data
+                    .as_array()
+                    .ok_or_else(|| anyhow!("invalid Nomad allocations"))?;
+                Ok(Value::Array(
+                    rows.iter()
+                        .filter(|a| a["JobID"] == job && a["Namespace"] == self.cfg.namespace)
+                        .map(|a| {
+                            select(
+                                a,
+                                &[
+                                    "ID",
+                                    "JobID",
+                                    "Namespace",
+                                    "NodeID",
+                                    "TaskGroup",
+                                    "ClientStatus",
+                                    "ClientDescription",
+                                    "DesiredStatus",
+                                    "TaskStates",
+                                    "CreateTime",
+                                    "ModifyTime",
+                                ],
+                            )
+                        })
+                        .collect(),
+                ))
+            }
             NomadRead::List => {
                 let data = self
                     .conn
@@ -88,6 +238,19 @@ impl Nomad {
     }
     pub async fn mutate(&self, a: NomadMutate) -> Result<Value> {
         match a {
+            NomadMutate::Plan { job } => self.read(NomadRead::Placement { job }).await,
+            NomadMutate::Scale { grant } => {
+                let s = self
+                    .cfg
+                    .scales
+                    .get(&grant)
+                    .ok_or_else(|| anyhow!("Nomad scale grant denied"))?;
+                let r = self.conn.json("POST", &format!("/v1/job/{}/scale?namespace={}", s.job, self.cfg.namespace), Some(json!({"Count":s.count,"Target":{"Job":s.job,"Group":s.group,"Namespace":self.cfg.namespace},"Reason":"operator-reviewed scale grant"})), true).await?;
+                Ok(select(
+                    &r,
+                    &["EvalID", "EvalCreateIndex", "JobModifyIndex", "Warnings"],
+                ))
+            }
             NomadMutate::Deploy { job } => {
                 self.check(&job)?;
                 let graph = self
@@ -178,14 +341,19 @@ impl Incus {
         }
         Ok(())
     }
-    fn check(&self, instance: &str) -> Result<()> {
+    pub(crate) fn check(&self, instance: &str) -> Result<()> {
         identifier(instance)?;
         if !self.cfg.instances.contains(instance) {
             bail!("Incus instance denied by exact allowlist");
         }
         Ok(())
     }
-    async fn query(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+    pub(crate) async fn query(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
         let r = self.conn.json(method, path, body, false).await?;
         if r["type"] == "error" || r["error_code"].as_u64().is_some_and(|code| code != 0) {
             bail!("Incus rejected operation");

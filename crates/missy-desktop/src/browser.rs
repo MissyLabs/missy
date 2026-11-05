@@ -80,6 +80,26 @@ struct Fill {
     selector: String,
     value: String,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Wait {
+    selector: String,
+    state: String,
+    timeout_ms: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Evaluate {
+    expression_id: String,
+}
+fn fixed_expression(id: &str) -> Result<&'static str> {
+    match id {
+        "url" => Ok("String(location.href).slice(0,8192)"),
+        "title" => Ok("String(document.title).slice(0,1024)"),
+        "ready_state" => Ok("String(document.readyState)"),
+        _ => bail!("unknown fixed expression ID; arbitrary JavaScript is not supported"),
+    }
+}
 fn selector(s: &str) -> Result<()> {
     if s.is_empty() || s.len() > 1024 || s.contains('\0') {
         bail!("invalid/bounded selector required");
@@ -88,8 +108,20 @@ fn selector(s: &str) -> Result<()> {
 }
 pub(crate) fn validate_call(call: &ToolCall, c: &BrowserConfig) -> Result<()> {
     match call.name.as_str() {
-        "browser_read" | "browser_screenshot" => {
+        "browser_read" | "browser_screenshot" | "browser_get_url" | "browser_close" => {
             parse::<crate::Empty>(call)?;
+        }
+        "browser_wait" => {
+            let a: Wait = parse(call)?;
+            selector(&a.selector)?;
+            if !matches!(a.state.as_str(), "visible" | "hidden")
+                || !(1..=15000).contains(&a.timeout_ms)
+            {
+                bail!("wait requires visible/hidden and timeout_ms 1..15000");
+            }
+        }
+        "browser_evaluate" => {
+            fixed_expression(&parse::<Evaluate>(call)?.expression_id)?;
         }
         "browser_navigate" => c.check_url(&parse::<Navigate>(call)?.url)?,
         "browser_click" => selector(&parse::<Click>(call)?.selector)?,
@@ -307,7 +339,30 @@ pub(crate) async fn execute(
         )
         .await?;
     client.check_location().await?;
+    if call.name == "browser_close" {
+        // Page.close acts on this pinned page websocket only, not a process.
+        client.rpc("Page.close", json!({})).await?;
+        let _ = client.socket.close(None).await;
+        return Ok(json!({"closed":true,"target_id":c.target_id}));
+    }
     let result=match call.name.as_str() {
+        "browser_get_url" => client.evaluate_fixed(fixed_expression("url")?.into()).await?,
+        "browser_evaluate" => {
+            let a: Evaluate = parse(call)?;
+            client.evaluate_fixed(fixed_expression(&a.expression_id)?.into()).await?
+        }
+        "browser_wait" => {
+            let a: Wait = parse(call)?;
+            let expression = format!("((s)=>{{const e=document.querySelector(s);if(!e)return false;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return r.width>0&&r.height>0&&c.display!=='none'&&c.visibility!=='hidden'&&c.visibility!=='collapse';}})({})",serde_json::to_string(&a.selector)?);
+            tokio::time::timeout(std::time::Duration::from_millis(a.timeout_ms), async {
+                loop {
+                    let visible = client.evaluate_fixed(expression.clone()).await?;
+                    let visible = visible.as_bool().ok_or_else(||anyhow::anyhow!("invalid visibility result"))?;
+                    if visible == (a.state == "visible") { break Ok::<_,anyhow::Error>(json!({"matched":true,"state":a.state})); }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }).await.map_err(|_|anyhow::anyhow!("browser wait timed out"))??
+        }
         "browser_read"=>client.evaluate_fixed("JSON.stringify({url:String(location.href),title:String(document.title).slice(0,1024),text:String(document.body?.innerText??'').slice(0,32768)})".into()).await?,
         "browser_navigate"=>{
             let a:Navigate=parse(call)?;
@@ -432,6 +487,13 @@ mod tests {
                         json!(
                             "{\"url\":\"https://example.org/\",\"title\":\"Mock\",\"text\":\"bounded text\"}"
                         )
+                    } else if expression.contains("getBoundingClientRect") {
+                        assert!(expression.contains("querySelector(s)"));
+                        json!(mode != "hidden" && mode != "timeout")
+                    } else if expression.contains("String(document.title).slice") {
+                        json!("Mock title")
+                    } else if expression.contains("String(document.readyState)") {
+                        json!("complete")
                     } else if expression.contains("document.readyState") {
                         json!("{\"url\":\"https://example.org/\",\"ready\":\"complete\"}")
                     } else if expression.contains("e.click()") || expression.contains("e.value=v") {
@@ -443,6 +505,10 @@ mod tests {
                         json!("https://example.org/")
                     };
                     json!({"result":{"type":"string","value":value}})
+                } else if request["method"] == "Page.close" {
+                    assert_eq!(request["params"], json!({}));
+                    assert_eq!(evaluations, 1);
+                    json!({})
                 } else if request["method"] == "Page.captureScreenshot" {
                     json!({"data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="})
                 } else {
@@ -491,6 +557,73 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn fixed_wait_url_evaluate_and_exact_page_close_transactions() {
+        for (mode, name, args, expected) in [
+            (
+                "url",
+                "browser_get_url",
+                json!({}),
+                json!("https://example.org/"),
+            ),
+            (
+                "title",
+                "browser_evaluate",
+                json!({"expression_id":"title"}),
+                json!("Mock title"),
+            ),
+            (
+                "ready",
+                "browser_evaluate",
+                json!({"expression_id":"ready_state"}),
+                json!("complete"),
+            ),
+            (
+                "visible",
+                "browser_wait",
+                json!({"selector":"button[data-x='quote\\\"']","state":"visible","timeout_ms":1000}),
+                json!({"matched":true,"state":"visible"}),
+            ),
+            (
+                "hidden",
+                "browser_wait",
+                json!({"selector":"#absent","state":"hidden","timeout_ms":1000}),
+                json!({"matched":true,"state":"hidden"}),
+            ),
+            (
+                "close",
+                "browser_close",
+                json!({}),
+                json!({"closed":true,"target_id":"test"}),
+            ),
+        ] {
+            let (c, http, task) = fake(mode).await;
+            let call = ToolCall {
+                id: "new".into(),
+                name: name.into(),
+                arguments: args,
+            };
+            assert_eq!(execute(&c, &http, &call, 65536).await.unwrap(), expected);
+            task.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn wait_timeout_is_bounded_and_drops_session() {
+        let (c, http, task) = fake("timeout").await;
+        let call = ToolCall {
+            id: "wait".into(),
+            name: "browser_wait".into(),
+            arguments: json!({"selector":"#missing","state":"visible","timeout_ms":30}),
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            execute(&c, &http, &call, 65536),
+        )
+        .await
+        .unwrap();
+        assert!(result.unwrap_err().to_string().contains("wait timed out"));
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn redirects_to_unknown_origins_are_blocked() {
         let (c, http, task) = fake("redirect").await;
         let call = ToolCall {
@@ -526,6 +659,35 @@ mod tests {
     }
     #[tokio::test]
     async fn fixed_click_fill_navigate_and_screenshot_protocols() {
+        fixed_click_fill_navigate_and_screenshot_transactions().await;
+    }
+    #[tokio::test]
+    async fn new_fixed_reads_and_wait_reject_final_cross_origin_events() {
+        for (name, args) in [
+            ("browser_get_url", json!({})),
+            ("browser_evaluate", json!({"expression_id":"title"})),
+            (
+                "browser_wait",
+                json!({"selector":"input","state":"visible","timeout_ms":1000}),
+            ),
+        ] {
+            let (c, http, task) = fake("bad-final").await;
+            let call = ToolCall {
+                id: "origin".into(),
+                name: name.into(),
+                arguments: args,
+            };
+            assert!(
+                execute(&c, &http, &call, 65536)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("origin denied")
+            );
+            task.await.unwrap();
+        }
+    }
+    async fn fixed_click_fill_navigate_and_screenshot_transactions() {
         for (mode, name, args) in [
             (
                 "click",

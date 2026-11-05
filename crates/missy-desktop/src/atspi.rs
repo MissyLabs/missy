@@ -25,6 +25,50 @@ trait Action {
     fn get_name(&self, index: i32) -> zbus::Result<String>;
     fn do_action(&self, index: i32) -> zbus::Result<bool>;
 }
+#[zbus::proxy(interface = "org.a11y.atspi.Text")]
+trait Text {
+    fn get_text(&self, start_offset: i32, end_offset: i32) -> zbus::Result<String>;
+}
+#[zbus::proxy(interface = "org.a11y.atspi.EditableText")]
+trait EditableText {
+    fn set_text_contents(&self, new_contents: &str) -> zbus::Result<bool>;
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextArgs {
+    application: String,
+    window: String,
+    path: String,
+    start: Option<i32>,
+    end: Option<i32>,
+    value: Option<String>,
+}
+pub(crate) fn validate_text_call(call: &ToolCall) -> Result<()> {
+    let a: TextArgs = parse(call)?;
+    ActionArgs {
+        application: a.application,
+        window: a.window,
+        path: a.path,
+        action: 0,
+    }
+    .validate()?;
+    match call.name.as_str() {
+        "desktop_accessibility_get_text" if a.value.is_none() => match (a.start, a.end) {
+            (Some(start), Some(end)) if start >= 0 && end >= start && end <= 4096 => {}
+            _ => bail!("text offsets require 0 <= start <= end <= 4096"),
+        },
+        "desktop_accessibility_set_value" if a.start.is_none() && a.end.is_none() => {
+            if a.value
+                .as_ref()
+                .is_none_or(|v| v.len() > 8192 || v.contains('\0'))
+            {
+                bail!("bounded value required");
+            }
+        }
+        _ => bail!("invalid typed text operation"),
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -188,6 +232,49 @@ async fn select(c: &zbus::Connection, app: &str, window: &str) -> Result<ObjectR
     Ok(matches.remove(0))
 }
 pub(crate) async fn execute(config: &AtspiConfig, call: &ToolCall) -> Result<Value> {
+    if matches!(
+        call.name.as_str(),
+        "desktop_accessibility_get_text" | "desktop_accessibility_set_value"
+    ) {
+        validate_text_call(call)?;
+        let a: TextArgs = parse(call)?;
+        if !config.allowed_applications.contains(&a.application)
+            || !config.allowed_windows.contains(&a.window)
+        {
+            bail!("AT-SPI application/window denied");
+        }
+        let c = zbus::connection::Builder::address(config.bus_address.as_str())
+            .build()
+            .await?;
+        let root = select(&c, &a.application, &a.window).await?;
+        // Re-select the exact app/window and prove descendant membership twice.
+        // Pin the unique bus owner throughout; no arbitrary object destinations.
+        for _ in 0..2 {
+            if select(&c, &a.application, &a.window).await? != root {
+                bail!("AT-SPI selection changed");
+            }
+            if !descendant(&c, &root, &a.path).await? {
+                bail!("AT-SPI text target not in bounded allowlisted window tree");
+            }
+        }
+        return if call.name == "desktop_accessibility_get_text" {
+            let p = TextProxy::builder(&c)
+                .destination(root.0.as_str())
+                .path(a.path.as_str())
+                .build()
+                .await?;
+            Ok(
+                json!({"text":bounded(p.get_text(a.start.expect("validated"),a.end.expect("validated")).await?)?}),
+            )
+        } else {
+            let p = EditableTextProxy::builder(&c)
+                .destination(root.0.as_str())
+                .path(a.path.as_str())
+                .build()
+                .await?;
+            Ok(json!({"set":p.set_text_contents(a.value.as_deref().expect("validated")).await?}))
+        };
+    }
     let (tree_args, action_args) = if call.name == "desktop_accessibility_action" {
         let a: ActionArgs = parse(call)?;
         a.validate()?;
@@ -235,7 +322,9 @@ pub(crate) async fn execute(config: &AtspiConfig, call: &ToolCall) -> Result<Val
             .is_some_and(|a| a.path == object.1.as_str())
         {
             // Re-resolve the scoped root immediately before mutation.
-            if select(&c, &tree_args.application, &tree_args.window).await? != selected_root {
+            if select(&c, &tree_args.application, &tree_args.window).await? != selected_root
+                || !descendant(&c, &selected_root, object.1.as_str()).await?
+            {
                 bail!("AT-SPI selection changed");
             }
             let a = action(&c, &dest, object.1.as_str()).await?;
@@ -284,6 +373,34 @@ pub(crate) async fn execute(config: &AtspiConfig, call: &ToolCall) -> Result<Val
     )
 }
 
+async fn descendant(c: &zbus::Connection, root: &ObjectRef, target: &str) -> Result<bool> {
+    let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+    let mut seen = BTreeSet::new();
+    while let Some((object, depth)) = queue.pop_front() {
+        same_application(&root.0, &object)?;
+        if !seen.insert(object.1.to_string()) {
+            continue;
+        }
+        if seen.len() > 256 {
+            bail!("AT-SPI descendant budget exceeded");
+        }
+        if object.1.as_str() == target {
+            return Ok(true);
+        }
+        if depth < 8 {
+            let p = accessible(c, &root.0, object.1.as_str()).await?;
+            for child in children(&p).await? {
+                same_application(&root.0, &child)?;
+                if queue.len() >= 256 {
+                    bail!("AT-SPI descendant queue exceeded");
+                }
+                queue.push_back((child, depth + 1));
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +440,27 @@ mod tests {
         }
     }
     struct MockAction(Arc<AtomicUsize>);
+    struct MockText(Arc<std::sync::Mutex<String>>);
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl MockText {
+        fn get_text(&self, start_offset: i32, end_offset: i32) -> String {
+            self.0
+                .lock()
+                .unwrap()
+                .chars()
+                .skip(start_offset as usize)
+                .take((end_offset - start_offset) as usize)
+                .collect()
+        }
+    }
+    struct MockEditable(Arc<std::sync::Mutex<String>>);
+    #[zbus::interface(name = "org.a11y.atspi.EditableText")]
+    impl MockEditable {
+        fn set_text_contents(&self, new_contents: &str) -> bool {
+            *self.0.lock().unwrap() = new_contents.into();
+            true
+        }
+    }
     #[zbus::interface(name = "org.a11y.atspi.Action")]
     impl MockAction {
         #[zbus(property, name = "NActions")]
@@ -400,6 +538,17 @@ mod tests {
             .object_server()
             .at(outside, MockAction(calls.clone()))
             .await?;
+        let text = Arc::new(std::sync::Mutex::new("initial text".into()));
+        for path in [button, outside] {
+            server
+                .object_server()
+                .at(path, MockText(text.clone()))
+                .await?;
+            server
+                .object_server()
+                .at(path, MockEditable(text.clone()))
+                .await?;
+        }
         let config = AtspiConfig {
             bus_address: address,
             allowed_applications: BTreeSet::from(["Allowed App".into()]),
@@ -447,6 +596,51 @@ mod tests {
                 .to_string()
                 .contains("denied")
         );
+        let mut read = ToolCall {
+            id: "text".into(),
+            name: "desktop_accessibility_get_text".into(),
+            arguments: json!({"application":"Allowed App","window":"Allowed Window","path":button,"start":0,"end":7}),
+        };
+        assert_eq!(execute(&config, &read).await?["text"], "initial");
+        let mut set = ToolCall {
+            id: "set".into(),
+            name: "desktop_accessibility_set_value".into(),
+            arguments: json!({"application":"Allowed App","window":"Allowed Window","path":button,"value":"edited"}),
+        };
+        assert_eq!(execute(&config, &set).await?["set"], true);
+        assert_eq!(*text.lock().unwrap(), "edited");
+        read.arguments["path"] = json!(outside);
+        set.arguments["path"] = json!(outside);
+        for denied in [&read, &set] {
+            assert!(
+                execute(&config, denied)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not in bounded")
+            );
+        }
+        assert_eq!(*text.lock().unwrap(), "edited");
+        assert!(server.object_server().remove::<Node, _>(window).await?);
+        server
+            .object_server()
+            .at(
+                window,
+                Node {
+                    name: "Allowed Window".into(),
+                    children: vec![],
+                },
+            )
+            .await?;
+        set.arguments["path"] = json!(button);
+        assert!(
+            execute(&config, &set)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("not in bounded")
+        );
+        assert_eq!(*text.lock().unwrap(), "edited");
         Ok(())
     }
 }

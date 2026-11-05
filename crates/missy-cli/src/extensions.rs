@@ -56,6 +56,24 @@ impl ToolExecutor for CompositeTools {
     }
 }
 
+#[async_trait]
+impl missy_capture::CaptureApproval for OuterGuardVerified {
+    async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {
+        Ok(())
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "outer-durable-exact-all-capture-approval-v1".into()
+    }
+}
+#[async_trait]
+impl missy_plugins::PluginApproval for OuterGuardVerified {
+    async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {
+        Ok(())
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "outer-durable-exact-all-native-plugin-approval-v1".into()
+    }
+}
 pub struct NoTools;
 #[async_trait]
 impl missy_desktop::DesktopApproval for OuterGuardVerified {

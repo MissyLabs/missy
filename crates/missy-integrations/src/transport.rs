@@ -44,6 +44,42 @@ impl Connection {
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.cfg.endpoint.trim_end_matches('/'), path)
     }
+    /// Binary HTTP still uses the sole policy gateway and its 4 MiB hard limit.
+    pub async fn bytes(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Vec<u8>>,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
+        let mut headers = vec![];
+        if let Some(secret) = &self.secret {
+            headers.push(("Authorization".into(), format!("Bearer {secret}")));
+        }
+        if body.is_some() {
+            headers.push(("Content-Type".into(), "application/octet-stream".into()));
+        }
+        let mut response = self
+            .http
+            .request_stream(method, &self.url(path), headers, body)
+            .await
+            .map_err(|_| anyhow!("integration policy or HTTP transport rejected request"))?;
+        if !(200..300).contains(&response.status) {
+            bail!("integration upstream HTTP status {}", response.status);
+        }
+        let mut data = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow!("integration response read rejected"))?
+        {
+            if data.len().saturating_add(chunk.len()) > limit {
+                bail!("integration binary response exceeds configured bound");
+            }
+            data.extend_from_slice(&chunk);
+        }
+        Ok(data)
+    }
     pub async fn json(
         &self,
         method: &str,

@@ -8,8 +8,11 @@ self-approve. `vision_devices` is the only read-only tool.
 ## Implemented tools
 
 * `video_edit`: typed `trim`, `transcode`, `concat`, `overlay`, `extract_frame`,
-  `extract_audio`, and `storyboard` operations. Output video is intentionally
-  **silent MPEG-4 MP4**, 15 fps and YUV420p. Audio extraction produces mono
+  `extract_audio`, `storyboard`, `audio_mux`, `audio_mix`, `speed`, `text`, and
+  `crossfade` operations. Existing video operations remain intentionally
+  **silent MPEG-4 MP4**, 15 fps and YUV420p. Audio is present only through explicit
+  new audio operations or a required `preserve_audio: true` on speed/text/crossfade.
+  Audio extraction produces mono
   16 kHz PCM16 WAV, not speaker output. Frames are PNG.
 * `video_storyboard`: assembles existing PNG/JPEG files. Files produced by a
   separately approved Comfy integration can be consumed through the same read
@@ -53,6 +56,46 @@ exported for native integrations.
 native-execution capability is generated for the exact, typed per-call argv;
 it does not enable the user's generic shell tools. Changes to operator config,
 file policy or catalog change `configuration_fingerprint`.
+
+## Legacy video_edit compatibility mapping
+
+The tool name and approval boundary stay `video_edit`. This is native typed
+compatibility, not a Python call-through or acceptance of legacy free-form flags.
+
+| Legacy option | Native request |
+| --- | --- |
+| `audio`, `audio_mode=replace`, `audio_file`, `loop` | `audio_mux`, `input`, `audio_file`, required `loop` boolean and finite `gain` 0..4 |
+| `audio`, `audio_mode=mix` | `audio_mix`, same fields plus required finite `original_gain` 0..4; absent original track degrades to replacement |
+| Audio duration follows video | Omit/null `duration_ms` to use video duration, or positive bounded duration no longer than video; short audio pads with silence, explicit loop repeats it |
+| `speed`, `factor` | `speed`, finite factor 0.25..4 and required `preserve_audio`; real audio uses chained atempo stages 0.5..2, pitch preserved |
+| `text`, `font_file`, `font_size`, `position` | `text`, explicit policy-readable TTF/OTF `font_file`, font size 8..256, nine legacy position names; 4px margins instead of legacy 20px |
+| Caption `start`, `end` seconds | Required `start_ms`, `end_ms`, positive interval within actual input duration |
+| `font_color`, `box_color`, `box_opacity`, `box` | Required colors from white/black/red/blue/yellow, finite opacity 0..1, boolean box; no color or coordinate expressions |
+| `concat`, `transition=crossfade`, `transition_duration` | `crossfade`, exactly two `inputs`, even bounded `width`/`height`, positive `duration_ms` <=5000 and <= shortest actual clip, required `preserve_audio` |
+| Legacy implicit audio preservation | Not implicit: existing operations remain silent, new speed/text/crossfade require an explicit boolean |
+
+Mux/mix stream-copy the video and encode AAC stereo 48kHz at 128kbit/s.
+Speed/text/crossfade encode MPEG-4 video with optional AAC, not NVENC/H.265.
+Crossfade uses normalized resolution/fps/timebase; if explicitly preserving
+audio and one clip lacks a track, bounded silence fills that clip before acrossfade.
+No audio is synthesized when neither clip has audio. Output duration is checked.
+Legacy arbitrary x/y expressions, automatic font discovery/size, arbitrary colors,
+CRF/encoder selection, last-frame sentinel and implicit output naming are not
+accepted. Existing bounded trim/transcode/extract mappings are unchanged.
+
+Caption UTF-8 text (1..4096 bytes, no NUL) is written to a private textfile and
+rendered with `expansion=none`; punctuation, percent expressions, quotes, colons
+and filter syntax stay literal. The approved font is read through Policy and
+copied to a fixed private filename; there is no font resolver, environment font
+path, or implicit font grant. Only generated numeric/enum expressions enter the
+filter graph. Caption staging roots with graph metacharacters are rejected.
+No new config fields were needed: existing config remains source/JSON compatible;
+the expanded schema is already part of the configuration fingerprint.
+
+All streams, including expected AAC, are FFprobed and fully decoded before atomic
+publication. Interrupted command timeouts/cancellation return an unknown-outcome
+error and are never retried here. Dropped futures are killed/reaped by the sandbox;
+the caller's durable journal must keep their outcome unknown until reconciliation.
 
 ## File and process boundary
 
@@ -101,9 +144,14 @@ reads are capped by `PolicyConfig.max_file_bytes` (hard ceiling 64 MiB).
 ## Validation
 
 `cargo test -p missy-media` creates tiny synthetic colored videos with trusted
-test-only lavfi constants and no hardware. It exercises all seven FFmpeg edit
+test-only lavfi constants and no hardware. It exercises the original seven FFmpeg edit
 operations, verifies artifact hashes/codecs/durations, decodes frame pixels,
 tests image operations, policy and symlink refusal, disguised playlists, exact
 typed-field rejection, executable hash mismatch, decompression bounds, actual
 Landlock denial, process timeout, cancellation and dropped-future cleanup paths.
 No expensive render, real camera, microphone, desktop interaction or playback.
+New-operation tests exercise 13 real mux/mix/loop/speed/text/crossfade cases,
+decode video and audio bytes to hashes, assert stream presence and durations,
+compare actual loop/mix audio, exercise literal dangerous-looking caption text,
+mixed missing-audio crossfades and full-overlap boundaries, and reject excessive
+gains, non-finite speeds, missing preservation flags and denied audio/font reads.

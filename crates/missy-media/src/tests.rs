@@ -81,6 +81,456 @@ fn image_fixture(dir: &Path, name: &str, color: [u8; 4]) -> PathBuf {
         .unwrap();
     path
 }
+fn frame_at(path: &Path, seconds: &str) -> image::RgbImage {
+    let output = Command::new("/usr/bin/ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(path)
+        .args([
+            "-ss",
+            seconds,
+            "-map",
+            "0:v:0",
+            "-frames:v",
+            "1",
+            "-an",
+            "-threads",
+            "1",
+            "-c:v",
+            "png",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    image::load_from_memory(&output.stdout).unwrap().to_rgb8()
+}
+
+fn decoded_hash(path: &Path, audio: bool) -> String {
+    let mut cmd = Command::new("/usr/bin/ffmpeg");
+    cmd.args(["-v", "error", "-xerror", "-nostdin", "-i"])
+        .arg(path);
+    if audio {
+        cmd.args([
+            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le",
+        ]);
+    } else {
+        cmd.args([
+            "-map", "0:v:0", "-an", "-pix_fmt", "rgb24", "-threads", "1", "-f", "rawvideo",
+        ]);
+    }
+    let output = cmd.arg("pipe:1").output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.is_empty());
+    hex::encode(Sha256::digest(output.stdout))
+}
+
+#[tokio::test]
+async fn actual_ffmpeg_explicit_audio_speed_text_crossfade_decode_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = policy(dir.path());
+    let font = PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+    p.read_roots.push(font.parent().unwrap().to_owned());
+    let tools = MediaTools::new(p, config(dir.path())).unwrap();
+    let red = fixture(dir.path(), "red.mp4", "red");
+    let blue = fixture(dir.path(), "blue.mp4", "blue");
+    let audio = dir.path().join("short.wav");
+    assert!(
+        Command::new("/usr/bin/ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-nostdin",
+                "-n",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=880:sample_rate=16000:duration=0.2",
+                "-c:a",
+                "pcm_s16le"
+            ])
+            .arg(&audio)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let silent = dir.path().join("silent.mp4");
+    tools
+        .edit_video(
+            &ctx(),
+            VideoRequest {
+                output: silent.clone(),
+                operation: VideoOperation::Transcode {
+                    input: red.clone(),
+                    width: 64,
+                    height: 48,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let text = |text: &str, preserve_audio| VideoOperation::Text {
+        input: red.clone(),
+        text: text.into(),
+        font_file: font.clone(),
+        font_size: 8,
+        position: TextPosition::Center,
+        font_color: CaptionColor::White,
+        box_color: CaptionColor::Black,
+        box_opacity: 0.5,
+        boxed: true,
+        start_ms: 200,
+        end_ms: 800,
+        preserve_audio,
+    };
+    let mut results = std::collections::BTreeMap::new();
+    for (name, operation, expect_audio, duration) in [
+        (
+            "mux",
+            VideoOperation::AudioMux {
+                input: silent.clone(),
+                audio_file: audio.clone(),
+                gain: 0.5,
+                duration_ms: None,
+                loop_audio: false,
+            },
+            true,
+            1.0,
+        ),
+        (
+            "loop",
+            VideoOperation::AudioMux {
+                input: silent.clone(),
+                audio_file: audio.clone(),
+                gain: 0.5,
+                duration_ms: Some(1000),
+                loop_audio: true,
+            },
+            true,
+            1.0,
+        ),
+        (
+            "mix",
+            VideoOperation::AudioMix {
+                input: red.clone(),
+                audio_file: audio.clone(),
+                gain: 0.5,
+                original_gain: 0.25,
+                duration_ms: None,
+                loop_audio: true,
+            },
+            true,
+            1.0,
+        ),
+        (
+            "mix_silent",
+            VideoOperation::AudioMix {
+                input: silent.clone(),
+                audio_file: audio.clone(),
+                gain: 0.5,
+                original_gain: 0.25,
+                duration_ms: Some(500),
+                loop_audio: false,
+            },
+            true,
+            0.5,
+        ),
+        (
+            "speed_quarter",
+            VideoOperation::Speed {
+                input: red.clone(),
+                factor: 0.25,
+                preserve_audio: true,
+            },
+            true,
+            4.0,
+        ),
+        (
+            "speed_four",
+            VideoOperation::Speed {
+                input: red.clone(),
+                factor: 4.0,
+                preserve_audio: true,
+            },
+            true,
+            0.25,
+        ),
+        (
+            "speed_silent",
+            VideoOperation::Speed {
+                input: red.clone(),
+                factor: 2.0,
+                preserve_audio: false,
+            },
+            false,
+            0.5,
+        ),
+        (
+            "speed_no_track",
+            VideoOperation::Speed {
+                input: silent.clone(),
+                factor: 1.0,
+                preserve_audio: true,
+            },
+            false,
+            1.0,
+        ),
+        ("text", text("100% : ' \\ ; [x] %{eif:1}", true), true, 1.0),
+        ("text_silent", text("caption", false), false, 1.0),
+        (
+            "fade",
+            VideoOperation::Crossfade {
+                inputs: vec![red.clone(), blue.clone()],
+                width: 64,
+                height: 48,
+                duration_ms: 400,
+                preserve_audio: true,
+            },
+            true,
+            1.6,
+        ),
+        (
+            "fade_mixed",
+            VideoOperation::Crossfade {
+                inputs: vec![silent.clone(), blue.clone()],
+                width: 64,
+                height: 48,
+                duration_ms: 400,
+                preserve_audio: true,
+            },
+            true,
+            1.6,
+        ),
+        (
+            "fade_silent",
+            VideoOperation::Crossfade {
+                inputs: vec![red.clone(), blue.clone()],
+                width: 64,
+                height: 48,
+                duration_ms: 1000,
+                preserve_audio: false,
+            },
+            false,
+            1.0,
+        ),
+    ] {
+        let result = tools
+            .execute(
+                &ctx(),
+                &call(
+                    "video_edit",
+                    serde_json::to_value(VideoRequest {
+                        output: dir.path().join(format!("{name}.mp4")),
+                        operation,
+                    })
+                    .unwrap(),
+                ),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        assert_artifact(&result, "mpeg4");
+        assert_eq!(
+            result["media"]["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["codec_type"] == "audio"),
+            expect_audio,
+            "{name}"
+        );
+        assert!(
+            (result["media"]["duration_seconds"].as_f64().unwrap() - duration).abs() < 0.2,
+            "{name}"
+        );
+        let path = Path::new(result["path"].as_str().unwrap());
+        let video_hash = decoded_hash(path, false);
+        let audio_hash = expect_audio.then(|| decoded_hash(path, true));
+        results.insert(name, (video_hash, audio_hash));
+    }
+    assert_eq!(
+        results["mux"].0, results["loop"].0,
+        "mux must not reencode video"
+    );
+    assert_ne!(
+        results["mux"].1, results["loop"].1,
+        "loop has real decoded audio beyond short track"
+    );
+    assert_ne!(
+        results["mix"].1, results["loop"].1,
+        "mix includes original audio"
+    );
+    assert_ne!(
+        results["text"].0,
+        decoded_hash(&red, false),
+        "text changes decoded pixels"
+    );
+    assert_ne!(
+        results["fade"].0,
+        decoded_hash(&red, false),
+        "crossfade renders both clips"
+    );
+    let text_output = dir.path().join("text.mp4");
+    let before = frame_at(&text_output, "0.0");
+    let during = frame_at(&text_output, "0.4");
+    let after = frame_at(&text_output, "0.9");
+    assert_eq!(
+        before.as_raw(),
+        after.as_raw(),
+        "caption disabled outside its interval"
+    );
+    assert_ne!(
+        before.as_raw(),
+        during.as_raw(),
+        "caption enabled within its interval"
+    );
+    let fade_output = dir.path().join("fade.mp4");
+    let midpoint = frame_at(&fade_output, "0.8");
+    let pixel = midpoint.get_pixel(32, 24);
+    assert!(
+        pixel[0] > 50 && pixel[2] > 50 && pixel[1] < 40,
+        "crossfade really blends red and blue: {pixel:?}"
+    );
+}
+
+#[tokio::test]
+async fn new_operations_reject_unbounded_values_and_policy_bypasses() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = MediaTools::new(policy(dir.path()), config(dir.path())).unwrap();
+    let red = fixture(dir.path(), "red.mp4", "red");
+    let outside = tempfile::tempdir().unwrap();
+    let external = fixture(outside.path(), "private.mp4", "blue");
+    let output = dir.path().join("denied.mp4");
+    for arguments in [
+        json!({"operation":"speed", "input":red,"output":output,"factor":2.0}),
+        json!({"operation":"speed", "input":red,"output":output,"factor":4.1,"preserve_audio":true}),
+        json!({"operation":"speed", "input":red,"output":output,"factor":0.0,"preserve_audio":true}),
+        json!({"operation":"speed", "input":red,"output":output,"factor":1.0,"preserve_audio":true,"filter":"movie=/etc/passwd"}),
+        json!({"operation":"audio_mux", "input":red,"output":output,"audio_file":red,"gain":5,"loop":false}),
+        json!({"operation":"crossfade", "inputs":[red],"output":output,"width":64,"height":48,"duration_ms":400,"preserve_audio":false}),
+    ] {
+        assert!(
+            tools
+                .preflight(&ctx(), &call("video_edit", arguments))
+                .await
+                .is_err()
+        );
+    }
+    for operation in [
+        VideoOperation::AudioMux {
+            input: red.clone(),
+            audio_file: external,
+            gain: 1.0,
+            duration_ms: None,
+            loop_audio: false,
+        },
+        VideoOperation::AudioMix {
+            input: red.clone(),
+            audio_file: red.clone(),
+            gain: 1.0,
+            original_gain: f64::NAN,
+            duration_ms: None,
+            loop_audio: false,
+        },
+        VideoOperation::Speed {
+            input: red.clone(),
+            factor: f64::INFINITY,
+            preserve_audio: true,
+        },
+        VideoOperation::Crossfade {
+            inputs: vec![red.clone(), red.clone()],
+            width: 64,
+            height: 48,
+            duration_ms: 1100,
+            preserve_audio: true,
+        },
+        VideoOperation::Text {
+            input: red.clone(),
+            text: "literal:movie=/etc/passwd".into(),
+            font_file: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into(),
+            font_size: 8,
+            position: TextPosition::Center,
+            font_color: CaptionColor::White,
+            box_color: CaptionColor::Black,
+            box_opacity: 0.5,
+            boxed: false,
+            start_ms: 0,
+            end_ms: 800,
+            preserve_audio: false,
+        },
+    ] {
+        assert!(
+            tools
+                .edit_video(
+                    &ctx(),
+                    VideoRequest {
+                        output: output.clone(),
+                        operation
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(!output.exists());
+    }
+    let bad_font = dir.path().join("bad.ttf");
+    std::fs::write(&bad_font, b"not a font").unwrap();
+    let linked_audio = dir.path().join("link.mp4");
+    std::os::unix::fs::symlink(&red, &linked_audio).unwrap();
+    for operation in [
+        VideoOperation::AudioMux {
+            input: red.clone(),
+            audio_file: linked_audio,
+            gain: 1.0,
+            duration_ms: None,
+            loop_audio: true,
+        },
+        VideoOperation::AudioMux {
+            input: red.clone(),
+            audio_file: red.clone(),
+            gain: 1.0,
+            duration_ms: Some(1200),
+            loop_audio: true,
+        },
+        VideoOperation::Text {
+            input: red,
+            text: "caption".into(),
+            font_file: bad_font,
+            font_size: 8,
+            position: TextPosition::Center,
+            font_color: CaptionColor::White,
+            box_color: CaptionColor::Black,
+            box_opacity: 0.5,
+            boxed: false,
+            start_ms: 0,
+            end_ms: 800,
+            preserve_audio: false,
+        },
+    ] {
+        assert!(
+            tools
+                .edit_video(
+                    &ctx(),
+                    VideoRequest {
+                        output: output.clone(),
+                        operation
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(!output.exists());
+    }
+}
+
 fn call(name: &str, arguments: Value) -> ToolCall {
     ToolCall {
         id: "test".into(),
@@ -430,6 +880,12 @@ async fn actual_native_process_timeout_and_cancellation() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("timed out"), "{error:#}");
+    assert!(
+        error
+            .to_string()
+            .contains("outcome unknown; no automatic retry"),
+        "{error:#}"
+    );
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
     c.timeout_ms = 15000;
     let context = ctx();
@@ -442,6 +898,12 @@ async fn actual_native_process_timeout_and_cancellation() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("cancelled"), "{error:#}");
+    assert!(
+        error
+            .to_string()
+            .contains("outcome unknown; no automatic retry"),
+        "{error:#}"
+    );
     cancel.await.unwrap();
     // Dropped future uses the same exact-group kill/reap ownership path.
     let context = ctx();

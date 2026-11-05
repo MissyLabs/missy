@@ -17,6 +17,45 @@ pub struct RuntimeVoice {
     pub full: Arc<missy_runtime::Runtime>,
     pub safe: Arc<missy_runtime::Runtime>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscordVoiceApplication {
+    pub server: missy_discord_voice::DiscordVoiceConfig,
+    pub stt: missy_voice::CommandConfig,
+    pub tts: missy_voice::CommandConfig,
+}
+#[async_trait]
+impl missy_discord_voice::DiscordVoiceAgent for RuntimeVoice {
+    async fn respond(
+        &self,
+        binding: &missy_discord_voice::VoiceBinding,
+        prompt: &str,
+        cancel: CancellationToken,
+    ) -> Result<String> {
+        if !binding.consent {
+            bail!("speaker has no explicit voice consent");
+        }
+        let mode = match binding.mode {
+            missy_discord_voice::VoiceMode::Normal => PolicyMode::Full,
+            missy_discord_voice::VoiceMode::NoTools | missy_discord_voice::VoiceMode::SafeChat => {
+                PolicyMode::SafeChat
+            }
+        };
+        let device = Device {
+            node_id: format!(
+                "discord:{}:{}:{}",
+                binding.guild_id, binding.channel_id, binding.user_id
+            ),
+            friendly_name: "consented Discord voice participant".into(),
+            room: binding.channel_id.to_string(),
+            scope: Some(binding.scope.clone()),
+            mode,
+            paired: true,
+            requested_at: 0,
+        };
+        <Self as VoiceAgent>::respond(self, &device, prompt, cancel).await
+    }
+}
 struct CancelOnDrop {
     runtime: Arc<missy_runtime::Runtime>,
     scope: missy_core::Scope,

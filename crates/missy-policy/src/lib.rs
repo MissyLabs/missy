@@ -8,6 +8,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use missy_core::PolicyConfig;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     ffi::{CString, OsStr},
@@ -102,6 +103,132 @@ fn roots(paths: &[PathBuf]) -> Result<Vec<Root>> {
             })
         })
         .collect()
+}
+
+fn delete_hash(expected: &str) -> Result<[u8; 32]> {
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("expected_sha256 must be exactly 64 hexadecimal characters");
+    }
+    let mut hash = [0; 32];
+    for (out, pair) in hash.iter_mut().zip(expected.as_bytes().as_chunks::<2>().0) {
+        let digit = |b: u8| {
+            if b <= b'9' {
+                b - b'0'
+            } else {
+                b.to_ascii_lowercase() - b'a' + 10
+            }
+        };
+        *out = digit(pair[0]) * 16 + digit(pair[1]);
+    }
+    Ok(hash)
+}
+fn same_delete_metadata(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    a.dev() == b.dev()
+        && a.ino() == b.ino()
+        && a.mode() == b.mode()
+        && a.uid() == b.uid()
+        && a.gid() == b.gid()
+        && a.nlink() == b.nlink()
+        && a.len() == b.len()
+        && a.mtime() == b.mtime()
+        && a.mtime_nsec() == b.mtime_nsec()
+}
+fn delete_snapshot(
+    parent: &File,
+    name: &OsStr,
+    expected: &[u8; 32],
+    limit: usize,
+) -> Result<std::fs::Metadata> {
+    let file = open_at(
+        parent.as_raw_fd(),
+        name,
+        libc::O_RDONLY | libc::O_NONBLOCK,
+        0,
+    )?;
+    let before = file
+        .metadata()
+        .map_err(|_| anyhow!("delete metadata unavailable"))?;
+    if !before.is_file()
+        || before.uid() != unsafe { libc::geteuid() }
+        || before.nlink() != 1
+        || before.len() > limit as u64
+    {
+        bail!("delete file type, ownership, links or size denied");
+    }
+    let mut hash = Sha256::new();
+    let mut reader = (&file).take(limit as u64 + 1);
+    let mut buf = [0u8; 8192];
+    let mut count = 0usize;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|_| anyhow!("delete bounded read failed"))?;
+        if n == 0 {
+            break;
+        }
+        count += n;
+        if count > limit {
+            bail!("delete file exceeds configured limit");
+        }
+        hash.update(&buf[..n]);
+    }
+    let actual = hash.finalize();
+    // No digest-dependent early exit. Hash values and file contents are never returned.
+    let mut difference = 0u8;
+    for i in 0..32 {
+        difference |= actual[i] ^ expected[i];
+    }
+    let after = file
+        .metadata()
+        .map_err(|_| anyhow!("delete metadata unavailable"))?;
+    if difference != 0
+        || count as u64 != after.len()
+        || !same_delete_metadata(&before, &after)
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+    {
+        bail!("delete content precondition failed");
+    }
+    // Ensure the pathname still names the descriptor that was hashed.
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let name = cstr(name)?;
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        bail!("delete entry unavailable");
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_dev != after.dev()
+        || stat.st_ino != after.ino()
+        || stat.st_mode != after.mode()
+        || stat.st_nlink != 1
+        || stat.st_uid != after.uid()
+    {
+        bail!("delete entry changed during validation");
+    }
+    Ok(after)
+}
+fn rename_noreplace(from: &File, source: &CString, to: &File, target: &CString) -> Result<()> {
+    // Linux-only: never fall back to an overwriting rename or check-then-rename.
+    if unsafe {
+        libc::renameat2(
+            from.as_raw_fd(),
+            source.as_ptr(),
+            to.as_raw_fd(),
+            target.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        bail!("delete non-overwriting rename unavailable");
+    }
+    Ok(())
 }
 
 impl Policy {
@@ -295,6 +422,118 @@ impl Policy {
             bail!("file exceeds configured limit");
         }
         Ok(bytes)
+    }
+    /// Delete one exact, owned, single-link regular file within write roots.
+    /// The digest is mandatory and checked before any namespace mutation and again
+    /// after quarantining the entry in a private directory. No recursive deletion.
+    /// This is not an atomic compare-and-unlink against malicious same-UID actors:
+    /// they can enter the private journal or retain a writable file descriptor.
+    /// Any error after quarantine may mean an uncertain outcome, never "no effect".
+    pub fn delete_file(&self, path: impl AsRef<Path>, expected_sha256: &str) -> Result<()> {
+        self.delete_file_inner(path.as_ref(), expected_sha256, || {}, || {})
+    }
+    fn delete_file_inner(
+        &self,
+        path: &Path,
+        expected_sha256: &str,
+        before_move: impl FnOnce(),
+        after_move: impl FnOnce(),
+    ) -> Result<()> {
+        let expected = delete_hash(expected_sha256)?;
+        if path.components().any(
+            |p| matches!(p, Component::Normal(n) if n.as_bytes().starts_with(b".missy-delete-")),
+        ) {
+            bail!("private delete journals are protected");
+        }
+        let (parent, name) = self.parent(path, true)?;
+        let parent_meta = parent
+            .metadata()
+            .map_err(|_| anyhow!("delete parent unavailable"))?;
+        if parent_meta.uid() != unsafe { libc::geteuid() } || parent_meta.mode() & 0o022 != 0 {
+            bail!("delete requires an owned parent without group or world write permission");
+        }
+        let original =
+            delete_snapshot(&parent, &name, &expected, self.inner.config.max_file_bytes)?;
+        let journal_name = CString::new(format!(".missy-delete-{}", uuid::Uuid::new_v4()))?;
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), journal_name.as_ptr(), 0o700) } != 0 {
+            bail!("private delete journal unavailable");
+        }
+        let cleanup = || unsafe {
+            libc::unlinkat(
+                parent.as_raw_fd(),
+                journal_name.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        };
+        let journal = match open_at(
+            parent.as_raw_fd(),
+            OsStr::from_bytes(journal_name.as_bytes()),
+            libc::O_RDONLY | libc::O_DIRECTORY,
+            0,
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                cleanup();
+                return Err(error);
+            }
+        };
+        if unsafe { libc::fchmod(journal.as_raw_fd(), 0o700) } != 0 {
+            cleanup();
+            bail!("private delete journal permissions unavailable");
+        }
+        let source = cstr(&name)?;
+        let entry = CString::new("entry")?;
+        before_move();
+        if let Err(error) = rename_noreplace(&parent, &source, &journal, &entry) {
+            cleanup();
+            return Err(error);
+        }
+        after_move();
+        let checked = delete_snapshot(
+            &journal,
+            OsStr::new("entry"),
+            &expected,
+            self.inner.config.max_file_bytes,
+        )
+        .and_then(|moved| {
+            if !same_delete_metadata(&original, &moved) {
+                bail!("delete entry identity changed");
+            }
+            Ok(())
+        });
+        if checked.is_err() {
+            // Restore the moved entry, even a symlink, without following it and
+            // without replacing anything created at the original name meanwhile.
+            if rename_noreplace(&journal, &entry, &parent, &source).is_err() {
+                let _ = journal.sync_all();
+                let _ = parent.sync_all();
+                bail!(
+                    "delete outcome uncertain; quarantined entry preserved in {} for recovery",
+                    journal_name.to_string_lossy()
+                );
+            }
+            cleanup();
+            parent
+                .sync_all()
+                .map_err(|_| anyhow!("delete restore sync failed; outcome uncertain"))?;
+            bail!("delete validation failed; moved entry restored without overwrite");
+        }
+        if unsafe { libc::unlinkat(journal.as_raw_fd(), entry.as_ptr(), 0) } != 0 {
+            bail!(
+                "delete outcome uncertain; quarantined entry retained in {}",
+                journal_name.to_string_lossy()
+            );
+        }
+        journal
+            .sync_all()
+            .map_err(|_| anyhow!("delete journal sync failed; outcome uncertain"))?;
+        if cleanup() != 0 {
+            bail!("delete journal cleanup failed; outcome uncertain");
+        }
+        parent
+            .sync_all()
+            .map_err(|_| anyhow!("directory sync failed after delete; outcome uncertain"))?;
+        Ok(())
     }
     /// Atomic replace, always mode 0600 and current effective user ownership.
     /// Parent directories must already exist. Symlink destinations are rejected.
@@ -883,5 +1122,7 @@ impl PolicyHttpClient {
     }
 }
 
+#[cfg(test)]
+mod delete_tests;
 #[cfg(test)]
 mod tests;

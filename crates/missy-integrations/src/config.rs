@@ -91,6 +91,17 @@ pub struct NomadConfig {
     /// Fully operator-authored Nomad Job objects keyed by exact allowed ID.
     /// Model callers select a name; they cannot supply task drivers/commands/mounts.
     pub deployments: BTreeMap<String, Value>,
+    /// Exact node IDs visible to discovery and placement. No fleet-wide fallback.
+    pub nodes: BTreeSet<String>,
+    /// Named, reviewed scale requests. Callers cannot supply a new count or group.
+    pub scales: BTreeMap<String, NomadScale>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NomadScale {
+    pub job: String,
+    pub group: String,
+    pub count: u32,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -99,6 +110,80 @@ pub struct IncusConfig {
     pub project: String,
     pub instances: BTreeSet<String>,
     pub actions: BTreeSet<InstanceAction>,
+    pub resources: BTreeSet<IncusResource>,
+    /// Exact typed action + resource + operator-authored payload grants.
+    pub operations: BTreeMap<String, IncusOperation>,
+    /// Remote paths are guest paths, not host filesystem roots. Exact grants only.
+    pub file_reads: BTreeMap<String, IncusFile>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IncusResource {
+    Instance { name: String },
+    Image { fingerprint: String },
+    Network { name: String },
+    StoragePool { name: String },
+    StorageVolume { pool: String, name: String },
+    Profile { name: String },
+    Project { name: String },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncusFile {
+    pub instance: String,
+    pub path: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IncusOperation {
+    Create {
+        resource: IncusResource,
+        definition: Value,
+    },
+    Update {
+        resource: IncusResource,
+        definition: Value,
+    },
+    Delete {
+        resource: IncusResource,
+    },
+    Exec {
+        instance: String,
+        argv: Vec<String>,
+    },
+    FileWrite {
+        file: IncusFile,
+        content: String,
+    },
+    SnapshotCreate {
+        instance: String,
+        snapshot: String,
+    },
+    SnapshotRestore {
+        instance: String,
+        snapshot: String,
+    },
+    SnapshotDelete {
+        instance: String,
+        snapshot: String,
+    },
+    DeviceSet {
+        instance: String,
+        device: String,
+        definition: BTreeMap<String, String>,
+    },
+    DeviceDelete {
+        instance: String,
+        device: String,
+    },
+    Copy {
+        instance: String,
+        target: String,
+    },
+    Move {
+        instance: String,
+        target: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -128,6 +213,17 @@ pub struct ComfyConfig {
     pub allowed_classes: BTreeSet<String>,
     /// Hard ceiling on in-memory submitted-job ownership records. No eviction/replay.
     pub max_tracked_jobs: usize,
+    /// Opt-in download ceiling, 1..4 MiB. Zero disables artifact downloads.
+    pub max_artifact_bytes: usize,
+    /// Named host read paths and LoadImage node bindings, authored by the operator.
+    pub conditioning: BTreeMap<String, ImageConditioning>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageConditioning {
+    pub workflow: String,
+    pub node: String,
+    pub path: std::path::PathBuf,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

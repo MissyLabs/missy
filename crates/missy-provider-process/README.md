@@ -1,14 +1,18 @@
 # Native CLI provider boundary
 
 This crate is an optional **chat-only** `missy_core::Provider`. It starts an
-explicitly approved external executable directly, not a Python bridge, ACP
-bridge, shell command, OAuth scraper, or token importer.
+explicitly approved external executable directly, not a Python/Node bridge,
+shell command, OAuth scraper, or token importer. The ACP path speaks NDJSON
+directly from Rust to an operator-provisioned local Claude ACP adapter.
 
 ## Public API
 
 - `CliProvider::new(CliProviderConfig) -> anyhow::Result<CliProvider>`
 - `create_provider(CliProviderConfig) -> Result<Arc<dyn Provider>>`
-- `CliProviderKind::{ClaudeCli, CodexCli}`, serialized as `claude_cli`, `codex_cli`
+- `CliProviderKind::{ClaudeCli, CodexCli, Acpx}`, serialized as `claude_cli`,
+  `codex_cli`, `acpx` (also accepts `claude_acp`)
+- `AcpAdapterPin { entrypoint, sha256 }`, optional `acp_adapter` configuration
+  required only for ACP
 - `CliProvider::manual_login_argv(kind, absolute_executable) -> Vec<String>`
 - `CliProvider::probe_auth(config, cancellation).await -> Result<AuthStatus>`
 - `AuthStatus::{Authenticated, NotAuthenticated}`
@@ -53,7 +57,7 @@ or protection against an operator replacing a binary after construction.
 ## Tool ownership
 
 Claude runs with fixed `--tools ""`, disallowed `mcp__*`, strict empty MCP config,
-no setting sources, slash commands disabled, `dontAsk`, hooks disabled,
+no setting sources, slash commands and Chrome disabled, `dontAsk`, hooks disabled,
 one turn, no session persistence, and an explicit replacement system prompt.
 The parser requires an init event advertising zero native tools/MCP servers,
 an assistant-only text response from the exact configured model, and a matching
@@ -68,6 +72,62 @@ does not prevent model-directed shell/read/web/MCP operations. Advertising an
 operational Codex adapter on that basis would bypass Missy policy. The serde
 kind, manual login argv and non-inference status probe are available for future
 integration, but there is no pretend tool-safe completion implementation.
+
+## Native ACP compatibility path
+
+`kind: "acpx"` implements the legacy acpx provider's actual direct ACP transport,
+not the acpx persistent-session CLI. Set `executable` to an exact absolute native
+ELF Node binary (Linux-only ACP runtime) and `acp_adapter` to an object with the absolute, locally provisioned
+adapter `entrypoint` and its hexadecimal `sha256`. No npx, package install,
+PATH discovery, shell or JavaScript bridge is run by Missy. Entrypoint ownership,
+ancestors and hash are checked at construction; hash is rechecked per call.
+Runtime initialize must identify exactly `@agentclientprotocol/claude-agent-acp`
+version `0.93.0`, ACP protocol 1. A different agent/version fails closed before
+session creation. The hash pins the entrypoint only, not its transitive Node/SDK
+dependencies: the operator must provision and protect the entire locked install.
+The self-reported version is a compatibility check, not a cryptographic identity.
+
+The audited 0.93.0 adapter source maps `_meta.claudeCode.options.tools: []`
+directly to the SDK's tools array (and documents `disableBuiltInTools: true` as
+its legacy equivalent). We send both. We additionally forward empty MCP servers,
+strict MCP configuration, empty setting sources, hooks disabled, slash commands
+disabled, Chrome disabled, persistence disabled, one turn, and a **replacement**
+system prompt. Exact model selection must be acknowledged by the adapter before
+prompting. Model-switch updates during a turn fail closed. These adapter-specific
+controls, not generic ACP capability negotiation, are the no-tools contract.
+
+Rust implements a small bounded ACP v1 JSON-RPC subset rather than depending on
+the larger official Rust SDK. The maintained SDK and pinned adapter were reviewed:
+
+- https://github.com/agentclientprotocol/rust-sdk
+- https://unpkg.com/@agentclientprotocol/claude-agent-acp@0.93.0/dist/acp-agent.js
+- https://unpkg.com/@agentclientprotocol/claude-agent-acp@0.93.0/package.json
+
+Client filesystem and terminal capabilities are false. Every permission request
+gets the unconditional ACP `cancelled` outcome, even if only allow options were
+offered, and poisons completion success. Unknown requests, tool calls/updates,
+wrong session IDs, wrong models, malformed framing, EOF before prompt completion,
+unsafe stop reasons and trailing buffered protocol data are rejected. Thinking is
+discarded; only assistant text chunks can become output. `available_commands`
+metadata is never invoked or rendered. Context-window `usage_update` is not
+mislabelled as billable turn usage: counters are unknown (represented as zero)
+and `cost_known=false` for ACP. There is no ACP auth-status/login command; the
+status API refuses without spawning and manual login argv is empty for this kind.
+
+The same cleared child environment, private cwd, byte bounds and process-group
+RAII guard apply to ACP. Timeout/token cancellation attempts `session/cancel`
+without waiting for acknowledgement, then kills/reaps; future drop also kills
+and reaps. This is **not OS containment or an HTTP origin allowlist**. The trusted
+adapter/SDK still accesses operator-provisioned credentials, local settings for
+its own initialization, and its provider network. No arbitrary ACP server,
+Codex agent, malicious executable or unreviewed adapter is made safe by this API.
+
+Validation uses local Node protocol fixtures only. The real installed Codex and
+Claude `--help` were inspected on 2026-11-05 under cleared environment, temporary
+HOME and cwd. Claude documents `--tools ""`; Codex documents read-only shell
+sandboxing, not zero tools. No real ACP adapter, OAuth, credential status, provider
+inference, external service or billed turn was exercised. Real-provider acceptance
+remains an explicit operator action, not a claim made from fixture tests.
 
 ## Credentials and process lifecycle
 
@@ -106,7 +166,7 @@ Cache rates are not invented. Missing usage or prices means `cost_known=false`,
 never a claim of a free call. Unknown counters are represented by zero because
 the shared `Usage` type has no optional counters; this is not an estimate.
 
-Tests use only approved temporary shell fixtures, not actual provider inference,
+Tests use only approved temporary shell/Node fixtures, not actual provider inference,
 OAuth, live accounts or credentials. They verify protocol/flags, usage, finish
 reasons, unknown costs, role/tool rejection, secret-safe failures, env/cwd,
 explicit setup/status, cancellation, task-abort and timeout process cleanup.

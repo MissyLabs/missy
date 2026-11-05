@@ -7,7 +7,9 @@ mod process;
 mod video;
 pub use config::{ExecutablePin, MediaConfig};
 pub use image_ops::{ImageOperation, ImageRequest, Rotation};
-pub use video::{MediaMetadata, StreamMetadata, VideoOperation, VideoRequest};
+pub use video::{
+    CaptionColor, MediaMetadata, StreamMetadata, TextPosition, VideoOperation, VideoRequest,
+};
 
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
@@ -135,7 +137,7 @@ impl ToolExecutor for MediaTools {
         vec![
             definition(
                 "video_edit",
-                "Native bounded FFmpeg editing of policy-readable files. Video outputs are silent MPEG-4 MP4; extract_audio writes PCM WAV; extract_frame writes PNG. No arbitrary filters or URLs.",
+                "Native bounded file-only FFmpeg editing. Existing edits stay silent; audio_mux/audio_mix explicitly add AAC, speed/text/crossfade require preserve_audio. Text requires a policy-readable font_file. No arbitrary filters or URLs.",
                 video::schema(),
                 true,
             ),

@@ -1,0 +1,30 @@
+[package]
+name = "missy-discord-voice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+missy-voice = { path = "../missy-voice" }
+missy-dave = { path = "../missy-dave" }
+aes-gcm = "0.10"
+opus2 = { version = "0.4", default-features = false, features = ["backend-libopus", "bundled"] }
+hound = "3.5"
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+libloading = "0.8"
+libc = "0.2"

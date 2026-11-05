@@ -39,13 +39,22 @@ per-window security boundary. `isolated_session = true` acknowledges this requir
 Window enumeration returns title, WM_CLASS, geometry and depth. Screenshots are
 bounded raw `application/x-x11-zpixmap` image artifacts with base64, dimensions,
 depth, byte order, bits-per-pixel, padding and visual masks, not mislabelled PNGs.
-Root screenshots are forbidden. XTest allows only key/button press or release on
-an already-focused allowed client, with pointer-in-window checks for buttons; it
-never steals focus. Global shortcuts, focus races and other X11 client behavior
+Root screenshots are forbidden. XTest accepts `key`/`button` press or release,
+window-relative `move` (`x`,`y`), `drag` (`x`,`y`,`to_x`,`to_y`,`code` button 1..3),
+and `type_text` (`text`, 1..256 printable ASCII bytes). All require an already-focused
+allowlisted client or its focused descendant; the executor never steals focus.
+Coordinates are geometry-bounded and translated to the configured screen root,
+not caller-selected root coordinates. Occluded pointer endpoints are denied.
+Focus/allowlist/geometry checks and dispatch occur under a short server grab on the
+**isolated server only**. A drag is an immediate press/move/release, not a timed
+gesture. Typing resolves existing Latin keysyms and Shift_L, rejects active keys,
+modifiers/locks/buttons, and never modifies keymaps or installs virtual keyboards.
+Unsupported text/layouts fail before typing. Global shortcuts and other X11 client behavior
 are why the isolated Xserver is mandatory. An independent five-second connection
 watchdog shuts down stalled sockets, bounding background blocking work. A timeout
 or cancellation can race a dispatched input and must be treated as UNKNOWN, never
-automatically replayed. A press/release pair requires two separately approved calls.
+automatically replayed. Raw key/button press/release still requires two separately
+approved calls; drag/type_text contain bounded complete pairs in a single call.
 
 ## Accessibility
 
@@ -58,6 +67,18 @@ the bounded scoped tree, never arbitrary D-Bus service/method dispatch. The pare
 deadline bounds the async bus operation. AT-SPI names are untrusted and spoofable;
 the bus isolation is a real requirement, not cosmetic configuration.
 
+`desktop_accessibility_get_text` uses typed `org.a11y.atspi.Text.GetText` with
+explicit `start`/`end` satisfying `0 <= start <= end <= 4096`. Returned UTF-8 text
+is byte-bounded as well. `desktop_accessibility_set_value` uses typed
+`org.a11y.atspi.EditableText.SetTextContents` with `value` at most 8192 UTF-8 bytes
+and no NUL. It is a text operation, not numeric Value or arbitrary D-Bus dispatch.
+Both take exact `application`, `window`, and descendant `path`, pin the unique bus
+owner, and re-resolve selection and bounded descendant membership immediately
+before dispatch. Set requires `enable_input` and outer per-call approval. AT-SPI
+offers no atomic cross-process tree transaction: a malicious application can still
+reparent its objects after validation. Do not treat this protocol as a security
+boundary against hostile peers; the isolated bus/session remains mandatory.
+
 ## Browser boundary
 
 Configure a canonical HTTP(S) CDP service origin, exact page `target_id` and exact
@@ -68,8 +89,18 @@ path. Returned WebSocket endpoints must match the configured authority and exact
 `/devtools/page/<target>` path. IDs are monotonically increasing and unknown,
 duplicate or malformed reply IDs fail closed. Events and output are bounded.
 
-Only fixed, bounded scripts exist: location, title/text, CSS selector click, and
-input/textarea fill. Arguments are JSON encoded, never interpolated as source.
+Only fixed, bounded scripts exist: location, title/text, CSS selector click,
+input/textarea fill, and selector visibility polling. `browser_get_url` reads the
+pinned target. `browser_wait` takes `selector`, `state` (`visible` or `hidden`),
+and `timeout_ms` (1..15000); it polls at 100ms, defines visible by nonzero layout
+dimensions plus computed display/visibility, and treats absent elements as hidden.
+The outer desktop deadline can shorten this bound. This is visibility, not
+interactability or an opacity/occlusion guarantee. `browser_evaluate` accepts only
+`expression_id` = `url`, `title`, or `ready_state`; arbitrary JavaScript, functions,
+and legacy evaluate arguments are intentionally rejected. `browser_close` requires
+input opt-in/approval and sends `Page.close` solely through the configured page's
+socket. It accepts no URL/target argument and never terminates a browser process.
+Arguments are JSON encoded, never interpolated as source.
 Every renderer script checks origin in its own turn. Requests (including redirects)
 are intercepted with Fetch, frame navigation events are checked, and final location
 is checked before releasing data. Navigation currently requires settling at the
@@ -93,5 +124,11 @@ target initially at an allowed URL in that isolated browser.
 
 Tests use a fresh authenticated Xvfb selected by `-displayfd`, a private D-Bus mock
 and fake HTTP/WebSocket CDP peers. They never inherit DISPLAY or create windows on
-an existing desktop. Passing these is protocol/isolation acceptance, not a claim
+an existing desktop. XTest pointer move, drag, and Latin typing are exercised only
+on the fresh authenticated Xvfb test window, including actual delivered key/button
+events, unchanged focus on denial, coordinate bounds, and released modifiers.
+The private D-Bus mock verifies typed text read/edit and rejects out-of-tree and
+reparented paths. Fixed CDP transactions cover wait, timeouts, safe expression IDs,
+get_url, exact-page close, and origin/redirect checks.
+Passing these is protocol/isolation acceptance, not a claim
 that an actual desktop accessibility stack or production browser was exercised.

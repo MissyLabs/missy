@@ -1,6 +1,12 @@
 //! Durable bounded agent runtime.
 mod context;
 #[cfg(test)]
+#[path = "tests/observability.rs"]
+mod observability_tests;
+mod observer;
+use observer::Span;
+pub use observer::{RuntimeEvent, RuntimeEventKind, RuntimeObserver};
+#[cfg(test)]
 mod tests;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use context::{Lineage, clip, compose, digest, frame_history};
@@ -47,6 +53,7 @@ struct Inner {
     schemas: HashMap<String, jsonschema::Validator>,
     permits: Arc<Semaphore>,
     active: Mutex<HashMap<String, CancellationToken>>,
+    observer: Option<Arc<dyn RuntimeObserver>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +101,33 @@ impl Runtime {
         system_prompt: String,
         config: RuntimeConfig,
     ) -> Result<Self> {
+        Self::construct(store, provider, tools, system_prompt, config, None)
+    }
+    pub fn new_observed(
+        store: Arc<Store>,
+        provider: Arc<dyn Provider>,
+        tools: Arc<dyn ToolExecutor>,
+        system_prompt: String,
+        config: RuntimeConfig,
+        observer: Arc<dyn RuntimeObserver>,
+    ) -> Result<Self> {
+        Self::construct(
+            store,
+            provider,
+            tools,
+            system_prompt,
+            config,
+            Some(observer),
+        )
+    }
+    fn construct(
+        store: Arc<Store>,
+        provider: Arc<dyn Provider>,
+        tools: Arc<dyn ToolExecutor>,
+        system_prompt: String,
+        config: RuntimeConfig,
+        observer: Option<Arc<dyn RuntimeObserver>>,
+    ) -> Result<Self> {
         config.validate()?;
         ensure!(!system_prompt.is_empty(), "empty system prompt");
         let definitions = tools.definitions();
@@ -131,6 +165,7 @@ impl Runtime {
                 schemas,
                 permits,
                 active: Mutex::new(HashMap::new()),
+                observer,
             }),
         })
     }
@@ -156,6 +191,11 @@ impl Runtime {
     /// Immutable local bounds for admission adapters; never exposes credentials.
     pub fn configuration(&self) -> &RuntimeConfig {
         &self.inner.config
+    }
+    /// Checked opaque configuration identity, never configuration contents.
+    pub fn configuration_fingerprint(&self) -> Result<String> {
+        self.check_configuration()?;
+        Ok(self.inner.context_hash.clone())
     }
     pub fn status(&self, scope: &Scope, turn_id: &str) -> Result<Turn> {
         self.store().get_turn(scope, turn_id)
@@ -324,9 +364,11 @@ impl Runtime {
             .insert(turn.id.clone(), token.clone());
         let runtime = self.clone();
         Ok(tokio::spawn(async move {
-            runtime
-                .drive(scope, turn, lease, state, token, permit)
-                .await
+            observer::observe_run(
+                runtime.inner.observer.clone(),
+                runtime.drive(scope, turn, lease, state, token, permit),
+            )
+            .await
         }))
     }
     fn save(&self, scope: &Scope, lease: &Lease, state: &State) -> Result<()> {
@@ -627,10 +669,13 @@ impl Runtime {
                     state.deadline_ms.saturating_sub(now_ms()).max(0) as u64,
                 ))
                 .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            let tool_span = Span::child(RuntimeEventKind::Tool);
             let mut execute = Box::pin(self.inner.tools.execute(&ctx, call));
             let result = tokio::select! {result=&mut execute=>result,_=token.cancelled()=>{ctx.cancellation.cancel();let _=tokio::time::timeout(Duration::from_secs(5),&mut execute).await;Err(anyhow!("tool cancelled; outcome unknown"))},_=tokio::time::sleep(timeout)=>{ctx.cancellation.cancel();let _=tokio::time::timeout(Duration::from_secs(5),&mut execute).await;Err(anyhow!("tool timed out; outcome unknown"))}};
             // BuiltinTools Drop synchronously joins process worker after killing/waiting children.
             drop(execute);
+            tool_span.finish(result.is_ok());
+            let settlement_span = Span::child(RuntimeEventKind::Settlement);
             match result {
                 Ok(value) => {
                     let bounded =
@@ -643,6 +688,7 @@ impl Runtime {
                         Some(&bounded),
                         None,
                     )?;
+                    settlement_span.finish(true);
                     state
                         .transcript
                         .push(Message::tool(&call.id, serde_json::to_string(&bounded)?));
@@ -660,6 +706,7 @@ impl Runtime {
                             Some(&receipt),
                             Some(&error),
                         )?;
+                        settlement_span.finish(true);
                         state
                             .transcript
                             .push(Message::tool(&call.id, serde_json::to_string(&receipt)?));
@@ -677,6 +724,7 @@ impl Runtime {
                         None,
                         Some(&error),
                     )?;
+                    settlement_span.finish(true);
                     bail!(
                         "tool {} outcome unknown; halted without retry: {error}",
                         call.id
@@ -752,7 +800,9 @@ impl Runtime {
             let remaining =
                 Duration::from_millis(state.deadline_ms.saturating_sub(now_ms()).max(0) as u64)
                     .min(monotonic_deadline.saturating_duration_since(tokio::time::Instant::now()));
+            let provider_span = Span::child(RuntimeEventKind::Provider);
             let attempt = tokio::select! {_=token.cancelled()=>Err(anyhow!("generation cancelled")),result=tokio::time::timeout(remaining,self.inner.provider.complete(&messages,&self.inner.definitions,token.child_token()))=>result.context("turn timeout during generation").and_then(|r|r)};
+            provider_span.finish(attempt.is_ok());
             state.provider_pending = false;
             let completion = match attempt {
                 Ok(completion) => completion,
@@ -909,6 +959,7 @@ impl Runtime {
                 )
             }
         };
+        let settlement_span = Span::child(RuntimeEventKind::Settlement);
         let final_result = match self.save(&scope, &lease, &state) {
             Ok(()) => {
                 self.store()
@@ -916,6 +967,7 @@ impl Runtime {
             }
             Err(e) => Err(e),
         };
+        settlement_span.finish(final_result.is_ok());
         heartbeat_stop.cancel();
         let _ = hb.await;
         self.inner

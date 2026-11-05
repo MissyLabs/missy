@@ -1,5 +1,5 @@
 //! This test starts ONLY a new authenticated Xserver. It never reads DISPLAY,
-//! XAUTHORITY or an existing session and sends no XTest input.
+//! XAUTHORITY or an existing session. XTest input goes to its new test window only.
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use missy_core::{PolicyConfig, Scope, ToolCall, ToolContext, ToolExecutor};
@@ -41,8 +41,7 @@ impl DesktopApproval for Approval {
     }
 }
 #[tokio::test]
-async fn authenticated_isolated_xvfb_enumerates_and_screenshots_only_allowed_window() -> Result<()>
-{
+async fn authenticated_isolated_xvfb_reads_and_inputs_only_focused_allowed_window() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if !std::path::Path::new("/usr/bin/Xvfb").exists() {
         bail!("Xvfb unavailable: isolated acceptance not run");
@@ -112,7 +111,15 @@ async fn authenticated_isolated_xvfb_enumerates_and_screenshots_only_allowed_win
         0,
         WindowClass::INPUT_OUTPUT,
         0,
-        &CreateWindowAux::new().background_pixel(0x336699),
+        &CreateWindowAux::new()
+            .background_pixel(0x336699)
+            .event_mask(
+                EventMask::KEY_PRESS
+                    | EventMask::KEY_RELEASE
+                    | EventMask::BUTTON_PRESS
+                    | EventMask::BUTTON_RELEASE
+                    | EventMask::POINTER_MOTION,
+            ),
     )?
     .check()?;
     c.change_property8(
@@ -143,6 +150,7 @@ async fn authenticated_isolated_xvfb_enumerates_and_screenshots_only_allowed_win
             isolated_session: true,
         }),
         enable_screenshots: true,
+        enable_input: true,
         approve_all: false,
         ..Default::default()
     };
@@ -191,6 +199,75 @@ async fn authenticated_isolated_xvfb_enumerates_and_screenshots_only_allowed_win
     assert_eq!(image["data"]["window"]["width"], 32);
     assert!(image["data"]["artifact"]["data"].as_str().unwrap().len() > 100);
     assert_eq!(approval.0.load(Ordering::SeqCst), 1);
+    let input = |args| ToolCall {
+        id: "input".into(),
+        name: "desktop_input".into(),
+        arguments: args,
+    };
+    // No focus is stolen by the executor. Only this test's connection sets it.
+    c.set_input_focus(InputFocus::POINTER_ROOT, root, x11rb::CURRENT_TIME)?
+        .check()?;
+    assert!(
+        tools
+            .execute(
+                &ctx,
+                &input(json!({"window":window,"kind":"move","x":5,"y":6}))
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not already focused")
+    );
+    c.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
+        .check()?;
+    assert_eq!(c.get_input_focus()?.reply()?.focus, window);
+    tools
+        .execute(
+            &ctx,
+            &input(json!({"window":window,"kind":"move","x":5,"y":6})),
+        )
+        .await?;
+    let pointer = c.query_pointer(window)?.reply()?;
+    assert_eq!((pointer.win_x, pointer.win_y), (5, 6));
+    tools
+        .execute(
+            &ctx,
+            &input(json!({"window":window,"kind":"drag","code":1,"x":5,"y":6,"to_x":20,"to_y":15})),
+        )
+        .await?;
+    let pointer = c.query_pointer(window)?.reply()?;
+    assert_eq!((pointer.win_x, pointer.win_y), (20, 15));
+    assert_eq!(u16::from(pointer.mask), 0);
+    tools
+        .execute(
+            &ctx,
+            &input(json!({"window":window,"kind":"type_text","text":"Az 9!"})),
+        )
+        .await?;
+    c.get_input_focus()?.reply()?;
+    let mut key_presses = 0;
+    let mut key_releases = 0;
+    let mut buttons = 0;
+    while let Some(event) = c.poll_for_event()? {
+        match event {
+            x11rb::protocol::Event::KeyPress(_) => key_presses += 1,
+            x11rb::protocol::Event::KeyRelease(_) => key_releases += 1,
+            x11rb::protocol::Event::ButtonPress(_) => buttons += 1,
+            _ => {}
+        }
+    }
+    assert!(key_presses >= 5);
+    assert_eq!(key_presses, key_releases);
+    assert_eq!(buttons, 1);
+    assert_eq!(u16::from(c.query_pointer(window)?.reply()?.mask), 0);
+    for args in [
+        json!({"window":window,"kind":"move","x":32,"y":0}),
+        json!({"window":window,"kind":"drag","code":1,"x":0,"y":0,"to_x":32,"to_y":0}),
+        json!({"window":window,"kind":"type_text","text":"newline\n"}),
+        json!({"window":root,"kind":"move","x":0,"y":0}),
+    ] {
+        assert!(tools.execute(&ctx, &input(args)).await.is_err());
+    }
     c.change_property8(
         PropMode::REPLACE,
         window,

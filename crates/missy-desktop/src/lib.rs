@@ -119,6 +119,9 @@ impl DesktopTools {
             "desktop_accessibility_action" => {
                 parse::<atspi::ActionArgs>(call)?.validate()?;
             }
+            "desktop_accessibility_get_text" | "desktop_accessibility_set_value" => {
+                atspi::validate_text_call(call)?;
+            }
             _ => browser::validate_call(
                 call,
                 self.config.browser.as_ref().expect("catalog checked"),
@@ -141,7 +144,10 @@ impl DesktopTools {
                 })
                 .await??
             }
-            "desktop_accessibility_tree" | "desktop_accessibility_action" => {
+            "desktop_accessibility_tree"
+            | "desktop_accessibility_action"
+            | "desktop_accessibility_get_text"
+            | "desktop_accessibility_set_value" => {
                 atspi::execute(self.config.atspi.as_ref().expect("validated"), call).await?
             }
             _ => {
@@ -170,6 +176,8 @@ fn input(name: &str) -> bool {
         name,
         "desktop_input"
             | "desktop_accessibility_action"
+            | "desktop_accessibility_set_value"
+            | "browser_close"
             | "browser_navigate"
             | "browser_click"
             | "browser_fill"
@@ -214,9 +222,9 @@ impl ToolExecutor for DesktopTools {
             if self.config.enable_input {
                 add(
                     "desktop_input",
-                    "Approval-gated XTest key/button on an already-focused allowlisted window. No focus stealing.",
-                    json!({"window":{"type":"integer"},"kind":{"enum":["key","button"]},"code":{"type":"integer"},"pressed":{"type":"boolean"}}),
-                    &["window", "kind", "code", "pressed"],
+                    "Approval-gated native XTest key/button/move/drag/type_text on an already-focused allowlisted window. Coordinates are window-relative. Printable ASCII text only; no keymap modification or focus stealing.",
+                    json!({"window":{"type":"integer"},"kind":{"enum":["key","button","move","drag","type_text"]},"code":{"type":"integer"},"pressed":{"type":"boolean"},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"to_x":{"type":"integer","minimum":0},"to_y":{"type":"integer","minimum":0},"text":{"type":"string","maxLength":256}}),
+                    &["window", "kind"],
                     true,
                 );
             }
@@ -238,9 +246,44 @@ impl ToolExecutor for DesktopTools {
                     &["application", "window", "path", "action"],
                     true,
                 );
+                add(
+                    "desktop_accessibility_set_value",
+                    "Approval-gated typed AT-SPI EditableText.SetTextContents on an exact scoped descendant. No arbitrary interface calls.",
+                    json!({"application":{"type":"string"},"window":{"type":"string"},"path":{"type":"string"},"value":{"type":"string","maxLength":8192}}),
+                    &["application", "window", "path", "value"],
+                    true,
+                );
             }
+            add(
+                "desktop_accessibility_get_text",
+                "Read bounded typed AT-SPI Text.GetText on an exact scoped descendant.",
+                json!({"application":{"type":"string"},"window":{"type":"string"},"path":{"type":"string"},"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0,"maximum":4096}}),
+                &["application", "window", "path", "start", "end"],
+                false,
+            );
         }
         if self.config.browser.is_some() {
+            add(
+                "browser_get_url",
+                "Read URL of the exact configured isolated page.",
+                json!({}),
+                &[],
+                false,
+            );
+            add(
+                "browser_wait",
+                "Wait at most 15 seconds for selector visible/hidden on the pinned page. Each poll checks origin in the same renderer turn.",
+                json!({"selector":{"type":"string"},"state":{"enum":["visible","hidden"]},"timeout_ms":{"type":"integer","minimum":1,"maximum":15000}}),
+                &["selector", "state", "timeout_ms"],
+                false,
+            );
+            add(
+                "browser_evaluate",
+                "Safe fixed read expression IDs only. Arbitrary JavaScript and legacy evaluate functions are unsupported.",
+                json!({"expression_id":{"enum":["url","title","ready_state"]}}),
+                &["expression_id"],
+                false,
+            );
             add(
                 "browser_read",
                 "Read bounded text using a fixed CDP script. No arbitrary JavaScript.",
@@ -263,6 +306,13 @@ impl ToolExecutor for DesktopTools {
                     "Approval-gated navigation to an exact allowlisted HTTP(S) origin. Browser network isolation required.",
                     json!({"url":{"type":"string"}}),
                     &["url"],
+                    true,
+                );
+                add(
+                    "browser_close",
+                    "Approval-gated Page.close for the exact configured target only. Never kills a browser process.",
+                    json!({}),
+                    &[],
                     true,
                 );
                 add(
