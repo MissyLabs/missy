@@ -15,7 +15,12 @@ behavior-disposition inventory, not106 independently exercised live services.
 Deliberate typed APIs and stricter isolation are documented rather than hidden
 behind a claim of byte-identical Python configuration or unrestricted execution.
 
-Local toolchain: `rustc 1.96.1`, `cargo 1.96.1`. Locked Linux x86_64 build.
+Initial integrated toolchain: `rustc 1.96.1`, `cargo 1.96.1`. The exact final
+source was then revalidated on **Rust/Cargo1.99.1**, matching hosted stable:
+740 ordinary entries, strict all-target Clippy, release build,15 Chromium
+assertions and all25 native crypto/voice entries passed again. Locked Linux
+x86_64 build. Current stable introduced an array-chunk lint; both affected loops
+were updated without suppressing the lint or weakening strict CI.
 
 | Check | Actual result |
 |---|---|
@@ -99,7 +104,7 @@ format/lint/native tests/release build/audit/native crypto and browser acceptanc
 the final PR handoff identifies the exact pushed commit and hosted run.
 
 Final executable SHA-256:
-`e4ddbcea1b3efd6a4b909ba46369be66f3f915f869bd39762822078c3dd9a021`.
+`d97b95012d063aacb027bdd0b10c84ac09b0d8996cd13b3c07bb64b1ca4398c7`.
 Observed dynamic dependencies: `libopus.so.0`, libc, libm, libgcc_s and the ELF
 loader. This is not a static or universal Linux binary; official DAVE remains a
 separately operator-configured pinned native library.

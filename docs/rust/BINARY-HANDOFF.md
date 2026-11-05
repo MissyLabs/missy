@@ -11,12 +11,12 @@ before enabling optional capabilities or promoting it.
 
 The locally accepted executable has SHA-256:
 
-`e4ddbcea1b3efd6a4b909ba46369be66f3f915f869bd39762822078c3dd9a021`
+`d97b95012d063aacb027bdd0b10c84ac09b0d8996cd13b3c07bb64b1ca4398c7`
 
 This is not a static binary. On compatible Debian/Ubuntu Linux it requires
 `libopus0`, glibc, libm, libgcc_s and the system ELF loader. Build requires a
 stable Rust toolchain and native Opus prerequisites (`libopus-dev pkg-config`).
-Local production-conversion acceptance used Linux Mint/Ubuntu glibc and Rust 1.96.1, not a claim of
+Local production-conversion acceptance used Linux Mint/Ubuntu glibc and Rust 1.99.1, not a claim of
 compatibility with every distribution or musl. SQLite and Rustls are compiled in.
 
 Discord DAVE voice additionally requires an explicitly built and operator-pinned
