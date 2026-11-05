@@ -1,5 +1,5 @@
 use crate::{SandboxConfig, landlock::Prepared};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use missy_core::ToolContext;
 use serde_json::{Value, json};
 use std::{
@@ -85,13 +85,16 @@ async fn capture(pipe: AsyncFd<File>, remaining: Arc<AtomicUsize>) -> Result<Vec
         if n == 0 {
             return Ok(output);
         }
-        if remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(n)
-            })
-            .is_err()
-        {
-            bail!("sandbox combined output byte limit exceeded");
+        let mut left = remaining.load(Ordering::Relaxed);
+        loop {
+            let next = left
+                .checked_sub(n)
+                .ok_or_else(|| anyhow::anyhow!("sandbox combined output byte limit exceeded"))?;
+            match remaining.compare_exchange_weak(left, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(current) => left = current,
+            }
         }
         output.extend_from_slice(&buf[..n]);
     }
