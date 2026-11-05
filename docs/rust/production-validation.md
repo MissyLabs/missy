@@ -65,6 +65,12 @@ additional evidence, not additional Rust test entries.
 * Screencast binding/restart invalidation completes before unified readiness.
   The real capture page is exercised by headless Chromium using synthetic canvas
   frames, never the active desktop or a capture permission bypass.
+* Hosted acceptance exposed a real owner-lock/status-probe startup race. A
+  read-only status probe can briefly own the same lock while checking for stale
+  status; startup now tolerates bounded transient contention without unlinking,
+  stealing or weakening a live owner's lock. A deterministic held-lock/release
+  regression was added to the actual restart fixture. The exact corrected source
+  passed all740 native entries, strict Clippy, release and Chromium acceptance.
 
 ## Representative real integration fixtures
 
@@ -104,7 +110,7 @@ format/lint/native tests/release build/audit/native crypto and browser acceptanc
 the final PR handoff identifies the exact pushed commit and hosted run.
 
 Final executable SHA-256:
-`d97b95012d063aacb027bdd0b10c84ac09b0d8996cd13b3c07bb64b1ca4398c7`.
+`91f7d332d3502696de7ad006cdb6da9865475a3ffa11f7697bbaa0f930bcb5a1`.
 Observed dynamic dependencies: `libopus.so.0`, libc, libm, libgcc_s and the ELF
 loader. This is not a static or universal Linux binary; official DAVE remains a
 separately operator-configured pinned native library.

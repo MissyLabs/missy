@@ -11,7 +11,7 @@ before enabling optional capabilities or promoting it.
 
 The locally accepted executable has SHA-256:
 
-`d97b95012d063aacb027bdd0b10c84ac09b0d8996cd13b3c07bb64b1ca4398c7`
+`91f7d332d3502696de7ad006cdb6da9865475a3ffa11f7697bbaa0f930bcb5a1`
 
 This is not a static binary. On compatible Debian/Ubuntu Linux it requires
 `libopus0`, glibc, libm, libgcc_s and the system ELF loader. Build requires a
