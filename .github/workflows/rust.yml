@@ -2,9 +2,9 @@ name: Rust rewrite
 on:
   push:
     branches: [master, 'rewrite/**']
-    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'tests/installer_offline.sh', 'docs/rust/**', 'README-RUST.md', 'examples/rust-*.yaml', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
   pull_request:
-    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'packaging/**', 'install.sh', 'tests/installer_offline.sh', 'docs/rust/**', 'README-RUST.md', 'examples/rust-*.yaml', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
 permissions:
   contents: read
 concurrency:

@@ -16,7 +16,8 @@ fixture acceptance is not a claim that Robby's actual host has been exercised.
 ## Build and run
 
 Requires Linux and the stable Rust toolchain (locked dependency floor: 1.89).
-Final acceptance used 1.99.1; the floor is metadata, not a separate MSRV test.
+Production-conversion acceptance used 1.96.1; the floor is metadata, not a
+separate MSRV test.
 SQLite is bundled. Rustls handles
 HTTPS; no Python environment, OpenSSL SDK, Node runtime or cloud account is
 required to build the native executable. Discord voice adds native Opus: on

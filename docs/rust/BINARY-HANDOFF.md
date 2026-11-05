@@ -11,12 +11,12 @@ before enabling optional capabilities or promoting it.
 
 The locally accepted executable has SHA-256:
 
-`7168957c5f6cb8ba6875af162ca3415933e7aaa6624a206870d1e6486094751e`
+`e4ddbcea1b3efd6a4b909ba46369be66f3f915f869bd39762822078c3dd9a021`
 
 This is not a static binary. On compatible Debian/Ubuntu Linux it requires
 `libopus0`, glibc, libm, libgcc_s and the system ELF loader. Build requires a
 stable Rust toolchain and native Opus prerequisites (`libopus-dev pkg-config`).
-Local acceptance used Linux Mint/Ubuntu glibc and Rust 1.99.1, not a claim of
+Local production-conversion acceptance used Linux Mint/Ubuntu glibc and Rust 1.96.1, not a claim of
 compatibility with every distribution or musl. SQLite and Rustls are compiled in.
 
 Discord DAVE voice additionally requires an explicitly built and operator-pinned
@@ -33,8 +33,8 @@ the local binary bundle; official DAVE/MLS/native crypto license and provenance
 details are in its separately built artifact. Do not remove third-party notices
 when redistributing. System libraries remain distribution-maintained dependencies.
 
-Final local evidence: 521 ordinary passing entries, all 3 separately enabled
-native cases passed (524 distinct total), strict format/lint/dependency audit,
+Final local evidence: 740 ordinary passing entries, all 3 separately enabled
+native cases passed (743 distinct total), strict format/lint/dependency audit,
 release build and 15 Chromium assertions. Test totals include helper entrypoints,
 not independent end-to-end scenarios. No live Discord/language-provider canary,
 hardware capture/playback, GPU job, deployment or production migration occurred.
@@ -42,4 +42,7 @@ hardware capture/playback, GPU job, deployment or production migration occurred.
 GitHub Actions `Rust rewrite` publishes the executable and native DAVE artifacts.
 Select a successful run for the exact PR head; older green checks do not certify
 new changes. The SHA above identifies this local build, not bit-identical builds
-on other compilers/runners. `validation.md` records evidence and remaining limits.
+on other compilers/runners. `production-validation.md` records the final integrated
+conversion evidence; `production-replacement-matrix.md` records exact behavior
+dispositions and intentional API/security differences. Earlier `validation.md`
+checkpoints describe older commits.
