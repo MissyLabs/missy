@@ -215,13 +215,19 @@ fn uncertain_tools_never_replay_and_live_worker_not_recovered() {
         let db = Store::open(&p).unwrap();
         id = db.admit(&s, "r", "hello").unwrap().turn.id;
         let l = db
-            .acquire_lease(&s, &id, "crasher", Duration::from_millis(20))
+            .acquire_lease(&s, &id, "crasher", Duration::from_secs(30))
             .unwrap();
         db.tool_begin(&s, &l, &call("x")).unwrap();
         db.tool_running(&s, &l, "x").unwrap();
         assert!(db.recover(&s).unwrap().is_empty());
     }
-    std::thread::sleep(Duration::from_millis(40));
+    // Expire the disposable fixture lease explicitly. A 20ms wall-clock lease
+    // could elapse during the fsynced journal writes on loaded CI, falsely
+    // classifying the intentionally live owner as expired before the assertion.
+    rusqlite::Connection::open(&p)
+        .unwrap()
+        .execute("UPDATE leases SET expires_at=0", [])
+        .unwrap();
     let db = Store::open(&p).unwrap();
     assert_eq!(db.recover(&s).unwrap().len(), 1);
     assert_eq!(
