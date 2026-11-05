@@ -37,7 +37,7 @@ jobs:
             'deb https://security.ubuntu.com/ubuntu noble-security main universe' > /tmp/missy-apt.list
           apt_options=(-o Dir::Etc::sourcelist=/tmp/missy-apt.list -o Dir::Etc::sourceparts=- -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
           sudo apt-get "${apt_options[@]}" update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg xvfb xauth dbus libopus-dev pkg-config
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg xvfb xauth dbus libopus-dev pkg-config nodejs
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --all-targets --locked

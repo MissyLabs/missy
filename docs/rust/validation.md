@@ -75,6 +75,16 @@ No production bot was replaced/restarted; no live credentials/state migration,
 active desktop, microphone, speaker or GPU workload was used. These are the
 remaining canary/quality gates, not claims of complete legacy parity.
 
+### Hosted runner correction
+
+The first expanded-head hosted run passed format/lint/audit and the complete
+native DAVE job (including upstream suites and Rust voice roundtrip), but failed
+the ACP fixture because the runner has no `/usr/bin/node`. The fixture is a
+test-only JavaScript ACP server; the Rust runtime does not require Node unless
+that optional CLI adapter is explicitly configured. Added distribution `nodejs`
+to isolated CI prerequisites rather than skipping the six ACP tests or weakening
+executable validation. Final-head hosted verification is checked after that fix.
+
 ## Results observed locally
 
 The following section is the **earlier 24-crate/350-entry snapshot**, retained
