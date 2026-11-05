@@ -56,7 +56,14 @@ compatibility.
 | `missy-gateway` | Authenticated loopback HTTP API and browser console; optional channel transport |
 | `missy-automation` | Durable scoped scheduling, bounded DAG validation and data-only skill discovery |
 | `missy-security` | Private ChaCha20-Poly1305 vault and pinned-key Ed25519 export verification |
-| `missy-cli` | Native `missy-rs` executable |
+| `missy-cli` | Native `missy-rs` executable and scope-preserving extension composition |
+| `missy-migrate` | Explicit offline copy-only legacy configuration/state migration |
+| `missy-retrieval` | Scoped graph and citation indexing, BM25/hashing-feature hybrid retrieval |
+| `missy-governance` | Exact single-use approvals, advisory trust and operator-reviewed prompt revisions |
+| `missy-integrations` | Typed policy-bound Nomad, Incus, ComfyUI, OBS and VTube adapters |
+| `missy-provider-process` | Explicitly approved chat-only CLI provider; no native provider-tool bypass |
+| `missy-voice` | Loopback voice edge protocol, explicit pairing and trusted speech-command adapters |
+| `missy-sandbox` | Opt-in child-only Landlock and hardened container command construction |
 
 The optional `scripts/test-rust-console.py` acceptance harness uses Python
 Playwright solely to drive Chromium against an isolated compiled Rust server
@@ -93,11 +100,14 @@ comparison with the original Python runtime and Odin's durability design.
 
 ## Security boundaries and honest limitations
 
-- Exact command approval is **not an OS sandbox**. Approved executables can have
+- Exact command approval alone is **not an OS sandbox**. Approved executables can have
   their own network, filesystem and descendant behavior. Do not approve a shell,
   arbitrary interpreter, network client or program that can detach from process
-  groups unless those capabilities are genuinely intended. Landlock/container
-  sandbox parity is not claimed.
+  groups unless those capabilities are genuinely intended. Optional child-only
+  Landlock adds kernel filesystem and TCP restrictions on supported kernels;
+  TCP restriction is not total denial of UDP/Unix socket communication. The
+  container feature constructs hardened argv but does not claim a deployed or
+  hardware-accepted container runtime.
 - HTTP redirects and ambient proxies are not followed. Origins include ports;
   private networking additionally requires explicit opt-in. DNS answers are
   checked and pinned for the connection rather than checked once then resolved
@@ -133,3 +143,62 @@ parity ledger and recovery behavior before enabling tools. Never point this
 build at a production Python `.missy` or reuse a live bot token concurrently.
 There is no automatic service restart, installer replacement or destructive
 configuration migration in this branch.
+
+## Native extension commands
+
+All optional files are selected under `extensions` in the main config and must
+be private operator-owned files. Defaults remain disabled.
+
+```yaml
+extensions:
+  retrieval_enabled: true
+  approvals_config: ./approvals.yaml
+  integrations_config: ./integrations.yaml
+  voice_config: ./voice.yaml
+  sandbox_config: ./sandbox.yaml
+  # cli_provider_config: ./chat-only-provider.yaml
+```
+
+Extension schemas are documented in the individual crate READMEs. Enabling a CLI
+provider selects a structurally NoTools runtime. Voice SafeChat also selects a
+separate NoTools runtime, never a prompt asking the model not to execute tools.
+Integration mutations require explicit service/action/resource grants **and**
+the durable outer approval gate to list every mutation tool. Approval never
+widens the filesystem/network/command policy.
+
+```sh
+missy-rs approvals list --session demo
+missy-rs approvals approve REQUEST_ID --binding-hash EXPECTED_HASH --operator OPERATOR_ID --session demo
+missy-rs resume TURN_ID --session demo
+missy-rs retrieval ingest handbook /approved/documents/handbook.txt --session demo
+missy-rs retrieval query 'repair procedure' --session demo
+missy-rs discord-probe
+missy-rs voice devices
+```
+
+`discord-probe` performs only authenticated read requests. It does not open a
+Gateway, register commands or send messages. Full live acceptance requires a
+dedicated authorized Missy credential and an isolated test guild/channel. Never
+reuse another running bot's token just because it happens to be in the process
+environment. The current build does not claim live Discord acceptance.
+
+### Offline migration, never an in-place experiment
+
+Create a consistent **backup** of Python Missy's database first, using SQLite's
+backup operation. The native migrator refuses live WAL/SHM/journal companions,
+implicit paths, `.missy` directories, unsafe source files and missing principal
+mapping. Each legacy session must map explicitly to exactly one new Scope.
+
+```sh
+missy-rs migrate plan --legacy-config /private/backup/config.yaml --legacy-database /private/backup/memory.db --scope-mapping /private/backup/scopes.json
+missy-rs migrate apply --legacy-config /private/backup/config.yaml --legacy-database /private/backup/memory.db --scope-mapping /private/backup/scopes.json --destination /private/missy-rust-import --confirm
+```
+
+The plan is credential-redacted and rejects grants it cannot preserve safely.
+Apply rechecks source hashes, builds a private staging tree, verifies it and
+publishes with atomic no-replace rename. It never overwrites the source or an
+existing destination. Historical messages and summaries become scoped inert
+memory with provenance, not new instructions. Unscoped learnings and all old
+incomplete checkpoints are quarantined rather than promoted globally or replayed.
+This is intentionally not a promise that old interrupted external side effects
+can be reconstructed from missing receipts.

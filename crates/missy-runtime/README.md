@@ -2,9 +2,11 @@
 
 `Runtime::new(Arc<Store>, Arc<dyn Provider>, Arc<dyn ToolExecutor>, String,
 RuntimeConfig) -> anyhow::Result<Runtime>` validates the frozen tool schemas and
-binds checkpoints to the system prompt, provider configuration, tool catalog and
-runtime configuration. Production providers must override
-`Provider::configuration_fingerprint` with their actual nonsecret configuration.
+binds checkpoints to the system prompt, provider configuration, tool catalog,
+executor policy fingerprint and runtime configuration. Production providers must
+override `Provider::configuration_fingerprint` with their actual nonsecret
+configuration. Executors must include execution and approval policy in
+`ToolExecutor::configuration_fingerprint`, not approval decision state.
 
 Public APIs:
 
@@ -27,11 +29,32 @@ Scope is trusted server context, never inferred from model arguments. History is
 scoped, serialized inert data with provenance, never a new system message. Memory
 is exposed only through the scoped executor tools. No automatic global recall.
 
-Each whole batch is schema/ID validated and persisted before the first tool.
-Each dispatch is fenced and RUNNING is durable first. Every tool error, timeout,
-or interrupted effect is conservatively UNKNOWN and stops all generation. There
-is no runtime side-effect retry. Successful journal results can repair a crash
-between result persistence and the transcript checkpoint without executing again.
+Each whole batch is schema/ID validated, persisted as exact waiting calls, and
+preflighted before the first journal intent. `ApprovalRequired` is known
+non-execution: the turn pauses as resumable Interrupted without an UNKNOWN tool.
+Explicit resume rechecks the exact original batch, with original usage counters
+and deadline, without another provider request. Only a typed waiting checkpoint
+whose calls exactly match the last assistant message and have no journal records
+can resume without settled journals. Ordinary missing journals still fail closed.
+A preflight denial or other error clears the waiting marker, refuses the batch,
+and creates no tool journal. Cancellation while waiting dispatches no effects.
+
+After all preflights pass, waiting is durably cleared before journal preparation.
+The store has no atomic checkpoint-and-batch-intent API: a crash in this gap is a
+safe refusal requiring reconciliation, not automatic regeneration or dispatch.
+Each actual dispatch is fenced and RUNNING is durable first. Every execution
+error, timeout, or interrupted effect is conservatively UNKNOWN and stops all
+generation. There is no runtime side-effect retry. Successful journal results
+can repair a crash between result persistence and the transcript checkpoint
+without executing again.
+
+The core `ToolDispatchRefused` error is the sole execution-error exception: a
+trusted executor guarantees it refused before calling its effectful inner
+executor. The current call is settled Failed with an inert `executed: false`
+receipt and the turn halts without replay. Other calls already Prepared in that
+batch remain conservatively UNKNOWN at lease finalization; no store API exists
+to mark an undispatched Prepared intent definitely cancelled. Arbitrary errors
+from the actual inner executor remain UNKNOWN.
 
 The executor contract matters: an effectful implementation must cancel and
 physically stop/join owned children when its future is dropped. BuiltinTools
@@ -48,7 +71,10 @@ Provider token-limit completions continue within bounded cumulative budgets;
 exhaustion is Interrupted, never Completed. Partial output is persisted. A final
 content marker prevents a crash during final bookkeeping from generating again.
 Unknown provider billing (including an interrupted request) poisons cumulative
-cost certainty and stops a cost-capped turn. An explicit zero cost cap disables
+cost certainty and stops a cost-capped turn. A crash with an unresolved provider
+completion marker additionally blocks regeneration even without a cost cap:
+there is no durable exact assistant batch to safely dispatch or replace.
+An explicit zero cost cap disables
 cost enforcement; token, step, continuation and time limits still apply. These
 are post-response consumed-usage limits, not a preauthorization guarantee against
 one provider request's billing overshoot.

@@ -10,15 +10,15 @@ This report concerns the new Rust workspace, not the production Python bot.
 |---|---|
 | `cargo fmt --all -- --check` | Pass |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Pass |
-| `cargo test --workspace --all-targets --locked` | 127 passing native test entries, 0 failed |
+| `cargo test --workspace --all-targets --locked` | 248 passing native test entries, 0 failed |
 | `cargo build --release -p missy-cli --locked` | Pass, native Linux executable |
 | `scripts/test-rust-console.py --binary target/release/missy-rs` | 15 Chromium/HTTP acceptance assertions passed |
-| `cargo audit --deny warnings` | Pass against 1,409 loaded RustSec advisories and 293 locked dependencies |
+| `cargo audit --deny warnings` | Pass against 1,409 loaded RustSec advisories and 302 locked dependencies |
 | Legacy Python source/tests/installer/config schema diff | Unchanged |
 
-The native total includes two subprocess-fixture entrypoints which intentionally
+The native total includes subprocess-fixture entrypoints which intentionally
 return without doing work in the ordinary runner and are driven separately by
-their parent crash/lock tests. It is not 127 independent end-to-end scenarios.
+their parent crash/lock tests. It is not 248 independent end-to-end scenarios.
 The optional browser harness is test tooling, not a runtime Python dependency.
 
 ### Native test breakdown
@@ -26,16 +26,23 @@ The optional browser harness is test tooling, not a runtime Python dependency.
 | Area | Passing test entries |
 |---|---:|
 | Automation DAG/skills + scheduler | 12 |
-| CLI config + executable end-to-end | 4 |
+| CLI config, voice cancellation + executable end-to-end | 8 |
 | Shared protocol/config | 4 |
-| HTTP gateway + Discord local wire protocol | 7 |
+| HTTP gateway + durable Discord transport | 21 |
+| Exact approvals, trust and prompt revisions | 11 |
+| Native infrastructure/media HTTP/WS integrations | 19 |
+| Offline legacy migration | 11 |
+| Chat-only CLI provider | 12 |
+| Scoped graph/hybrid citation retrieval | 17 |
 | Filesystem/network/transport policy | 19 |
 | OpenAI/Anthropic/Ollama HTTP fixtures | 18 |
-| Agent runtime/context/continuation | 15 |
+| Agent runtime/context/continuation/approval | 26 |
+| Native Landlock and container argument construction | 6 |
 | Vault/signature/concurrency | 8 |
 | SQLite lock/persistence/crash/recovery/cancellation | 27 |
-| Builtin tools/MCP/owned child cleanup | 13 |
-| **Total** | **127** |
+| Builtin tools/MCP/owned child cleanup/fingerprints | 14 |
+| Voice edge protocol/registry/native speech fixtures | 15 |
+| **Total** | **248** |
 
 ## What was exercised, not merely compiled
 
@@ -65,6 +72,28 @@ The optional browser harness is test tooling, not a runtime Python dependency.
   JSON-RPC, changed manifests, strict arguments and bounded output.
 - Distinct vault handles serialize with flock; shared-handle concurrent writes
   serialize with an internal mutex. AEAD corruption and missing keys fail closed.
+- Actual native executable pauses an exact file-write batch for human approval,
+  exits, accepts an operator decision in a separate process, resumes the original
+  call without another model generation, writes once and consumes approval once.
+- Actual migration command plans then atomically publishes a separate usable
+  tree from a fixture database. Source bytes stay identical, old system text is
+  inert scoped memory, foreign principals cannot retrieve it, and old checkpoints
+  are never runnable.
+- Citation ingestion/query/delete through actual CLI preserves exact UTF-8 byte
+  spans and refuses cross-user recall. Local graph traversal and document updates
+  are transactionally scoped and bounded.
+- Dedicated native subprocesses were actually restricted with Landlock ABI8.
+  Allowed/forbidden filesystem paths, truncate/symlink denial, TCP bind/connect,
+  descriptor/environment isolation and cancellation/abort reaping were exercised.
+  The parent process remained unrestricted. Container tests inspect argv only.
+- Voice tests use real loopback WebSockets and fixture speech executables. Mute,
+  revoke, disconnect and dropped callback cancel work, including detached runtime
+  execution. No real microphone, speaker or model was exercised.
+- Discord SQLite intake/outbox tests cover sequence backpressure, restart windows,
+  uncertain sends reconciled by nonce without blind repost, scoped interactions,
+  persistent throttling and bounded retries. A live read-only preflight was
+  attempted in an isolated empty environment and correctly stopped at missing
+  `MISSY_DISCORD_TOKEN`; no network login or send occurred.
 
 ## Defects found and fixed during acceptance
 
@@ -89,6 +118,12 @@ The optional browser harness is test tooling, not a runtime Python dependency.
   unsupported by the tested Playwright version. Pinned the Rust workflow to
   supported Ubuntu 24.04 rather than weakening browser acceptance.
 - Added same-instance vault mutation serialization and secret-buffer cleanup.
+- Fixed dropped voice callback allowing a detached runtime to continue after
+  transport authority was revoked; an armed drop guard now cancels the turn.
+- Fixed MCP environment-value-only changes escaping continuation fingerprints.
+  Full environment content is hashed without exposing its values.
+- Fixed migrated Anthropic endpoints missing `/v1`, and state-only imports
+  missing a usable secure default-deny native configuration.
 
 ## Limits and unperformed acceptance
 
@@ -99,7 +134,8 @@ The optional browser harness is test tooling, not a runtime Python dependency.
 - No claim that every historical Python integration is ported. See
   [parity.md](parity.md) before deciding this can replace a particular deployment.
 - Spend checks operate on consumed/known usage, not an externally guaranteed
-  prepaid cap. Same-user commands/MCP are not kernel sandboxes.
+  prepaid cap. Exact argv policy alone is not a sandbox; optional Landlock is
+  child-only and its network control covers TCP, not every communication family.
 - SQLite hash-chain audit has no external anchor. Export signature verification
   only authenticates a bundle against an independently pinned key.
 - GitHub workflow results must be checked separately from these local results.

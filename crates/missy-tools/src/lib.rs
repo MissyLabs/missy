@@ -258,8 +258,27 @@ fn definition(
         side_effect: effect,
     }
 }
+fn environment_fingerprint(env: &BTreeMap<String, String>) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(
+        serde_json::to_vec(env).expect("serializable MCP environment"),
+    ))
+}
 #[async_trait]
 impl ToolExecutor for BuiltinTools {
+    fn configuration_fingerprint(&self) -> String {
+        // Runtime continuation must reject changes in grants and pinned servers,
+        // even when the advertised names and JSON schemas remain identical.
+        use sha2::{Digest, Sha256};
+        let nonsecret = serde_json::json!({
+            "policy": self.policy_config,
+            "runtime": self.runtime,
+            "mcp": self.servers.iter().map(|s| serde_json::json!({"name":s.config.name,"command":s.config.command,"manifest_sha256":s.config.manifest_sha256,"timeout_seconds":s.config.timeout_seconds,"env_sha256":environment_fingerprint(&s.config.env) })).collect::<Vec<_>>()
+        });
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(&nonsecret).expect("serializable builtin configuration"),
+        ))
+    }
     fn definitions(&self) -> Vec<ToolDefinition> {
         let mut d = vec![
             definition(
@@ -347,5 +366,20 @@ impl ToolExecutor for BuiltinTools {
             v=tokio::time::timeout(Duration::from_secs(self.runtime.tool_timeout_seconds),self.dispatch(ctx,call))=>v.context("tool deadline exceeded")??,
         };
         self.wrap(value)
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    #[test]
+    fn env_value_change_changes_fingerprint_without_disclosing_value() {
+        let a = BTreeMap::from([("UPSTREAM".into(), "tenant-secret-a".into())]);
+        let mut b = a.clone();
+        b.insert("UPSTREAM".into(), "tenant-secret-b".into());
+        let hash = environment_fingerprint(&a);
+        assert_ne!(hash, environment_fingerprint(&b));
+        assert_eq!(hash.len(), 64);
+        assert!(!hash.contains("tenant-secret"));
     }
 }

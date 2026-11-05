@@ -22,7 +22,7 @@ use std::{
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 mod discord;
-pub use discord::serve_discord;
+pub use discord::{DiscordProbe, probe_discord, serve_discord, serve_discord_with_state_dir};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_PROMPT_BYTES: usize = 32 * 1024;

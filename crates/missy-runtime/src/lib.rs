@@ -6,7 +6,8 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use context::{Lineage, clip, compose, digest, frame_history};
 pub use missy_core::RuntimeConfig;
 use missy_core::{
-    Message, Provider, Scope, ToolCall, ToolContext, ToolDefinition, ToolExecutor, Usage,
+    ApprovalRequired, Message, Provider, Scope, ToolCall, ToolContext, ToolDefinition,
+    ToolDispatchRefused, ToolExecutor, Usage,
 };
 use missy_store::{Checkpoint, Lease, Store, ToolBegin, ToolStatus, Turn, TurnStatus};
 use serde::{Deserialize, Serialize};
@@ -64,6 +65,16 @@ struct State {
     partial: String,
     final_content: Option<String>,
     provider_pending: bool,
+    #[serde(default)]
+    waiting_tools: Option<WaitingTools>,
+}
+/// The only journal-free tool batch eligible for explicit resume. Original calls,
+/// IDs and arguments are retained, never reconstructed by another provider call.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaitingTools {
+    calls: Vec<ToolCall>,
+    approval_request_id: Option<String>,
 }
 struct AdmittedTask {
     result: RunResult,
@@ -105,7 +116,7 @@ impl Runtime {
             );
         }
         let context_hash = digest(&serde_json::to_string(
-            &json!({"system":system_prompt,"config":config,"provider":provider.configuration_fingerprint(),"tools":definitions}),
+            &json!({"system":system_prompt,"config":config,"provider":provider.configuration_fingerprint(),"tools":definitions,"tool_configuration":tools.configuration_fingerprint()}),
         )?);
         let permits = Arc::new(Semaphore::new(config.max_concurrent_turns));
         Ok(Self {
@@ -239,6 +250,7 @@ impl Runtime {
             partial: String::new(),
             final_content: None,
             provider_pending: false,
+            waiting_tools: None,
         })
     }
     fn launch(&self, scope: Scope, turn: Turn) -> Result<JoinHandle<Result<RunResult>>> {
@@ -356,7 +368,9 @@ impl Runtime {
         );
         if state.provider_pending {
             state.usage.cost_known = false;
-            state.provider_pending = false;
+            // The provider may already have returned calls before a crash. Keep
+            // this marker until human reconciliation; never regenerate unknown
+            // completion content, including when billing limits are disabled.
         }
         self.hydrate(scope, turn, &mut state)?;
         Ok(state)
@@ -369,9 +383,15 @@ impl Runtime {
             .unwrap_or_default();
         let resumable = turn.status == TurnStatus::Interrupted
             && self.store().unresolved_tools(scope, &turn.id)?.is_empty()
-            && self
-                .load(scope, turn)
-                .is_ok_and(|state| state.final_content.is_some() || self.budget(&state).is_ok());
+            && self.load(scope, turn).is_ok_and(|state| {
+                !state.provider_pending
+                    && (state.final_content.is_some()
+                        || if state.waiting_tools.is_some() {
+                            self.consumed_budget(&state).is_ok()
+                        } else {
+                            self.budget(&state).is_ok()
+                        })
+            });
         Ok(RunResult {
             turn_id: turn.id.clone(),
             status: serde_json::to_value(turn.status)?
@@ -391,6 +411,32 @@ fn now_ms() -> i64 {
 impl Runtime {
     fn hydrate(&self, scope: &Scope, turn: &Turn, state: &mut State) -> Result<()> {
         let records = self.store().tools(scope, &turn.id)?;
+        if let Some(waiting) = &state.waiting_tools {
+            let last = state
+                .transcript
+                .last()
+                .context("waiting batch missing assistant")?;
+            ensure!(
+                !waiting.calls.is_empty()
+                    && last.role == "assistant"
+                    && last.tool_calls == waiting.calls
+                    && state.final_content.is_none()
+                    && !state.provider_pending,
+                "waiting tool batch does not match current assistant calls"
+            );
+            ensure!(
+                waiting
+                    .calls
+                    .iter()
+                    .all(|call| !records.iter().any(|r| r.call.id == call.id)),
+                "waiting tool batch already has a journal; replay blocked"
+            );
+            let mut validation = state.clone();
+            for call in &waiting.calls {
+                validation.seen_ids.remove(&call.id);
+            }
+            self.validate_calls(&waiting.calls, &mut validation)?;
+        }
         let mut rebuilt = vec![state.transcript.first().context("missing request")?.clone()];
         let mut ids = HashSet::new();
         let mut i = 1;
@@ -407,18 +453,25 @@ impl Runtime {
                 "user tool calls in checkpoint"
             );
             rebuilt.push(message.clone());
+            let waiting = state
+                .waiting_tools
+                .as_ref()
+                .filter(|_| i == state.transcript.len());
             for call in &message.tool_calls {
                 ensure!(
                     ids.insert(call.id.clone()) && state.seen_ids.contains(&call.id),
                     "checkpoint duplicate or untracked call ID"
                 );
+                if waiting.is_some() {
+                    continue;
+                }
                 let record = records
                     .iter()
                     .find(|r| r.call.id == call.id)
                     .context("checkpoint tool intent has no settled journal entry; no replay")?;
                 ensure!(
                     record.call == *call && record.status == ToolStatus::Succeeded,
-                    "checkpoint tool journal mismatch or uncertain outcome"
+                    "checkpoint tool journal mismatch or non-success outcome; replay blocked"
                 );
                 let content = serde_json::to_string(
                     record
@@ -440,6 +493,10 @@ impl Runtime {
             records.iter().all(|r| ids.contains(&r.call.id)),
             "journal call missing from checkpoint"
         );
+        ensure!(
+            ids == state.seen_ids,
+            "checkpoint seen IDs do not match assistant calls"
+        );
         state.transcript = rebuilt;
         Ok(())
     }
@@ -454,6 +511,61 @@ impl Runtime {
         calls: &[ToolCall],
         deadline: tokio::time::Instant,
     ) -> Result<()> {
+        // Preflight the WHOLE batch before the first journal intent or effect.
+        // A preflight error is a definite non-execution, never UNKNOWN.
+        let mut pending = None;
+        for call in calls {
+            self.consumed_budget(state)?;
+            ensure!(
+                !token.is_cancelled()
+                    && !self.store().cancellation_requested(scope, &lease.turn_id)?,
+                "cancelled before preflight"
+            );
+            let ctx = ToolContext {
+                scope: scope.clone(),
+                turn_id: lease.turn_id.clone(),
+                cancellation: token.child_token(),
+            };
+            let timeout = Duration::from_secs(self.inner.config.tool_timeout_seconds)
+                .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            let result = tokio::select! {
+                result = tokio::time::timeout(timeout, self.inner.tools.preflight(&ctx, call)) => result.context("tool preflight timeout").and_then(|r| r),
+                _ = token.cancelled() => Err(anyhow!("tool preflight cancelled")),
+            };
+            ctx.cancellation.cancel();
+            if let Err(error) = result {
+                if let Some(approval) = error.downcast_ref::<ApprovalRequired>() {
+                    pending.get_or_insert_with(|| approval.request_id.clone());
+                } else {
+                    state.waiting_tools = None;
+                    self.save(scope, lease, state)?;
+                    return Err(
+                        error.context("tool preflight refused; no batch effects dispatched")
+                    );
+                }
+            }
+        }
+        if let Some(request_id) = pending {
+            state.waiting_tools = Some(WaitingTools {
+                calls: calls.to_vec(),
+                approval_request_id: Some(request_id.clone()),
+            });
+            self.save(scope, lease, state)?;
+            return Err(ApprovalRequired { request_id }.into());
+        }
+        self.consumed_budget(state)?;
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "monotonic time budget exhausted before batch prepare"
+        );
+        ensure!(
+            !token.is_cancelled() && !self.store().cancellation_requested(scope, &lease.turn_id)?,
+            "cancelled before batch prepare"
+        );
+        // Store has no atomic checkpoint+batch-intent API. Clear waiting FIRST:
+        // a crash in this gap fails closed on missing journal, never replays.
+        state.waiting_tools = None;
+        self.save(scope, lease, state)?;
         for call in calls {
             ensure!(
                 matches!(
@@ -513,6 +625,25 @@ impl Runtime {
                 }
                 Err(e) => {
                     let error = format!("{e:#}");
+                    if e.downcast_ref::<ToolDispatchRefused>().is_some() {
+                        let receipt = json!({"untrusted":true,"refused":true,"executed":false});
+                        self.store().tool_settle(
+                            scope,
+                            lease,
+                            &call.id,
+                            ToolStatus::Failed,
+                            Some(&receipt),
+                            Some(&error),
+                        )?;
+                        state
+                            .transcript
+                            .push(Message::tool(&call.id, serde_json::to_string(&receipt)?));
+                        self.save(scope, lease, state)?;
+                        bail!(
+                            "tool {} dispatch refused without execution; halted: {error}",
+                            call.id
+                        );
+                    }
                     self.store().tool_settle(
                         scope,
                         lease,
@@ -540,6 +671,10 @@ impl Runtime {
         token: &CancellationToken,
     ) -> Result<String> {
         ensure!(
+            !state.provider_pending,
+            "provider completion not durably checkpointed; explicit reconciliation required"
+        );
+        ensure!(
             !self.store().cancellation_requested(scope, &lease.turn_id)?,
             "turn cancelled before completion"
         );
@@ -548,6 +683,12 @@ impl Runtime {
         }
         let monotonic_deadline = tokio::time::Instant::now()
             + Duration::from_millis(state.deadline_ms.saturating_sub(now_ms()).max(0) as u64);
+        if let Some(waiting) = &state.waiting_tools {
+            let calls = waiting.calls.clone();
+            self.consumed_budget(state)?;
+            self.dispatch(scope, lease, state, token, &calls, monotonic_deadline)
+                .await?;
+        }
         loop {
             self.budget(state)?;
             ensure!(
@@ -644,6 +785,10 @@ impl Runtime {
                 !matches!(completion.finish_reason.as_str(), "length" | "max_tokens"),
                 "truncated tool batch never dispatched"
             );
+            state.waiting_tools = Some(WaitingTools {
+                calls: calls.clone(),
+                approval_request_id: None,
+            });
             self.save(scope, lease, state)?;
             self.dispatch(scope, lease, state, token, &calls, monotonic_deadline)
                 .await?;

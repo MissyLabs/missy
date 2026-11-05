@@ -261,3 +261,164 @@ fn actual_binary_multitool_restart_dedup_memory_history_and_user_isolation() {
     assert!(!denied.status.success());
     assert!(!root.path().join(".missy").exists());
 }
+
+#[test]
+fn actual_binary_waits_for_exact_operator_approval_then_resumes_without_regenerating_effect() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let artifact = workspace.join("approved.txt");
+    let mock = Mock::start(vec![
+        reply(
+            "",
+            vec![call(
+                "guarded-write",
+                "file_write",
+                json!({"path":artifact,"content":"operator approved once"}),
+            )],
+        ),
+        reply("Completed the approved write.", vec![]),
+    ]);
+    let guard = root.path().join("approvals.yaml");
+    std::fs::write(&guard,serde_json::to_vec(&json!({"sensitive_tool_names":["file_write"],"context_fingerprint":"0".repeat(64),"approval_ttl_seconds":300})).unwrap()).unwrap();
+    std::fs::set_permissions(&guard, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        providers: vec![ProviderConfig {
+            name: "fixture".into(),
+            kind: "openai".into(),
+            base_url: format!("{}/v1", mock.origin),
+            model: "fixture".into(),
+            api_key_env: Some("MISSY_TEST_KEY".into()),
+            input_microusd_per_million: Some(0),
+            output_microusd_per_million: Some(0),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    cfg.policy.allowed_origins = vec![mock.origin.clone()];
+    cfg.policy.allow_private_network = true;
+    cfg.policy.write_roots = vec![workspace];
+    cfg.policy.max_file_bytes = 65536;
+    cfg.extensions.approvals_config = Some(guard);
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let pending = ok(invoke(
+        root.path(),
+        &[
+            "ask",
+            "Write approved.txt only after operator approval",
+            "--request-id",
+            "approval-request",
+        ],
+    ));
+    assert_eq!(pending["status"], "interrupted");
+    assert_eq!(pending["resumable"], true);
+    assert!(!artifact.exists());
+    assert_eq!(mock.requests.lock().unwrap().len(), 1);
+    let approvals = ok(invoke(root.path(), &["approvals", "list"]));
+    let record = &approvals.as_array().unwrap()[0];
+    assert_eq!(record["status"], "pending");
+    ok(invoke(
+        root.path(),
+        &[
+            "approvals",
+            "approve",
+            record["id"].as_str().unwrap(),
+            "--binding-hash",
+            record["binding_hash"].as_str().unwrap(),
+            "--operator",
+            "fixture-operator",
+        ],
+    ));
+    let result = ok(invoke(
+        root.path(),
+        &["resume", pending["turn_id"].as_str().unwrap()],
+    ));
+    assert_eq!(result["status"], "completed");
+    assert_eq!(
+        std::fs::read_to_string(&artifact).unwrap(),
+        "operator approved once"
+    );
+    assert_eq!(mock.requests.lock().unwrap().len(), 2);
+    let receipts = ok(invoke(root.path(), &["approvals", "list"]));
+    assert_eq!(receipts[0]["status"], "consumed");
+    assert!(
+        !invoke(
+            root.path(),
+            &["resume", pending["turn_id"].as_str().unwrap()]
+        )
+        .status
+        .success()
+    );
+    assert_eq!(mock.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn actual_binary_retrieval_preserves_citations_and_scope() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let docs = root.path().join("docs");
+    std::fs::create_dir(&docs).unwrap();
+    let document = docs.join("reference.txt");
+    let text = "Original é𐐀 UTF-8 citation. The scoped repair code is CITATION_CANARY.";
+    std::fs::write(&document, text).unwrap();
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        ..Default::default()
+    };
+    cfg.extensions.retrieval_enabled = true;
+    cfg.policy.read_roots = vec![docs];
+    cfg.policy.max_file_bytes = 65536;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    // The native store creates this parent0700; ensure no environment umask ambiguity.
+    std::fs::create_dir(&cfg.state_dir).unwrap();
+    std::fs::set_permissions(&cfg.state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    ok(invoke(
+        root.path(),
+        &[
+            "retrieval",
+            "ingest",
+            "reference",
+            document.to_str().unwrap(),
+        ],
+    ));
+    let hits = ok(invoke(
+        root.path(),
+        &["retrieval", "query", "CITATION_CANARY"],
+    ));
+    let hit = &hits[0];
+    let start = hit["start_byte"].as_u64().unwrap() as usize;
+    let end = hit["end_byte"].as_u64().unwrap() as usize;
+    assert_eq!(hit["text"].as_str().unwrap(), &text[start..end]);
+    assert!(!hit["document_hash"].as_str().unwrap().is_empty());
+    assert_eq!(
+        ok(invoke(
+            root.path(),
+            &[
+                "retrieval",
+                "query",
+                "CITATION_CANARY",
+                "--user",
+                "stranger"
+            ]
+        )),
+        json!([])
+    );
+    ok(invoke(root.path(), &["retrieval", "delete", "reference"]));
+    assert_eq!(
+        ok(invoke(
+            root.path(),
+            &["retrieval", "query", "CITATION_CANARY"]
+        )),
+        json!([])
+    );
+}

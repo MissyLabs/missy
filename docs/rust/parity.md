@@ -12,28 +12,29 @@ Per-task validation results belong in `docs/rust/validation.md`.
 | OpenAI / Anthropic / Ollama | Native HTTP adapters, strict protocol validation and usage accounting |
 | Provider fallback / health | Native bounded failover and circuit breakers; uncertain billing is not free |
 | Shell/files/web | Native default-deny builtins, exact argv and descriptor-relative path handling |
-| MCP | Native pinned opt-in stdio JSON-RPC; HTTP/SSE transport not yet ported |
+| MCP | Native pinned opt-in stdio JSON-RPC; HTTP/SSE transport still not ported |
 | CLI | Separate `missy-rs`, not a replacement symlink for legacy `missy` |
 | HTTP API / browser console | Native authenticated loopback API and isolated console |
-| Discord | Native policy-pinned Gateway/REST, allowlists, heartbeat and reconnect/resume; local wire fixture only, no live bot acceptance |
+| Discord | Native policy-pinned Gateway/REST, durable intake/resume/outbox and nonce reconciliation, scoped interactions; read-only probe command. Live bot acceptance still requires a dedicated authorized credential |
 | Scheduler | Native durable explicitly scoped interval jobs, manual worker invocation; not all APScheduler syntax |
 | Planning DAG | Native bounded validation/topological compilation; execution does not bypass the durable runtime |
 | SKILL.md | Native bounded data-only discovery; no arbitrary embedded Python execution |
 | Vault | Native ChaCha20-Poly1305 at-rest storage, private files and cross-process lock |
 | Signed audit exports | Native Ed25519 export API with independently pinned verification key |
-| Prompt/persona | Explicit configured system prompt and immutable continuation hash; legacy hatching/persona experiments not ported |
-| Voice edge / Discord voice / STT / TTS | **Not ported**, no claim of hardware or protocol compatibility |
-| Vision/camera/screencast/desktop/OBS/VTube | **Not ported**, no desktop session or camera operated by rewrite tests |
-| Image/video/music media tools | **Not ported**; explicitly approved MCP can provide integrations, not automatic parity |
-| OAuth/Codex/Claude CLI/acpx providers | **Not ported**, no credential scraping or inheritance from legacy state |
-| Automatic prompt patches / code evolution | **Not ported**, no self-modification or implicit approvals |
+| Prompt/persona | Native scoped proposal/review/revision store, immutable prompt snapshots, CLI new-turn loading; hatching/A-B experiments not ported |
+| Voice edge / STT / TTS | Native loopback edge protocol, explicit device pairing, mode enforcement, command Whisper/Piper adapters, fake-audio/ELF acceptance. Actual speech models and Discord voice not tested/ported |
+| Vision/camera/screencast/native desktop | **Not ported**, no desktop session or camera operated by rewrite tests |
+| OBS/VTube | Native policy-pinned typed WebSocket adapters, explicit request grants and mutation approvals; only simulated protocol acceptance |
+| Image/video workflow | Native operator-workflow ComfyUI submit/history validation; no arbitrary graph or artifact-path grants. Other media/music tools not ported |
+| OAuth/Claude CLI | Native explicitly approved chat-only CLI provider, NoTools runtime, no credential scraping/automatic login. Codex completion deliberately blocked without verified no-tools mode; acpx not ported |
+| Automatic prompt patches / code evolution | Native scoped inert patch proposal/review, **no source auto-application or self-modification** |
 | Mesh/CRDT/quorum | **Not ported**, no federation security claim |
-| Graph/vector/semantic retrieval | **Not ported**, SQLite FTS is lexical retrieval, not neural embeddings |
-| Nomad / Incus / repo evaluation tools | **Not ported**, no deployment credentials or infrastructure mutations |
-| Landlock/container sandbox | **Not ported**, exact argv policy is not kernel containment |
-| Full approval TUI / trust scoring | **Not ported**, denied capability stays denied rather than silently granting one |
+| Graph/vector retrieval | Native scoped SQLite graph, UTF-8 citation indexing, BM25 + deterministic hashing lexical vectors/RRF. Pluggable Embedder, **not a neural semantic model** |
+| Nomad / Incus | Native bounded typed adapters, resource/action allowlists and exact durable mutation approval. Mock endpoints only; no infrastructure changed. Repo-evaluation tools not ported |
+| Landlock/container sandbox | Native child-only Landlock, real filesystem/TCP confinement acceptance on ABI8; hardened container argv builder only, not a deployed container service |
+| Approval / trust | Native exact scoped single-use approvals with CLI approve/deny, durable runtime pause/resume. Advisory versioned trust; Rich approval TUI not ported |
 | OTel/SIEM | **Not ported**, durable audit chain is not an external telemetry deployment |
-| Legacy config/state migration | Explicitly rejected until reviewed migration exists; Python state remains untouched |
+| Legacy config/state migration | Native offline plan/apply, immutable backup sources, explicit one-to-one Scope mapping, separate atomic destination. Historical messages imported inert/scoped, unsafe global learning and incomplete checkpoints quarantined, never replayed |
 
 ## Promotion gates
 

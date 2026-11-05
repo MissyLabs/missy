@@ -20,6 +20,17 @@ missy-tools = { path = "../missy-tools" }
 missy-gateway = { path = "../missy-gateway" }
 missy-automation = { path = "../missy-automation" }
 missy-security = { path = "../missy-security" }
+missy-migrate = { path = "../missy-migrate" }
+missy-retrieval = { path = "../missy-retrieval" }
+missy-integrations = { path = "../missy-integrations" }
+missy-governance = { path = "../missy-governance" }
+missy-provider-process = { path = "../missy-provider-process" }
+missy-voice = { path = "../missy-voice" }
+missy-sandbox = { path = "../missy-sandbox" }
+async-trait.workspace = true
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
 chrono.workspace = true
 libc.workspace = true
 zeroize = "1"
@@ -32,3 +43,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rusqlite.workspace = true

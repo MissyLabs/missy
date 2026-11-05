@@ -1,0 +1,18 @@
+[package]
+name = "missy-provider-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+libc.workspace = true
+missy-core = { path = "../missy-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

@@ -1,4 +1,5 @@
 use super::*;
+mod approvals;
 use async_trait::async_trait;
 use missy_core::Completion;
 use std::{

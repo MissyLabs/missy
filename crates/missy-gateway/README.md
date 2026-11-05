@@ -6,6 +6,13 @@ Public interfaces:
 * `router(state: ApiState) -> axum::Router` (no listener; in-process tests)
 * `serve(runtime: Arc<Runtime>, config: ApiConfig) -> async anyhow::Result<()>`
 * `serve_discord(runtime: Arc<Runtime>, config: DiscordConfig, policy: PolicyConfig) -> async anyhow::Result<()>`
+  remains source-compatible but returns an explicit state-directory-required error.
+* `serve_discord_with_state_dir(runtime, config, policy, state_dir: impl AsRef<Path>)`
+  opts into durable Discord transport in a caller-supplied **existing canonical absolute
+  private directory** (owner-only 0700, caller-owned). No implicit state path is opened.
+* `probe_discord(config: DiscordConfig, policy: PolicyConfig) -> async Result<DiscordProbe>`
+  performs only authenticated GET `/users/@me` and GET `/gateway/bot`. Returns bot
+  ID/username and safe session-start counters; no raw JSON/token/session/Gateway URL.
 * `require_discord_transport(&DiscordConfig) -> anyhow::Result<()>` validates opt-in channel configuration.
 
 No production startup or live state is used in tests. Scheduler lives in the separate
@@ -78,14 +85,87 @@ bound by the Store idempotency payload hash. Redelivery cannot silently rerun a
 changed payload. Outbound mentions are disabled. UTF-16-aware chunks are under 2000
 units, with 16-chunk maximum; REST 429 retries/waits and pacing are bounded.
 
-Known limits: Gateway resume state is memory-only across reconnects (not process
-restarts), but runtime turn deduplication is durable. A serial message worker and
-32-entry queue bound concurrency; overflow/rate-limited messages are dropped rather
-than admitted. Per-user 30/minute rate counters reset on reconnect. Response delivery
-is at-most-once: a completed deduplicated turn is not reposted, so a crash between
-turn completion and REST delivery can lose the reply. There is no durable outbound
-delivery journal, distributed shard/session-start governor, slash-command, attachment,
-voice, edit-event, or automatic reconciliation support. Fatal auth/intents closes
-stop rather than reconnect forever. Reconnect/backoff and heartbeat code is real but
-not live-Discord acceptance tested; pure allowlist/chunk tests plus the policy crate's
-mock pinned-WebSocket transport tests are not a claim of production Discord parity.
+### Durable intake, execution and delivery
+
+`discord.sqlite` uses WAL + FULL synchronous transactions. Intake payload/hash,
+persistent principal governor and Gateway resume checkpoint commit atomically before
+the sequence advances in memory or in heartbeats. Replayed occurrences are hash-bound
+and do not spend another rate allowance. Queue capacity is 256 outstanding occurrences;
+saturation disconnects without advancing that event's checkpoint, allowing Gateway
+resume instead of `try_send` loss. The 30/minute user governor survives reconnect and
+process restart; over-limit admitted occurrences receive a durable rejection instead
+of executing. Up to eight asks/resumes run concurrently; control requests, delivery,
+heartbeat and ephemeral acknowledgements run independently. Runtime itself enforces
+session leases, tool-outcome safety, capacity and scoped access.
+
+Pending intake survives a crash before runtime admission. Runtime's own durable
+admission/result closes the completion-to-outbox crash window: completed deduplicated
+turns are recovered into the outbox, not discarded. Running/interrupted turns are not
+implicitly reexecuted. Explicit slash resume occurrences are persisted as started
+before invoking runtime resume, so a restart cannot replay the same resume attempt.
+An interrupted result identifies the turn and requires a new explicit resume command.
+
+Each output chunk has a stable occurrence/index-derived 24-character nonce and POST
+uses `enforce_nonce: true`, with allowed mentions disabled. Intent is committed before
+POST. Receipt IDs are durable. A restart or unknown POST result gets one policy-bound
+GET of the same channel's last 100 messages, matched by bot, channel, nonce and exact
+content. **No match is not evidence of failure**: a missing receipt, insufficient read
+permission, old message beyond that bounded page, or ambiguous response leaves an
+`uncertain` outbox row and stops the transport with an actionable error. No blind
+re-POST occurs, because Discord's nonce deduplication window is finite. Later chunks
+cannot pass an unresolved earlier chunk. Inspect the private journal's `outbox`
+state/receipt columns and runtime scoped history before operator reconciliation.
+This deliberately favors visible unresolved delivery over duplicate messages; it is
+not an exactly-once claim. REST 429 retries are persisted, paced and capped at three.
+
+The directory is bound to authenticated bot ID; a second process is excluded with a
+nonblocking advisory lock. Symlink/non-private/multiply-linked database/lock/sidecar
+files are rejected. Credentials from interaction events exist only in the private
+journal and are never logged. Keep this directory off shared/synchronized paths and
+back it up as sensitive state. SQLite has a 256MiB main-db page cap; completed dedup
+receipts are retained rather than pruned unsafely. Disk-full/storage failures stop
+intake without advancing the uncommitted dispatch. One instance/shard per journal is
+supported; persistent conservative identify throttle is one/minute, not a distributed
+multi-shard Discord session-budget coordinator. Startup checks remaining budget;
+identify consumes a persisted local reservation before network I/O. Exhausting that
+snapshot requires an authenticated startup preflight refresh after Discord's reset,
+not an unbounded automatic identify loop.
+
+### Slash commands and attachments
+
+Native authenticated Gateway `INTERACTION_CREATE` accepts `/missy ask prompt:...`,
+`/missy status turn:...`, `/missy cancel turn:...`, `/missy resume turn:...`. The app ID
+must equal the authenticated bot ID, and the same explicit user/guild/channel rules
+and exact same Scope as mentioned messages apply. A turn ID is never authorization.
+There is no public interaction webhook handler or HTTP signature bypass. Commands
+must be registered separately by an authorized operator (guild or global application
+commands with `applications.commands` authorization); startup/probe never registers
+or mutates them. Subcommands have a single required string option `prompt` for ask,
+`turn` for the others. Threads need their own channel allowlist entry.
+
+Interactions get deferred ephemeral acknowledgements on a separate bounded poller,
+then idempotent PATCH of the original response. No public fallback or followup POST.
+Callback identity is unique; interrupted acknowledgements can be retried safely.
+Result is one bounded message, with scoped-history notice on truncation. Discord's
+three-second acknowledgement and 15-minute token expiry are external hard limits:
+slow network/restart can expire an interaction. Its undelivered result stays durable
+and visible as uncertain, never silently discarded or publicly reposted.
+
+Attachments are **inert metadata only**, never fetched or decoded. Maximum ten,
+256-byte filenames, 25MiB each and 50MiB total declared sizes, within the overall
+prompt bound. Only ID/filename/size are included as untrusted metadata; arbitrary
+URL/proxy URL/MIME fields are not forwarded. No voice or message-edit handling.
+
+### Acceptance boundary
+
+Tests use actual local mock WS/REST through PolicyHttpClient and disposable private
+SQLite journals, including process-reopen crash windows. They do not log in any live
+bot. Live Discord acceptance remains **unverified without a dedicated, currently
+authorized Missy bot credential and confirmed bot identity**. Never inherit Odin's
+`DISCORD_TOKEN` or reuse another running bot. The parent CLI's read-only preflight is
+`cargo run -p missy-cli -- --config /path/to/dedicated-test.yaml discord-probe`;
+set `discord.token_env` to a dedicated `MISSY_*` variable supplied securely for that
+invocation. Missing dedicated credentials is a blocked acceptance result, not success.
+Shared `DISCORD_TOKEN`/`DISCORD_BOT_TOKEN` names are rejected before reading them.
+Only after identity approval may the parent wire and invoke durable serving; probe
+alone neither sends messages nor opens a Gateway session.

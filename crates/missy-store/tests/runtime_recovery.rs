@@ -120,7 +120,7 @@ fn interrupted_cp(turn: &Turn, config: &RuntimeConfig) -> Checkpoint {
         },
     ];
     let state = json!({"version":1,"current_turn_start":1,"request_hash":hash_text("hello"),"deadline_ms":turn.created_at+config.max_turn_seconds as i64*1000,"history":"","transcript":transcript,"steps":1,"continuations":0,"usage":Usage::default(),"seen_ids":["effect-1"],"lineage":[],"partial":"","provider_pending":false,"final_content":null});
-    let context_hash=hash_text(&serde_json::to_string(&json!({"system":SYSTEM,"config":config,"provider":"test-provider","tools":definitions()})).unwrap());
+    let context_hash=hash_text(&serde_json::to_string(&json!({"system":SYSTEM,"config":config,"provider":"test-provider","tools":definitions(),"tool_configuration":serde_json::to_string(&definitions()).unwrap()})).unwrap());
     let mut full = vec![Message::text("system", SYSTEM)];
     full.extend(transcript);
     Checkpoint {

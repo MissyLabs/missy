@@ -467,6 +467,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -745,6 +746,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -1179,19 +1189,31 @@ name = "missy-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
+ "hex",
  "libc",
  "missy-automation",
  "missy-core",
  "missy-gateway",
+ "missy-governance",
+ "missy-integrations",
+ "missy-migrate",
  "missy-policy",
+ "missy-provider-process",
  "missy-providers",
+ "missy-retrieval",
  "missy-runtime",
+ "missy-sandbox",
  "missy-security",
  "missy-store",
  "missy-tools",
+ "missy-voice",
+ "rusqlite",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1222,6 +1244,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "libc",
  "missy-core",
  "missy-policy",
  "missy-runtime",
@@ -1241,6 +1264,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "missy-governance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "hex",
+ "libc",
+ "missy-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "missy-integrations"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "missy-core",
+ "missy-policy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "missy-migrate"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "libc",
+ "missy-core",
+ "missy-store",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "url",
+ "yaml_serde",
+]
+
+[[package]]
 name = "missy-policy"
 version = "0.1.0"
 dependencies = [
@@ -1254,6 +1336,23 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "missy-provider-process"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "hex",
+ "libc",
+ "missy-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1277,6 +1376,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "missy-retrieval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "libc",
+ "missy-core",
+ "missy-policy",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "missy-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1290,6 +1405,22 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "missy-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "missy-core",
+ "missy-policy",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1351,6 +1482,29 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "missy-voice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "hex",
+ "libc",
+ "missy-core",
+ "pbkdf2",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -1485,6 +1639,16 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
 ]
 
 [[package]]
