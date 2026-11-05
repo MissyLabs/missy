@@ -84,6 +84,10 @@ The optional browser harness is test tooling, not a runtime Python dependency.
   ordering checks.
 - Browser acceptance exposed the original 202-admission UI leaving an empty
   result forever. Added bounded status polling rather than replaying the request.
+- The first hosted Rust build passed native lint/tests/release but its browser
+  dependency installation failed because `ubuntu-latest` had migrated to 26.04,
+  unsupported by the tested Playwright version. Pinned the Rust workflow to
+  supported Ubuntu 24.04 rather than weakening browser acceptance.
 - Added same-instance vault mutation serialization and secret-buffer cleanup.
 
 ## Limits and unperformed acceptance

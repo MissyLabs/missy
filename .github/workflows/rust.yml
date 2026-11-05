@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # Pin the browser-supported OS rather than inherit ubuntu-latest migrations.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       CARGO_BUILD_JOBS: 4
@@ -50,7 +51,7 @@ jobs:
           path: target/release/missy-rs
           retention-days: 14
   dependency-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
