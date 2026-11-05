@@ -128,12 +128,30 @@ fn supervisor_lock_reload_sigterm_and_restart() {
         serde_json::from_slice(&fs::read(cfg.state_dir.join("run/gateway_status.json")).unwrap())
             .unwrap();
     assert_eq!(status["phase"], "stopped");
+    // A read-only status probe owns the lock only transiently. Never steal a
+    // real owner, but tolerate this bounded startup/probe race.
+    use std::os::fd::AsRawFd;
+    let status_probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(cfg.state_dir.join("run/gateway.lock"))
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(status_probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     let mut restarted = Process(
         command(&path, &["gateway", "start"])
             .stdout(Stdio::null())
             .spawn()
             .unwrap(),
     );
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        restarted.0.try_wait().unwrap().is_none(),
+        "transient status probe must not reject startup"
+    );
+    drop(status_probe);
     wait_ready(&path);
     unsafe {
         libc::kill(restarted.0.id() as i32, libc::SIGTERM);

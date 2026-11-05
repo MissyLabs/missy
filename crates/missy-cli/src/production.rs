@@ -63,10 +63,27 @@ impl Owner {
         }
         check_directory(&dir)?;
         let lock = lock_file(&dir)?;
-        ensure!(
-            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "another native gateway owns this state directory"
-        );
+        // Status probes briefly acquire the same lock to distinguish a stopped
+        // owner from stale status. A probe racing startup is not another daemon.
+        // Retry bounded contention, but never steal or unlink the owner's lock.
+        let lock_deadline = std::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            if !matches!(
+                error.raw_os_error(),
+                Some(libc::EWOULDBLOCK) | Some(libc::EINTR)
+            ) {
+                return Err(error).context("could not acquire native gateway owner lock");
+            }
+            ensure!(
+                std::time::Instant::now() < lock_deadline,
+                "another native gateway owns this state directory"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         Ok(Self {
             _lock: lock,
             dir,
