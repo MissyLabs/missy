@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Missy console</title><link rel="stylesheet" href="/console.css"></head>
+<body><main><h1>Missy</h1><p>Local authenticated console. Token is held only in this page's memory and is forgotten on reload. This browser is not a secret vault.</p>
+<form id="auth"><label>Bearer token <input id="token" type="password" autocomplete="off" required></label><button>Unlock</button><button type="button" id="forget">Forget token</button></form>
+<label>Session <input id="session" value="console" maxlength="128" pattern="[A-Za-z0-9_.:-]+"></label>
+<nav><button id="health">Health</button><button id="sessions">Sessions</button><button id="history">History</button></nav>
+<form id="chat"><label>Message <textarea id="prompt" maxlength="32000" required></textarea></label><button id="send">Send</button></form>
+<label>Turn ID <input id="turn" maxlength="128"></label><nav><button id="status">Status</button><button id="cancel">Cancel</button><button id="resume">Resume</button></nav>
+<p id="notice" role="status">Locked</p><pre id="output" aria-live="polite"></pre></main><script src="/console.js" defer></script></body></html>

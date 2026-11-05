@@ -36,3 +36,12 @@ secrets.yaml
 
 # Stray artifacts from tests that use an unpatched MagicMock config path
 MagicMock/
+
+# Rust build output and isolated Rust state, never the legacy live ~/.missy.
+/target/
+/.missy-rust/
+/missy-rust-state/
+/missy-rust.yaml
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

@@ -1,0 +1,59 @@
+name: Rust rewrite
+on:
+  push:
+    branches: [master, 'rewrite/**']
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**', 'scripts/test-rust-console.py', '.github/workflows/rust.yml']
+permissions:
+  contents: read
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: 4
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo build --release -p missy-cli --locked
+      - name: Chromium console acceptance
+        run: |
+          python3 -m venv /tmp/missy-browser-test
+          /tmp/missy-browser-test/bin/pip install playwright==1.60.0
+          /tmp/missy-browser-test/bin/playwright install --with-deps chromium
+          /tmp/missy-browser-test/bin/python scripts/test-rust-console.py --binary target/release/missy-rs
+      - name: Native executable and isolated configuration smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          export HOME="$work"
+          target/release/missy-rs --help
+          target/release/missy-rs --config "$work/config.yaml" init
+          target/release/missy-rs --config "$work/config.yaml" config-check
+          target/release/missy-rs --config "$work/config.yaml" doctor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: missy-rs-linux-x86_64
+          path: target/release/missy-rs
+          retention-days: 14
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit --deny warnings

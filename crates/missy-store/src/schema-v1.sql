@@ -1,0 +1,13 @@
+CREATE TABLE turns (id TEXT PRIMARY KEY, scope TEXT NOT NULL, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, prompt TEXT NOT NULL, status TEXT NOT NULL, response TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, cancel_requested INTEGER NOT NULL DEFAULT 0, retained INTEGER NOT NULL DEFAULT 0, UNIQUE(scope,request_id), UNIQUE(scope,id));
+CREATE TABLE leases (scope TEXT PRIMARY KEY, turn_id TEXT NOT NULL, owner TEXT NOT NULL, fence INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE messages (sequence INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, turn_id TEXT NOT NULL, message TEXT NOT NULL, FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id) ON DELETE CASCADE);
+CREATE INDEX messages_scope ON messages(scope,sequence);
+CREATE TABLE checkpoints (scope TEXT NOT NULL, turn_id TEXT NOT NULL, context_hash TEXT NOT NULL, system_prompt_hash TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(scope,turn_id), FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id) ON DELETE CASCADE);
+CREATE TABLE tools (scope TEXT NOT NULL, turn_id TEXT NOT NULL, call_id TEXT NOT NULL, name TEXT NOT NULL, args_hash TEXT NOT NULL, args TEXT NOT NULL, status TEXT NOT NULL, fence INTEGER NOT NULL, result TEXT, error TEXT, PRIMARY KEY(scope,turn_id,call_id), FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id) ON DELETE CASCADE);
+CREATE TABLE events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, turn_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL, FOREIGN KEY(scope,turn_id) REFERENCES turns(scope,id) ON DELETE CASCADE);
+CREATE INDEX events_scope ON events(scope,turn_id,sequence);
+CREATE TABLE memories (scope TEXT NOT NULL, id TEXT NOT NULL, content TEXT NOT NULL, provenance TEXT NOT NULL, trust TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(scope,id));
+CREATE TABLE audit (sequence INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, previous_hash TEXT NOT NULL, hash TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX audit_scope ON audit(scope,sequence);
+CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
+CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;

@@ -1,5 +1,11 @@
 # Missy
 
+> **Rust rewrite branch:** native implementation, build instructions, security
+> invariants and explicit compatibility gaps are in [README-RUST.md](README-RUST.md).
+> The Python description below remains the legacy reference, not a claim that
+> every Python integration has already been ported. No production replacement
+> or automatic migration happens when you build the Rust workspace.
+
 **Security-first, self-hosted AI assistant for Linux.**
 
 Missy is a production-grade agentic platform that runs entirely on your hardware. Default-deny network, filesystem sandboxing, shell whitelisting, encrypted vault, and structured audit logging — every capability is locked down until you explicitly allow it. Connect any AI provider. Deploy voice nodes throughout your home. Automate with scheduled jobs. Extend with tools, skills, and plugins.
