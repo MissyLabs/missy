@@ -44,10 +44,15 @@ impl PcmWav<'_> {
             .pcm
             .chunks(chunk)
             .map(|bytes| {
-                let (sum, n) = bytes.chunks_exact(2).fold((0.0, 0usize), |(sum, n), b| {
-                    let x = i16::from_le_bytes([b[0], b[1]]) as f64 / 32768.0;
-                    (sum + x * x, n + 1)
-                });
+                let (sum, n) =
+                    bytes
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .fold((0.0, 0usize), |(sum, n), b| {
+                            let x = i16::from_le_bytes([b[0], b[1]]) as f64 / 32768.0;
+                            (sum + x * x, n + 1)
+                        });
                 (sum / n.max(1) as f64).sqrt()
             })
             .collect();

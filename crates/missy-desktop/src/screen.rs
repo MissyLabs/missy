@@ -136,7 +136,7 @@ pub(crate) fn reject_blank_rgb(pixels: &[u8]) -> Result<()> {
     let count = (pixels.len() / 3) as f64;
     let mut sums = [0f64; 3];
     let mut squares = [0f64; 3];
-    for pixel in pixels.chunks_exact(3) {
+    for pixel in pixels.as_chunks::<3>().0 {
         for i in 0..3 {
             let v = pixel[i] as f64;
             sums[i] += v;
