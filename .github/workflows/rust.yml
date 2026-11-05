@@ -87,8 +87,14 @@ jobs:
       - name: Native build and codec prerequisites
         timeout-minutes: 6
         run: |
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=20 update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install -y --no-install-recommends cmake ninja-build libssl-dev libopus-dev pkg-config
+          set -euo pipefail
+          printf '%s\n' \
+            'deb https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb https://security.ubuntu.com/ubuntu noble-security main universe' > /tmp/missy-native-apt.list
+          apt_options=(-o Dir::Etc::sourcelist=/tmp/missy-native-apt.list -o Dir::Etc::sourceparts=- -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends cmake ninja-build libssl-dev libopus-dev pkg-config
       - name: Build pinned official DAVE library and run upstream suites
         run: bash crates/missy-dave/build-native.sh "$RUNNER_TEMP/missy-native-dave"
       - name: Native Rust MLS and media acceptance
