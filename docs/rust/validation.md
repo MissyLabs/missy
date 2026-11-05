@@ -196,3 +196,8 @@ Clippy with warnings denied pass on the same final dependency set.
   only authenticates a bundle against an independently pinned key.
 - GitHub workflow results must be checked separately from these local results.
   The workflow includes native tests/lint/build/audit and Chromium acceptance.
+  One final hosted run timed out installing OS test packages from the runner's
+  Azure Ubuntu mirror before any Rust validation ran. The dependency step now
+  uses official signed Ubuntu archives, bounded acquisition, no recommended
+  extras and an explicit six-minute step timeout. It still installs all test
+  dependencies; no tests were skipped to hide the infrastructure failure.

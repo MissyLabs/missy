@@ -25,7 +25,19 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Disposable native media and display test dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb xauth dbus
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runner's Azure mirror delivered 94 MB over >25 minutes. Use
+          # official signed Ubuntu indexes, bounded acquisition and no extras.
+          printf '%s\n' \
+            'deb https://archive.ubuntu.com/ubuntu noble main universe' \
+            'deb https://archive.ubuntu.com/ubuntu noble-updates main universe' \
+            'deb https://security.ubuntu.com/ubuntu noble-security main universe' > /tmp/missy-apt.list
+          apt_options=(-o Dir::Etc::sourcelist=/tmp/missy-apt.list -o Dir::Etc::sourceparts=- -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg xvfb xauth dbus
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --all-targets --locked
