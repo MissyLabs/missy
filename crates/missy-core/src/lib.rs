@@ -220,6 +220,12 @@ pub struct ExtensionConfig {
     pub cli_provider_config: Option<PathBuf>,
     pub voice_config: Option<PathBuf>,
     pub sandbox_config: Option<PathBuf>,
+    pub http_mcp_config: Option<PathBuf>,
+    pub desktop_config: Option<PathBuf>,
+    pub media_config: Option<PathBuf>,
+    pub embedding_config: Option<PathBuf>,
+    pub mesh_config: Option<PathBuf>,
+    pub operations_config: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

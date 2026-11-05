@@ -17,8 +17,15 @@ defaults and no Python runtime dependency.
 - `PolicyHttpClient::new(PolicyConfig) -> Result<Self>` or `from_policy(Policy)`.
 - `PolicyHttpClient::with_timeout(Duration) -> Result<Self>` consumes the client;
   bounds are 1 to 600 seconds, default 30 seconds.
+- `PolicyHttpClient::with_chunk_timeout(Duration) -> Result<Self>` configures the
+  streaming idle-read timeout, independently bounded to 1..600 seconds (default
+  30). Buffered requests retain their existing total timeout behavior.
 - `request(method: &str, url: &str, headers: Vec<(String,String)>,
   body: Option<Vec<u8>>) -> Result<HttpResponse>` is async.
+- `request_stream(method: &str, url: &str, headers: Vec<(String,String)>,
+  body: Option<Vec<u8>>) -> Result<PolicyHttpStream>` is async. The stream exposes
+  public `status: u16`, `headers: Vec<(String,String)>`, and async
+  `chunk(&mut self) -> Result<Option<Vec<u8>>>`. It does not expose reqwest.
 - `get(url: &str) -> Result<HttpResponse>` is async.
 - `request_json` has the same parameters as `request` except an optional JSON
   Value body, returning a Value. It rejects non-2xx with a status-only error.
@@ -33,6 +40,19 @@ defaults and no Python runtime dependency.
 and other headers remain untrusted application data, not safe logging material.
 Dropping an in-flight request/handshake future cancels its transport. The caller
 owns WebSocket heartbeat/read deadlines, message processing and stream closure.
+
+Streaming HTTP uses the same request validation, DNS pinning and response header
+filtering as buffered HTTP. Its absolute deadline starts before DNS/connection
+setup and includes time between reads. Every chunk read is bounded by the earlier
+of that deadline and the idle-read timeout. No reqwest body-wide timeout is used
+for streaming. For legacy SSE long polls, callers may set both timeouts up to 600
+seconds. Heartbeats cannot extend the total deadline. All delivered chunks count
+toward the hard 4 MiB cumulative response limit, even for indefinite/chunked SSE.
+EOF, errors and cancelled pending chunk reads close the stream permanently;
+subsequent reads return `None`. Dropping the stream also closes its non-pooled
+response. A caller retaining a stream without reading must still drop it when
+done; no background task reads or buffers events. `Debug` reports counts/status
+only, never headers, URL, body bytes or the internal transport.
 
 ## Enforced boundaries
 

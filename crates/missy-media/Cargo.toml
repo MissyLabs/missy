@@ -1,0 +1,23 @@
+[package]
+name = "missy-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+missy-sandbox = { path = "../missy-sandbox" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true

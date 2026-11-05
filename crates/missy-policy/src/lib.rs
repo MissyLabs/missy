@@ -469,6 +469,7 @@ fn validate_answers(addrs: &[SocketAddr], private: bool) -> Result<()> {
 pub struct PolicyHttpClient {
     policy: Policy,
     timeout: Duration,
+    chunk_timeout: Duration,
 }
 pub struct HttpResponse {
     pub status: u16,
@@ -484,6 +485,99 @@ impl std::fmt::Debug for HttpResponse {
             .finish()
     }
 }
+/// Bounded streaming response from the policy gateway, never a raw transport.
+/// Drop closes the response. Cancelling a pending `chunk()` also closes it.
+pub struct PolicyHttpStream {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    response: Option<reqwest::Response>,
+    deadline: tokio::time::Instant,
+    chunk_timeout: Duration,
+    received: usize,
+}
+impl std::fmt::Debug for PolicyHttpStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicyHttpStream")
+            .field("status", &self.status)
+            .field("header_count", &self.headers.len())
+            .field("received_bytes", &self.received)
+            .field("closed", &self.response.is_none())
+            .finish()
+    }
+}
+impl PolicyHttpStream {
+    fn new(
+        response: reqwest::Response,
+        deadline: tokio::time::Instant,
+        chunk_timeout: Duration,
+    ) -> Result<Self> {
+        if response
+            .content_length()
+            .is_some_and(|n| n > MAX_HTTP_RESPONSE_BYTES as u64)
+        {
+            bail!("HTTP response exceeds limit");
+        }
+        let status = response.status().as_u16();
+        let mut headers = Vec::new();
+        let mut header_bytes = 0;
+        for (index, (k, v)) in response.headers().iter().enumerate() {
+            header_bytes += k.as_str().len() + v.len();
+            if header_bytes > 32 * 1024 || index >= 128 {
+                bail!("HTTP response headers exceed limit");
+            }
+            if matches!(
+                k.as_str(),
+                "set-cookie" | "www-authenticate" | "proxy-authenticate"
+            ) {
+                continue;
+            }
+            if let Ok(value) = v.to_str() {
+                headers.push((k.to_string(), value.to_owned()));
+            }
+        }
+        Ok(Self {
+            status,
+            headers,
+            response: Some(response),
+            deadline,
+            chunk_timeout,
+            received: 0,
+        })
+    }
+    /// Read one transport chunk, with cumulative 4 MiB and absolute lifetime bounds.
+    /// An error or cancellation is terminal; subsequent calls return `None`.
+    /// The total deadline includes DNS, connection setup and time between reads.
+    pub async fn chunk(&mut self) -> Result<Option<Vec<u8>>> {
+        // Move ownership into this future: cancelling a pending read must not leave
+        // an unattended live connection in the outer stream.
+        let Some(mut response) = self.response.take() else {
+            return Ok(None);
+        };
+        let now = tokio::time::Instant::now();
+        if now >= self.deadline {
+            bail!("HTTP response stream timed out");
+        }
+        let read_deadline = self.deadline.min(now + self.chunk_timeout);
+        let next = tokio::time::timeout_at(read_deadline, response.chunk())
+            .await
+            .map_err(|_| anyhow!("HTTP response stream timed out"))?
+            .map_err(|_| anyhow!("HTTP response transfer failed"))?;
+        // A ready transport may win a timeout poll at the boundary. Never deliver
+        // bytes after the absolute policy lifetime, including buffered bytes.
+        if tokio::time::Instant::now() >= self.deadline {
+            bail!("HTTP response stream timed out");
+        }
+        let Some(chunk) = next else {
+            return Ok(None);
+        };
+        if self.received.saturating_add(chunk.len()) > MAX_HTTP_RESPONSE_BYTES {
+            bail!("HTTP response exceeds limit");
+        }
+        self.received += chunk.len();
+        self.response = Some(response);
+        Ok(Some(chunk.to_vec()))
+    }
+}
 pub type PolicyWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 impl PolicyHttpClient {
@@ -494,6 +588,7 @@ impl PolicyHttpClient {
         Self {
             policy,
             timeout: Duration::from_secs(HTTP_TIMEOUT_SECONDS),
+            chunk_timeout: Duration::from_secs(HTTP_TIMEOUT_SECONDS),
         }
     }
     pub fn config(&self) -> &PolicyConfig {
@@ -504,6 +599,15 @@ impl PolicyHttpClient {
             bail!("HTTP timeout must be 1..600 seconds");
         }
         self.timeout = timeout;
+        Ok(self)
+    }
+    /// Streaming idle-read bound, independent of the absolute `with_timeout` bound.
+    /// Legacy SSE long polls may opt into up to 600 seconds; default is 30 seconds.
+    pub fn with_chunk_timeout(mut self, timeout: Duration) -> Result<Self> {
+        if timeout < Duration::from_secs(1) || timeout > Duration::from_secs(600) {
+            bail!("HTTP chunk timeout must be 1..600 seconds");
+        }
+        self.chunk_timeout = timeout;
         Ok(self)
     }
     pub async fn get(&self, url: &str) -> Result<HttpResponse> {
@@ -655,6 +759,22 @@ impl PolicyHttpClient {
             .await
             .map_err(|_| anyhow!("HTTP request timed out"))?
     }
+    /// Start a streaming request through the same origin, DNS and header policy
+    /// as buffered requests. No redirects, proxies or unvalidated DNS fallback.
+    pub async fn request_stream(
+        &self,
+        method: &str,
+        raw: &str,
+        headers: Vec<(String, String)>,
+        body: Option<Vec<u8>>,
+    ) -> Result<PolicyHttpStream> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let response =
+            tokio::time::timeout_at(deadline, self.send_inner(method, raw, headers, body, true))
+                .await
+                .map_err(|_| anyhow!("HTTP request timed out"))??;
+        PolicyHttpStream::new(response, deadline, self.chunk_timeout)
+    }
     async fn request_inner(
         &self,
         method: &str,
@@ -662,6 +782,28 @@ impl PolicyHttpClient {
         headers: Vec<(String, String)>,
         body: Option<Vec<u8>>,
     ) -> Result<HttpResponse> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let response = self.send_inner(method, raw, headers, body, false).await?;
+        // Buffered HTTP keeps its existing total timeout, not the streaming idle bound.
+        let mut stream = PolicyHttpStream::new(response, deadline, self.timeout)?;
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.chunk().await? {
+            body.extend_from_slice(&chunk);
+        }
+        Ok(HttpResponse {
+            status: stream.status,
+            headers: stream.headers,
+            body,
+        })
+    }
+    async fn send_inner(
+        &self,
+        method: &str,
+        raw: &str,
+        headers: Vec<(String, String)>,
+        body: Option<Vec<u8>>,
+        streaming: bool,
+    ) -> Result<reqwest::Response> {
         let url = parse_url(raw)?;
         if !self.policy.inner.origins.contains(&origin_key(&url)?) {
             bail!("HTTP origin denied by exact allowlist");
@@ -716,10 +858,14 @@ impl PolicyHttpClient {
         let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(self.timeout)
             .connect_timeout(Duration::from_secs(10))
             .referer(false)
             .pool_max_idle_per_host(0);
+        // Streaming uses the absolute policy deadline and per-read timeout rather
+        // than reqwest's body-wide timer, which is unsuitable for long-lived SSE.
+        if !streaming {
+            builder = builder.timeout(self.timeout);
+        }
         if let Host::Domain(name) = host {
             builder = builder.resolve_to_addrs(name, &addrs);
         }
@@ -730,50 +876,10 @@ impl PolicyHttpClient {
         if let Some(body) = body {
             request = request.body(body);
         }
-        let mut response = request
+        request
             .send()
             .await
-            .map_err(|_| anyhow!("HTTP transport failed"))?;
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_HTTP_RESPONSE_BYTES as u64)
-        {
-            bail!("HTTP response exceeds limit");
-        }
-        let status = response.status().as_u16();
-        let mut headers = Vec::new();
-        let mut header_bytes = 0;
-        for (k, v) in response.headers() {
-            header_bytes += k.as_str().len() + v.len();
-            if header_bytes > 32 * 1024 || headers.len() >= 128 {
-                bail!("HTTP response headers exceed limit");
-            }
-            if matches!(
-                k.as_str(),
-                "set-cookie" | "www-authenticate" | "proxy-authenticate"
-            ) {
-                continue;
-            }
-            if let Ok(value) = v.to_str() {
-                headers.push((k.to_string(), value.to_owned()));
-            }
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| anyhow!("HTTP response transfer failed"))?
-        {
-            if body.len().saturating_add(chunk.len()) > MAX_HTTP_RESPONSE_BYTES {
-                bail!("HTTP response exceeds limit");
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(HttpResponse {
-            status,
-            headers,
-            body,
-        })
+            .map_err(|_| anyhow!("HTTP transport failed"))
     }
 }
 

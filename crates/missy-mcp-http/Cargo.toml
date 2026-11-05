@@ -1,0 +1,24 @@
+[package]
+name = "missy-mcp-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+jsonschema = { version = "0.33", default-features = false }
+missy-core = { path = "../missy-core" }
+missy-policy = { path = "../missy-policy" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+futures-util.workspace = true

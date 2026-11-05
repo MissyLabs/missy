@@ -121,6 +121,87 @@ fn ok(output: Output) -> Value {
 }
 
 #[test]
+fn actual_binary_human_schedule_and_literal_workflow_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let mock = Mock::start(vec![
+        reply("scheduled", vec![]),
+        reply("first", vec![]),
+        reply("second", vec![]),
+    ]);
+    let mut cfg = Config {
+        state_dir: root.path().join("state"),
+        providers: vec![ProviderConfig {
+            name: "fixture".into(),
+            kind: "openai".into(),
+            base_url: format!("{}/v1", mock.origin),
+            model: "fixture".into(),
+            input_microusd_per_million: Some(0),
+            output_microusd_per_million: Some(0),
+            ..ProviderConfig::default()
+        }],
+        ..Config::default()
+    };
+    cfg.policy.allowed_origins = vec![mock.origin.clone()];
+    cfg.policy.allow_private_network = true;
+    std::fs::write(
+        root.path().join("config.yaml"),
+        serde_yaml_ng::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let serialized = serde_yaml_ng::to_string(&cfg).unwrap();
+    let _: Config = serde_yaml_ng::from_str(&serialized).unwrap();
+    let next = ok(invoke(
+        root.path(),
+        &[
+            "schedule",
+            "next",
+            "daily at 09:00",
+            "--timezone",
+            "America/New_York",
+        ],
+    ));
+    assert!(next["next"].is_string());
+    let job = ok(invoke(
+        root.path(),
+        &["schedule", "add-text", "run once", "in 1 second"],
+    ));
+    assert!(job["schedule_spec"].is_object());
+    std::thread::sleep(Duration::from_millis(2100));
+    let ran = ok(invoke(root.path(), &["schedule", "run-due"]));
+    assert_eq!(ran.as_array().unwrap().len(), 1);
+    assert_eq!(ran[0]["status"], "completed");
+    let listed = ok(invoke(root.path(), &["schedule", "list"]));
+    assert_eq!(listed[0]["enabled"], false);
+    assert!(
+        ok(invoke(root.path(), &["schedule", "run-due"]))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let workflow = root.path().join("workflow.yaml");
+    std::fs::write(&workflow,"id: acceptance\nnodes:\n  - id: first\n    dependencies: []\n    prompt: First step\n  - id: second\n    dependencies: [first]\n    prompt: Second step\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&workflow, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let result = ok(invoke(
+        root.path(),
+        &["workflow", workflow.to_str().unwrap()],
+    ));
+    assert_eq!(result["turns"].as_object().unwrap().len(), 2);
+    let duplicate = ok(invoke(
+        root.path(),
+        &["workflow", workflow.to_str().unwrap()],
+    ));
+    assert_eq!(
+        duplicate["turns"]["first"]["turn_id"],
+        result["turns"]["first"]["turn_id"]
+    );
+    assert_eq!(mock.requests.lock().unwrap().len(), 3);
+}
+
+#[test]
 fn actual_binary_multitool_restart_dedup_memory_history_and_user_isolation() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");

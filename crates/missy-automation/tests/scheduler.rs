@@ -1,12 +1,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{Duration, Timelike, Utc};
 use missy_automation::{NewJob, OccurrenceStatus, Scheduler};
 use missy_core::{
     Completion, Message, Provider, RuntimeConfig, Scope, ToolCall, ToolContext, ToolDefinition,
     ToolExecutor, Usage,
 };
 use missy_runtime::Runtime;
+use missy_schedule_text::ScheduleSpec;
 use missy_store::Store;
 use std::sync::{
     Arc,
@@ -393,4 +394,329 @@ async fn expired_occurrence_with_unknown_effect_is_not_replayed_or_unpaused() {
     assert!(scheduler.pause(&scope(), &j.id, false).is_err());
     assert!(rt.resume(scope(), &admitted.turn.id).await.is_err());
     assert_eq!(p.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn fractional_one_shot_rounds_up_completes_once_and_stays_exhausted() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    private_dir(&root);
+    let p = provider(false, None);
+    let rt = runtime(&root.join("runtime.db"), p.clone());
+    let db_path = root.join("scheduler.db");
+    let scheduler = Scheduler::open(&db_path, rt.clone()).unwrap();
+    let anchor = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00.123456789Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let spec = ScheduleSpec::parse_at("in 1 second", "UTC", anchor).unwrap();
+    let j = scheduler
+        .add_spec(&scope(), "once".into(), spec, anchor)
+        .unwrap();
+    assert_eq!(
+        j.next_due,
+        anchor.with_nanosecond(0).unwrap() + Duration::seconds(2)
+    );
+    assert_eq!(scheduler.list(&scope()).unwrap()[0].next_due, j.next_due);
+    let mut other = scope();
+    other.channel = "other".into();
+    assert!(scheduler.list(&other).unwrap().is_empty());
+    assert!(
+        scheduler
+            .run_due(&other, 1, CancellationToken::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(scheduler.pause(&other, &j.id, false).is_err());
+    assert!(scheduler.remove(&other, &j.id).is_err());
+    let completed = scheduler
+        .run_due(&scope(), 1, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].due, j.next_due);
+    assert_eq!(completed[0].status, OccurrenceStatus::Completed);
+    assert!(!scheduler.list(&scope()).unwrap()[0].enabled);
+    assert!(scheduler.pause(&scope(), &j.id, false).is_err());
+    assert!(scheduler.occurrences(&other, 10).unwrap().is_empty());
+    drop(scheduler);
+    let reopened = Scheduler::open(&db_path, rt).unwrap();
+    assert!(!reopened.list(&scope()).unwrap()[0].enabled);
+    assert!(reopened.pause(&scope(), &j.id, false).is_err());
+    assert!(
+        reopened
+            .run_due(&scope(), 1, CancellationToken::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn fractional_interval_uses_ceiling_on_first_and_subsequent_dates() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    private_dir(&root);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let p = provider(false, Some(gate.clone()));
+    let scheduler = Scheduler::open(
+        root.join("scheduler.db"),
+        runtime(&root.join("runtime.db"), p.clone()),
+    )
+    .unwrap();
+    let anchor = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00.125Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let spec = ScheduleSpec::parse_at("every 10 seconds", "UTC", anchor).unwrap();
+    let j = scheduler
+        .add_spec(&scope(), "interval".into(), spec.clone(), anchor)
+        .unwrap();
+    let running = scheduler.clone();
+    let worker =
+        tokio::spawn(async move { running.run_due(&scope(), 1, CancellationToken::new()).await });
+    wait_for_call(&p).await;
+    scheduler.pause(&scope(), &j.id, true).unwrap();
+    gate.add_permits(1);
+    let completed = worker.await.unwrap().unwrap();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].status, OccurrenceStatus::Completed);
+    let next = scheduler.list(&scope()).unwrap().remove(0).next_due;
+    assert_eq!(
+        j.next_due,
+        anchor.with_nanosecond(0).unwrap() + Duration::seconds(11)
+    );
+    assert_eq!(next, j.next_due + Duration::seconds(10));
+    assert!(next >= spec.next_after(j.next_due).unwrap());
+    assert_eq!(next.timestamp_subsec_nanos(), 0);
+    // The legacy API deliberately retains its old floor-to-second behavior.
+    let legacy = scheduler
+        .add(
+            &scope(),
+            NewJob {
+                prompt: "legacy".into(),
+                interval_seconds: 10,
+                first_due: anchor,
+            },
+        )
+        .unwrap();
+    assert_eq!(legacy.next_due, anchor.with_nanosecond(0).unwrap());
+}
+
+#[tokio::test]
+async fn future_spec_is_not_admitted_early() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    private_dir(&root);
+    let p = provider(false, None);
+    let scheduler = Scheduler::open(
+        root.join("scheduler.db"),
+        runtime(&root.join("runtime.db"), p.clone()),
+    )
+    .unwrap();
+    let anchor = Utc::now().with_nanosecond(123_000_000).unwrap();
+    let spec = ScheduleSpec::parse_at("in 1 hour", "UTC", anchor).unwrap();
+    let exact = spec.next_after(anchor).unwrap();
+    let j = scheduler
+        .add_spec(&scope(), "future".into(), spec, anchor)
+        .unwrap();
+    assert!(j.next_due > exact);
+    assert!(j.next_due - exact < Duration::seconds(1));
+    assert_eq!(scheduler.list(&scope()).unwrap()[0].next_due, j.next_due);
+    assert!(
+        scheduler
+            .run_due(&scope(), 1, CancellationToken::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(p.calls.load(Ordering::SeqCst), 0);
+}
+
+async fn wait_for_call(p: &MockProvider) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while p.calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn daily_and_cron_reschedule_wall_clock_across_dst_not_fixed_86400_seconds() {
+    // 09:00 New York changes from 14:00Z to 13:00Z across spring DST.
+    let after = chrono::DateTime::parse_from_rfc3339("2026-03-07T13:59:59Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let first = chrono::DateTime::parse_from_rfc3339("2026-03-07T14:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let next = chrono::DateTime::parse_from_rfc3339("2026-03-08T13:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for expression in ["daily at 09:00", "0 9 * * *"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        private_dir(&root);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let p = provider(false, Some(gate.clone()));
+        let rt = runtime(&root.join("runtime.db"), p.clone());
+        let path = root.join("scheduler.db");
+        let scheduler = Scheduler::open(&path, rt.clone()).unwrap();
+        let spec = ScheduleSpec::parse_at(expression, "America/New_York", after).unwrap();
+        let j = scheduler
+            .add_spec(&scope(), "wall clock".into(), spec.clone(), after)
+            .unwrap();
+        assert_eq!(j.next_due, first);
+        let running = scheduler.clone();
+        let worker =
+            tokio::spawn(
+                async move { running.run_due(&scope(), 1, CancellationToken::new()).await },
+            );
+        wait_for_call(&p).await;
+        // Pause admission, not completion, to inspect exactly the next occurrence.
+        scheduler.pause(&scope(), &j.id, true).unwrap();
+        gate.add_permits(1);
+        let completed = worker.await.unwrap().unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].status, OccurrenceStatus::Completed);
+        assert_eq!(scheduler.list(&scope()).unwrap()[0].next_due, next);
+        assert_eq!(next - first, Duration::hours(23));
+        drop(scheduler);
+        let reopened = Scheduler::open(&path, rt).unwrap();
+        let persisted = reopened.list(&scope()).unwrap().remove(0);
+        assert_eq!(persisted.next_due, next);
+        assert_eq!(persisted.schedule_spec, Some(spec));
+        assert!(!persisted.enabled);
+    }
+}
+
+fn create_v1(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let db = rusqlite::Connection::open(path).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA application_id=1297307969; PRAGMA user_version=1;
+        CREATE TABLE automation_jobs(id TEXT PRIMARY KEY, scope TEXT NOT NULL, prompt TEXT NOT NULL,
+            interval_seconds INTEGER NOT NULL CHECK(interval_seconds > 0), next_due INTEGER NOT NULL,
+            enabled INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE automation_occurrences(request_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES automation_jobs(id),
+            due INTEGER NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL, fence INTEGER NOT NULL,
+            lease_until INTEGER NOT NULL, turn_id TEXT, error TEXT, UNIQUE(job_id,due));").unwrap();
+    let due = Utc::now().timestamp() - 1;
+    db.execute(
+        "INSERT INTO automation_jobs VALUES('legacy',?1,'migrated legacy',3600,?2,1,0)",
+        rusqlite::params![serde_json::to_string(&scope()).unwrap(), due],
+    )
+    .unwrap();
+    db.execute("INSERT INTO automation_occurrences VALUES('legacy-completed','legacy',?1,'completed','old',7,0,'old-turn',NULL)", [due-3600]).unwrap();
+}
+
+#[tokio::test]
+async fn v1_migration_preserves_jobs_history_and_legacy_execution() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    private_dir(&root);
+    let path = root.join("scheduler.db");
+    create_v1(&path);
+    let p = provider(false, None);
+    let rt = runtime(&root.join("runtime.db"), p.clone());
+    let scheduler = Scheduler::open(&path, rt.clone()).unwrap();
+    let j = scheduler.list(&scope()).unwrap().remove(0);
+    assert_eq!(j.id, "legacy");
+    assert_eq!(j.prompt, "migrated legacy");
+    assert_eq!(j.interval_seconds, 3600);
+    assert!(j.schedule_spec.is_none());
+    assert_eq!(
+        scheduler.occurrences(&scope(), 10).unwrap()[0].request_id,
+        "legacy-completed"
+    );
+    let out = scheduler
+        .run_due(&scope(), 1, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].status, OccurrenceStatus::Completed);
+    assert_eq!(
+        scheduler.list(&scope()).unwrap()[0].next_due,
+        j.next_due + Duration::hours(1)
+    );
+    drop(scheduler);
+    let reopened = Scheduler::open(&path, rt).unwrap();
+    assert_eq!(reopened.occurrences(&scope(), 10).unwrap().len(), 2);
+    assert!(
+        reopened
+            .run_due(&scope(), 1, CancellationToken::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn migration_open_child() {
+    let Ok(root) = std::env::var("MISSY_SCHEDULER_MIGRATION_TEST_ROOT") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let rt = runtime(
+        &root.join(format!("runtime-{}.db", std::process::id())),
+        provider(false, None),
+    );
+    let scheduler = Scheduler::open(root.join("scheduler.db"), rt).unwrap();
+    assert_eq!(scheduler.list(&scope()).unwrap()[0].id, "legacy");
+}
+
+#[test]
+fn separate_processes_migrate_v1_atomically() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    private_dir(&root);
+    let path = root.join("scheduler.db");
+    create_v1(&path);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let children: Vec<_> = (0..4)
+        .map(|_| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "migration_open_child", "--nocapture"])
+                .env("MISSY_SCHEDULER_MIGRATION_TEST_ROOT", &root)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    db.execute_batch("COMMIT").unwrap();
+    for child in children {
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('automation_jobs') WHERE name='schedule_spec'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
 }

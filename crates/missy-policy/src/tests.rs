@@ -495,6 +495,397 @@ fn debug_response_does_not_leak_contents() {
     assert!(debug.contains("body_bytes"));
 }
 
+// Real chunked SSE without a terminating chunk. Drop/cancellation must close TCP.
+async fn open_sse(heartbeat: bool) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut bytes = [0; 8192];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut bytes).await.unwrap();
+            assert!(n > 0);
+            request.extend_from_slice(&bytes[..n]);
+            assert!(request.len() <= 32 * 1024);
+        }
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nX-Secret: STREAM-SECRET\r\nSet-Cookie: SECRET-COOKIE\r\n\r\n").await.unwrap();
+        socket.write_all(b"b\r\ndata: one\n\n\r\n").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    n = socket.read(&mut bytes) => {
+                        match n {
+                            Ok(0) => return,
+                            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return,
+                            other => panic!("expected closed streaming connection: {other:?}"),
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(25)), if heartbeat => {
+                        if socket.write_all(b"3\r\n:\n\n\r\n").await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("stream connection was not closed");
+    });
+    (origin, task)
+}
+
+async fn first_event(stream: &mut PolicyHttpStream) {
+    let mut body = Vec::new();
+    while !body.windows(11).any(|w| w == b"data: one\n\n") {
+        body.extend(stream.chunk().await.unwrap().expect("SSE ended early"));
+    }
+}
+
+#[tokio::test]
+async fn streaming_sse_is_incremental_pinned_redacted_and_drop_closes() {
+    let (origin, task) = open_sse(false).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true))
+        .unwrap()
+        .with_timeout(Duration::from_secs(600))
+        .unwrap()
+        .with_chunk_timeout(Duration::from_secs(600))
+        .unwrap();
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request_stream("GET", &format!("{origin}/SECRET-PATH"), vec![], None),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(stream.status, 200);
+    assert!(
+        stream
+            .headers
+            .iter()
+            .any(|(k, v)| k == "content-type" && v == "text/event-stream")
+    );
+    assert!(!stream.headers.iter().any(|(k, _)| k == "set-cookie"));
+    assert!(!format!("{stream:?}").contains("SECRET"));
+    tokio::time::timeout(Duration::from_secs(2), first_event(&mut stream))
+        .await
+        .unwrap();
+    assert_eq!(stream.received, 11);
+    drop(stream);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_pending_stream_chunk_closes_and_is_terminal() {
+    let (origin, task) = open_sse(false).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    first_event(&mut stream).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), stream.chunk())
+            .await
+            .is_err()
+    );
+    // The outer object remains in scope, but the cancelled read dropped TCP.
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_continuous_heartbeats_cannot_extend_total_deadline() {
+    let (origin, task) = open_sse(true).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true))
+        .unwrap()
+        .with_timeout(Duration::from_secs(1))
+        .unwrap()
+        .with_chunk_timeout(Duration::from_secs(600))
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    first_event(&mut stream).await;
+    let error = loop {
+        match stream.chunk().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("indefinite fixture unexpectedly ended"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(error.to_string(), "HTTP response stream timed out");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_idle_timeout_is_additional_to_total_deadline() {
+    let (origin, task) = open_sse(false).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true))
+        .unwrap()
+        .with_timeout(Duration::from_secs(600))
+        .unwrap()
+        .with_chunk_timeout(Duration::from_secs(1))
+        .unwrap();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    first_event(&mut stream).await;
+    let started = tokio::time::Instant::now();
+    let error = stream.chunk().await.unwrap_err();
+    assert_eq!(error.to_string(), "HTTP response stream timed out");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_request_cancel_before_headers_closes_transport() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = [0; 8192];
+        assert!(socket.read(&mut bytes).await.unwrap() > 0);
+        accepted_tx.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), socket.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+    });
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    let mut request = Box::pin(client.request_stream("GET", &origin, vec![], None));
+    tokio::select! {
+        _ = accepted_rx => {},
+        response = &mut request => panic!("fixture must not send headers: {response:?}"),
+    }
+    drop(request);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_redirects_not_followed_and_policy_validation_shared() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = format!("http://{}", listener.local_addr().unwrap());
+    let (origin, task) = mock(
+        format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target}/SECRET-REDIRECT\r\nContent-Length: 0\r\n\r\n"
+        )
+        .into_bytes(),
+    )
+    .await;
+    let mut config = network_policy(&origin, true);
+    config.allowed_origins.push(target);
+    let client = PolicyHttpClient::new(config).unwrap();
+    for name in [
+        "Host",
+        "Connection",
+        "Transfer-Encoding",
+        "Content-Length",
+        "Proxy-Authorization",
+        "Proxy-Connection",
+        "Upgrade",
+        "TE",
+        "Trailer",
+    ] {
+        let error = client
+            .request_stream("GET", &origin, vec![(name.into(), "SECRET".into())], None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "HTTP routing or framing header denied");
+    }
+    assert!(
+        client
+            .request_stream("TRACE", &origin, vec![], None)
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .request_stream(
+                "POST",
+                &origin,
+                vec![],
+                Some(vec![0; MAX_HTTP_REQUEST_BYTES + 1])
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .request_stream(
+                "GET",
+                &origin,
+                vec![
+                    ("X-Test".into(), "one".into()),
+                    ("x-test".into(), "two".into())
+                ],
+                None
+            )
+            .await
+            .is_err()
+    );
+    let mut response = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(response.status, 302);
+    assert!(response.chunk().await.unwrap().is_none());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+    task.await.unwrap();
+    assert!(client.clone().with_chunk_timeout(Duration::ZERO).is_err());
+    assert!(client.with_chunk_timeout(Duration::from_secs(601)).is_err());
+}
+
+#[tokio::test]
+async fn streaming_chunked_cumulative_limit_is_hard_and_terminal() {
+    let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    for _ in 0..=(MAX_HTTP_RESPONSE_BYTES / 1024) {
+        response.extend_from_slice(b"400\r\n");
+        response.extend_from_slice(&[b'x'; 1024]);
+        response.extend_from_slice(b"\r\n");
+    }
+    response.extend_from_slice(b"0\r\n\r\n");
+    let (origin, task) = mock(response).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    let mut received = 0;
+    loop {
+        match stream.chunk().await {
+            Ok(Some(chunk)) => received += chunk.len(),
+            Ok(None) => panic!("oversized stream accepted"),
+            Err(error) => {
+                assert_eq!(error.to_string(), "HTTP response exceeds limit");
+                break;
+            }
+        }
+    }
+    assert!(received <= MAX_HTTP_RESPONSE_BYTES);
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_validation_before_connect_and_declared_limits() {
+    let (origin, task) = mock(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            MAX_HTTP_RESPONSE_BYTES + 1
+        )
+        .into_bytes(),
+    )
+    .await;
+    let private_denied = PolicyHttpClient::new(network_policy(&origin, false)).unwrap();
+    assert_eq!(
+        private_denied
+            .request_stream("GET", &origin, vec![], None)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "HTTP address denied by network policy"
+    );
+    let denied = PolicyHttpClient::new(PolicyConfig::default()).unwrap();
+    assert_eq!(
+        denied
+            .request_stream("GET", &origin, vec![], None)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "HTTP origin denied by exact allowlist"
+    );
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    assert_eq!(
+        client
+            .request_stream("GET", &origin, vec![], None)
+            .await
+            .unwrap_err()
+            .to_string(),
+        "HTTP response exceeds limit"
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_total_deadline_includes_time_between_reads() {
+    let (origin, task) = open_sse(false).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true))
+        .unwrap()
+        .with_timeout(Duration::from_secs(1))
+        .unwrap();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    first_event(&mut stream).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        stream.chunk().await.unwrap_err().to_string(),
+        "HTTP response stream timed out"
+    );
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_exact_limit_and_eof_are_accepted() {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {MAX_HTTP_RESPONSE_BYTES}\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes();
+    response.resize(response.len() + MAX_HTTP_RESPONSE_BYTES, b'x');
+    let (origin, task) = mock(response).await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    let mut stream = client
+        .request_stream("GET", &origin, vec![], None)
+        .await
+        .unwrap();
+    let mut received = 0;
+    while let Some(bytes) = stream.chunk().await.unwrap() {
+        received += bytes.len();
+    }
+    assert_eq!(received, MAX_HTTP_RESPONSE_BYTES);
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn streaming_transfer_errors_do_not_expose_upstream_or_url() {
+    let (origin, task) =
+        mock(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nSECRET".to_vec())
+            .await;
+    let client = PolicyHttpClient::new(network_policy(&origin, true)).unwrap();
+    let mut stream = client
+        .request_stream("GET", &format!("{origin}/SECRET-URL"), vec![], None)
+        .await
+        .unwrap();
+    let error = loop {
+        match stream.chunk().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("truncated body accepted"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(format!("{error:#}"), "HTTP response transfer failed");
+    assert!(stream.chunk().await.unwrap().is_none());
+    task.await.unwrap();
+}
+
 #[tokio::test]
 async fn websocket_tls_never_falls_back_to_plaintext() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

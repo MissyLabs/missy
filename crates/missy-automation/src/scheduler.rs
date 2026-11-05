@@ -33,6 +33,7 @@ pub struct Job {
     pub interval_seconds: u64,
     pub next_due: DateTime<Utc>,
     pub enabled: bool,
+    pub schedule_spec: Option<missy_schedule_text::ScheduleSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,6 +80,16 @@ fn scope_key(scope: &Scope) -> Result<String> {
 }
 fn timestamp(t: i64) -> Result<DateTime<Utc>> {
     DateTime::from_timestamp(t, 0).context("invalid persisted timestamp")
+}
+// SQLite due dates have whole-second resolution. Spec dates must round up,
+// never down: flooring a fractional one-shot/anchor can run early and leave
+// next_occurrence_after(due) pointing at the occurrence that just completed.
+fn ceil_second(date: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    let seconds = date
+        .timestamp()
+        .checked_add(i64::from(date.timestamp_subsec_nanos() != 0))
+        .context("schedule date exceeds UTC range")?;
+    timestamp(seconds)
 }
 fn status(s: &str) -> Result<OccurrenceStatus> {
     Ok(match s {
@@ -162,15 +173,36 @@ impl Scheduler {
         }
         #[cfg(not(unix))]
         bail!("private scheduler database requires Unix ownership validation");
-        let db = Connection::open_with_flags(
+        let mut db = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         db.busy_timeout(Duration::from_secs(5))?;
-        let application_id: i64 = db.query_row("PRAGMA application_id", [], |r| r.get(0))?;
-        let tables: i64 = db.query_row(
+        // Refuse unrelated databases before changing their persistent journal
+        // mode. This is only a preflight; authoritative checks repeat under lock.
+        let preflight = db.transaction()?;
+        let application_id: i64 = preflight.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        let tables: i64 = preflight.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )?;
+        let version: i64 = preflight.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if application_id != 0x4d535941 && (application_id != 0 || tables != 0) {
+            bail!("scheduler requires its own database, not a runtime or unrelated database");
+        }
+        if !(0..=2).contains(&version) {
+            bail!("scheduler schema version unsupported");
+        }
+        preflight.commit()?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;")?;
+        // The process-local OPEN_LOCK cannot serialize other processes. Inspect
+        // and migrate under the same SQLite write lock, including on new DBs.
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let application_id: i64 = tx.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        let tables: i64 = tx.query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
             [],
             |r| r.get(0),
@@ -178,13 +210,12 @@ impl Scheduler {
         if application_id != 0x4d535941 && (application_id != 0 || tables != 0) {
             bail!("scheduler requires its own database, not a runtime or unrelated database");
         }
-        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=1).contains(&version) {
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if !(0..=2).contains(&version) {
             bail!("scheduler schema version unsupported");
         }
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;
-          BEGIN IMMEDIATE;
-          PRAGMA application_id=1297307969; PRAGMA user_version=1;
+        tx.execute_batch("
+          PRAGMA application_id=1297307969;
           CREATE TABLE IF NOT EXISTS automation_jobs(
             id TEXT PRIMARY KEY, scope TEXT NOT NULL, prompt TEXT NOT NULL,
             interval_seconds INTEGER NOT NULL CHECK(interval_seconds > 0),
@@ -194,7 +225,17 @@ impl Scheduler {
             request_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES automation_jobs(id),
             due INTEGER NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL,
             fence INTEGER NOT NULL, lease_until INTEGER NOT NULL, turn_id TEXT, error TEXT,
-            UNIQUE(job_id,due)); COMMIT;")?;
+            UNIQUE(job_id,due));")?;
+        if version < 2 {
+            tx.execute_batch(
+                "ALTER TABLE automation_jobs ADD COLUMN schedule_spec TEXT; PRAGMA user_version=2;",
+            )?;
+        }
+        let migrated_version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if migrated_version != 2 {
+            bail!("scheduler schema migration failed");
+        }
+        tx.commit()?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
             runtime,
@@ -229,6 +270,32 @@ impl Scheduler {
             interval_seconds: job.interval_seconds,
             next_due: due,
             enabled: true,
+            schedule_spec: None,
+        })
+    }
+
+    pub fn add_spec(
+        &self,
+        scope: &Scope,
+        prompt: String,
+        spec: missy_schedule_text::ScheduleSpec,
+        after: DateTime<Utc>,
+    ) -> Result<Job> {
+        let key = scope_key(scope)?;
+        if prompt.trim().is_empty() || prompt.len() > 65536 {
+            bail!("bounded prompt required");
+        }
+        let next = ceil_second(spec.next_after(after)?)?;
+        let id = Uuid::new_v4().to_string();
+        self.db.lock().map_err(|_|anyhow::anyhow!("scheduler mutex poisoned"))?.execute("INSERT INTO automation_jobs(id,scope,prompt,interval_seconds,next_due,enabled,schedule_spec) VALUES(?1,?2,?3,1,?4,1,?5)",params![id,key,prompt,next.timestamp(),serde_json::to_string(&spec)?])?;
+        Ok(Job {
+            id,
+            scope: scope.clone(),
+            prompt,
+            interval_seconds: 0,
+            next_due: next,
+            enabled: true,
+            schedule_spec: Some(spec),
         })
     }
 
@@ -238,7 +305,7 @@ impl Scheduler {
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("scheduler mutex poisoned"))?;
-        let mut q=db.prepare("SELECT id,prompt,interval_seconds,next_due,enabled FROM automation_jobs WHERE scope=?1 AND removed=0 ORDER BY next_due,id")?;
+        let mut q=db.prepare("SELECT id,prompt,interval_seconds,next_due,enabled,schedule_spec FROM automation_jobs WHERE scope=?1 AND removed=0 ORDER BY next_due,id")?;
         let rows = q.query_map([key], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -246,17 +313,24 @@ impl Scheduler {
                 r.get::<_, u64>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, bool>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         rows.map(|r| {
-            let (id, prompt, interval_seconds, due, enabled) = r?;
+            let (id, prompt, interval_seconds, due, enabled, spec) = r?;
+            let schedule_spec = spec.map(|s| serde_json::from_str(&s)).transpose()?;
             Ok(Job {
                 id,
                 scope: scope.clone(),
                 prompt,
-                interval_seconds,
+                interval_seconds: if schedule_spec.is_some() {
+                    0
+                } else {
+                    interval_seconds
+                },
                 next_due: timestamp(due)?,
                 enabled,
+                schedule_spec,
             })
         })
         .collect()
@@ -274,6 +348,24 @@ impl Scheduler {
                 bail!(
                     "job has an uncertain occurrence; remove and create a new job only after operator reconciliation"
                 );
+            }
+            let spec: Option<String> = tx.query_row(
+                "SELECT schedule_spec FROM automation_jobs WHERE id=?1 AND scope=?2 AND removed=0",
+                params![id, scope_key(scope)?],
+                |r| r.get(0),
+            ).optional()?.flatten();
+            if let Some(spec) = spec {
+                let spec: missy_schedule_text::ScheduleSpec = serde_json::from_str(&spec)?;
+                let terminal: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM automation_occurrences WHERE job_id=?1 AND status!='running')",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                if spec.is_one_shot() && terminal {
+                    bail!(
+                        "one-shot job is exhausted; create a new job to schedule another occurrence"
+                    );
+                }
             }
         }
         let n = tx.execute(
@@ -387,18 +479,25 @@ impl Scheduler {
         if changed != 1 {
             bail!("scheduler claim lost before completion; runtime request remains durable");
         }
-        let interval: i64 = tx.query_row(
-            "SELECT interval_seconds FROM automation_jobs WHERE id=?1",
+        let (interval, spec): (i64, Option<String>) = tx.query_row(
+            "SELECT interval_seconds,schedule_spec FROM automation_jobs WHERE id=?1",
             [&c.occurrence.job_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
-        if let Some(next) = c
-            .occurrence
-            .due
-            .timestamp()
-            .checked_add(interval)
-            .filter(|t| DateTime::from_timestamp(*t, 0).is_some())
-        {
+        let next = if let Some(spec) = spec {
+            let spec: missy_schedule_text::ScheduleSpec = serde_json::from_str(&spec)?;
+            spec.next_occurrence_after(c.occurrence.due)?
+                .map(ceil_second)
+                .transpose()?
+                .map(|next| next.timestamp())
+        } else {
+            c.occurrence
+                .due
+                .timestamp()
+                .checked_add(interval)
+                .filter(|t| DateTime::from_timestamp(*t, 0).is_some())
+        };
+        if let Some(next) = next {
             tx.execute(
                 "UPDATE automation_jobs SET next_due=?1 WHERE id=?2 AND next_due=?3",
                 params![next, c.occurrence.job_id, c.occurrence.due.timestamp()],
@@ -534,5 +633,23 @@ impl Scheduler {
         }
         self.finish(&c, &result)?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ceil_second;
+    use chrono::{DateTime, Timelike, Utc};
+
+    #[test]
+    fn schedule_date_ceiling_preserves_integral_dates_and_rejects_overflow() {
+        let integral = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(ceil_second(integral).unwrap(), integral);
+        let fractional = integral.with_nanosecond(1).unwrap();
+        assert_eq!(
+            ceil_second(fractional).unwrap().timestamp(),
+            integral.timestamp() + 1
+        );
+        assert!(ceil_second(DateTime::<Utc>::MAX_UTC).is_err());
     }
 }

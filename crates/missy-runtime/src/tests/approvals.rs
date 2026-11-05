@@ -475,3 +475,83 @@ async fn typed_execute_refusal_keeps_later_prepared_intents_conservatively_unkno
     assert_eq!(gate.effects.load(Ordering::SeqCst), 0);
     assert_eq!(p.calls.load(Ordering::SeqCst), 1);
 }
+
+struct DriftingTools {
+    gate: Arc<Gate>,
+    revision: AtomicUsize,
+    drift_in_preflight: bool,
+}
+#[async_trait]
+impl ToolExecutor for DriftingTools {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        self.gate.definitions()
+    }
+    fn configuration_fingerprint(&self) -> String {
+        format!("mutable-policy-{}", self.revision.load(Ordering::SeqCst))
+    }
+    async fn preflight(&self, ctx: &ToolContext, call: &ToolCall) -> Result<()> {
+        self.gate.preflight(ctx, call).await?;
+        if self.drift_in_preflight {
+            self.revision.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+    async fn execute(&self, ctx: &ToolContext, call: &ToolCall) -> Result<Value> {
+        self.gate.execute(ctx, call).await
+    }
+}
+
+#[tokio::test]
+async fn in_place_policy_drift_blocks_paused_resume_before_effect() {
+    let p = Arc::new(Script::new(vec![
+        effect(vec![call("a")]),
+        completion("must not complete", "stop"),
+    ]));
+    let gate = Gate::new();
+    let executor = Arc::new(DriftingTools {
+        gate: gate.clone(),
+        revision: AtomicUsize::new(0),
+        drift_in_preflight: false,
+    });
+    let (_d, rt) = setup(p.clone(), executor.clone(), RuntimeConfig::default());
+    let paused = rt
+        .run(scope("a"), "request".into(), "r".into())
+        .await
+        .unwrap();
+    assert!(paused.resumable);
+    gate.decide("a", Decision::Approved);
+    executor.revision.fetch_add(1, Ordering::SeqCst);
+    assert!(rt.resume(scope("a"), &paused.turn_id).await.is_err());
+    assert_eq!(gate.effects.load(Ordering::SeqCst), 0);
+    assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn in_place_policy_drift_during_preflight_blocks_batch_prepare() {
+    let p = Arc::new(Script::new(vec![
+        effect(vec![call("a")]),
+        completion("must not complete", "stop"),
+    ]));
+    let gate = Gate::new();
+    gate.decide("a", Decision::Approved);
+    let executor = Arc::new(DriftingTools {
+        gate: gate.clone(),
+        revision: AtomicUsize::new(0),
+        drift_in_preflight: true,
+    });
+    let (_d, rt) = setup(p.clone(), executor, RuntimeConfig::default());
+    let result = rt
+        .run(scope("a"), "request".into(), "r".into())
+        .await
+        .unwrap();
+    assert_eq!(result.status, "interrupted");
+    assert!(!result.resumable);
+    assert_eq!(gate.effects.load(Ordering::SeqCst), 0);
+    assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        rt.store()
+            .tools(&scope("a"), &result.turn_id)
+            .unwrap()
+            .is_empty()
+    );
+}

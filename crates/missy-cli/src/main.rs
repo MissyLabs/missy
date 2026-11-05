@@ -103,6 +103,18 @@ enum Command {
         #[command(subcommand)]
         command: ScheduleCommand,
     },
+    /// Authenticated local webhook intake and operational diagnostics.
+    Operations,
+    /// Run a bounded literal task DAG through ordinary durable turns.
+    Workflow {
+        path: PathBuf,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommand,
+    },
     /// Scoped local lexical retrieval and citation-preserving document indexing.
     Retrieval {
         #[command(subcommand)]
@@ -152,6 +164,15 @@ impl MigrationArgs {
             ..Default::default()
         }
     }
+}
+#[derive(Subcommand)]
+enum MeshCommand {
+    IdentityCreate { path: PathBuf },
+    Status,
+    Peers,
+    Serve,
+    PeerRemove { id: String },
+    PeerAdd { path: PathBuf },
 }
 #[derive(Subcommand)]
 enum RetrievalCommand {
@@ -277,6 +298,19 @@ enum VaultCommand {
 }
 #[derive(Subcommand)]
 enum ScheduleCommand {
+    AddText {
+        prompt: String,
+        expression: String,
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    Next {
+        expression: String,
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+    },
     Add {
         prompt: String,
         #[arg(long)]
@@ -401,6 +435,12 @@ fn load_config(path: &Path) -> Result<Config> {
         &mut cfg.extensions.cli_provider_config,
         &mut cfg.extensions.voice_config,
         &mut cfg.extensions.sandbox_config,
+        &mut cfg.extensions.http_mcp_config,
+        &mut cfg.extensions.desktop_config,
+        &mut cfg.extensions.media_config,
+        &mut cfg.extensions.embedding_config,
+        &mut cfg.extensions.mesh_config,
+        &mut cfg.extensions.operations_config,
     ]
     .into_iter()
     .flatten()
@@ -441,9 +481,18 @@ fn retrieval(cfg: &Config) -> Result<Arc<missy_retrieval::Retrieval>> {
         bail!("retrieval is disabled; explicitly enable extensions.retrieval_enabled");
     }
     open_store(cfg)?;
-    Ok(Arc::new(missy_retrieval::Retrieval::open(
-        cfg.state_dir.join("retrieval.sqlite3"),
-    )?))
+    let path = cfg.state_dir.join("retrieval.sqlite3");
+    let db = if let Some(config) = &cfg.extensions.embedding_config {
+        missy_retrieval::Retrieval::open_with_embedder(
+            path,
+            Arc::new(missy_embedding::LocalHttpEmbedder::new(load_extension(
+                config,
+            )?)?),
+        )?
+    } else {
+        missy_retrieval::Retrieval::open(path)?
+    };
+    Ok(Arc::new(db))
 }
 
 fn initialize(path: &Path) -> Result<()> {
@@ -503,25 +552,68 @@ async fn build_runtime(cfg: &Config) -> Result<Arc<Runtime>> {
         }));
     }
     let mut integration_mutations = std::collections::BTreeSet::new();
+    if let Some(path) = &cfg.extensions.http_mcp_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("HTTP MCP tools require exact durable approvals configuration");
+        }
+        let configs: Vec<missy_mcp_http::HttpMcpConfig> = load_extension(path)?;
+        let mcp = missy_mcp_http::HttpMcpTools::connect(
+            missy_policy::PolicyHttpClient::new(cfg.policy.clone())?,
+            configs,
+        )
+        .await?;
+        integration_mutations.extend(mcp.definitions().into_iter().map(|d| d.name));
+        executors.push(Arc::new(mcp));
+    }
     if let Some(path) = &cfg.extensions.integrations_config {
         use missy_core::ToolExecutor;
         let mut integrations = missy_integrations::IntegrationTools::new(
             missy_policy::PolicyHttpClient::new(cfg.policy.clone())?,
             load_extension(path)?,
         )?;
-        integration_mutations = integrations
+        let mutations: std::collections::BTreeSet<_> = integrations
             .definitions()
             .into_iter()
             .filter(|d| d.side_effect)
             .map(|d| d.name)
             .collect();
-        if !integration_mutations.is_empty() {
+        if !mutations.is_empty() {
             if cfg.extensions.approvals_config.is_none() {
                 bail!("enabled integration mutations require durable approvals configuration");
             }
             integrations = integrations.with_approval(Arc::new(extensions::OuterGuardVerified));
         }
+        integration_mutations.extend(mutations);
         executors.push(Arc::new(integrations));
+    }
+    if let Some(path) = &cfg.extensions.desktop_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("desktop capabilities require exact durable approval configuration");
+        }
+        let desktop = missy_desktop::DesktopTools::new(
+            load_extension(path)?,
+            missy_policy::PolicyHttpClient::new(cfg.policy.clone())?,
+            Arc::new(extensions::OuterGuardVerified),
+        )?;
+        integration_mutations.extend(desktop.definitions().into_iter().map(|d| d.name));
+        executors.push(Arc::new(desktop));
+    }
+    if let Some(path) = &cfg.extensions.media_config {
+        use missy_core::ToolExecutor;
+        if cfg.extensions.approvals_config.is_none() {
+            bail!("media capabilities require exact durable approval configuration");
+        }
+        let media = missy_media::MediaTools::new(cfg.policy.clone(), load_extension(path)?)?;
+        integration_mutations.extend(
+            media
+                .definitions()
+                .into_iter()
+                .filter(|d| d.side_effect)
+                .map(|d| d.name),
+        );
+        executors.push(Arc::new(media));
     }
     let mut tools: Arc<dyn missy_core::ToolExecutor> =
         Arc::new(extensions::CompositeTools::new(executors)?);
@@ -1015,6 +1107,37 @@ async fn execute(cli: Cli) -> Result<()> {
             )?;
             use missy_automation::NewJob;
             match command {
+                ScheduleCommand::AddText {
+                    prompt,
+                    expression,
+                    timezone,
+                    scope,
+                } => {
+                    let now = chrono::Utc::now();
+                    let spec =
+                        missy_schedule_text::ScheduleSpec::parse_at(&expression, &timezone, now)?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&scheduler.add_spec(
+                            &scope.scope()?,
+                            prompt,
+                            spec,
+                            now
+                        )?)?
+                    );
+                }
+                ScheduleCommand::Next {
+                    expression,
+                    timezone,
+                } => {
+                    let now = chrono::Utc::now();
+                    let spec =
+                        missy_schedule_text::ScheduleSpec::parse_at(&expression, &timezone, now)?;
+                    println!(
+                        "{}",
+                        serde_json::json!({"spec":spec,"next":spec.next_after(now)?})
+                    );
+                }
                 ScheduleCommand::Add {
                     prompt,
                     every_seconds,
@@ -1059,6 +1182,70 @@ async fn execute(cli: Cli) -> Result<()> {
                     )?
                 ),
             }
+        }
+        Command::Mesh { command } => match command {
+            MeshCommand::IdentityCreate { path } => {
+                let identity = missy_mesh::Identity::create(&path)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"peer_id":identity.peer_id(),"public_key":identity.public_key()})
+                );
+            }
+            command => {
+                let config = missy_mesh::MeshConfig::load(
+                    cfg.extensions
+                        .mesh_config
+                        .as_deref()
+                        .context("extensions.mesh_config required")?,
+                )?;
+                let node = missy_mesh::MeshNode::open(config)?;
+                match command {
+                    MeshCommand::Status => {
+                        println!("{}", serde_json::to_string_pretty(&node.status()?)?)
+                    }
+                    MeshCommand::Peers => {
+                        println!("{}", serde_json::to_string_pretty(&node.peers()?)?)
+                    }
+                    MeshCommand::PeerAdd { path } => {
+                        let peer: missy_mesh::Peer = load_extension(&path)?;
+                        println!("{}", node.peer_add(peer)?);
+                    }
+                    MeshCommand::PeerRemove { id } => println!("{}", node.peer_remove(&id)?),
+                    MeshCommand::Serve => {
+                        let runtime = Arc::new(missy_mesh::MeshRuntime::try_from_runtime(
+                            build_runtime(&cfg).await?,
+                        )?);
+                        node.serve_with_runtime(runtime).await?;
+                    }
+                    MeshCommand::IdentityCreate { .. } => unreachable!(),
+                }
+            }
+        },
+        Command::Workflow { path, scope } => {
+            let workflow: missy_operations::Workflow = load_extension(&path)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &workflow
+                        .execute(
+                            build_runtime(&cfg).await?,
+                            scope.scope()?,
+                            missy_operations::WorkflowBounds::default()
+                        )
+                        .await?
+                )?
+            );
+        }
+        Command::Operations => {
+            let mut operations: missy_operations::OperationsConfig = load_extension(
+                cfg.extensions
+                    .operations_config
+                    .as_deref()
+                    .context("extensions.operations_config required")?,
+            )?;
+            open_store(&cfg)?;
+            operations.replay_db = cfg.state_dir.join("operations.sqlite3");
+            missy_operations::serve(build_runtime(&cfg).await?, operations).await?;
         }
         Command::Doctor => {
             open_store(&cfg)?;

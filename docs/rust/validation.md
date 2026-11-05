@@ -1,7 +1,8 @@
 # Native Rust validation evidence
 
 Date: 2026-11-05. Local Linux x86_64 checkout, starting from Python Missy
-`d152c54e04f5daf1381c84527643a958fcb7d252`. Rust 1.96.1 / Cargo 1.96.1.
+`d152c54e04f5daf1381c84527643a958fcb7d252`. Initial core validation used Rust
+1.96.1; the final expanded workspace was validated with Rust/Cargo 1.99.1.
 This report concerns the new Rust workspace, not the production Python bot.
 
 ## Results observed locally
@@ -10,18 +11,18 @@ This report concerns the new Rust workspace, not the production Python bot.
 |---|---|
 | `cargo fmt --all -- --check` | Pass |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Pass |
-| `cargo test --workspace --all-targets --locked` | 248 passing native test entries, 0 failed |
+| `cargo test --workspace --all-targets --locked` | Final expanded workspace: 349 passing native test entries across 47 result groups, 0 failed |
 | `cargo build --release -p missy-cli --locked` | Pass, native Linux executable |
 | `scripts/test-rust-console.py --binary target/release/missy-rs` | 15 Chromium/HTTP acceptance assertions passed |
-| `cargo audit --deny warnings` | Pass against 1,409 loaded RustSec advisories and 302 locked dependencies |
+| `cargo audit --deny warnings` | Pass against 1,409 loaded RustSec advisories and 354 locked dependencies; no advisory suppressions |
 | Legacy Python source/tests/installer/config schema diff | Unchanged |
 
 The native total includes subprocess-fixture entrypoints which intentionally
 return without doing work in the ordinary runner and are driven separately by
-their parent crash/lock tests. It is not 248 independent end-to-end scenarios.
+their parent crash/lock tests. It is not 349 independent end-to-end scenarios.
 The optional browser harness is test tooling, not a runtime Python dependency.
 
-### Native test breakdown
+### Initial core test breakdown (248 entries, before the final expansion)
 
 | Area | Passing test entries |
 |---|---:|
@@ -125,12 +126,63 @@ The optional browser harness is test tooling, not a runtime Python dependency.
 - Fixed migrated Anthropic endpoints missing `/v1`, and state-only imports
   missing a usable secure default-deny native configuration.
 
+## Final expansion and focused correction evidence
+
+The workspace now contains 24 native crates. The final locked all-target suite
+passes 349 entries, including the retained 248-entry core and new regression,
+native extension and executable acceptance entries. Formatting and full-workspace
+Clippy with warnings denied pass on the same final dependency set.
+
+- **Actual stale-policy bug reproduced and fixed:** changing a shared tool
+  executor's policy while paused or during preflight previously allowed dispatch
+  under a cached binding. Two regression probes failed before the narrow repair
+  and passed afterward. Runtime rechecks existing configuration identity at
+  generation, resume and dispatch boundaries. The Odin source comparison and
+  residual atomicity limits are recorded in `odin-comparison.md`.
+- **Scheduler defects repaired:** fractional one-shot and interval timestamps are
+  rounded upward rather than fired early or repeated at the same second. Schema
+  migration rechecks the version under a cross-process IMMEDIATE transaction.
+  Actual worker tests cover one-shot exhaustion, daily/cron DST rescheduling,
+  migration of v1 jobs and concurrent independent-process migration.
+- **Executable workflow acceptance:** a real new process creates a human-language
+  one-shot, another executes it once, and later processes show it exhausted.
+  A literal two-node workflow completes through provider HTTP, then redelivery
+  returns the original turns without further inference. This exposed a Clap
+  argument-ID collision between a positional extension `config` and the global
+  `--config`; positional fields were renamed, not worked around in the test.
+- **HTTP MCP:** real loopback Streamable HTTP and never-EOF SSE, persistent legacy
+  SSE correlation, same-origin credential routing, initialized-session manifest
+  checks, changed pins and uncertain outcomes. No live MCP server was used.
+- **Desktop:** native allowlisted X11 enumeration/screenshots on a fresh
+  authenticated isolated Xvfb, a private D-Bus AT-SPI mock and fixed-script CDP
+  protocol fixtures. No active desktop, production browser or actual input.
+- **Media:** seven actual tiny FFmpeg operations with FFprobe metadata and full
+  decode checks, native image edits, policy/symlink denial, playlist refusal,
+  child Landlock and process timeout/cancellation. No hardware or playback.
+- **Neural retrieval:** a separate CPU-only llama.cpp process loaded a public
+  SHA256-verified 45.9 MB MiniLM model. Three token-disjoint semantic/lexical-decoy
+  cases and persistent retrieval passed. The exact-quotation weakness is retained
+  in `crates/missy-embedding/ACCEPTANCE.md`, not hidden. Dedicated process reaped.
+  HTTP-config model fingerprints remain operator assertions, not remote attestation.
+- **Mesh:** signed scope/recipient grants, durable replay/receipts, revocation,
+  memory/quorum primitives and signed HTTP intake to an ordinary mock-provider
+  Runtime. Stable delegated task IDs deduplicate; an approval-required effect
+  does not execute. No production peer federation was exercised.
+- **Operations:** real Runtime admission through dedicated HMAC webhook auth,
+  replay persistence, unknown-crash refusal, body/scope spoof denial, separate
+  diagnostics authorization, bounded event bus, Prometheus and policy-bound OTLP
+  payload tests. Usage is explicitly a recent sample, not fabricated lifetime totals.
+- **Dependency audit defect repaired:** strict audit rejected three unmaintained
+  transitive D-Bus crates. Migrated native AT-SPI code to maintained zbus 6.2.1;
+  reran all desktop tests and the entire workspace. No advisories were ignored.
+
 ## Limits and unperformed acceptance
 
 - No production replacement, service restart, live state migration, active
   desktop interaction or hardware capture.
-- No real-provider inference, real Discord bot login, GPU benchmark or live
+- No real language-provider inference, real Discord bot login, GPU benchmark or live
   operator credential used. Mock protocol coverage is not live acceptance.
+  The separately tested local embedding model is the explicit exception above.
 - No claim that every historical Python integration is ported. See
   [parity.md](parity.md) before deciding this can replace a particular deployment.
 - Spend checks operate on consumed/known usage, not an externally guaranteed

@@ -27,6 +27,13 @@ missy-governance = { path = "../missy-governance" }
 missy-provider-process = { path = "../missy-provider-process" }
 missy-voice = { path = "../missy-voice" }
 missy-sandbox = { path = "../missy-sandbox" }
+missy-mcp-http = { path = "../missy-mcp-http" }
+missy-desktop = { path = "../missy-desktop" }
+missy-media = { path = "../missy-media" }
+missy-embedding = { path = "../missy-embedding" }
+missy-mesh = { path = "../missy-mesh" }
+missy-operations = { path = "../missy-operations" }
+missy-schedule-text = { path = "../missy-schedule-text" }
 async-trait.workspace = true
 serde.workspace = true
 sha2.workspace = true

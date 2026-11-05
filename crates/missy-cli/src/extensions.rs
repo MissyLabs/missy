@@ -57,6 +57,15 @@ impl ToolExecutor for CompositeTools {
 }
 
 pub struct NoTools;
+#[async_trait]
+impl missy_desktop::DesktopApproval for OuterGuardVerified {
+    async fn authorize(&self, _: &ToolContext, _: &ToolCall) -> Result<()> {
+        Ok(())
+    }
+    fn configuration_fingerprint(&self) -> String {
+        "outer-durable-exact-all-desktop-approval-v1".into()
+    }
+}
 /// Only constructed inside a composition whose outer durable guard requires
 /// approval for every integration mutation. Never exposed through tool JSON.
 pub struct OuterGuardVerified;

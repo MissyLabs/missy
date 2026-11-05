@@ -137,6 +137,26 @@ impl Runtime {
     pub fn store(&self) -> &Arc<Store> {
         &self.inner.store
     }
+    /// A cached construction hash is not proof that a shared executor/provider
+    /// has remained unchanged. Refuse observed drift; never rebind an old turn.
+    fn check_configuration(&self) -> Result<()> {
+        let current = digest(&serde_json::to_string(&json!({
+            "system": self.inner.system,
+            "config": self.inner.config,
+            "provider": self.inner.provider.configuration_fingerprint(),
+            "tools": self.inner.tools.definitions(),
+            "tool_configuration": self.inner.tools.configuration_fingerprint(),
+        }))?);
+        ensure!(
+            current == self.inner.context_hash,
+            "runtime configuration changed; rebuild runtime before execution"
+        );
+        Ok(())
+    }
+    /// Immutable local bounds for admission adapters; never exposes credentials.
+    pub fn configuration(&self) -> &RuntimeConfig {
+        &self.inner.config
+    }
     pub fn status(&self, scope: &Scope, turn_id: &str) -> Result<Turn> {
         self.store().get_turn(scope, turn_id)
     }
@@ -254,6 +274,7 @@ impl Runtime {
         })
     }
     fn launch(&self, scope: Scope, turn: Turn) -> Result<JoinHandle<Result<RunResult>>> {
+        self.check_configuration()?;
         let permit = self
             .inner
             .permits
@@ -325,6 +346,7 @@ impl Runtime {
         )
     }
     fn load(&self, scope: &Scope, turn: &Turn) -> Result<State> {
+        self.check_configuration()?;
         let cp = self
             .store()
             .checkpoint(scope, &turn.id, &self.inner.context_hash)?
@@ -515,6 +537,7 @@ impl Runtime {
         // A preflight error is a definite non-execution, never UNKNOWN.
         let mut pending = None;
         for call in calls {
+            self.check_configuration()?;
             self.consumed_budget(state)?;
             ensure!(
                 !token.is_cancelled()
@@ -533,6 +556,7 @@ impl Runtime {
                 _ = token.cancelled() => Err(anyhow!("tool preflight cancelled")),
             };
             ctx.cancellation.cancel();
+            self.check_configuration()?;
             if let Err(error) = result {
                 if let Some(approval) = error.downcast_ref::<ApprovalRequired>() {
                     pending.get_or_insert_with(|| approval.request_id.clone());
@@ -576,6 +600,7 @@ impl Runtime {
             );
         }
         for call in calls {
+            self.check_configuration()?;
             self.consumed_budget(state)?;
             ensure!(
                 tokio::time::Instant::now() < deadline,
@@ -690,6 +715,7 @@ impl Runtime {
                 .await?;
         }
         loop {
+            self.check_configuration()?;
             self.budget(state)?;
             ensure!(
                 tokio::time::Instant::now() < monotonic_deadline,
@@ -737,6 +763,7 @@ impl Runtime {
                 }
             };
             state.usage.add(completion.usage);
+            self.check_configuration()?;
             ensure!(
                 !token.is_cancelled()
                     && !self.store().cancellation_requested(scope, &lease.turn_id)?,

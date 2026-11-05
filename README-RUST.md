@@ -10,7 +10,9 @@ authorization to replace the running bot.** The exact parity ledger is
 
 ## Build and run
 
-Requires Linux and the stable Rust toolchain. SQLite is bundled. Rustls handles
+Requires Linux and the stable Rust toolchain (locked dependency floor: 1.89).
+Final acceptance used 1.99.1; the floor is metadata, not a separate MSRV test.
+SQLite is bundled. Rustls handles
 HTTPS; no Python environment, OpenSSL SDK, Node runtime or cloud account is
 required to build the native executable.
 
@@ -64,6 +66,13 @@ compatibility.
 | `missy-provider-process` | Explicitly approved chat-only CLI provider; no native provider-tool bypass |
 | `missy-voice` | Loopback voice edge protocol, explicit pairing and trusted speech-command adapters |
 | `missy-sandbox` | Opt-in child-only Landlock and hardened container command construction |
+| `missy-mcp-http` | Pinned Streamable HTTP and persistent SSE MCP through network policy |
+| `missy-desktop` | Approval-gated native X11, AT-SPI and isolated CDP controls |
+| `missy-media` | Typed pinned FFmpeg editing, image transforms and file-based vision |
+| `missy-embedding` | Explicit local neural embedding adapter with CPU model acceptance |
+| `missy-mesh` | Signed scope-bound peers, replay protection, memory and budgeted delegation |
+| `missy-operations` | Authenticated webhook, diagnostics, metrics, literal workflows and export APIs |
+| `missy-schedule-text` | Strict human/cron grammar, IANA timezones and deterministic DST rules |
 
 The optional `scripts/test-rust-console.py` acceptance harness uses Python
 Playwright solely to drive Chromium against an isolated compiled Rust server
@@ -97,6 +106,8 @@ not cancel admitted work, and cancellation is explicit.
 
 See [docs/rust/continuation-design.md](docs/rust/continuation-design.md) for the
 comparison with the original Python runtime and Odin's durability design.
+The focused final comparison and regression evidence are in
+[docs/rust/odin-comparison.md](docs/rust/odin-comparison.md).
 
 ## Security boundaries and honest limitations
 
@@ -156,12 +167,28 @@ extensions:
   integrations_config: ./integrations.yaml
   voice_config: ./voice.yaml
   sandbox_config: ./sandbox.yaml
+  # http_mcp_config: ./http-mcp.yaml
+  # desktop_config: ./desktop.yaml
+  # media_config: ./media.yaml
+  # embedding_config: ./embedding.yaml
+  # mesh_config: ./mesh.json
+  # operations_config: ./operations.yaml
   # cli_provider_config: ./chat-only-provider.yaml
 ```
 
 Extension schemas are documented in the individual crate READMEs. Enabling a CLI
 provider selects a structurally NoTools runtime. Voice SafeChat also selects a
 separate NoTools runtime, never a prompt asking the model not to execute tools.
+HTTP MCP, desktop and media mutations require the same durable outer approval
+gate; every desktop tool, including reads, must be listed explicitly. Desktop
+configuration never discovers the operator's ambient display or accessibility
+bus. Media editing requires explicitly pinned FFmpeg/FFprobe, and native
+acceptance requires `ffmpeg`, `xvfb`, `xauth` and `dbus` packages on Linux.
+
+The optional local embedding service is separately installed and explicitly
+configured. Default retrieval remains deterministic lexical hashing, not a
+pretend semantic model. See `crates/missy-embedding/ACCEPTANCE.md` for actual
+CPU inference evidence and the documented adversarial-quotation limitation.
 Integration mutations require explicit service/action/resource grants **and**
 the durable outer approval gate to list every mutation tool. Approval never
 widens the filesystem/network/command policy.
@@ -174,7 +201,25 @@ missy-rs retrieval ingest handbook /approved/documents/handbook.txt --session de
 missy-rs retrieval query 'repair procedure' --session demo
 missy-rs discord-probe
 missy-rs voice devices
+missy-rs schedule next 'daily at 09:00' --timezone America/New_York
+missy-rs schedule add-text 'Check the approved service' 'every monday at 08:00' --timezone America/New_York --session maintenance
+missy-rs schedule run-due --session maintenance
+missy-rs workflow /private/workflow.yaml --session maintenance
+missy-rs mesh status
+missy-rs operations
 ```
+
+`operations` is an explicitly started authenticated loopback webhook/metrics
+service. Its trusted scope comes from private configuration, not incoming JSON.
+It uses dedicated Missy HMAC/read keys, never another service's credentials.
+`mesh serve` requires a private explicit peer configuration and finite stricter
+local runtime limits; it never auto-discovers or trusts peers. Neither command
+is automatically installed, started or exposed remotely.
+
+Workflows are bounded literal prompt DAGs, not unconstrained autonomous forks.
+Each node uses the existing scoped runtime and stable durable request ID.
+Aggregate limits gate admission, not externally reserve billing. Scheduler
+workers are explicitly invoked, never silently started by opening the database.
 
 `discord-probe` performs only authenticated read requests. It does not open a
 Gateway, register commands or send messages. Full live acceptance requires a
